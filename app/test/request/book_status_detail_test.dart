@@ -4,7 +4,7 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/features/request/data/request_service.dart'
     hide RequestOptions;
-import 'package:cantinarr/features/request/ui/book_request_button.dart';
+import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -199,6 +199,47 @@ class _DeferredPostRefreshAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// Accepts one request per format and then serves that format back as live
+/// truth, so a row's post-request state is the server's answer, not a local
+/// guess.
+class _RequestFlowAdapter implements HttpClientAdapter {
+  final requestBodies = <Map<String, dynamic>>[];
+  final _requested = <String, String>{};
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      final body = Map<String, dynamic>.from(options.data as Map);
+      requestBodies.add(body);
+      final format = body['book_format'] as String;
+      _requested[format] = 'requested';
+      return _json({
+        'status': 'requested',
+        'book_formats': {format: 'requested'},
+      });
+    }
+    return _json({
+      'status': _requested.isEmpty ? 'unavailable' : 'requested',
+      'book_formats': _requested,
+    });
+  }
+
+  ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
+        jsonEncode(body),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+
+  @override
+  void close({bool force = false}) {}
+}
+
 RequestService _service(Map<String, dynamic> resp) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = _GetAdapter(resp);
@@ -339,40 +380,67 @@ void main() {
     });
   });
 
+  testWidgets('tapping a format row requests exactly that format', (tester) async {
+    final adapter = _RequestFlowAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    // A still-open format offers its own action instead of a bare state label.
+    expect(find.text('Request'), findsNWidgets(2));
+    expect(find.text('Not requested'), findsNothing);
+
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['foreign_id'], 'fb');
+    // The tap is confirmed twice: the row's own state, and a named outcome.
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('eBook requested.'), findsOneWidget);
+    // The untouched format stays actionable, and the requested one does not.
+    expect(find.text('Request'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+  });
+
+  testWidgets('a request the server holds for approval says so', (tester) async {
+    final adapter = _GetAdapter({
+      'status': 'pending',
+      'book_formats': {'audiobook': 'pending'},
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('eBook is pending approval.'), findsOneWidget);
+    expect(find.text('Pending Approval'), findsOneWidget);
+  });
+
   testWidgets('unknown book truth is visible and blocks request mutation',
       (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: _service({'status': 'future-status'}),
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(_service({'status': 'future-status'})));
     await tester.pumpAndSettle();
 
     expect(find.text('Couldn’t check · Retry'), findsOneWidget);
-    expect(find.text('Choose format'), findsNothing);
-    expect(find.text('Request eBook'), findsNothing);
+    expect(find.text('Couldn’t check'), findsNWidgets(2));
+    expect(find.text('Request'), findsNothing);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
   });
 
   testWidgets('unresolved book format gives guidance without a retry action',
       (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: _service({'status': 'unavailable'}),
-            ownershipStatusKnown: false,
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(
+      _service({'status': 'unavailable'}),
+      ownershipStatusKnown: false,
+    ));
     await tester.pumpAndSettle();
 
     expect(
@@ -380,68 +448,53 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Couldn’t check · Retry'), findsNothing);
-    expect(find.byType(TextButton), findsNothing);
+    expect(find.text('Request'), findsNothing);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
   });
 
-  testWidgets('partial both request names each outcome and leaves retry open',
+  testWidgets('a partial response names the requested format’s own outcome',
       (tester) async {
     final adapter = _PartialRequestAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: RequestService(backendDio: dio),
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose format'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook + Audiobook'));
+    await tester.tap(_row('ebook'));
     await tester.pumpAndSettle();
 
-    expect(
-      find.text(
-        'eBook requested. Audiobook could not be requested. Try again.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('Request Audiobook'), findsOneWidget);
+    expect(find.text('eBook requested.'), findsOneWidget);
+    expect(find.text('Request'), findsOneWidget);
   });
 
-  testWidgets('partial request distinguishes an already available format',
+  testWidgets('a partial response distinguishes an already available format',
       (tester) async {
     final adapter = _PartialRequestAdapter(ebookStatus: 'available');
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: RequestService(backendDio: dio),
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose format'));
+    await tester.tap(_row('ebook'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook + Audiobook'));
+
+    expect(find.text('eBook is available.'), findsOneWidget);
+    expect(find.text('Available'), findsOneWidget);
+  });
+
+  testWidgets('a format the server would not take reports its own failure',
+      (tester) async {
+    final adapter = _PartialRequestAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+    await tester.tap(_row('audiobook'));
     await tester.pumpAndSettle();
 
     expect(
-      find.text(
-        'eBook is available. Audiobook could not be requested. Try again.',
-      ),
+      find.text('Audiobook could not be requested. Try again.'),
       findsOneWidget,
     );
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
   });
 
   testWidgets('a failed POST refreshes truth before exposing another action',
@@ -449,29 +502,19 @@ void main() {
     final adapter = _FailedPostAfterMutationAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: RequestService(backendDio: dio),
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose format'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook'));
+    await tester.tap(_row('ebook'));
     await tester.pumpAndSettle();
 
     expect(adapter.statusChecks, 2);
-    expect(find.text('Request eBook'), findsNothing);
-    expect(find.text('Request Audiobook'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+    expect(find.text('Request'), findsOneWidget);
     expect(
       find.text(
-        'The request outcome couldn’t be confirmed. The book status was refreshed.',
+        'The request outcome couldn’t be confirmed. The book status was '
+        'refreshed.',
       ),
       findsOneWidget,
     );
@@ -488,7 +531,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: StatefulBuilder(
-            builder: (context, rebuild) => BookRequestButton(
+            builder: (context, rebuild) => BookFormatPanel(
               foreignId: 'fb',
               title: 'Flock',
               service: RequestService(backendDio: dio),
@@ -503,9 +546,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Choose format'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('eBook'));
+    await tester.tap(_row('ebook'));
 
     for (var attempt = 0;
         attempt < 50 && adapter.statusChecks < 2;
@@ -515,9 +556,12 @@ void main() {
     expect(adapter.postCount, 1);
     expect(refreshTick, 0);
     expect(adapter.statusChecks, 2);
-    expect(tester.widget<TextButton>(find.byType(TextButton)).onPressed, isNull);
+    // The in-flight format says so on its own row, and no row can be tapped.
+    expect(find.text('Requesting…'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
 
-    await tester.tap(find.byType(TextButton));
+    await tester.tap(_row('audiobook'));
     await tester.pump();
     expect(adapter.postCount, 1);
 
@@ -530,11 +574,12 @@ void main() {
     expect(refreshTick, 1);
     expect(adapter.statusChecks, 2,
         reason: 'the refreshTick rebuild must not supersede the accepted check');
-    expect(tester.widget<TextButton>(find.byType(TextButton)).onPressed, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
 
     parentRefresh.complete();
     await tester.pumpAndSettle();
-    expect(find.text('Request Audiobook'), findsOneWidget);
+    expect(find.text('Requesting…'), findsNothing);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
     expect(adapter.postCount, 1);
   });
 
@@ -546,17 +591,7 @@ void main() {
     });
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BookRequestButton(
-            foreignId: 'fb',
-            title: 'Flock',
-            service: RequestService(backendDio: dio),
-          ),
-        ),
-      ),
-    );
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
     await tester.pumpAndSettle();
     expect(adapter.requestCount, 1);
 
@@ -571,7 +606,7 @@ void main() {
     expect(adapter.requestCount, 2);
   });
 
-  testWidgets('a late status response cannot overwrite a reused book button',
+  testWidgets('a late status response cannot overwrite a reused book panel',
       (tester) async {
     final adapter = _DeferredStatusAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -586,11 +621,10 @@ void main() {
           body: StatefulBuilder(
             builder: (context, setState) {
               rebuild = setState;
-              return BookRequestButton(
+              return BookFormatPanel(
                 foreignId: foreignId,
                 title: foreignId,
                 service: service,
-                showCoveredStatus: true,
               );
             },
           ),
@@ -610,10 +644,29 @@ void main() {
       },
     });
     await tester.pumpAndSettle();
-    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Requested'), findsNWidgets(2));
 
     adapter.complete('old-book', {'status': 'unavailable'});
     await tester.pumpAndSettle();
-    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Requested'), findsNWidgets(2));
+    expect(find.text('Request'), findsNothing);
   });
 }
+
+/// The panel under test, with only the book identity every case shares.
+Widget _panel(
+  RequestService service, {
+  bool ownershipStatusKnown = true,
+}) =>
+    MaterialApp(
+      home: Scaffold(
+        body: BookFormatPanel(
+          foreignId: 'fb',
+          title: 'Flock',
+          service: service,
+          ownershipStatusKnown: ownershipStatusKnown,
+        ),
+      ),
+    );
+
+Finder _row(String format) => find.byKey(ValueKey('book-format-row:$format'));

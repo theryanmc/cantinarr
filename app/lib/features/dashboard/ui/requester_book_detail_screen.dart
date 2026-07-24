@@ -9,7 +9,6 @@ import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
-import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
@@ -20,7 +19,7 @@ import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
-import '../../request/ui/book_request_button.dart';
+import '../../request/ui/book_format_panel.dart';
 import '../data/book_library_service.dart';
 import '../logic/book_ownership_matcher.dart';
 
@@ -55,7 +54,6 @@ class _RequesterBookDetailScreenState
   ChaptarrBook? _metadata;
   List<ChaptarrBook> _chaptarrRecords = const [];
   Map<int, List<ChaptarrBookFile>> _filesByBook = const {};
-  BookRequestStatusDetail? _requestDetail;
   bool _metadataLoading = false;
   int _loadGeneration = 0;
   int _recordsLoadGeneration = 0;
@@ -100,7 +98,6 @@ class _RequesterBookDetailScreenState
     _metadata = widget.initialBook;
     _chaptarrRecords = const [];
     _filesByBook = const {};
-    _requestDetail = null;
     _metadataLoading = widget.initialBook == null &&
         (widget.titleHint?.trim().isNotEmpty ?? false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -223,11 +220,6 @@ class _RequesterBookDetailScreenState
     }
   }
 
-  void _onRequestDetailChanged(BookRequestStatusDetail detail) {
-    if (!mounted) return;
-    setState(() => _requestDetail = detail);
-  }
-
   Future<void> _onRequestCompleted() async {
     // The request may have created the live Chaptarr records immediately.
     // Refresh both the ownership digest and the admin destination in place.
@@ -332,11 +324,6 @@ class _RequesterBookDetailScreenState
         ? _metadata!.genres
         : (live?.genres ?? const <String>[]);
     final ownership = owned?.ownership;
-    final detail = (_requestDetail ?? const BookRequestStatusDetail())
-        .withOwnership(
-          ownership,
-          ownershipStatusKnown: owned?.statusKnown ?? true,
-        );
     final auth = ref.watch(authProvider).valueOrNull;
     final instanceId = _instanceId;
     final downloadsEnabled =
@@ -371,9 +358,8 @@ class _RequesterBookDetailScreenState
 
     return CenteredContent(
       child: ListView(
-        // Build the status/action region even when large accessibility text
-        // pushes it just below the viewport; it owns the live status refresh
-        // that feeds the format panel above it.
+        // Build the format panel even when large accessibility text pushes it
+        // just below the viewport; it owns this book's live request state.
         cacheExtent: MediaQuery.sizeOf(context).height * 2,
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
         children: [
@@ -421,41 +407,48 @@ class _RequesterBookDetailScreenState
             ),
           ],
           const SizedBox(height: 24),
-          _FormatStatusPanel(
-            detail: detail,
-            statusLoaded: _requestDetail != null,
+          BookFormatPanel(
+            foreignId: widget.foreignId,
+            title: title,
             instanceId: instanceId,
-            ebookFiles: downloadsEnabled ? ebookFiles : const [],
-            audiobookFiles:
-                downloadsEnabled ? audiobookFiles : const [],
+            service: _requestService,
+            ownership: ownership,
+            ownershipStatusKnown: owned?.statusKnown ?? true,
+            refreshTick: requestRefreshTick,
+            ebookDownload: !downloadsEnabled ||
+                    instanceId == null ||
+                    ebookFiles.isEmpty
+                ? null
+                : MediaDownloadChoiceButton(
+                    instanceId: instanceId,
+                    choices: ebookFiles,
+                    label: 'Download eBook',
+                    sheetTitle: 'Download eBook',
+                    iconOnly: true,
+                  ),
+            audiobookDownload: !downloadsEnabled ||
+                    instanceId == null ||
+                    audiobookFiles.isEmpty
+                ? null
+                : MediaDownloadChoiceButton(
+                    instanceId: instanceId,
+                    choices: audiobookFiles,
+                    label: 'Download audiobook',
+                    sheetTitle: 'Download audiobook',
+                    iconOnly: true,
+                  ),
+            onRequestCompleted: _onRequestCompleted,
           ),
-          const SizedBox(height: 18),
-          Wrap(
-            alignment: WrapAlignment.center,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: 10,
-            runSpacing: 8,
-            children: [
-              BookRequestButton(
-                foreignId: widget.foreignId,
-                title: title,
-                instanceId: instanceId,
-                service: _requestService,
-                ownership: ownership,
-                ownershipStatusKnown: owned?.statusKnown ?? true,
-                refreshTick: requestRefreshTick,
-                showCoveredStatus: false,
-                onDetailChanged: _onRequestDetailChanged,
-                onRequestCompleted: _onRequestCompleted,
+          if (isAdmin && _chaptarrRecords.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            Center(
+              child: OutlinedButton.icon(
+                onPressed: _openInChaptarr,
+                icon: const Icon(Icons.open_in_new_rounded, size: 17),
+                label: const Text('Manage book'),
               ),
-              if (isAdmin && _chaptarrRecords.isNotEmpty)
-                OutlinedButton.icon(
-                  onPressed: _openInChaptarr,
-                  icon: const Icon(Icons.open_in_new_rounded, size: 17),
-                  label: const Text('Manage book'),
-                ),
-            ],
-          ),
+            ),
+          ],
           if (genres.isNotEmpty) ...[
             const SizedBox(height: 22),
             Wrap(
@@ -539,213 +532,10 @@ class _RequesterBookDetailScreenState
   }
 }
 
-class _FormatStatusPanel extends StatelessWidget {
-  final BookRequestStatusDetail detail;
-  final bool statusLoaded;
-  final String? instanceId;
-  final List<MediaDownloadChoice> ebookFiles;
-  final List<MediaDownloadChoice> audiobookFiles;
-
-  const _FormatStatusPanel({
-    required this.detail,
-    required this.statusLoaded,
-    required this.instanceId,
-    required this.ebookFiles,
-    required this.audiobookFiles,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-            child: Text('Formats',
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          const Divider(height: 1, color: AppTheme.border),
-          _FormatStatusRow(
-            icon: Icons.menu_book,
-            label: 'eBook',
-            state: _formatState(
-              detail,
-              BookRequestFormat.ebook,
-              statusLoaded,
-            ),
-            download: instanceId == null || ebookFiles.isEmpty
-                ? null
-                : MediaDownloadChoiceButton(
-                    instanceId: instanceId!,
-                    choices: ebookFiles,
-                    label: 'Download eBook',
-                    sheetTitle: 'Download eBook',
-                    iconOnly: true,
-                  ),
-          ),
-          const Divider(height: 1, indent: 52, color: AppTheme.border),
-          _FormatStatusRow(
-            icon: Icons.headphones,
-            label: 'Audiobook',
-            state: _formatState(
-              detail,
-              BookRequestFormat.audiobook,
-              statusLoaded,
-            ),
-            download: instanceId == null || audiobookFiles.isEmpty
-                ? null
-                : MediaDownloadChoiceButton(
-                    instanceId: instanceId!,
-                    choices: audiobookFiles,
-                    label: 'Download audiobook',
-                    sheetTitle: 'Download audiobook',
-                    iconOnly: true,
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FormatStatusRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final ({String label, Color color}) state;
-  final Widget? download;
-
-  const _FormatStatusRow({
-    required this.icon,
-    required this.label,
-    required this.state,
-    this.download,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final stack = MediaQuery.textScalerOf(context).scale(1) > 1.3 ||
-        MediaQuery.sizeOf(context).width < 360 ||
-        state.label == 'Format needs attention';
-    final heading = Row(
-      children: [
-        Icon(icon, color: AppTheme.accent, size: 20),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(label, style: Theme.of(context).textTheme.titleSmall),
-        ),
-      ],
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: stack
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                heading,
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.only(left: 28),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: StatusPill(
-                            text: state.label,
-                            color: state.color,
-                          ),
-                        ),
-                      ),
-                      if (download != null) ...[
-                        const SizedBox(width: 4),
-                        download!,
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            )
-          : Row(
-              children: [
-                Expanded(child: heading),
-                StatusPill(text: state.label, color: state.color),
-                if (download != null) ...[
-                  const SizedBox(width: 4),
-                  download!,
-                ],
-              ],
-            ),
-    );
-  }
-}
-
 String _bookFileLabel(ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';
   final parts = path.split('/').where((part) => part.isNotEmpty).toList();
   return parts.isEmpty ? 'File ${index + 1}' : parts.last;
-}
-
-({String label, Color color}) _formatState(
-  BookRequestStatusDetail detail,
-  BookRequestFormat format,
-  bool statusLoaded,
-) {
-  final ownership = detail.ownership;
-  final owned = switch (format) {
-    BookRequestFormat.ebook => ownership?.ebook,
-    BookRequestFormat.audiobook => ownership?.audiobook,
-    BookRequestFormat.both => null,
-  };
-  if (owned?.downloaded ?? false) {
-    return (label: 'Available', color: AppTheme.available);
-  }
-
-  if (owned?.monitored ?? false) {
-    return (label: 'Requested', color: AppTheme.requested);
-  }
-
-  final status = detail.statusFor(format);
-  if (status != null && status != RequestStatus.unavailable) {
-    return switch (status) {
-      RequestStatus.available =>
-        (label: 'Available', color: AppTheme.available),
-      RequestStatus.pending =>
-        (label: 'Pending Approval', color: AppTheme.requested),
-      RequestStatus.requested =>
-        (label: 'Requested', color: AppTheme.requested),
-      RequestStatus.downloading =>
-        (label: 'Downloading', color: AppTheme.downloading),
-      RequestStatus.partial =>
-        (label: 'Requested', color: AppTheme.requested),
-      RequestStatus.denied =>
-        (label: 'Request Denied', color: AppTheme.error),
-      RequestStatus.unavailable => throw StateError('unreachable'),
-    };
-  }
-
-  // Until request history resolves, an empty ownership row does not prove the
-  // format was never requested. Keep the neutral loading state instead of
-  // briefly claiming "Not requested" for a pending or denied request.
-  if (!statusLoaded) {
-    return (label: 'Checking…', color: AppTheme.textSecondary);
-  }
-
-  if (!detail.isKnown) {
-    return detail.effectiveUnknownReason ==
-            BookStatusUnknownReason.formatNeedsAttention
-        ? (label: 'Format needs attention', color: AppTheme.requested)
-        : (label: 'Couldn’t check', color: AppTheme.error);
-  }
-  if (status == RequestStatus.unavailable) {
-    return (label: 'Not requested', color: AppTheme.textSecondary);
-  }
-  return (label: 'Couldn’t check', color: AppTheme.error);
 }
 
 String _firstText(Iterable<String?> values) {

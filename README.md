@@ -43,7 +43,7 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
 - **TMDB + Trakt for discovery** -- The best metadata, images, and trending data, proxied through the server so keys stay off devices. Sonarr's TVDB dependency is invisible.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
-- **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: request the ebook, the audiobook, or both; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user.
+- **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: tap a book's eBook or Audiobook row to request that format; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user.
 - **Take available files with you** -- Optional, resumable downloads let signed-in users save exact ebook, audiobook, movie, and episode files from their authorized library. Cantinarr re-checks the live arr file record before issuing a short-lived, file-scoped link without putting arr credentials in the URL.
 - **Request approvals** -- Optional approval queue, globally or per user. Admins also control per-user season choice, quality choice, and default quality profiles. Approve/deny lands as a push notification for the requester.
 - **AI assistant** -- "What should I watch tonight?" Every user can bring a personal Anthropic, OpenAI, or Gemini API key, or link OpenAI (OAuth) with a one-time ChatGPT browser code—even without included access, and their choice never has to match the server's provider. Admins can configure the same providers as an included server profile and grant that shared access per user. A personal provider is an explicit override; Cantinarr never silently spends the shared account when that override needs attention. The assistant searches your library, checks availability, requests for you, and gives admins conversational queue and release control.
@@ -184,7 +184,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 1. Admin sends you a connect link
 2. Open the link on your device -- it creates your account and connects automatically
 3. Browse movies, TV shows, and books powered by TMDB, Trakt, and Chaptarr
-4. Tap "Request" on anything you want -- pick seasons or book formats when more than one choice is still open
+4. Tap "Request" on anything you want -- pick seasons for a show, or tap a book's eBook or Audiobook row to request that format
 5. Watch download progress live and get push notifications
 6. Something wrong with a file? Tap "Report a problem"; Cantinarr quietly watches for an in-flight Radarr/Sonarr recovery, then investigates only if the problem persists
 7. Ask the AI assistant for recommendations or to make requests for you. Use the included server provider when granted, or choose your own provider under **Settings > AI Access**
