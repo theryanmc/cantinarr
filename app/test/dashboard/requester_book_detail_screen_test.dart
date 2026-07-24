@@ -35,15 +35,23 @@ void main() {
     expect(find.text('eBook'), findsOneWidget);
     expect(find.text('Audiobook'), findsOneWidget);
     expect(find.text('Requested'), findsOneWidget);
-    expect(find.text('Not requested'), findsOneWidget);
     // Flock-style mixed truth: a monitored audiobook is Requested while the
-    // untouched eBook remains the one exact action.
-    await tester.scrollUntilVisible(
-      find.text('Request eBook'),
-      250,
-      scrollable: _detailScrollable(),
+    // untouched eBook row is itself the one exact action.
+    expect(find.text('Request'), findsOneWidget);
+    expect(find.text('Not requested'), findsNothing);
+    expect(
+      tester
+          .widget<InkWell>(find.byKey(const ValueKey('book-format-row:ebook')))
+          .onTap,
+      isNotNull,
     );
-    expect(find.text('Request eBook'), findsOneWidget);
+    expect(
+      tester
+          .widget<InkWell>(
+              find.byKey(const ValueKey('book-format-row:audiobook')))
+          .onTap,
+      isNull,
+    );
     expect(find.text('Manage book'), findsNothing);
   });
 
@@ -100,6 +108,26 @@ void main() {
     expect(find.text('1969 · 336 pages'), findsNothing);
     expect(find.text('Science Fiction'), findsNothing);
     expect(find.textContaining('desert planet'), findsNothing);
+  });
+
+  testWidgets('tapping a still-open format row requests exactly that format',
+      (tester) async {
+    final adapter = _BooksAdapter();
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+
+    router.go('/detail/book/29749107');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('book-format-row:ebook')));
+    await tester.pumpAndSettle();
+
+    expect(adapter.requestBodies, hasLength(1));
+    expect(adapter.requestBodies.single['book_format'], 'ebook');
+    expect(adapter.requestBodies.single['foreign_id'], '29749107');
+    // The requester is told what happened and sees the row settle into it.
+    expect(find.text('eBook requested.'), findsOneWidget);
+    expect(find.text('Requested'), findsNWidgets(2));
+    expect(find.text('Request'), findsNothing);
   });
 
   testWidgets('a known format stays visible beside an unknown sibling',
@@ -263,7 +291,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Requested'), findsOneWidget);
-    expect(find.text('Not requested'), findsOneWidget);
+    expect(find.text('Request'), findsOneWidget);
 
     container
         .read(instanceProvider.notifier)
@@ -271,7 +299,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Requested'), findsOneWidget);
-    expect(find.text('Not requested'), findsOneWidget);
+    expect(find.text('Request'), findsOneWidget);
     expect(find.text('Available'), findsNothing);
     expect(adapter.libraryInstanceIds, everyElement('books'));
     expect(adapter.statusInstanceIds, everyElement('books'));
@@ -464,6 +492,8 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool bookFiles;
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
+  final requestBodies = <Map<String, dynamic>>[];
+  final _requestedFormats = <String, String>{};
 
   _BooksAdapter({
     this.ownedCover = '',
@@ -481,7 +511,16 @@ class _BooksAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object body;
-    if (options.path == '/api/requests/book-library') {
+    if (options.method == 'POST' && options.path == '/api/requests') {
+      final data = Map<String, dynamic>.from(options.data as Map);
+      requestBodies.add(data);
+      final format = data['book_format'] as String;
+      _requestedFormats[format] = 'requested';
+      body = {
+        'status': 'requested',
+        'book_formats': {format: 'requested'},
+      };
+    } else if (options.path == '/api/requests/book-library') {
       final instanceId = options.queryParameters['instance_id'].toString();
       libraryInstanceIds.add(instanceId);
       final otherLibrary = divergentLibraries && instanceId == 'books-two';
@@ -528,7 +567,10 @@ class _BooksAdapter implements HttpClientAdapter {
       body = switch (options.queryParameters['foreign_id']) {
         '29749107' => {
             'status': 'requested',
-            'book_formats': {'audiobook': 'requested'},
+            'book_formats': {
+              'audiobook': 'requested',
+              ..._requestedFormats,
+            },
           },
         '555' => {
             'status': partiallyUnknownStatus ? 'partial' : 'requested',

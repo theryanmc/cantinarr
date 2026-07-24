@@ -74,7 +74,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
 
-    expect(find.text('Choose format'), findsNothing);
+    expect(find.text('Request'), findsNothing);
 
     final secondResult =
         find.byKey(const ValueKey('book-result:book-2:book-2:lookup:1'));
@@ -83,16 +83,13 @@ void main() {
 
     expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
     expect(find.text('Letters from a Stoic'), findsOneWidget);
-    expect(find.text('Choose format'), findsOneWidget);
-
-    await tester.tap(find.text('Choose format'));
-    await tester.pumpAndSettle();
-    expect(find.text('eBook'), findsNWidgets(2));
-    expect(find.text('Audiobook'), findsNWidgets(2));
-    expect(find.text('eBook + Audiobook'), findsOneWidget);
+    // Both formats are still open, so each row carries its own request action.
+    expect(find.text('eBook'), findsOneWidget);
+    expect(find.text('Audiobook'), findsOneWidget);
+    expect(find.text('Request'), findsNWidgets(2));
 
     final libraryRequestsBefore = adapter.libraryRequests;
-    await tester.tap(find.text('eBook').last);
+    await tester.tap(find.byKey(const ValueKey('book-format-row:ebook')));
     await tester.pumpAndSettle();
     expect(adapter.libraryRequests, greaterThan(libraryRequestsBefore));
   });
@@ -150,15 +147,16 @@ void main() {
     expect(screen.foreignId, 'library-flock');
     expect(screen.initialBook?.foreignBookId, 'lookup-flock');
 
+    final ebookRow = find.byKey(const ValueKey('book-format-row:ebook'));
     await tester.scrollUntilVisible(
-      find.text('Request eBook'),
+      ebookRow,
       250,
       scrollable: find.descendant(
         of: find.byType(RequesterBookDetailScreen),
         matching: find.byType(Scrollable),
       ),
     );
-    await tester.tap(find.text('Request eBook'));
+    await tester.tap(ebookRow);
     await tester.pumpAndSettle();
 
     expect(adapter.requestBodies, hasLength(1));
@@ -197,7 +195,7 @@ void main() {
       ),
       findsNothing,
     );
-    expect(find.text('Request eBook'), findsNothing);
+    expect(find.text('Request'), findsNothing);
 
     router.go(
       '/detail/book/library-flock?title=Flock&instance_id=books',
@@ -217,7 +215,7 @@ void main() {
       find.text('Ask an admin to check this book’s format'),
       findsOneWidget,
     );
-    expect(find.textContaining('Request eBook'), findsNothing);
+    expect(find.text('Request'), findsNothing);
     expect(adapter.requestBodies, isEmpty);
   });
 
