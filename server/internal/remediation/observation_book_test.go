@@ -43,12 +43,15 @@ func setupBookObservationService(t *testing.T, state *bookFileState) (*Service, 
 				fmt.Fprintf(w, `[{"id":%d,"authorId":456,"bookId":123}]`, state.fileID)
 			}
 		case "/api/v1/book":
-			// Library records for report resolution: one plain ebook, plus a
-			// title that exists in both formats (shared foreignBookId).
+			// Library records for report resolution: one plain ebook, a title
+			// that exists in both formats (shared foreignBookId), and a record
+			// whose format is only derivable from its lone edition (empty
+			// mediaType — the shared RecordFormat classifier must handle it).
 			fmt.Fprint(w, `[
 				{"id":123,"authorId":456,"foreignBookId":"fb-1","title":"Example Book","mediaType":"ebook"},
 				{"id":310,"authorId":456,"foreignBookId":"fb-both","title":"Dual Format","mediaType":"ebook"},
-				{"id":311,"authorId":456,"foreignBookId":"fb-both","title":"Dual Format","mediaType":"audiobook"}
+				{"id":311,"authorId":456,"foreignBookId":"fb-both","title":"Dual Format","mediaType":"audiobook"},
+				{"id":410,"authorId":456,"foreignBookId":"fb-edition","title":"Edition Only","mediaType":"","editions":[{"id":1,"bookId":410,"format":"EPUB"}]}
 			]`)
 		case "/api/v1/history":
 			if state.importDownloadID == "" {
@@ -379,6 +382,22 @@ func TestCreateUserIssueBookRequiresFormatWhenAmbiguous(t *testing.T) {
 	issue, err := svc.GetIssue(created.IssueID)
 	if err != nil || issue.BookID != 311 {
 		t.Fatalf("format-disambiguated report = %+v err=%v", issue, err)
+	}
+}
+
+// A record whose mediaType is empty classifies via its lone edition, so a
+// format-scoped report still resolves it (server and app share the semantics).
+func TestCreateUserIssueBookFormatMatchesEditionDerivedRecords(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+	created, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-edition",
+		BookFormat: "ebook", Category: CategoryOther,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue, err := svc.GetIssue(created.IssueID); err != nil || issue.BookID != 410 {
+		t.Fatalf("edition-derived format report = %+v err=%v", issue, err)
 	}
 }
 

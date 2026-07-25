@@ -178,6 +178,26 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
 
   bool get _reasonRequired => _category.requiresReason;
 
+  /// The wire categories are shared across media; only their presentation is
+  /// scope-aware. An ebook has no audio to be in the wrong language, so that
+  /// choice is withheld for ebook-scoped reports.
+  List<IssueCategory> _categoryChoices() {
+    if (widget.scope.mediaType == 'book' && widget.scope.bookFormat == 'ebook') {
+      return IssueCategory.values
+          .where((c) => c != IssueCategory.wrongAudio)
+          .toList();
+    }
+    return IssueCategory.values.toList();
+  }
+
+  String _chipLabel(IssueCategory c) {
+    if (widget.scope.mediaType != 'book') return c.label;
+    return switch (c) {
+      IssueCategory.wrongContent => 'Wrong book/title',
+      _ => c.label,
+    };
+  }
+
   Future<void> _submit() async {
     if (_submitting) return;
     final reason = _reasonController.text.trim();
@@ -273,9 +293,9 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: IssueCategory.values
+            children: _categoryChoices()
                 .map((c) => ChoiceChip(
-                      label: Text(c.label),
+                      label: Text(_chipLabel(c)),
                       selected: _category == c,
                       onSelected: (_) => setState(() {
                         _category = c;

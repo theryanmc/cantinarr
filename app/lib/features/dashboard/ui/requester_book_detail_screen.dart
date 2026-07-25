@@ -255,33 +255,51 @@ class _RequesterBookDetailScreenState
     await _resolveChaptarrRecords(_loadGeneration);
   }
 
-  /// A book is reportable once the library has a live Chaptarr record for it
-  /// (so there's a download/file to complain about) and the server allows
-  /// reporting — the same gate the movie/TV detail screens apply.
-  bool _canReportBook() {
+  /// The formats a reporter can flag. Live Chaptarr records are the richest
+  /// truth but resolve only for admins/download-enabled users; plain requesters
+  /// fall back to the requester-visible ownership digest (owned = monitored or
+  /// downloaded, which includes a stuck download — exactly what reports are
+  /// for), failing closed while the digest is still unknown.
+  List<BookFormat> _reportableFormats(OwnedTitle? owned) {
+    final live = _chaptarrRecords
+        .where((record) => record.id > 0)
+        .map((record) => record.format)
+        .where((format) => format != BookFormat.unknown)
+        .toSet()
+        .toList();
+    if (live.isNotEmpty) return live;
+    if (owned == null || !owned.statusKnown) return const [];
+    return [
+      if (owned.ownership.ebook.owned) BookFormat.ebook,
+      if (owned.ownership.audiobook.owned) BookFormat.audiobook,
+    ];
+  }
+
+  /// A book is reportable once the library tracks it in some form (a live
+  /// Chaptarr record, or an owned format in the requester digest) and the
+  /// server allows reporting — mirroring the movie/TV gate, which also derives
+  /// from requester-visible library truth.
+  bool _canReportBook(OwnedTitle? owned) {
     final allow = ref
             .watch(authProvider)
             .valueOrNull
             ?.connection
             ?.allowReporting ??
         false;
-    return allow &&
-        _instanceId != null &&
-        _chaptarrRecords.any((record) => record.id > 0);
+    if (!allow || _instanceId == null) return false;
+    if (_chaptarrRecords.any((record) => record.id > 0)) return true;
+    return _reportableFormats(owned).isNotEmpty;
   }
 
   /// Opens the report flow. An ebook and audiobook of the same title are
   /// distinct Chaptarr records, so when both exist the reporter picks which
-  /// format the problem is about — never a silent merge.
-  Future<void> _onReportProblem(String title) async {
+  /// format the problem is about — never a silent merge. With no format
+  /// knowledge at all the report goes up format-less and the server resolves
+  /// (or asks for the format via its ambiguity error).
+  Future<void> _onReportProblem(String title, OwnedTitle? owned) async {
     final instanceId = _instanceId;
     if (instanceId == null) return;
-    final formats = _chaptarrRecords
-        .where((record) => record.id > 0)
-        .map((record) => record.format)
-        .where((format) => format != BookFormat.unknown)
-        .toSet()
-        .toList();
+    final formats = _reportableFormats(owned);
     String? format;
     if (formats.length == 1) {
       format = formats.first == BookFormat.audiobook ? 'audiobook' : 'ebook';
@@ -538,12 +556,12 @@ class _RequesterBookDetailScreenState
                   ),
             onRequestCompleted: _onRequestCompleted,
           ),
-          if (_canReportBook()) ...[
+          if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the
             // format picker: an ebook and audiobook are distinct records.
             OutlinedButton.icon(
-              onPressed: () => _onReportProblem(title),
+              onPressed: () => _onReportProblem(title, owned),
               icon: const Icon(Icons.flag_outlined,
                   size: 18, color: AppTheme.textSecondary),
               label: const Text('Report a problem',

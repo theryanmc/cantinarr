@@ -150,22 +150,10 @@ func coverOf(book chaptarr.Book) string {
 	return ""
 }
 
-// recordFormat resolves the single format a Chaptarr book record represents: its
-// book-level mediaType when "ebook"/"audiobook", else the format of its lone
-// edition via chaptarr.FormatOf (a book with anything other than exactly one
-// edition is "unknown"). Mirrors the Dart ChaptarrBook.format fallback.
-func recordFormat(book chaptarr.Book) string {
-	switch book.MediaType {
-	case chaptarr.FormatEbook:
-		return chaptarr.FormatEbook
-	case chaptarr.FormatAudiobook:
-		return chaptarr.FormatAudiobook
-	}
-	if len(book.Editions) == 1 {
-		return chaptarr.FormatOf(book.Editions[0].Format)
-	}
-	return chaptarr.FormatUnknown
-}
+// recordFormat resolves the single format a Chaptarr book record represents.
+// The classifier lives in the chaptarr package so every consumer (library
+// digests, issue-report resolution) agrees on the same semantics.
+func recordFormat(book chaptarr.Book) string { return chaptarr.RecordFormat(book) }
 
 // recordsByForeignID indexes a foreignBookId's library records by format
 // ("ebook"/"audiobook") and returns the title. Used to complete the missing

@@ -104,7 +104,10 @@ func resolveReportedBook(client *chaptarr.Client, foreignID, format string) (*ch
 		if b.ForeignBookID != foreignID {
 			continue
 		}
-		if format != "" && !strings.EqualFold(b.MediaType, format) {
+		// Classify with the shared record-format semantics (mediaType, else the
+		// lone edition) so a record the library digest shows as "ebook" matches
+		// an "ebook" report even when its mediaType field is empty.
+		if format != "" && chaptarr.RecordFormat(b) != format {
 			continue
 		}
 		matched = append(matched, b)
@@ -141,12 +144,6 @@ func validCategory(c string) bool {
 // is 0 but tvdb_id is set, a best-effort reverse lookup of the cached
 // tmdb<->tvdb mapping is attempted; otherwise the ids are stored as given.
 func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*CreateIssueResponse, error) {
-	// Serialize report creation with complete-snapshot reconciliation. Without
-	// this boundary, an auto observation can be created from a stale in-memory
-	// record set while the same exact user report is committing.
-	s.observationMu.Lock()
-	defer s.observationMu.Unlock()
-
 	instanceID := strings.TrimSpace(req.InstanceID)
 	if instanceID == "" {
 		return nil, fmt.Errorf("instance_id is required")
@@ -198,7 +195,10 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	}
 	// Books carry no TMDB/TVDB identity. Resolve the reported foreignBookId
 	// live to the durable Chaptarr record ids the remediation engine keys on —
-	// never trusting client-supplied record ids or a stored snapshot.
+	// never trusting client-supplied record ids or a stored snapshot. This runs
+	// BEFORE the observation lock: it is a network fetch (with the client's full
+	// timeout) and reads no lock-guarded state, and the record-removed-mid-report
+	// race is handled fail-closed by observation either way.
 	authorID, bookID := 0, 0
 	if req.MediaType == "book" {
 		tmdbID, tvdbID = 0, 0
@@ -211,6 +211,12 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 			req.Title = record.Title
 		}
 	}
+
+	// Serialize report creation with complete-snapshot reconciliation. Without
+	// this boundary, an auto observation can be created from a stale in-memory
+	// record set while the same exact user report is committing.
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
 	// Resolve a missing tmdb_id from a known tvdb_id via the cached mapping the
 	// ID bridge maintains (request flows populate tmdb_tvdb_cache). There is no
 	// live reverse resolver, so this is best-effort: on a miss the ids are stored
