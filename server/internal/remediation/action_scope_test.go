@@ -25,12 +25,13 @@ func TestBookIssueRejectsActionsWithoutDurableBookIdentity(t *testing.T) {
 	issueID, _ := res.LastInsertId()
 
 	unsafe := []struct {
-		kind   ActionKind
-		params string
+		kind    ActionKind
+		params  string
+		message string
 	}{
-		{ActionGrabRelease, `{"media_type":"book","guid":"g","indexer_id":1,"queue_id_to_replace":77,"release_title":"Book.Release","size":1,"protocol":"usenet","indexer":"Test"}`},
-		{ActionTriggerSearch, `{"media_type":"book","book_id":123}`},
-		{ActionRescan, `{"media_type":"book","author_id":456}`},
+		{ActionGrabRelease, `{"media_type":"book","guid":"g","indexer_id":1,"queue_id_to_replace":77,"release_title":"Book.Release","size":1,"protocol":"usenet","indexer":"Test"}`, "authoritative book id"},
+		{ActionTriggerSearch, `{"media_type":"book","book_id":123}`, "authoritative book id"},
+		{ActionRescan, `{"media_type":"book","author_id":456}`, "authoritative author id"},
 	}
 	for _, tc := range unsafe {
 		canonical, err := validateActionParams(tc.kind, json.RawMessage(tc.params))
@@ -38,7 +39,7 @@ func TestBookIssueRejectsActionsWithoutDurableBookIdentity(t *testing.T) {
 			t.Fatalf("validate %s params: %v", tc.kind, err)
 		}
 		err = validateActionScopeWith(database, issueID, tc.kind, canonical)
-		if err == nil || !strings.Contains(err.Error(), "authoritative book id") {
+		if err == nil || !strings.Contains(err.Error(), tc.message) {
 			t.Errorf("%s scope error = %v", tc.kind, err)
 		}
 	}
@@ -50,6 +51,51 @@ func TestBookIssueRejectsActionsWithoutDurableBookIdentity(t *testing.T) {
 	}
 	if err := validateActionScopeWith(database, issueID, ActionRemediateQueue, canonical); err != nil {
 		t.Fatalf("exact book queue action rejected: %v", err)
+	}
+}
+
+// A book issue with stored authoritative Chaptarr ids accepts exactly-scoped
+// title-level actions and still rejects any other book/author.
+func TestBookIssueWithDurableIdentityScopesTitleActions(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	res, err := database.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, instance_id, download_id, arr_queue_id, author_id, book_id)
+		 VALUES ('auto', 'open', 'book', 0, 'Book', 'chaptarr-1', 'download-1', 77, 456, 123)`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+
+	for _, tc := range []struct {
+		kind   ActionKind
+		params string
+		ok     bool
+	}{
+		{ActionTriggerSearch, `{"media_type":"book","book_id":123}`, true},
+		{ActionTriggerSearch, `{"media_type":"book","author_id":456}`, true},
+		{ActionTriggerSearch, `{"media_type":"book","book_id":999}`, false},
+		{ActionTriggerSearch, `{"media_type":"book","author_id":999}`, false},
+		{ActionRescan, `{"media_type":"book","author_id":456}`, true},
+		{ActionRescan, `{"media_type":"book","author_id":999}`, false},
+		{ActionGrabRelease, `{"media_type":"book","guid":"g","indexer_id":1,"queue_id_to_replace":77,"release_title":"Book.Release","size":1,"protocol":"usenet","indexer":"Test"}`, true},
+		{ActionGrabRelease, `{"media_type":"book","guid":"g","indexer_id":1,"queue_id_to_replace":78,"release_title":"Book.Release","size":1,"protocol":"usenet","indexer":"Test"}`, false},
+	} {
+		canonical, err := validateActionParams(tc.kind, json.RawMessage(tc.params))
+		if err != nil {
+			t.Fatalf("validate %s params: %v", tc.kind, err)
+		}
+		err = validateActionScopeWith(database, issueID, tc.kind, canonical)
+		if tc.ok && err != nil {
+			t.Errorf("exact-scope %s rejected: %v (params %s)", tc.kind, err, tc.params)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("out-of-scope %s accepted: %s", tc.kind, tc.params)
+		}
 	}
 }
 

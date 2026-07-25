@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1169,5 +1170,62 @@ func TestGetQueueParseFailureIsAnError(t *testing.T) {
 	}
 	if errors.Is(err, ErrToolAuthorization) {
 		t.Fatalf("parse failure misclassified as authorization failure: %v", err)
+	}
+}
+
+// TestGetLibraryBookDrillDown pins the book-scoped library view: the in-tool
+// source of the book ids the per-book action tools require.
+func TestGetLibraryBookDrillDown(t *testing.T) {
+	chaptarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/book":
+			if r.URL.Query().Get("authorId") != "456" {
+				t.Errorf("book query = %s", r.URL.RawQuery)
+			}
+			fmt.Fprint(w, `[
+				{"id":123,"authorId":456,"title":"Missing Book","monitored":true,"mediaType":"ebook","statistics":{"bookFileCount":0}},
+				{"id":124,"authorId":456,"title":"Owned Book","monitored":true,"mediaType":"audiobook","statistics":{"bookFileCount":3}},
+				{"id":125,"authorId":456,"title":"Ignored Book","monitored":false,"statistics":{"bookFileCount":0}}
+			]`)
+		case "/api/v1/book/123":
+			fmt.Fprint(w, `{"id":123,"authorId":456,"title":"Missing Book","monitored":true,"mediaType":"ebook","statistics":{"bookFileCount":0},"author":{"id":456,"authorName":"The Author"}}`)
+		case "/api/v1/book/999":
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(chaptarrSrv.Close)
+	server := newDefaultInstanceToolServer(t, map[string]string{"chaptarr": chaptarrSrv.URL})
+
+	// author_id lists the author's books with their book ids; filter applies.
+	res, err := server.ExecuteTool(context.Background(), "get_library",
+		json.RawMessage(`{"media_type":"book","author_id":456,"filter":"missing"}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("author drill-down: %v", err)
+	}
+	if !strings.Contains(res.Text, "[book ID 123") || strings.Contains(res.Text, "Owned Book") || strings.Contains(res.Text, "Ignored Book") {
+		t.Fatalf("missing-filtered author books = %q", res.Text)
+	}
+
+	// book_id renders the single exact record (and wins over author_id).
+	res, err = server.ExecuteTool(context.Background(), "get_library",
+		json.RawMessage(`{"media_type":"book","book_id":123,"author_id":456}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("book drill-down: %v", err)
+	}
+	if !strings.Contains(res.Text, "[book ID 123") || !strings.Contains(res.Text, "The Author") {
+		t.Fatalf("exact book view = %q", res.Text)
+	}
+
+	// A deleted/unknown book id yields the not-found message, never a zero-id record.
+	res, err = server.ExecuteTool(context.Background(), "get_library",
+		json.RawMessage(`{"media_type":"book","book_id":999}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("missing book drill-down: %v", err)
+	}
+	if !strings.Contains(res.Text, "not found") || strings.Contains(res.Text, "book ID 0") {
+		t.Fatalf("missing book view = %q", res.Text)
 	}
 }

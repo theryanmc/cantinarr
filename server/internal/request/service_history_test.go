@@ -184,7 +184,7 @@ func TestGetRequestsBookRowsUsePinnedLiveProjection(t *testing.T) {
 			{"id":6,"title":"Unknown Format","foreignBookId":"book-5","monitored":true,"mediaType":"paperback",
 			 "author":{"authorName":"E"},"statistics":{"bookFileCount":0}}
 		]`,
-		"/api/v1/queue": `{"totalRecords":1,"records":[{"bookId":4,"status":"downloading","trackedDownloadStatus":"ok"}]}`,
+		"/api/v1/queue": `{"totalRecords":1,"records":[{"id":6,"bookId":4,"status":"downloading","trackedDownloadStatus":"ok"}]}`,
 	})
 	s, uid := newHistoryTestService(t, "", "", chaptarrSrv.URL)
 	_, instanceID, err := s.resolveChaptarr(uid, "")

@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -57,7 +56,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_library",
 		Permission:  auth.PermissionArrRead,
-		Description: "Browse the Radarr/Sonarr/Chaptarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query. Admin only",
+		Description: "Browse the Radarr/Sonarr/Chaptarr library. Filter for missing (monitored but not downloaded) or unmonitored items, optionally narrowed by a title query. For books, pass author_id to list one author's books with their book ids (the ids search_releases/trigger_search need), or book_id for one exact book. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -74,6 +73,14 @@ var arrToolDefinitions = []Tool{
 				"query": map[string]interface{}{
 					"type":        "string",
 					"description": "Optional case-insensitive title substring filter",
+				},
+				"author_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: list this Chaptarr author's books with their book ids",
+				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Book only: show this exact Chaptarr book record",
 				},
 			},
 			"required": []string{"media_type"},
@@ -562,6 +569,8 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 		TvdbID        int    `json:"tvdb_id"`
 		SeasonNumber  int    `json:"season_number"`
 		EpisodeNumber int    `json:"episode_number"`
+		AuthorID      int    `json:"author_id"`
+		BookID        int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -570,6 +579,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 	scope := mediaReadScope{
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+		AuthorID: params.AuthorID, BookID: params.BookID,
 	}
 
 	var sections []string
@@ -650,14 +660,11 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 			}
 			sections = append(sections, "Chaptarr is not configured.")
 		} else {
-			items, err := chaptarrClient.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			items, err := chaptarrClient.GetQueueDetailed()
 			if err != nil {
 				return nil, err
 			}
-			items = slices.DeleteFunc(items, func(item chaptarr.DetailedQueueItem) bool {
-				return (params.QueueID > 0 && item.ID != params.QueueID) ||
-					(params.DownloadID != "" && item.DownloadID != params.DownloadID)
-			})
+			items = filterChaptarrQueue(items, scope)
 			if len(items) == 0 {
 				sections = append(sections, "Book queue: empty.")
 			} else {
@@ -835,6 +842,8 @@ func (s *ToolServer) getLibrary(input json.RawMessage, instanceID string) (*Tool
 		Query     string `json:"query"`
 		TmdbID    int    `json:"tmdb_id"`
 		TvdbID    int    `json:"tvdb_id"`
+		AuthorID  int    `json:"author_id"`
+		BookID    int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -965,6 +974,9 @@ func (s *ToolServer) getLibrary(input json.RawMessage, instanceID string) (*Tool
 		if chaptarrClient == nil {
 			return &ToolResult{Text: "Chaptarr is not configured."}, nil
 		}
+		if params.BookID > 0 || params.AuthorID > 0 {
+			return chaptarrBookScopedLibrary(chaptarrClient, params.BookID, params.AuthorID, filter, query)
+		}
 		authors, err := chaptarrClient.GetAllAuthors()
 		if err != nil {
 			return nil, err
@@ -1008,12 +1020,87 @@ func (s *ToolServer) getLibrary(input json.RawMessage, instanceID string) (*Tool
 				sb.WriteString(" — unmonitored")
 			}
 		}
-		sb.WriteString("\n\nUse get_queue, search_releases (book_id), or trigger_search (author_id/book_id) for per-book actions; book ids come from the Chaptarr library, not this summary.")
+		sb.WriteString("\n\nCall get_library again with author_id to list one author's books with their book ids, then use get_queue, search_releases (book_id), or trigger_search (author_id/book_id) for per-book actions.")
 		return &ToolResult{Text: sb.String()}, nil
 
 	default:
 		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
 	}
+}
+
+// chaptarrBookScopedLibrary renders the book-level library view: one exact book
+// record, or one author's books. This is the in-tool source of the book ids the
+// per-book action tools (search_releases, grab_release, trigger_search) require.
+func chaptarrBookScopedLibrary(client *chaptarr.Client, bookID, authorID int, filter, query string) (*ToolResult, error) {
+	formatBook := func(b chaptarr.Book) string {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "- %s [book ID %d", b.Title, b.ID)
+		if b.AuthorID > 0 {
+			fmt.Fprintf(&sb, ", author ID %d", b.AuthorID)
+		}
+		sb.WriteString("]")
+		if b.MediaType != "" {
+			fmt.Fprintf(&sb, " (%s)", b.MediaType)
+		}
+		fmt.Fprintf(&sb, " — %d file(s)", b.Statistics.BookFileCount)
+		if !b.Monitored {
+			sb.WriteString(" — unmonitored")
+		}
+		return sb.String()
+	}
+	if bookID > 0 {
+		book, err := client.GetBook(bookID)
+		if err != nil {
+			return nil, err
+		}
+		if book == nil {
+			return &ToolResult{Text: fmt.Sprintf("Book id %d was not found in the Chaptarr library.", bookID)}, nil
+		}
+		var sb strings.Builder
+		sb.WriteString("Book record:\n")
+		sb.WriteString(formatBook(*book))
+		if book.Author != nil && book.Author.AuthorName != "" {
+			fmt.Fprintf(&sb, "\n  author: %s", book.Author.AuthorName)
+		}
+		return &ToolResult{Text: sb.String()}, nil
+	}
+	books, err := client.GetBooks(authorID)
+	if err != nil {
+		return nil, err
+	}
+	var matched []chaptarr.Book
+	for _, b := range books {
+		switch filter {
+		case "missing":
+			if !b.Monitored || b.Statistics.BookFileCount > 0 {
+				continue
+			}
+		case "unmonitored":
+			if b.Monitored {
+				continue
+			}
+		}
+		if query != "" && !strings.Contains(strings.ToLower(b.Title), query) {
+			continue
+		}
+		matched = append(matched, b)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Books for author %d: %d total, %d matching (filter: %s)", authorID, len(books), len(matched), filter)
+	shown := matched
+	if len(shown) > maxLibraryItems {
+		shown = shown[:maxLibraryItems]
+		fmt.Fprintf(&sb, ", showing first %d", maxLibraryItems)
+	}
+	for _, b := range shown {
+		sb.WriteString("\n")
+		sb.WriteString(formatBook(b))
+	}
+	if len(matched) == 0 {
+		sb.WriteString("\n(no books matched)")
+	}
+	sb.WriteString("\n\nUse these book ids with search_releases (book_id), grab_release, or trigger_search (book_id).")
+	return &ToolResult{Text: sb.String()}, nil
 }
 
 // --- get_history ---
@@ -1026,6 +1113,8 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		TvdbID        int    `json:"tvdb_id"`
 		SeasonNumber  int    `json:"season_number"`
 		EpisodeNumber int    `json:"episode_number"`
+		AuthorID      int    `json:"author_id"`
+		BookID        int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -1040,9 +1129,10 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 	scope := mediaReadScope{
 		TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+		AuthorID: params.AuthorID, BookID: params.BookID,
 	}
 	fetchLimit := limit
-	if scope.hasTitleIdentity() || scope.SeasonNumber > 0 || scope.EpisodeNumber > 0 {
+	if scope.hasTitleIdentity() || scope.SeasonNumber > 0 || scope.EpisodeNumber > 0 || scope.BookID > 0 || scope.AuthorID > 0 {
 		// Filtering after fetching only the requested 20 records can falsely hide
 		// a title whose last event is slightly older. Fetch the bounded maximum,
 		// then return at most the caller's requested count.
@@ -1128,16 +1218,23 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if chaptarrClient == nil {
 			return &ToolResult{Text: "Chaptarr is not configured."}, nil
 		}
-		page, err := chaptarrClient.GetHistory(1, limit)
+		page, err := chaptarrClient.GetHistory(1, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
-		if page == nil || len(page.Records) == 0 {
+		var records []chaptarr.HistoryRecord
+		if page != nil {
+			records = filterChaptarrHistory(page.Records, scope)
+		}
+		if len(records) > limit {
+			records = records[:limit]
+		}
+		if len(records) == 0 {
 			return &ToolResult{Text: "No book history found."}, nil
 		}
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Recent book history (%d records):", len(page.Records))
-		for _, rec := range page.Records {
+		fmt.Fprintf(&sb, "Recent book history (%d records):", len(records))
+		for _, rec := range records {
 			when := "unknown date"
 			if rec.Date != nil {
 				when = rec.Date.UTC().Format("2006-01-02 15:04")

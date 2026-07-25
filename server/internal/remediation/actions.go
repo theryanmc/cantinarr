@@ -226,12 +226,15 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		season    int
 		episode   int
 		queueID   int
+		authorID  int
+		bookID    int
 		closedAt  any
 	)
 	if err := q.QueryRow(
-		`SELECT media_type, tmdb_id, season_number, episode_number, COALESCE(arr_queue_id, 0), closed_at
+		`SELECT media_type, tmdb_id, season_number, episode_number, COALESCE(arr_queue_id, 0),
+		        COALESCE(author_id, 0), COALESCE(book_id, 0), closed_at
 		 FROM issues WHERE id = ?`, issueID,
-	).Scan(&mediaType, &tmdbID, &season, &episode, &queueID, &closedAt); err != nil {
+	).Scan(&mediaType, &tmdbID, &season, &episode, &queueID, &authorID, &bookID, &closedAt); err != nil {
 		return fmt.Errorf("load issue scope: %w", err)
 	}
 	if closedAt != nil {
@@ -239,12 +242,18 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 	}
 	if mediaType == "book" {
 		switch kind {
-		case ActionGrabRelease, ActionTriggerSearch, ActionRescan:
-			// The current issue schema has no durable author_id/book_id. Accepting
-			// either from the model would let an auto book incident mutate a wholly
-			// unrelated title. Queue/manual-import actions remain safe because they
-			// are bound to the detector's exact queue + download identity.
-			return fmt.Errorf("%s is unavailable for book issues until an authoritative book id is stored", kind)
+		case ActionGrabRelease, ActionTriggerSearch:
+			// Without a stored book record id, accepting one from the model would
+			// let a book incident mutate a wholly unrelated title. Queue/manual-
+			// import actions remain safe either way because they are bound to the
+			// detector's exact queue + download identity.
+			if bookID <= 0 {
+				return fmt.Errorf("%s is unavailable for book issues until an authoritative book id is stored", kind)
+			}
+		case ActionRescan:
+			if authorID <= 0 {
+				return fmt.Errorf("%s is unavailable for book issues until an authoritative author id is stored", kind)
+			}
 		case ActionRemediateQueue, ActionManualImport:
 			if queueID <= 0 {
 				return fmt.Errorf("%s requires the book issue's exact detector queue id", kind)
@@ -321,6 +330,17 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		if p.MediaType != "book" {
 			return checkMediaID(p.TmdbID, p.Season, p.Episode)
 		}
+		// A single-book search must target the issue's exact book record; an
+		// author-wide search must target the issue's exact author.
+		if p.BookID > 0 {
+			if p.BookID != bookID {
+				return fmt.Errorf("book_id %d does not match issue book_id %d", p.BookID, bookID)
+			}
+			return nil
+		}
+		if authorID <= 0 || p.AuthorID != authorID {
+			return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
+		}
 	case ActionRescan:
 		var p RescanParams
 		if err := json.Unmarshal(canonical, &p); err != nil {
@@ -331,6 +351,9 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		}
 		if p.MediaType != "book" {
 			return checkMediaID(p.TmdbID, nil, nil)
+		}
+		if p.AuthorID != authorID {
+			return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
 		}
 	}
 	return nil

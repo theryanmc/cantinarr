@@ -134,8 +134,9 @@ var AgentToolProposeAction = Tool{
 		"\"remove\", \"blocklist_search\" (remove + blocklist + re-search), or \"change_category\".\n" +
 		"- manual_import: import a download's files. params: {media_type, queue_id, force} (force imports despite " +
 		"permanent rejections — only when a rejection is known-safe/temporary).\n" +
-		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values.\n" +
-		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}.\n" +
+		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values. " +
+			"Book issues have no tmdb_id: pass {media_type: \"book\", book_id} (or author_id to search all of the author's monitored books) using the issue's authoritative ids.\n" +
+		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}; for a book issue pass {media_type: \"book\", author_id} instead.\n" +
 		"Always include a clear 'rationale' explaining why this fix is correct (the admin reads it).",
 	InputSchema: map[string]interface{}{
 		"type": "object",

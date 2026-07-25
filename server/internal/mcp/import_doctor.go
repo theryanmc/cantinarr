@@ -11,15 +11,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
-// chaptarrQueuePage / chaptarrQueuePageSize drive the paginated
-// chaptarr.GetQueueDetailed calls (the client loops from this page until every
-// record is fetched). Radarr/Sonarr expose a non-paginated GetQueueDetailed, so
-// these are book-only.
-const (
-	chaptarrQueuePage     = 1
-	chaptarrQueuePageSize = 100
-)
-
 // --- Import Doctor: shared signal mapping ---
 
 // sonarrSignal projects a Sonarr queue item into the neutral classifier input.
@@ -287,6 +278,8 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 		TvdbID        int    `json:"tvdb_id"`
 		SeasonNumber  int    `json:"season_number"`
 		EpisodeNumber int    `json:"episode_number"`
+		AuthorID      int    `json:"author_id"`
+		BookID        int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -295,6 +288,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 	scope := mediaReadScope{
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+		AuthorID: params.AuthorID, BookID: params.BookID,
 	}
 
 	var sb strings.Builder
@@ -375,17 +369,12 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 			}
 			notes = append(notes, "Chaptarr is not configured.")
 		} else {
-			items, err := chaptarrClient.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			items, err := chaptarrClient.GetQueueDetailed()
 			if err != nil {
 				return nil, err
 			}
+			items = filterChaptarrQueue(items, scope)
 			for _, item := range items {
-				if params.QueueID > 0 && item.ID != params.QueueID {
-					continue
-				}
-				if params.DownloadID != "" && item.DownloadID != params.DownloadID {
-					continue
-				}
 				d := arr.Diagnose(chaptarrSignal(item))
 				if d.Severity == arr.SeverityOK {
 					healthy++
@@ -452,7 +441,7 @@ func findSonarrQueueItem(client *sonarr.Client, queueID int) (*sonarr.DetailedQu
 
 // findChaptarrQueueItem returns the queue item with the given id, or nil.
 func findChaptarrQueueItem(client *chaptarr.Client, queueID int) (*chaptarr.DetailedQueueItem, error) {
-	items, err := client.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+	items, err := client.GetQueueDetailed()
 	if err != nil {
 		return nil, err
 	}
@@ -490,6 +479,8 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 		TvdbID        int    `json:"tvdb_id"`
 		SeasonNumber  int    `json:"season_number"`
 		EpisodeNumber int    `json:"episode_number"`
+		AuthorID      int    `json:"author_id"`
+		BookID        int    `json:"book_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -497,6 +488,7 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 	scope := mediaReadScope{
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
+		AuthorID: params.AuthorID, BookID: params.BookID,
 	}
 
 	switch params.MediaType {
@@ -607,11 +599,11 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 		if err != nil {
 			return nil, err
 		}
-		if item == nil {
-			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
+		if item != nil && len(filterChaptarrQueue([]chaptarr.DetailedQueueItem{*item}, scope)) == 0 {
+			item = nil
 		}
-		if params.DownloadID != "" && item.DownloadID != params.DownloadID {
-			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d in this issue's download scope.", params.QueueID)}, nil
+		if item == nil {
+			return &ToolResult{Text: fmt.Sprintf("No book queue item with id %d in this scope. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
 		}
 		if item.DownloadID == "" {
 			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet, so its files cannot be inspected. Wait until it has been handed to the download client.", params.QueueID)}, nil

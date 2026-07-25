@@ -401,6 +401,7 @@ type QueueItem struct {
 	AuthorID              int             `json:"authorId"`
 	BookID                int             `json:"bookId"`
 	Title                 string          `json:"title"`
+	Added                 *time.Time      `json:"added,omitempty"`
 	Status                string          `json:"status"`
 	TrackedDownloadStatus string          `json:"trackedDownloadStatus"`
 	TrackedDownloadState  string          `json:"trackedDownloadState"`
@@ -430,6 +431,7 @@ type HistoryRecord struct {
 	Quality     json.RawMessage   `json:"quality"`
 	AuthorID    int               `json:"authorId"`
 	BookID      int               `json:"bookId"`
+	DownloadID  string            `json:"downloadId"`
 	Author      *AuthorContext    `json:"author,omitempty"`
 	Book        *BookContext      `json:"book,omitempty"`
 	Data        map[string]string `json:"data,omitempty"`
@@ -684,7 +686,15 @@ func (c *Client) GetBooks(authorID int) ([]Book, error) {
 	if err := c.do("GET", path, nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
-	return books, nil
+	// The authorId query narrows server-side; re-filter here so a fork that
+	// ignores the parameter still returns only this author's books.
+	matched := books[:0]
+	for _, b := range books {
+		if b.AuthorID == authorID {
+			matched = append(matched, b)
+		}
+	}
+	return matched, nil
 }
 
 // GetAllBooks lists every book in the Chaptarr library (all authors). Chaptarr
@@ -697,13 +707,23 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 	return books, nil
 }
 
-// GetBook returns a single book by id.
+// GetBook returns a single book by id, or (nil, nil) when the record no longer
+// exists. Non-2xx responses become host-free errors instead of decoding an
+// error body into a bogus zero-id record.
 func (c *Client) GetBook(id int) (*Book, error) {
 	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/book/%d", id))
 	if err != nil {
 		return nil, fmt.Errorf("chaptarr get book: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("chaptarr GET /api/v1/book/%d returned status %d", id, resp.StatusCode)
+	}
 
 	var book Book
 	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
@@ -730,6 +750,24 @@ func (c *Client) GetBookFile(id int) (*BookFile, error) {
 		return nil, fmt.Errorf("chaptarr book file: %w", err)
 	}
 	return &file, nil
+}
+
+// GetBookFilesForBook lists the files on disk for one book record. The bookId
+// query narrows server-side; the response is re-filtered here so a fork that
+// ignores the parameter still returns only this book's files.
+func (c *Client) GetBookFilesForBook(bookID int) ([]BookFile, error) {
+	var files []BookFile
+	path := fmt.Sprintf("/api/v1/bookfile?bookId=%d", bookID)
+	if err := c.do("GET", path, nil, &files); err != nil {
+		return nil, fmt.Errorf("chaptarr book files: %w", err)
+	}
+	matched := files[:0]
+	for _, f := range files {
+		if f.BookID == bookID {
+			matched = append(matched, f)
+		}
+	}
+	return matched, nil
 }
 
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
@@ -905,33 +943,41 @@ func (c *Client) GetQueue() ([]QueueItem, error) {
 	return queueResp.Records, nil
 }
 
-// queueMaxRecords is a safety cap on the total queue records accumulated across
-// pages of GetQueueDetailed.
+// queueMaxRecords is a safety cap on the queue records a detailed snapshot may
+// contain, mirroring the Radarr/Sonarr clients.
 const queueMaxRecords = 1000
 
-// GetQueueDetailed returns the download queue with author and book context,
-// paginating from page until all records are fetched (capped at
-// queueMaxRecords).
-func (c *Client) GetQueueDetailed(page, pageSize int) ([]DetailedQueueItem, error) {
-	var all []DetailedQueueItem
-	for ; ; page++ {
-		var resp struct {
-			TotalRecords int                 `json:"totalRecords"`
-			Records      []DetailedQueueItem `json:"records"`
-		}
-		path := fmt.Sprintf("/api/v1/queue?page=%d&pageSize=%d&includeAuthor=true&includeBook=true", page, pageSize)
-		if err := c.do("GET", path, nil, &resp); err != nil {
-			return nil, fmt.Errorf("chaptarr queue: %w", err)
-		}
-		all = append(all, resp.Records...)
-		if len(resp.Records) == 0 || len(all) >= resp.TotalRecords || len(all) >= queueMaxRecords {
-			break
-		}
+// GetQueueDetailed returns the download queue with author and book context as
+// one complete bounded snapshot, mirroring the Radarr/Sonarr contract: a
+// truncated, oversized, or internally inconsistent response is an ERROR, never
+// a silently shortened queue — remediation observation treats a successful
+// read as complete evidence.
+func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
+	var resp struct {
+		TotalRecords int                 `json:"totalRecords"`
+		Records      []DetailedQueueItem `json:"records"`
 	}
-	if len(all) > queueMaxRecords {
-		all = all[:queueMaxRecords]
+	path := fmt.Sprintf("/api/v1/queue?page=1&pageSize=%d&includeAuthor=true&includeBook=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, fmt.Errorf("chaptarr queue: %w", err)
 	}
-	return all, nil
+	if resp.TotalRecords < 0 || resp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("chaptarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", resp.TotalRecords, queueMaxRecords)
+	}
+	if len(resp.Records) != resp.TotalRecords {
+		return nil, fmt.Errorf("chaptarr queue snapshot incomplete: received %d of %d records in bounded page", len(resp.Records), resp.TotalRecords)
+	}
+	seenIDs := make(map[int]struct{})
+	for _, item := range resp.Records {
+		if item.ID <= 0 {
+			return nil, fmt.Errorf("chaptarr queue snapshot incomplete: record has invalid id")
+		}
+		if _, duplicate := seenIDs[item.ID]; duplicate {
+			return nil, fmt.Errorf("chaptarr queue snapshot incomplete: duplicate record id %d", item.ID)
+		}
+		seenIDs[item.ID] = struct{}{}
+	}
+	return resp.Records, nil
 }
 
 // RemoveQueueItem removes an item from the download queue. removeFromClient
@@ -957,6 +1003,25 @@ func (c *Client) GetHistory(page, pageSize int) (*HistoryPage, error) {
 		return nil, fmt.Errorf("chaptarr history: %w", err)
 	}
 	return &hp, nil
+}
+
+// GetImportHistory returns a bounded server-filtered import witness for one
+// book record and observed download identity, mirroring the Radarr/Sonarr
+// clients. eventType=3 is bookFileImported in the Readarr-lineage enum (its
+// vocabulary for a completed import). Callers still revalidate
+// every returned field; the totalRecords bound fails closed (a fork that
+// ignores the filters would overflow it rather than yield a false witness).
+func (c *Client) GetImportHistory(bookID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=3&bookId=%d&downloadId=%s",
+		pageSize, bookID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("chaptarr import history: %w", err)
+	}
+	if hp.TotalRecords > pageSize {
+		return nil, fmt.Errorf("chaptarr import history incomplete: %d records exceeds bound %d", hp.TotalRecords, pageSize)
+	}
+	return hp.Records, nil
 }
 
 // GetWantedMissing returns a page of monitored books with no file.

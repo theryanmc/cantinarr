@@ -136,11 +136,14 @@ type Issue struct {
 
 	// Exact arr scope. Auto-detected and user-reported issues both carry the
 	// instance that owns the affected media so investigation cannot drift to a
-	// different Radarr/Sonarr installation.
+	// different Radarr/Sonarr/Chaptarr installation. AuthorID/BookID are the
+	// Chaptarr record ids that stand in for TMDB/TVDB identity on book issues.
 	InstanceID string `json:"instance_id"`
 	DownloadID string `json:"-"`
 	ArrQueueID int    `json:"-"`
 	TvdbID     int    `json:"-"`
+	AuthorID   int    `json:"-"`
+	BookID     int    `json:"-"`
 }
 
 // IssueMessage is one row of an issue's append-only thread.

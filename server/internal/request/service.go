@@ -2127,7 +2127,7 @@ func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, erro
 		return nil, fmt.Errorf("check live book state: %w", err)
 	}
 	queued := make(map[int]bool)
-	if queue, err := client.GetQueueDetailed(1, 100); err == nil {
+	if queue, err := client.GetQueueDetailed(); err == nil {
 		for _, item := range queue {
 			if item.BookID != 0 && bookQueueItemDownloading(item) {
 				queued[item.BookID] = true

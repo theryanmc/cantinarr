@@ -1227,7 +1227,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 				return nil, fmt.Errorf("issue has no authoritative TV identity for scoped %s", toolName)
 			}
 		case "book":
-			if !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
+			if issue.BookID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
 				return nil, fmt.Errorf("issue has no authoritative book identity for scoped %s", toolName)
 			}
 		}
@@ -1254,6 +1254,12 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.EpisodeNumber > 0 {
 			params["episode_number"] = issue.EpisodeNumber
 		}
+		if issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
+		if issue.AuthorID > 0 {
+			params["author_id"] = issue.AuthorID
+		}
 	case "search_releases":
 		if issue.TmdbID > 0 {
 			params["tmdb_id"] = issue.TmdbID
@@ -1264,6 +1270,9 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.MediaType == "tv" && issue.EpisodeNumber > 0 {
 			params["episode_number"] = issue.EpisodeNumber
 		}
+		if issue.MediaType == "book" && issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
 	case "get_library":
 		delete(params, "query")
 		if issue.TmdbID > 0 {
@@ -1272,7 +1281,13 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.TvdbID > 0 {
 			params["tvdb_id"] = issue.TvdbID
 		}
-		if issue.TmdbID == 0 && issue.TvdbID == 0 && issue.Title != "" {
+		if issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
+		if issue.AuthorID > 0 {
+			params["author_id"] = issue.AuthorID
+		}
+		if issue.TmdbID == 0 && issue.TvdbID == 0 && issue.BookID == 0 && issue.AuthorID == 0 && issue.Title != "" {
 			params["query"] = issue.Title
 		}
 	case "get_history":
@@ -1287,6 +1302,12 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		}
 		if issue.EpisodeNumber > 0 {
 			params["episode_number"] = issue.EpisodeNumber
+		}
+		if issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
+		if issue.AuthorID > 0 {
+			params["author_id"] = issue.AuthorID
 		}
 	}
 	return json.Marshal(params)

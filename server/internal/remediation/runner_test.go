@@ -709,6 +709,40 @@ func TestScopeReadToolInputDoesNotInventTMDBForTVDBOnlyIssue(t *testing.T) {
 	}
 }
 
+func TestScopeReadToolInputInjectsAuthoritativeBookIdentity(t *testing.T) {
+	issue := &Issue{MediaType: "book", AuthorID: 456, BookID: 123, ArrQueueID: 7, DownloadID: "download-7"}
+	for toolName, want := range map[string]map[string]any{
+		"get_queue":       {"book_id": float64(123), "author_id": float64(456), "queue_id": float64(7), "download_id": "download-7"},
+		"search_releases": {"book_id": float64(123)},
+		"get_library":     {"book_id": float64(123), "author_id": float64(456)},
+		"get_history":     {"book_id": float64(123), "author_id": float64(456)},
+	} {
+		raw, err := scopeReadToolInput(issue, toolName, json.RawMessage(`{"book_id":999,"author_id":999,"query":"model choice"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", toolName, err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["media_type"] != "book" {
+			t.Fatalf("%s media_type = %v", toolName, got["media_type"])
+		}
+		for key, value := range want {
+			if got[key] != value {
+				t.Fatalf("%s %s = %v, want %v (%s)", toolName, key, got[key], value, raw)
+			}
+		}
+		if _, ok := got["query"]; ok && toolName == "get_library" {
+			t.Fatalf("get_library kept a model query alongside exact book identity: %s", raw)
+		}
+	}
+	// Identity-bearing book issues may search releases even without a queue row.
+	if _, err := scopeReadToolInput(&Issue{MediaType: "book", BookID: 123}, "search_releases", nil); err != nil {
+		t.Fatalf("book release search with durable identity rejected: %v", err)
+	}
+}
+
 func TestScopeReadToolInputFailsClosedWithoutUsableIdentity(t *testing.T) {
 	if _, err := scopeReadToolInput(&Issue{MediaType: "movie"}, "get_queue", json.RawMessage(`{"queue_id":9}`)); err == nil {
 		t.Fatal("unscoped movie queue read was accepted")

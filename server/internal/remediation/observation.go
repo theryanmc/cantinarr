@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -47,6 +48,7 @@ const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
 
 const recoveryInFlightResult = "Superseded because the live arr state changed or the arr continued its own retry before approval; no fix was executed."
 const arrStateClearedResolution = "The requested movie or episode is now available."
+const arrStateClearedBookResolution = "The requested book is now available."
 const observationNeedsCloserLook = "We couldn't confirm the latest status from the connected media service. We didn't make automated changes, and this needs a closer look."
 
 var errStaleObservation = errors.New("stale observation")
@@ -98,6 +100,12 @@ func incidentScopeKey(instanceID, mediaType, downloadID string, media arr.QueueM
 		} else if media.EpisodeNumber > 0 && media.TmdbID > 0 {
 			scope = fmt.Sprintf("%s|tv|tmdb:%d|s:%d|e:%d", instanceID, media.TmdbID, media.SeasonNumber, media.EpisodeNumber)
 		}
+	case "chaptarr", "book":
+		// Chaptarr tracks a title's ebook and audiobook as separate book records,
+		// so the book record id alone is an exact incident scope.
+		if media.BookID > 0 {
+			scope = fmt.Sprintf("%s|book|book:%d", instanceID, media.BookID)
+		}
 	}
 	if scope == "" && downloadID != "" {
 		scope = instanceID + "|download:" + downloadID
@@ -112,6 +120,11 @@ func incidentScopeKey(instanceID, mediaType, downloadID string, media arr.QueueM
 func userIncidentScopeKey(instanceID, mediaType string, media arr.QueueMediaContext) string {
 	scope := fmt.Sprintf("%s|%s|tmdb:%d|tvdb:%d|s:%d|e:%d",
 		instanceID, mediaType, media.TmdbID, media.TvdbID, media.SeasonNumber, media.EpisodeNumber)
+	if media.BookID > 0 {
+		// Appended only for book scopes so every pre-existing movie/TV scope key
+		// stays byte-identical across upgrades.
+		scope += fmt.Sprintf("|b:%d", media.BookID)
+	}
 	sum := sha256.Sum256([]byte(scope))
 	return hex.EncodeToString(sum[:])
 }
@@ -121,6 +134,7 @@ func issueMediaContext(issue *Issue) arr.QueueMediaContext {
 		QueueID: issue.ArrQueueID, Title: issue.Title, TmdbID: issue.TmdbID,
 		TvdbID: issue.TvdbID, SeasonNumber: issue.SeasonNumber,
 		EpisodeNumber: issue.EpisodeNumber,
+		AuthorID:      issue.AuthorID, BookID: issue.BookID,
 	}
 }
 
@@ -240,6 +254,11 @@ func groupQueueObservations(serviceType, instanceID string, items []arr.QueueObs
 }
 
 func mediaScopeMatches(want, got arr.QueueMediaContext, mediaType string) bool {
+	if mediaType == "book" {
+		// Books have no TMDB/TVDB identity; the Chaptarr book record id is the
+		// only exact match. Missing identity on either side fails closed.
+		return want.BookID > 0 && got.BookID > 0 && want.BookID == got.BookID
+	}
 	if want.TvdbID > 0 && got.TvdbID > 0 {
 		if want.TvdbID != got.TvdbID {
 			return false
@@ -272,7 +291,7 @@ func mediaScopeMatches(want, got arr.QueueMediaContext, mediaType string) bool {
 func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []arr.QueueObservation, now time.Time) error {
 	s.observationMu.Lock()
 	defer s.observationMu.Unlock()
-	if serviceType != "radarr" && serviceType != "sonarr" {
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
 		return fmt.Errorf("unsupported observation service %q", serviceType)
 	}
 	if strings.TrimSpace(instanceID) == "" {
@@ -417,6 +436,7 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 				QueueID: item.Media.QueueID, Title: secrets.RedactText(item.Media.Title),
 				TmdbID: item.Media.TmdbID, TvdbID: item.Media.TvdbID,
 				SeasonNumber: item.Media.SeasonNumber, EpisodeNumber: item.Media.EpisodeNumber,
+				AuthorID:     item.Media.AuthorID, BookID: item.Media.BookID,
 			},
 			Signal: arr.QueueSignal{
 				Status: item.Signal.Status, TrackedDownloadStatus: item.Signal.TrackedDownloadStatus,
@@ -718,12 +738,13 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 	res, err := s.db.Exec(
 		`INSERT INTO issues
 		 (source, status, media_type, tmdb_id, tvdb_id, title, season_number,
-		  episode_number, instance_id, download_id, arr_queue_id, detail,
+		  episode_number, author_id, book_id, instance_id, download_id, arr_queue_id, detail,
 		  dedupe_key, read, created_at, updated_at)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
 		 WHERE NOT EXISTS (SELECT 1 FROM issues WHERE dedupe_key = ? AND closed_at IS NULL)`,
 		SourceAuto, issueStatus, mediaType, tmdbID, sqlNullInt(item.Media.TvdbID), secrets.RedactText(title),
-		item.Media.SeasonNumber, item.Media.EpisodeNumber, instanceID,
+		item.Media.SeasonNumber, item.Media.EpisodeNumber,
+		sqlNullInt(item.Media.AuthorID), sqlNullInt(item.Media.BookID), instanceID,
 		sqlNullStr(item.DownloadID), sqlNullInt(item.Media.QueueID), secrets.RedactText(item.Diagnosis.Transparency),
 		group.scopeKey, now, now, group.scopeKey,
 	)
@@ -810,11 +831,14 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 		 tvdb_id = CASE WHEN source = ? AND ? > 0 THEN ? ELSE tvdb_id END,
 		 season_number = CASE WHEN source = ? THEN ? ELSE season_number END,
 		 episode_number = CASE WHEN source = ? THEN ? ELSE episode_number END,
+		 author_id = CASE WHEN source = ? AND ? > 0 THEN ? ELSE author_id END,
+		 book_id = CASE WHEN source = ? AND ? > 0 THEN ? ELSE book_id END,
 		 detail = CASE WHEN source = ? AND ? != '' THEN ? ELSE detail END,
 		 updated_at = ? WHERE id = ? AND closed_at IS NULL`,
 		sqlNullStr(item.DownloadID), sqlNullInt(item.Media.QueueID), SourceAuto, item.Media.Title, item.Media.Title,
 		SourceAuto, item.Media.TmdbID, item.Media.TmdbID, SourceAuto, item.Media.TvdbID, item.Media.TvdbID,
-		SourceAuto, item.Media.SeasonNumber, SourceAuto, item.Media.EpisodeNumber, SourceAuto,
+		SourceAuto, item.Media.SeasonNumber, SourceAuto, item.Media.EpisodeNumber,
+		SourceAuto, item.Media.AuthorID, item.Media.AuthorID, SourceAuto, item.Media.BookID, item.Media.BookID, SourceAuto,
 		secrets.RedactText(item.Diagnosis.Transparency), secrets.RedactText(item.Diagnosis.Transparency), now, record.issue.ID,
 	); err != nil {
 		return err
@@ -848,6 +872,9 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 				return s.promoteObservationNeedsAdmin(record.issue.ID, now, observationNeedsCloserLook)
 			}
 			if probe.completed {
+				if bookReceiptCannotProveLiveRow(record.issue, group) {
+					return s.promoteObservedIssue(record.issue.ID, now)
+				}
 				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
 			}
 			if probe.needsAdmin {
@@ -876,6 +903,9 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			return s.promoteObservationNeedsAdmin(record.issue.ID, now, observationNeedsCloserLook)
 		}
 		if probe.completed {
+			if bookReceiptCannotProveLiveRow(record.issue, group) {
+				return s.promoteObservedIssue(record.issue.ID, now)
+			}
 			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
 		}
 		if probe.needsAdmin {
@@ -884,6 +914,16 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 		return s.promoteObservedIssue(record.issue.ID, now)
 	}
 	return nil
+}
+
+// bookReceiptCannotProveLiveRow reports whether a completed-recovery proof must
+// be withheld because the incident's queue row is still signalling a problem.
+// A book receipt binds to the download and book record, not to an exact file,
+// so it cannot prove a still-broken row (e.g. a partially imported multi-file
+// audiobook) is done; the movie/TV witness carries exact-file binding and keeps
+// its close. The escalation path (promote for attention) handles books instead.
+func bookReceiptCannotProveLiveRow(issue *Issue, group observationGroup) bool {
+	return issue.MediaType == "book" && groupHasProblemSignal(group)
 }
 
 func (s *Service) applyAbsentObservation(record *observationRecord, now time.Time, settings Settings) error {
@@ -1105,8 +1145,13 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 }
 
 func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool) error {
+	resolution := arrStateClearedResolution
+	var mediaType string
+	if err := s.db.QueryRow("SELECT media_type FROM issues WHERE id=?", issueID).Scan(&mediaType); err == nil && mediaType == "book" {
+		resolution = arrStateClearedBookResolution
+	}
 	transitioned, err := s.concludeIssueAggregate(context.Background(), issueID, IssueResolved,
-		arrStateClearedResolution,
+		resolution,
 		ResolutionArrStateCleared, issueClosureOptions{silentNotifications: !wasPromoted})
 	// Silent means no alert/push, not no cache invalidation. `issue_updated` is a
 	// websocket-only refresh signal in the push notifier, so the Tracking list and
@@ -1206,6 +1251,28 @@ func (s *Service) exactIssueFileState(issue *Issue) (exactFileState, error) {
 			}
 		}
 		return exactFileState{known: true}, nil
+	case "book":
+		if issue.BookID <= 0 {
+			return exactFileState{}, nil
+		}
+		client, err := s.registry.GetChaptarrClient(issue.InstanceID)
+		if err != nil {
+			return exactFileState{}, err
+		}
+		// A book record can own several files (multi-part audiobooks), so the
+		// witness tracks the newest file id: a fresh import always raises it,
+		// which is the transition the baseline comparison needs.
+		files, err := client.GetBookFilesForBook(issue.BookID)
+		if err != nil {
+			return exactFileState{}, err
+		}
+		var newest int64
+		for _, f := range files {
+			if int64(f.ID) > newest {
+				newest = int64(f.ID)
+			}
+		}
+		return exactFileState{hasFile: len(files) > 0, fileID: newest, mediaID: issue.BookID, known: true}, nil
 	default:
 		return exactFileState{}, nil
 	}
@@ -1492,8 +1559,73 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 				return importReceipt{historyID: record.ID, downloadID: record.DownloadID, fileID: currentFileID}, nil
 			}
 		}
+	case "book":
+		if issue.BookID <= 0 {
+			return importReceipt{}, nil
+		}
+		client, err := s.registry.GetChaptarrClient(issue.InstanceID)
+		if err != nil {
+			return importReceipt{}, err
+		}
+		for _, download := range downloadIDs {
+			downloadID := download.id
+			history, err := client.GetImportHistory(issue.BookID, downloadID, 20)
+			if err != nil {
+				return importReceipt{}, err
+			}
+			for _, record := range history {
+				// Identity binds via the exact book record + download. Readarr-lineage
+				// forks emit "bookFileImported" for a completed import (their event 3),
+				// not the Radarr/Sonarr "downloadFolderImported" vocabulary.
+				if !strings.EqualFold(record.EventType, "bookFileImported") ||
+					!strings.EqualFold(record.DownloadID, downloadID) ||
+					record.BookID != issue.BookID || record.ID <= 0 {
+					continue
+				}
+				if fileID, present := historyFileID(record.Data); present {
+					// A supplied fileId corroborates only when it names the exact
+					// current file; a mismatch (e.g. one part of a multi-file
+					// audiobook) fails closed to "no receipt", never a false close.
+					if fileID != currentFileID {
+						continue
+					}
+				} else {
+					// No fileId to bind (the normal Chaptarr case): require the
+					// receipt to postdate this download's attempt so a reused
+					// download id cannot resurrect a months-old import as proof.
+					boundary := download.firstSeenAt
+					if download.addedAt.Valid {
+						boundary = download.addedAt.Time
+					}
+					if boundary.IsZero() || record.Date == nil || record.Date.Before(boundary) {
+						continue
+					}
+				}
+				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
+					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
+					record.Date == nil || record.Date.Before(download.addedAt.Time)) {
+					continue
+				}
+				if record.Book != nil && record.Book.ID != issue.BookID {
+					continue
+				}
+				return importReceipt{historyID: int64(record.ID), downloadID: record.DownloadID, fileID: currentFileID}, nil
+			}
+		}
 	}
 	return importReceipt{}, nil
+}
+
+// historyFileID extracts a case-insensitive fileId entry from a history
+// record's data map, reporting whether the key was present at all.
+func historyFileID(data map[string]string) (int64, bool) {
+	for key, value := range data {
+		if strings.EqualFold(key, "fileId") {
+			id, _ := strconv.ParseInt(value, 10, 64)
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 // recentQueueObservationForUser uses only a recent successful complete snapshot
@@ -1652,6 +1784,20 @@ func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.Queu
 			out = append(out, sonarrObservation(item))
 		}
 		return out, nil
+	case "chaptarr":
+		client, err := s.registry.GetChaptarrClient(instanceID)
+		if err != nil {
+			return nil, err
+		}
+		items, err := client.GetQueueDetailed()
+		if err != nil {
+			return nil, err
+		}
+		out := make([]arr.QueueObservation, 0, len(items))
+		for _, item := range items {
+			out = append(out, chaptarrObservation(item))
+		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("unsupported queue service %q", serviceType)
 	}
@@ -1750,7 +1896,7 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		return arrRecoveryProbe{}, nil
 	}
 	serviceType := mediaServiceType(issue.MediaType)
-	if serviceType != "radarr" && serviceType != "sonarr" {
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
 		return arrRecoveryProbe{}, nil
 	}
 	now := time.Now().UTC() // request-start ordering; delayed reads remain stale.
@@ -1797,10 +1943,18 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		return arrRecoveryProbe{}, err
 	}
 	guard, err := s.exactRecoveryGuard(issue)
-	if err != nil || guard.completed || guard.needsAdmin {
+	if err != nil || guard.needsAdmin {
 		return guard, err
 	}
 	group := observationGroup{items: matched}
+	if guard.completed {
+		if !bookReceiptCannotProveLiveRow(issue, group) {
+			return guard, nil
+		}
+		// A book receipt cannot prove this still-signalling row done; fall
+		// through to the activity checks so the incident stays live instead of
+		// closing over a partially imported download.
+	}
 	active, err := s.matchingGroupStillActive(issue, group, now)
 	if err != nil {
 		return arrRecoveryProbe{}, err
@@ -2084,6 +2238,34 @@ func radarrObservation(item radarr.DetailedQueueItem) arr.QueueObservation {
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
+}
+
+func chaptarrObservation(item chaptarr.DetailedQueueItem) arr.QueueObservation {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, message := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: message.Title, Messages: message.Messages})
+	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title, AuthorID: item.AuthorID, BookID: item.BookID}
+	if item.Book != nil {
+		if item.Book.Title != "" {
+			media.Title = item.Book.Title
+		}
+		if media.BookID == 0 {
+			media.BookID = item.Book.ID
+		}
+	}
+	if item.Author != nil && media.AuthorID == 0 {
+		media.AuthorID = item.Author.ID
+	}
+	signal := arr.QueueSignal{
+		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
+		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
+		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+	}
+	// Chaptarr queue payloads never embed the book's current file id, so
+	// FileIDAtSnapshot stays nil (unknown) and boundary-dependent proofs fail
+	// closed rather than guessing.
+	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }
 
 func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
