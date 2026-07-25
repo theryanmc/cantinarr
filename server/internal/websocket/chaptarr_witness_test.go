@@ -13,11 +13,16 @@ import (
 // recordingContent captures ContentNotifier calls so the Chaptarr departure
 // witness can be pinned without a push gateway.
 type recordingContent struct {
-	mu    sync.Mutex
-	books []string // "title|foreignID|instanceID|format"
+	mu     sync.Mutex
+	books  []string // "title|foreignID|instanceID|format"
+	movies []string // "title|tmdbID"
 }
 
-func (r *recordingContent) NotifyNewMovie(title string, tmdbID int)         {}
+func (r *recordingContent) NotifyNewMovie(title string, tmdbID int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.movies = append(r.movies, fmt.Sprintf("%s|%d", title, tmdbID))
+}
 func (r *recordingContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {}
 func (r *recordingContent) NotifyNewBook(title, foreignID, instanceID, format string) {
 	r.mu.Lock()
@@ -29,6 +34,12 @@ func (r *recordingContent) calls() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.books...)
+}
+
+func (r *recordingContent) movieCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.movies...)
 }
 
 // chaptarrBackend is a minimal Chaptarr API double: a mutable queue plus a
@@ -92,7 +103,7 @@ func TestPollChaptarrWitnessesImportedDepartures(t *testing.T) {
 	client := chaptarr.NewClient(srv.URL, "test-key")
 
 	content := &recordingContent{}
-	hub := NewHub(nil, nil, nil, content, nil)
+	hub := NewHub(nil, nil, nil, nil, content, nil)
 
 	// First poll: three tracked downloads (one unmapped). No previous state,
 	// so nothing can have departed yet.

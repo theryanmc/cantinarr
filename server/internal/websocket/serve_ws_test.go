@@ -38,7 +38,7 @@ func newWSTestEnv(t *testing.T) *wsTestEnv {
 		t.Fatalf("ensure admin: %v", err)
 	}
 
-	h := NewHub(svc, nil, nil, nil, nil)
+	h := NewHub(svc, nil, nil, nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go h.Run(ctx)
 

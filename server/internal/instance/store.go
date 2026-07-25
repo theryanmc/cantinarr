@@ -314,9 +314,10 @@ func (s *Store) Update(inst *Instance) error {
 	defer tx.Rollback()
 	// The stored service type is authoritative (it is immutable and the
 	// caller's copy may be unset); the default rules key off it.
+	var oldURL string
 	err = tx.QueryRow(
-		"SELECT service_type FROM service_instances WHERE id = ?", inst.ID,
-	).Scan(&inst.ServiceType)
+		"SELECT service_type, url FROM service_instances WHERE id = ?", inst.ID,
+	).Scan(&inst.ServiceType, &oldURL)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("instance not found: %s", inst.ID)
 	}
@@ -336,6 +337,14 @@ func (s *Store) Update(inst *Instance) error {
 		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, inst.ID,
 	); err != nil {
 		return fmt.Errorf("update instance: %w", err)
+	}
+	// Repointing an instance at a different arr invalidates the recorded queue
+	// membership: the same record ids mean different media there, so the next
+	// poll must re-seed rather than diff against the old server's queue.
+	if oldURL != inst.URL {
+		if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", inst.ID); err != nil {
+			return fmt.Errorf("clear instance queue witness: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("update instance: %w", err)
@@ -541,6 +550,9 @@ func (s *Store) Delete(id string) error {
 	// keeps granting access to a now-removed instance.
 	if _, err := tx.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance user defaults: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", id); err != nil {
+		return fmt.Errorf("delete instance queue witness: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit instance deletion: %w", err)

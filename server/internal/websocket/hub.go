@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,21 @@ const (
 	pollPeriod          = 30 * time.Second
 	downloadsPollPeriod = 15 * time.Second
 )
+
+// queueWitnessStaleAfter bounds how far back a restart may resume: a persisted
+// queue snapshot older than this is ignored and the instance re-seeds exactly as
+// on a first boot. Long enough to cover a container restart, an image pull, or a
+// host reboot; short enough that we never announce content the user has already
+// found by opening the app, where availability is always computed live.
+const queueWitnessStaleAfter = 6 * time.Hour
+
+// restoredAlertCap bounds the single departure diff resumed after a restart.
+// Above it the whole batch is dropped rather than partially delivered:
+// new-content alerts fan out to the entire household by default and the only
+// remedy a user has is a permanent category opt-out, so a burst of stale alerts
+// costs more trust than silence — and past this count the app's live view is the
+// better answer anyway. Steady-state departures are never capped.
+const restoredAlertCap = 10
 
 // downloadClientTypes are the service types polled for downloads_queue events.
 var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission"}
@@ -105,6 +121,17 @@ type Hub struct {
 	prevSonarrQueue   map[string]map[int]float64  // instanceID -> seriesId -> progress
 	prevChaptarrQueue map[string]map[int]struct{} // instanceID -> set of book record ids
 
+	// witness persists the three prev*Queue maps so a restart resumes the
+	// departure diff instead of re-seeding from empty. nil disables persistence
+	// and leaves the poller on its in-memory-only behavior.
+	witness *queueWitness
+
+	// restoredWitness marks the instances whose membership came from disk and
+	// whose first diff has not run yet, holding the snapshot's observed_at so
+	// the diff can be re-checked for staleness while it is deferred. An entry is
+	// cleared as soon as that first diff is resolved.
+	restoredWitness map[string]time.Time
+
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
 	prevArrQueueHash map[string]string // instanceID -> composition hash
@@ -125,8 +152,10 @@ type Hub struct {
 // NewHub creates a new WebSocket hub. content pushes new-content alerts when a
 // download completes; pass nil (or a nil *push.Notifier) when push is disabled.
 // opener receives stuck/blocked downloads for auto-dispatch; pass nil (or a nil
-// remediation.AutoDispatcher) to keep the whole auto-dispatch path off.
-func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, content ContentNotifier, opener IssueOpener) *Hub {
+// remediation.AutoDispatcher) to keep the whole auto-dispatch path off. database
+// persists the poller's queue-departure memory across restarts; pass nil to keep
+// that memory in-process only.
+func NewHub(authService *auth.Service, registry *instance.Registry, store *instance.Store, database *sql.DB, content ContentNotifier, opener IssueOpener) *Hub {
 	return &Hub{
 		clients:            make(map[*Client]bool),
 		broadcast:          make(chan outboundMessage, 256),
@@ -143,7 +172,26 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		prevArrQueueHash:   make(map[string]string),
 		prevDownloadsHash:  make(map[string]string),
 		downloadsErrLogged: make(map[string]bool),
+		witness:            newQueueWitness(database),
+		restoredWitness:    make(map[string]time.Time),
 	}
+}
+
+// contentReadiness is optionally implemented by ContentNotifier (*push.Notifier
+// does). Checked by type assertion so existing implementations compile
+// unchanged.
+type contentReadiness interface{ ContentReady() bool }
+
+// contentReady reports whether a restored departure diff can be announced yet.
+// A hub with no content notifier has nothing to deliver, so it never holds.
+func (h *Hub) contentReady() bool {
+	if h.content == nil {
+		return true
+	}
+	if r, ok := h.content.(contentReadiness); ok {
+		return r.ContentReady()
+	}
+	return true
 }
 
 // SetIssueOpener wires the auto-dispatch opener after construction. This exists
@@ -354,6 +402,13 @@ func (c *Client) writePump() {
 }
 
 func (h *Hub) pollLoop(ctx context.Context) {
+	// Restore the previous process's queue membership before the first tick, on
+	// this goroutine: it owns the prev*Queue maps, so no lock is needed, and it
+	// broadcasts nothing, so it cannot fill the broadcast channel before Run's
+	// drain loop is live. The ordinary first tick then performs the resumed
+	// diff — there is exactly one code path that witnesses completions.
+	h.restoreQueueWitness()
+
 	arrTicker := time.NewTicker(pollPeriod)
 	defer arrTicker.Stop()
 	downloadsTicker := time.NewTicker(downloadsPollPeriod)
@@ -371,6 +426,123 @@ func (h *Hub) pollLoop(ctx context.Context) {
 			h.pollAllDownloadClients()
 		}
 	}
+}
+
+// restoreQueueWitness seeds the prev*Queue maps from the last poll of the
+// previous process, so the first tick diffs against real membership instead of
+// re-seeding from empty. On a first boot the table is empty, nothing is
+// restored, and the existing seed-only behavior is unchanged — which is why no
+// upgrade can produce a burst of alerts.
+func (h *Hub) restoreQueueWitness() {
+	if h.witness == nil {
+		return
+	}
+	rows, err := h.witness.load(time.Now(), queueWitnessStaleAfter)
+	if err != nil {
+		log.Printf("websocket: restore queue witness: %v", err)
+		return
+	}
+	for instanceID, row := range rows {
+		switch row.serviceType {
+		case "radarr", "sonarr":
+			// Only the keys are ever read; the progress values are re-derived
+			// from the live queue on every poll.
+			seeded := make(map[int]float64, len(row.ids))
+			for _, id := range row.ids {
+				seeded[id] = 0
+			}
+			if row.serviceType == "radarr" {
+				h.prevRadarrQueue[instanceID] = seeded
+			} else {
+				h.prevSonarrQueue[instanceID] = seeded
+			}
+		case "chaptarr":
+			seeded := make(map[int]struct{}, len(row.ids))
+			for _, id := range row.ids {
+				seeded[id] = struct{}{}
+			}
+			h.prevChaptarrQueue[instanceID] = seeded
+		default:
+			continue
+		}
+		h.restoredWitness[instanceID] = row.observedAt
+	}
+	if len(h.restoredWitness) > 0 {
+		log.Printf("websocket: resumed queue witness for %d instance(s)", len(h.restoredWitness))
+	}
+}
+
+// gateRestoredDiff decides what the first diff after a restore may announce.
+// hold=true means: persist nothing, announce nothing, keep the restored
+// membership in memory and retry on the next tick.
+//
+// It cannot wedge. Once the restored snapshot ages past queueWitnessStaleAfter
+// the staleness arm drops it unconditionally, so a permanently unreachable push
+// gateway costs one batch of alerts rather than a stuck poller.
+//
+// A hold requires push to be configured but unenrolled, so it cannot happen on a
+// push-disabled server (contentReady reports true when there is no notifier).
+// While one is in effect this instance's queue membership stays frozen, which
+// also defers its request_status_changed broadcasts — accepted because the push
+// those alerts exist for is undeliverable during exactly that window, and
+// availability is recomputed live on every read, so a connected client converges
+// on its next fetch rather than showing anything wrong.
+func (h *Hub) gateRestoredDiff(instanceID string, departed []int) (announce []int, hold bool) {
+	observedAt, restored := h.restoredWitness[instanceID]
+	if !restored {
+		return departed, false // steady state is never gated
+	}
+	if time.Since(observedAt) > queueWitnessStaleAfter {
+		delete(h.restoredWitness, instanceID)
+		if len(departed) > 0 {
+			log.Printf("websocket: dropping %d stale resumed completion(s) for %s", len(departed), instanceID)
+		}
+		return nil, false
+	}
+	// Announcing into a gateway that has not enrolled yet would drop these
+	// permanently: the send is fire-and-forget and the membership is about to be
+	// overwritten. Wait for it instead.
+	if len(departed) > 0 && !h.contentReady() {
+		return nil, true
+	}
+	delete(h.restoredWitness, instanceID)
+	if len(departed) > restoredAlertCap {
+		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(departed), instanceID)
+		return nil, false
+	}
+	return departed, false
+}
+
+// saveQueueWitness records this instance's current queue membership. A failure
+// is logged and swallowed: degrading to in-memory-only behavior is right, but
+// suppressing the alerts this poll already found is not.
+func (h *Hub) saveQueueWitness(instanceID, serviceType string, ids []int) {
+	if h.witness == nil {
+		return
+	}
+	if err := h.witness.save(instanceID, serviceType, ids, time.Now()); err != nil {
+		log.Printf("websocket: persist queue witness (%s): %v", instanceID, err)
+	}
+}
+
+// progressKeys returns the sorted arr record ids of a radarr/sonarr queue map.
+func progressKeys(queue map[int]float64) []int {
+	ids := make([]int, 0, len(queue))
+	for id := range queue {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// setKeys returns the sorted arr record ids of a chaptarr queue set.
+func setKeys(queue map[int]struct{}) []int {
+	ids := make([]int, 0, len(queue))
+	for id := range queue {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
 }
 
 func (h *Hub) pollAllDownloadClients() {
@@ -752,34 +924,49 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	}
 
 	// Check for items that were previously downloading but are no longer in queue
-	prevQueue := h.prevRadarrQueue[instanceID]
-	if prevQueue != nil {
+	var departed []int
+	if prevQueue := h.prevRadarrQueue[instanceID]; prevQueue != nil {
 		for movieID := range prevQueue {
 			if _, stillInQueue := currentQueue[movieID]; !stillInQueue {
-				movie, err := client.GetMovie(movieID)
-				if err != nil {
-					log.Printf("websocket: get completed radarr movie %d: %v", movieID, err)
-					continue
-				}
-				if movie.HasFile {
-					h.Broadcast(Event{
-						Type: "request_status_changed",
-						Data: map[string]interface{}{
-							"tmdb_id":     movie.TmdbID,
-							"media_type":  "movie",
-							"status":      "available",
-							"instance_id": instanceID,
-						},
-					})
-					if h.content != nil {
-						h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
-					}
-				}
+				departed = append(departed, movieID)
+			}
+		}
+		sort.Ints(departed)
+	}
+
+	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	if hold {
+		h.noteArrQueueComposition(instanceID, "radarr", tuples)
+		h.autoDispatchRadarr(instanceID, client)
+		return
+	}
+
+	// Persist before announcing — see pollChaptarrInstance.
+	h.prevRadarrQueue[instanceID] = currentQueue
+	h.saveQueueWitness(instanceID, "radarr", progressKeys(currentQueue))
+
+	for _, movieID := range announce {
+		movie, err := client.GetMovie(movieID)
+		if err != nil {
+			log.Printf("websocket: get completed radarr movie %d: %v", movieID, err)
+			continue
+		}
+		if movie.HasFile {
+			h.Broadcast(Event{
+				Type: "request_status_changed",
+				Data: map[string]interface{}{
+					"tmdb_id":     movie.TmdbID,
+					"media_type":  "movie",
+					"status":      "available",
+					"instance_id": instanceID,
+				},
+			})
+			if h.content != nil {
+				h.content.NotifyNewMovie(movie.Title, movie.TmdbID)
 			}
 		}
 	}
 
-	h.prevRadarrQueue[instanceID] = currentQueue
 	h.noteArrQueueComposition(instanceID, "radarr", tuples)
 
 	// Auto-dispatch observation pass: diagnose and deliver the full detailed
@@ -824,48 +1011,63 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	}
 
 	// Check for items that left the queue
-	prevQueue := h.prevSonarrQueue[instanceID]
-	if prevQueue != nil {
+	var departed []int
+	if prevQueue := h.prevSonarrQueue[instanceID]; prevQueue != nil {
 		for seriesID := range prevQueue {
 			if _, stillInQueue := currentQueue[seriesID]; !stillInQueue {
-				series, err := client.GetSeries(seriesID)
-				if err != nil {
-					log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
-					continue
-				}
-				// "available" strictly means every aired episode has a file.
-				// Sonarr's percentOfEpisodes only counts monitored episodes,
-				// so it reads 100 for a series that's mostly unmonitored and
-				// missing — which would flip request buttons green over this
-				// broadcast for incomplete series.
-				status := "available"
-				if episodes, err := client.GetAllEpisodes(seriesID); err == nil {
-					if completion, _ := sonarr.SeriesCompletion(episodes, time.Now()); !completion.Complete() {
-						status = "partially_available"
-					}
-				} else {
-					files, total := series.EpisodeTotals()
-					if total == 0 || files < total {
-						status = "partially_available"
-					}
-				}
-				h.Broadcast(Event{
-					Type: "request_status_changed",
-					Data: map[string]interface{}{
-						"tmdb_id":     series.TmdbID,
-						"media_type":  "tv",
-						"status":      status,
-						"instance_id": instanceID,
-					},
-				})
-				if h.content != nil {
-					h.content.NotifyNewEpisode(series.Title, series.TmdbID)
-				}
+				departed = append(departed, seriesID)
 			}
+		}
+		sort.Ints(departed)
+	}
+
+	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	if hold {
+		h.noteArrQueueComposition(instanceID, "sonarr", tuples)
+		h.autoDispatchSonarr(instanceID, client)
+		return
+	}
+
+	// Persist before announcing — see pollChaptarrInstance.
+	h.prevSonarrQueue[instanceID] = currentQueue
+	h.saveQueueWitness(instanceID, "sonarr", progressKeys(currentQueue))
+
+	for _, seriesID := range announce {
+		series, err := client.GetSeries(seriesID)
+		if err != nil {
+			log.Printf("websocket: get completed sonarr series %d: %v", seriesID, err)
+			continue
+		}
+		// "available" strictly means every aired episode has a file.
+		// Sonarr's percentOfEpisodes only counts monitored episodes,
+		// so it reads 100 for a series that's mostly unmonitored and
+		// missing — which would flip request buttons green over this
+		// broadcast for incomplete series.
+		status := "available"
+		if episodes, err := client.GetAllEpisodes(seriesID); err == nil {
+			if completion, _ := sonarr.SeriesCompletion(episodes, time.Now()); !completion.Complete() {
+				status = "partially_available"
+			}
+		} else {
+			files, total := series.EpisodeTotals()
+			if total == 0 || files < total {
+				status = "partially_available"
+			}
+		}
+		h.Broadcast(Event{
+			Type: "request_status_changed",
+			Data: map[string]interface{}{
+				"tmdb_id":     series.TmdbID,
+				"media_type":  "tv",
+				"status":      status,
+				"instance_id": instanceID,
+			},
+		})
+		if h.content != nil {
+			h.content.NotifyNewEpisode(series.Title, series.TmdbID)
 		}
 	}
 
-	h.prevSonarrQueue[instanceID] = currentQueue
 	h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 
 	// Auto-dispatch pass (see pollRadarrInstance). No-op when the opener is nil.
@@ -898,15 +1100,44 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	// Ebook and audiobook are separate records sharing a foreignBookId, so each
 	// format alerts on its own import; a record that departed without a file
 	// failed or was removed — say nothing.
-	prevQueue := h.prevChaptarrQueue[instanceID]
-	if prevQueue != nil && h.content != nil {
+	var departed []int
+	if prevQueue := h.prevChaptarrQueue[instanceID]; prevQueue != nil {
 		for bookID := range prevQueue {
 			if _, stillInQueue := currentQueue[bookID]; stillInQueue || bookID <= 0 {
 				continue
 			}
+			departed = append(departed, bookID)
+		}
+		sort.Ints(departed)
+	}
+
+	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	if hold {
+		// Keep the restored membership and retry next tick, so these
+		// completions are not lost to an unenrolled gateway.
+		h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
+		h.autoDispatchChaptarr(instanceID, client)
+		return
+	}
+
+	// Persist before announcing: a crash between the two costs this batch of
+	// alerts, whereas announcing first would re-announce them on every restart
+	// of a crashlooping container. The save is deliberately outside the
+	// h.content check — enabling push later must not start from amnesia.
+	h.prevChaptarrQueue[instanceID] = currentQueue
+	h.saveQueueWitness(instanceID, "chaptarr", setKeys(currentQueue))
+
+	if h.content != nil {
+		for _, bookID := range announce {
 			book, err := client.GetBook(bookID)
 			if err != nil {
 				log.Printf("websocket: get completed chaptarr book %d: %v", bookID, err)
+				continue
+			}
+			// Chaptarr answers 404 with (nil, nil) for a record deleted while it
+			// was downloading. Dereferencing that would panic the poll goroutine
+			// and take the process down.
+			if book == nil {
 				continue
 			}
 			if book.Statistics.BookFileCount == 0 {
@@ -915,7 +1146,6 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 			h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
 		}
 	}
-	h.prevChaptarrQueue[instanceID] = currentQueue
 
 	h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
 

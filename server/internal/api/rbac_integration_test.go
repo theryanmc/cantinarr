@@ -463,7 +463,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	proxyHandler := proxy.NewHandler(store)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pushHandler := push.NewHandler(database, nil, logger)
-	hub := ws.NewHub(authService, instanceRegistry, store, nil, nil)
+	hub := ws.NewHub(authService, instanceRegistry, store, nil, nil, nil)
 	plexService := plex.NewService(database, cipher, plex.NewClient(), nil, logger)
 	plexHandler := plex.NewHandler(plexService, logger)
 	webhookHandler := webhooks.NewHandler(store, instanceRegistry, hub, requestService, nil)
