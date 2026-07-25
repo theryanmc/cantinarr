@@ -22,11 +22,13 @@ class IssuesService {
   /// investigation.
   Future<IssueReportResult> reportProblem({
     required String instanceId,
-    required String mediaType, // 'movie' | 'tv'
+    required String mediaType, // 'movie' | 'tv' | 'book'
     required int tmdbId,
     int? tvdbId,
     int? seasonNumber,
     int? episodeNumber,
+    String? foreignId, // book: Chaptarr foreignBookId
+    String? bookFormat, // book: 'ebook' | 'audiobook'
     required IssueCategory category,
     String? reason,
     String? title,
@@ -34,9 +36,20 @@ class IssuesService {
     final body = <String, dynamic>{
       'instance_id': instanceId,
       'media_type': mediaType,
-      'tmdb_id': tmdbId,
       'category': category.value,
     };
+    // Books have no TMDB identity; their scope is the library foreignBookId
+    // (plus format when the title exists as both ebook and audiobook).
+    if (mediaType == 'book') {
+      if (foreignId != null && foreignId.isNotEmpty) {
+        body['foreign_id'] = foreignId;
+      }
+      if (bookFormat != null && bookFormat.isNotEmpty) {
+        body['book_format'] = bookFormat;
+      }
+    } else {
+      body['tmdb_id'] = tmdbId;
+    }
     if (tvdbId != null && tvdbId != 0) body['tvdb_id'] = tvdbId;
     // Season zero is a real Sonarr season (Specials). A positive episode makes
     // the zero unambiguous, so preserve it instead of collapsing S00E## into a

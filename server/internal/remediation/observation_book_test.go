@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,17 @@ func setupBookObservationService(t *testing.T, state *bookFileState) (*Service, 
 			} else {
 				fmt.Fprintf(w, `[{"id":%d,"authorId":456,"bookId":123}]`, state.fileID)
 			}
+		case "/api/v1/book":
+			// Library records for report resolution: one plain ebook, a title
+			// that exists in both formats (shared foreignBookId), and a record
+			// whose format is only derivable from its lone edition (empty
+			// mediaType — the shared RecordFormat classifier must handle it).
+			fmt.Fprint(w, `[
+				{"id":123,"authorId":456,"foreignBookId":"fb-1","title":"Example Book","mediaType":"ebook"},
+				{"id":310,"authorId":456,"foreignBookId":"fb-both","title":"Dual Format","mediaType":"ebook"},
+				{"id":311,"authorId":456,"foreignBookId":"fb-both","title":"Dual Format","mediaType":"audiobook"},
+				{"id":410,"authorId":456,"foreignBookId":"fb-edition","title":"Edition Only","mediaType":"","editions":[{"id":1,"bookId":410,"format":"EPUB"}]}
+			]`)
 		case "/api/v1/history":
 			if state.importDownloadID == "" {
 				fmt.Fprint(w, `{"page":1,"pageSize":20,"totalRecords":0,"records":[]}`)
@@ -69,6 +81,13 @@ func setupBookObservationService(t *testing.T, state *bookFileState) (*Service, 
 	}
 	notifier := &fakeNotifier{}
 	return NewService(database, instance.NewRegistry(store), nil, notifier), notifier
+}
+
+// setupBookReportService is setupBookObservationService plus a seeded reporter.
+func setupBookReportService(t *testing.T, state *bookFileState) (*Service, int64) {
+	t.Helper()
+	svc, _ := setupBookObservationService(t, state)
+	return svc, seedUser(t, svc.db, "book-reporter")
 }
 
 func observedBookProblem(downloadID string, queueID int) arr.QueueObservation {
@@ -302,6 +321,129 @@ func TestUserBookScopeKeyLeavesMovieKeysUnchanged(t *testing.T) {
 	other := userIncidentScopeKey("chaptarr-1", "book", arr.QueueMediaContext{BookID: 124})
 	if book == other {
 		t.Fatal("distinct book records share a user scope key")
+	}
+}
+
+// A user book report resolves its foreignBookId live to the durable Chaptarr
+// record ids, stores them on the issue, and dedupes repeat reports by record.
+func TestCreateUserIssueBookResolvesDurableIdentity(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+
+	created, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-1",
+		Category: CategoryBadCopy, Reason: "The epub is corrupt.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := svc.GetIssue(created.IssueID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue.MediaType != "book" || issue.AuthorID != 456 || issue.BookID != 123 ||
+		issue.TmdbID != 0 || issue.Title != "Example Book" {
+		t.Fatalf("book report identity = %+v", issue)
+	}
+
+	duplicate, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-1",
+		Category: CategoryBadCopy, Reason: "Still corrupt.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.IssueID != created.IssueID {
+		t.Fatalf("same book report did not dedupe: first=%d duplicate=%d", created.IssueID, duplicate.IssueID)
+	}
+	if issue, err := svc.GetIssue(created.IssueID); err != nil || issue.Occurrences != 2 {
+		t.Fatalf("duplicate bump = %+v err=%v", issue, err)
+	}
+}
+
+// A title that exists as both ebook and audiobook is two distinct records: the
+// report must name its format rather than have the server silently pick one.
+func TestCreateUserIssueBookRequiresFormatWhenAmbiguous(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-both",
+		Category: CategoryOther,
+	}); err == nil || !strings.Contains(err.Error(), "book_format is required") {
+		t.Fatalf("ambiguous format error = %v", err)
+	}
+
+	created, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-both",
+		BookFormat: "audiobook", Category: CategoryOther,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issue, err := svc.GetIssue(created.IssueID)
+	if err != nil || issue.BookID != 311 {
+		t.Fatalf("format-disambiguated report = %+v err=%v", issue, err)
+	}
+}
+
+// A record whose mediaType is empty classifies via its lone edition, so a
+// format-scoped report still resolves it (server and app share the semantics).
+func TestCreateUserIssueBookFormatMatchesEditionDerivedRecords(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+	created, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-edition",
+		BookFormat: "ebook", Category: CategoryOther,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue, err := svc.GetIssue(created.IssueID); err != nil || issue.BookID != 410 {
+		t.Fatalf("edition-derived format report = %+v err=%v", issue, err)
+	}
+}
+
+func TestCreateUserIssueBookFailsClosedOnUnresolvableReport(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", Category: CategoryOther,
+	}); err == nil || !strings.Contains(err.Error(), "foreign_id is required") {
+		t.Fatalf("missing foreign id error = %v", err)
+	}
+	if _, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-unknown",
+		Category: CategoryOther,
+	}); err == nil || !strings.Contains(err.Error(), "no library book matches") {
+		t.Fatalf("unknown foreign id error = %v", err)
+	}
+}
+
+// A user report on the exact book an auto observation is already quietly
+// tracking adopts that incident instead of creating a second observer.
+func TestCreateUserIssueBookAdoptsMatchingAutoObservation(t *testing.T) {
+	svc, reporterID := setupBookReportService(t, &bookFileState{})
+	enableAutoDispatch(t, svc, 5)
+
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{observedBookProblem("download-1", 9)}, base); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.ListIssues("")
+	if err != nil || len(before) != 1 || before[0].Source != SourceAuto {
+		t.Fatalf("initial automatic observation=%+v err=%v", before, err)
+	}
+
+	created, err := svc.CreateUserIssue(reporterID, &CreateIssueRequest{
+		InstanceID: "chaptarr-observe", MediaType: "book", ForeignID: "fb-1",
+		Category: CategoryBadCopy, Reason: "It never finishes.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := svc.ListIssues("")
+	if err != nil || len(after) != 1 {
+		t.Fatalf("adopted issues=%+v err=%v", after, err)
+	}
+	if created.IssueID != before[0].ID || after[0].Source != SourceUser {
+		t.Fatalf("book report did not adopt the auto incident: %+v vs %+v", created, after[0])
 	}
 }
 

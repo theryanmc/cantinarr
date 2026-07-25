@@ -163,17 +163,22 @@ type IssueDetail struct {
 
 // CreateIssueRequest is the POST /api/issues body (snake_case wire contract).
 // Reason/Title are UNTRUSTED. EpisodeNumber 0 means whole season/series;
-// SeasonNumber 0 with a positive episode is an exact special (S00E##).
+// SeasonNumber 0 with a positive episode is an exact special (S00E##). Book
+// reports carry the Chaptarr foreignBookId the app knows (plus the format when
+// a title exists as both ebook and audiobook); the server resolves it live to
+// the durable Chaptarr record ids — the client never supplies those directly.
 type CreateIssueRequest struct {
-	InstanceID    string `json:"instance_id"` // exact Radarr/Sonarr instance
-	MediaType     string `json:"media_type"`  // "movie" | "tv"
+	InstanceID    string `json:"instance_id"` // exact Radarr/Sonarr/Chaptarr instance
+	MediaType     string `json:"media_type"`  // "movie" | "tv" | "book"
 	TmdbID        int    `json:"tmdb_id"`
 	TvdbID        int    `json:"tvdb_id"`
 	SeasonNumber  int    `json:"season_number"`
 	EpisodeNumber int    `json:"episode_number"`
-	Category      string `json:"category"` // wrong_content|bad_copy|wrong_audio|other
-	Reason        string `json:"reason"`   // UNTRUSTED free text
-	Title         string `json:"title"`    // UNTRUSTED display hint
+	ForeignID     string `json:"foreign_id"`  // book: Chaptarr foreignBookId
+	BookFormat    string `json:"book_format"` // book: "ebook" | "audiobook" when both records exist
+	Category      string `json:"category"`    // wrong_content|bad_copy|wrong_audio|other
+	Reason        string `json:"reason"`      // UNTRUSTED free text
+	Title         string `json:"title"`       // UNTRUSTED display hint
 }
 
 // CreateIssueResponse is the POST /api/issues result.

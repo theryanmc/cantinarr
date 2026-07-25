@@ -10,11 +10,13 @@ import '../logic/issues_provider.dart';
 /// optionally narrowed to a TV season/episode.
 class ReportScope {
   final String instanceId;
-  final String mediaType; // 'movie' | 'tv'
+  final String mediaType; // 'movie' | 'tv' | 'book'
   final int tmdbId;
   final int? tvdbId;
   final int? seasonNumber;
   final int? episodeNumber;
+  final String? foreignId; // book: Chaptarr foreignBookId
+  final String? bookFormat; // book: 'ebook' | 'audiobook'
   final String? title;
 
   const ReportScope({
@@ -24,8 +26,28 @@ class ReportScope {
     this.tvdbId,
     this.seasonNumber,
     this.episodeNumber,
+    this.foreignId,
+    this.bookFormat,
     this.title,
   });
+
+  /// Books carry no TMDB identity: the report names the library's
+  /// foreignBookId (and the format, since an ebook and audiobook of the same
+  /// title are distinct records) and the server resolves the durable Chaptarr
+  /// record ids live.
+  const ReportScope.book({
+    required String instanceId,
+    required String foreignId,
+    String? format,
+    String? title,
+  }) : this(
+          instanceId: instanceId,
+          mediaType: 'book',
+          tmdbId: 0,
+          foreignId: foreignId,
+          bookFormat: format,
+          title: title,
+        );
 
   const ReportScope.movie({
     required String instanceId,
@@ -156,6 +178,26 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
 
   bool get _reasonRequired => _category.requiresReason;
 
+  /// The wire categories are shared across media; only their presentation is
+  /// scope-aware. An ebook has no audio to be in the wrong language, so that
+  /// choice is withheld for ebook-scoped reports.
+  List<IssueCategory> _categoryChoices() {
+    if (widget.scope.mediaType == 'book' && widget.scope.bookFormat == 'ebook') {
+      return IssueCategory.values
+          .where((c) => c != IssueCategory.wrongAudio)
+          .toList();
+    }
+    return IssueCategory.values.toList();
+  }
+
+  String _chipLabel(IssueCategory c) {
+    if (widget.scope.mediaType != 'book') return c.label;
+    return switch (c) {
+      IssueCategory.wrongContent => 'Wrong book/title',
+      _ => c.label,
+    };
+  }
+
   Future<void> _submit() async {
     if (_submitting) return;
     final reason = _reasonController.text.trim();
@@ -176,6 +218,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             tvdbId: scope.tvdbId,
             seasonNumber: scope.seasonNumber,
             episodeNumber: scope.episodeNumber,
+            foreignId: scope.foreignId,
+            bookFormat: scope.bookFormat,
             category: _category,
             reason: reason.isEmpty ? null : reason,
             title: scope.title,
@@ -249,9 +293,9 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: IssueCategory.values
+            children: _categoryChoices()
                 .map((c) => ChoiceChip(
-                      label: Text(c.label),
+                      label: Text(_chipLabel(c)),
                       selected: _category == c,
                       onSelected: (_) => setState(() {
                         _category = c;

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
@@ -82,6 +83,50 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 
 // validCategory reports whether a user-selected category is one of the known
 // values.
+// resolveReportedBook maps a reported foreignBookId to the live Chaptarr
+// library record it names. This fork tracks a title's ebook and audiobook as
+// separate records sharing a foreignBookId, so when both exist the report must
+// say which format it is about. A book with no library record has nothing to
+// remediate (no queue, no files), so resolution failing is a client error.
+func resolveReportedBook(client *chaptarr.Client, foreignID, format string) (*chaptarr.Book, error) {
+	if client == nil {
+		return nil, fmt.Errorf("chaptarr instance unavailable")
+	}
+	if format != "" && format != "ebook" && format != "audiobook" {
+		return nil, fmt.Errorf("book_format must be \"ebook\" or \"audiobook\"")
+	}
+	books, err := client.GetAllBooks()
+	if err != nil {
+		return nil, fmt.Errorf("resolve reported book: %w", err)
+	}
+	var matched []chaptarr.Book
+	for _, b := range books {
+		if b.ForeignBookID != foreignID {
+			continue
+		}
+		// Classify with the shared record-format semantics (mediaType, else the
+		// lone edition) so a record the library digest shows as "ebook" matches
+		// an "ebook" report even when its mediaType field is empty.
+		if format != "" && chaptarr.RecordFormat(b) != format {
+			continue
+		}
+		matched = append(matched, b)
+	}
+	switch len(matched) {
+	case 0:
+		return nil, fmt.Errorf("no library book matches this report; it may have been removed")
+	case 1:
+		record := matched[0]
+		if record.ID <= 0 {
+			return nil, fmt.Errorf("the matched library book has no usable record id")
+		}
+		return &record, nil
+	default:
+		// Never silently pick one of two distinct records (ebook vs audiobook).
+		return nil, fmt.Errorf("this title exists as both ebook and audiobook; book_format is required")
+	}
+}
+
 func validCategory(c string) bool {
 	switch c {
 	case CategoryWrongContent, CategoryBadCopy, CategoryWrongAudio, CategoryOther:
@@ -99,27 +144,25 @@ func validCategory(c string) bool {
 // is 0 but tvdb_id is set, a best-effort reverse lookup of the cached
 // tmdb<->tvdb mapping is attempted; otherwise the ids are stored as given.
 func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*CreateIssueResponse, error) {
-	// Serialize report creation with complete-snapshot reconciliation. Without
-	// this boundary, an auto observation can be created from a stale in-memory
-	// record set while the same exact user report is committing.
-	s.observationMu.Lock()
-	defer s.observationMu.Unlock()
-
 	instanceID := strings.TrimSpace(req.InstanceID)
 	if instanceID == "" {
 		return nil, fmt.Errorf("instance_id is required")
 	}
-	if req.MediaType != "movie" && req.MediaType != "tv" {
+	if req.MediaType != "movie" && req.MediaType != "tv" && req.MediaType != "book" {
 		return nil, fmt.Errorf("unsupported media type: %s", req.MediaType)
 	}
 	if s.registry == nil {
 		return nil, fmt.Errorf("instance registry unavailable")
 	}
+	var chaptarrClient *chaptarr.Client
 	var instanceErr error
-	if req.MediaType == "movie" {
+	switch req.MediaType {
+	case "movie":
 		_, instanceErr = s.registry.GetRadarrClient(instanceID)
-	} else {
+	case "tv":
 		_, instanceErr = s.registry.GetSonarrClient(instanceID)
+	case "book":
+		chaptarrClient, instanceErr = s.registry.GetChaptarrClient(instanceID)
 	}
 	if instanceErr != nil {
 		return nil, fmt.Errorf("invalid instance_id for %s: %w", req.MediaType, instanceErr)
@@ -136,6 +179,9 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if req.MediaType == "tv" && req.TmdbID == 0 && req.TvdbID == 0 {
 		return nil, fmt.Errorf("tmdb_id or tvdb_id is required for a tv issue")
 	}
+	if req.MediaType == "book" && strings.TrimSpace(req.ForeignID) == "" {
+		return nil, fmt.Errorf("foreign_id is required for a book issue")
+	}
 	// episode_number > 0 disambiguates an exact S00 special from the
 	// season_number=0 whole-series sentinel.
 	if len(req.Title) > maxIssueTitleBytes || len(req.Reason) > maxIssueDetailBytes {
@@ -147,6 +193,30 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	if req.MediaType == "movie" {
 		tvdbID = 0 // TVDB is not a canonical movie identity or dedupe key.
 	}
+	// Books carry no TMDB/TVDB identity. Resolve the reported foreignBookId
+	// live to the durable Chaptarr record ids the remediation engine keys on —
+	// never trusting client-supplied record ids or a stored snapshot. This runs
+	// BEFORE the observation lock: it is a network fetch (with the client's full
+	// timeout) and reads no lock-guarded state, and the record-removed-mid-report
+	// race is handled fail-closed by observation either way.
+	authorID, bookID := 0, 0
+	if req.MediaType == "book" {
+		tmdbID, tvdbID = 0, 0
+		record, err := resolveReportedBook(chaptarrClient, strings.TrimSpace(req.ForeignID), strings.TrimSpace(req.BookFormat))
+		if err != nil {
+			return nil, err
+		}
+		authorID, bookID = record.AuthorID, record.ID
+		if strings.TrimSpace(req.Title) == "" {
+			req.Title = record.Title
+		}
+	}
+
+	// Serialize report creation with complete-snapshot reconciliation. Without
+	// this boundary, an auto observation can be created from a stale in-memory
+	// record set while the same exact user report is committing.
+	s.observationMu.Lock()
+	defer s.observationMu.Unlock()
 	// Resolve a missing tmdb_id from a known tvdb_id via the cached mapping the
 	// ID bridge maintains (request flows populate tmdb_tvdb_cache). There is no
 	// live reverse resolver, so this is best-effort: on a miss the ids are stored
@@ -163,8 +233,8 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 
 	season := req.SeasonNumber
 	episode := req.EpisodeNumber
-	if req.MediaType == "movie" {
-		// Movies have no season/episode scope; keep the stored row clean.
+	if req.MediaType != "tv" {
+		// Only TV has season/episode scope; keep the stored row clean.
 		season = 0
 		episode = 0
 	}
@@ -178,6 +248,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 	observedGroup, observed := s.recentQueueObservationForUser(instanceID, req.MediaType, arr.QueueMediaContext{
 		Title: req.Title, TmdbID: tmdbID, TvdbID: tvdbID,
 		SeasonNumber: season, EpisodeNumber: episode,
+		AuthorID: authorID, BookID: bookID,
 	}, time.Now().UTC())
 	if observed {
 		if groupIsRecovery(observedGroup, "") {
@@ -205,7 +276,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		problemSince = nil
 	}
 	scopeKey := userIncidentScopeKey(instanceID, req.MediaType, arr.QueueMediaContext{
-		TmdbID: tmdbID, TvdbID: tvdbID, SeasonNumber: season, EpisodeNumber: episode,
+		TmdbID: tmdbID, TvdbID: tvdbID, SeasonNumber: season, EpisodeNumber: episode, BookID: bookID,
 	})
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -224,11 +295,11 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		`SELECT id,status FROM issues
 		 WHERE source=? AND instance_id=? AND media_type=? AND closed_at IS NULL
 		   AND status IN (?,?)
-		   AND ((? > 0 AND tmdb_id=?) OR (? > 0 AND tvdb_id=?))
+		   AND ((? > 0 AND tmdb_id=?) OR (? > 0 AND tvdb_id=?) OR (? > 0 AND book_id=?))
 		   AND season_number=? AND episode_number=?
 		 ORDER BY id LIMIT 1`,
 		SourceAuto, instanceID, req.MediaType, IssueObserving, IssueRecovering,
-		tmdbID, tmdbID, tvdbID, tvdbID, season, episode,
+		tmdbID, tmdbID, tvdbID, tvdbID, bookID, bookID, season, episode,
 	).Scan(&adoptedID, &adoptedStatus)
 	if adoptErr != nil && adoptErr != sql.ErrNoRows {
 		return nil, fmt.Errorf("find matching automatic observation: %w", adoptErr)
@@ -271,17 +342,18 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 
 	res, err := tx.Exec(
 		`INSERT INTO issues
-			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, instance_id, detail, read)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			(source, status, category, reporter_id, tmdb_id, tvdb_id, media_type, title, season_number, episode_number, author_id, book_id, instance_id, detail, read)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 WHERE NOT EXISTS (
 			SELECT 1 FROM issues
 			WHERE source = ? AND reporter_id = ? AND instance_id = ? AND media_type = ?
-			  AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?))
+			  AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?) OR (? > 0 AND book_id = ?))
 			  AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 )`,
-		SourceUser, issueStatus, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode, instanceID, req.Reason, issueRead,
+		SourceUser, issueStatus, req.Category, reporterID, tmdbID, sqlNullInt(tvdbID), req.MediaType, req.Title, season, episode,
+		sqlNullInt(authorID), sqlNullInt(bookID), instanceID, req.Reason, issueRead,
 		SourceUser, reporterID, instanceID, req.MediaType,
-		tmdbID, tmdbID, tvdbID, tvdbID, season, episode, req.Category,
+		tmdbID, tmdbID, tvdbID, tvdbID, bookID, bookID, season, episode, req.Category,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create issue: %w", err)
@@ -292,7 +364,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 		_ = tx.Rollback()
 		// Duplicate open report: bump occurrences + refresh updated_at on the
 		// existing open issue, and return it.
-		id, status, derr := s.bumpDuplicateUserIssue(reporterID, req, instanceID, tmdbID, tvdbID, season, episode)
+		id, status, derr := s.bumpDuplicateUserIssue(reporterID, req, instanceID, tmdbID, tvdbID, bookID, season, episode)
 		if derr != nil {
 			return nil, derr
 		}
@@ -352,7 +424,7 @@ func (s *Service) CreateUserIssue(reporterID int64, req *CreateIssueRequest) (*C
 // bumpDuplicateUserIssue increments occurrences AND appends the newly submitted
 // reason in one transaction. Keeping every report as an AuthorUser thread event
 // prevents an active agent from continuing against only the original detail.
-func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, instanceID string, tmdbID, tvdbID, season, episode int) (int64, string, error) {
+func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueRequest, instanceID string, tmdbID, tvdbID, bookID, season, episode int) (int64, string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, "", fmt.Errorf("begin duplicate issue: %w", err)
@@ -363,11 +435,11 @@ func (s *Service) bumpDuplicateUserIssue(reporterID int64, req *CreateIssueReque
 	err = tx.QueryRow(
 		`SELECT id, status FROM issues
 		 WHERE source = ? AND reporter_id = ? AND instance_id = ? AND media_type = ?
-		   AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?))
+		   AND ((? > 0 AND tmdb_id = ?) OR (? > 0 AND tvdb_id = ?) OR (? > 0 AND book_id = ?))
 		   AND season_number = ? AND episode_number = ? AND category = ? AND closed_at IS NULL
 		 ORDER BY id DESC LIMIT 1`,
 		SourceUser, reporterID, instanceID, req.MediaType,
-		tmdbID, tmdbID, tvdbID, tvdbID, season, episode, req.Category,
+		tmdbID, tmdbID, tvdbID, tvdbID, bookID, bookID, season, episode, req.Category,
 	).Scan(&id, &status)
 	if err != nil {
 		return 0, "", fmt.Errorf("find duplicate issue: %w", err)

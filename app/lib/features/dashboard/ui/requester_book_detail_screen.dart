@@ -15,6 +15,7 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
@@ -254,6 +255,101 @@ class _RequesterBookDetailScreenState
     await _resolveChaptarrRecords(_loadGeneration);
   }
 
+  /// The formats a reporter can flag. Live Chaptarr records are the richest
+  /// truth but resolve only for admins/download-enabled users; plain requesters
+  /// fall back to the requester-visible ownership digest (owned = monitored or
+  /// downloaded, which includes a stuck download — exactly what reports are
+  /// for), failing closed while the digest is still unknown.
+  List<BookFormat> _reportableFormats(OwnedTitle? owned) {
+    final live = _chaptarrRecords
+        .where((record) => record.id > 0)
+        .map((record) => record.format)
+        .where((format) => format != BookFormat.unknown)
+        .toSet()
+        .toList();
+    if (live.isNotEmpty) return live;
+    if (owned == null || !owned.statusKnown) return const [];
+    return [
+      if (owned.ownership.ebook.owned) BookFormat.ebook,
+      if (owned.ownership.audiobook.owned) BookFormat.audiobook,
+    ];
+  }
+
+  /// A book is reportable once the library tracks it in some form (a live
+  /// Chaptarr record, or an owned format in the requester digest) and the
+  /// server allows reporting — mirroring the movie/TV gate, which also derives
+  /// from requester-visible library truth.
+  bool _canReportBook(OwnedTitle? owned) {
+    final allow = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.allowReporting ??
+        false;
+    if (!allow || _instanceId == null) return false;
+    if (_chaptarrRecords.any((record) => record.id > 0)) return true;
+    return _reportableFormats(owned).isNotEmpty;
+  }
+
+  /// Opens the report flow. An ebook and audiobook of the same title are
+  /// distinct Chaptarr records, so when both exist the reporter picks which
+  /// format the problem is about — never a silent merge. With no format
+  /// knowledge at all the report goes up format-less and the server resolves
+  /// (or asks for the format via its ambiguity error).
+  Future<void> _onReportProblem(String title, OwnedTitle? owned) async {
+    final instanceId = _instanceId;
+    if (instanceId == null) return;
+    final formats = _reportableFormats(owned);
+    String? format;
+    if (formats.length == 1) {
+      format = formats.first == BookFormat.audiobook ? 'audiobook' : 'ebook';
+    } else if (formats.length > 1) {
+      final picked = await showModalBottomSheet<BookFormat>(
+        context: context,
+        backgroundColor: AppTheme.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (sheetContext) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 18, 24, 6),
+                child: Text('Which format is the problem with?'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.menu_book_outlined),
+                title: const Text('eBook'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(BookFormat.ebook),
+              ),
+              ListTile(
+                leading: const Icon(Icons.headphones_outlined),
+                title: const Text('Audiobook'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(BookFormat.audiobook),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (picked == null) return;
+      format = picked == BookFormat.audiobook ? 'audiobook' : 'ebook';
+    }
+    if (!mounted) return;
+    await showReportProblemSheet(
+      context,
+      scope: ReportScope.book(
+        instanceId: instanceId,
+        foreignId: _effectiveForeignId,
+        format: format,
+        title: title,
+      ),
+      onSubmitted: _refreshBookTruth,
+    );
+  }
+
   Future<void> _openInChaptarr() async {
     if (_chaptarrRecords.isEmpty) return;
     final instanceId = _instanceId;
@@ -460,6 +556,24 @@ class _RequesterBookDetailScreenState
                   ),
             onRequestCompleted: _onRequestCompleted,
           ),
+          if (_canReportBook(owned)) ...[
+            const SizedBox(height: 18),
+            // Mirrors the shared ReportProblemButton, but routes through the
+            // format picker: an ebook and audiobook are distinct records.
+            OutlinedButton.icon(
+              onPressed: () => _onReportProblem(title, owned),
+              icon: const Icon(Icons.flag_outlined,
+                  size: 18, color: AppTheme.textSecondary),
+              label: const Text('Report a problem',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppTheme.border),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ],
           if (isAdmin && _chaptarrRecords.isNotEmpty) ...[
             const SizedBox(height: 18),
             Center(

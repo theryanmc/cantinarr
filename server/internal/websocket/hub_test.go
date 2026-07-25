@@ -1,13 +1,16 @@
 package websocket
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -245,5 +248,47 @@ func TestQueueSignalMappers(t *testing.T) {
 	}
 	if d := arr.Diagnose(s.Signal); d.Severity != arr.SeverityError {
 		t.Fatalf("sonarr stalled severity = %q, want error", d.Severity)
+	}
+}
+
+// TestAutoDispatchChaptarrForwardsBookSnapshot proves books enter remediation
+// observation through the same complete-snapshot channel as movies/TV, with
+// the durable Chaptarr identity every downstream gate keys on.
+func TestAutoDispatchChaptarrForwardsBookSnapshot(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/queue") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"totalRecords":1,"records":[{"id":9,"authorId":456,"bookId":123,"title":"queue title","downloadId":"download-1","status":"warning","trackedDownloadStatus":"error","errorMessage":"The download is stalled with no connections","added":"2026-07-10T09:00:00Z","book":{"id":123,"title":"Example Book"},"author":{"id":456,"authorName":"The Author"}}]}`)
+	}))
+	defer srv.Close()
+
+	opener := &fakeOpener{}
+	h := newTestHub(opener)
+	h.autoDispatchChaptarr("chaptarr-1", chaptarr.NewClient(srv.URL, "key"))
+
+	calls := opener.calls()
+	if len(calls) != 1 {
+		t.Fatalf("snapshot calls = %d, want exactly 1", len(calls))
+	}
+	got := calls[0]
+	if got.serviceType != "chaptarr" || got.instanceID != "chaptarr-1" || len(got.items) != 1 {
+		t.Fatalf("snapshot scope = %s/%s (%d items)", got.serviceType, got.instanceID, len(got.items))
+	}
+	item := got.items[0]
+	if item.Media.BookID != 123 || item.Media.AuthorID != 456 || item.Media.QueueID != 9 ||
+		item.Media.Title != "Example Book" || item.DownloadID != "download-1" {
+		t.Fatalf("book observation media = %+v", item.Media)
+	}
+	if item.AddedAt == nil {
+		t.Fatal("book observation lost the arr-clock added boundary")
+	}
+	if item.Diagnosis.Severity != arr.SeverityError {
+		t.Fatalf("stalled book diagnosis = %+v", item.Diagnosis)
+	}
+	if item.FileIDAtSnapshot != nil {
+		t.Fatalf("book observation file id should be unknown, got %v", *item.FileIDAtSnapshot)
 	}
 }

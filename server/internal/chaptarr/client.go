@@ -1209,6 +1209,23 @@ const (
 // FormatOf classifies a Chaptarr quality name as "ebook", "audiobook", or
 // "unknown" via a case-insensitive substring match. Ebook tokens are checked
 // first so an ambiguous name leans toward the text format.
+// RecordFormat resolves the single format a Chaptarr book record represents:
+// its book-level mediaType when "ebook"/"audiobook", else the format of its
+// lone edition via FormatOf (a book with anything other than exactly one
+// edition is "unknown"). Mirrors the Dart ChaptarrBook.format fallback.
+func RecordFormat(book Book) string {
+	switch book.MediaType {
+	case FormatEbook:
+		return FormatEbook
+	case FormatAudiobook:
+		return FormatAudiobook
+	}
+	if len(book.Editions) == 1 {
+		return FormatOf(book.Editions[0].Format)
+	}
+	return FormatUnknown
+}
+
 func FormatOf(qualityName string) string {
 	upper := strings.ToUpper(qualityName)
 	for _, tok := range ebookTokens {
