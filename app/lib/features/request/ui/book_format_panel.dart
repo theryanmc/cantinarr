@@ -60,12 +60,44 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
 
+  /// Formats this panel submitted and the server confirmed, kept for as long as
+  /// this book is on screen. See [_detail].
+  final Map<BookRequestFormat, RequestStatus> _submitted = {};
+
   bool get _checking => _activeChecks > 0;
 
-  BookRequestStatusDetail get _detail => _serverDetail.withOwnership(
-        widget.ownership,
-        ownershipStatusKnown: widget.ownershipStatusKnown,
-      );
+  /// Server truth with two layers on top: the owned-books digest, and this
+  /// panel's own confirmed submissions.
+  ///
+  /// A request Cantinarr accepted seconds ago can still read back as "not
+  /// requested" until the arr record materialises, and re-offering Request there
+  /// invites a duplicate request and reads as if the tap failed. A confirmed
+  /// submission therefore outranks a later *unavailable* — but nothing else, so
+  /// an admin's denial and every live state (downloading, available) still win.
+  BookRequestStatusDetail get _detail {
+    final detail = _serverDetail.withOwnership(
+      widget.ownership,
+      ownershipStatusKnown: widget.ownershipStatusKnown,
+    );
+    if (_submitted.isEmpty) return detail;
+    final formats = {...detail.formats};
+    var covered = false;
+    for (final entry in _submitted.entries) {
+      // Only an explicit "never requested" is overridden; an unresolved status
+      // stays unknown rather than being dressed up as a live request.
+      if (detail.statusFor(entry.key) != RequestStatus.unavailable) continue;
+      formats[entry.key] = entry.value;
+      covered = true;
+    }
+    if (!covered) return detail;
+    return BookRequestStatusDetail(
+      status: detail.status,
+      formats: formats,
+      ownership: detail.ownership,
+      isKnown: detail.isKnown,
+      unknownReason: detail.unknownReason,
+    );
+  }
 
   @override
   void initState() {
@@ -81,6 +113,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         oldWidget.instanceId != widget.instanceId) {
       _loading = true;
       _serverDetail = const BookRequestStatusDetail();
+      // Another book (or library) knows nothing about what was requested here.
+      _submitted.clear();
       _check();
     } else if (oldWidget.refreshTick != widget.refreshTick && !_busy) {
       _check();
@@ -181,10 +215,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         );
         return;
       }
-      final outcome = _formatOutcome(
-        format,
-        submission.formats[format] ?? submission.status,
-      );
+      final resolved = submission.formats[format] ?? submission.status;
+      final outcome = _formatOutcome(format, resolved);
+      _rememberSubmission(format, resolved);
       await _refreshAfterSubmission();
       if (!mounted) return;
       _announce(outcome);
@@ -207,6 +240,21 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     // [_busy] set while it runs; didUpdateWidget suppresses a redundant status
     // check until this accepted refresh has fully completed.
     await widget.onRequestCompleted?.call();
+  }
+
+  /// Records a submission the server confirmed. An outcome that did not land —
+  /// a denial, or a format the server refused — is never recorded, so it stays
+  /// retryable.
+  void _rememberSubmission(BookRequestFormat format, RequestStatus? status) {
+    if (status == null ||
+        status == RequestStatus.unavailable ||
+        status == RequestStatus.denied) {
+      return;
+    }
+    setState(() {
+      _submitted[format] =
+          status == RequestStatus.partial ? RequestStatus.requested : status;
+    });
   }
 
   void _announce(String message) {
