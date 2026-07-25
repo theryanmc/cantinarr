@@ -233,10 +233,12 @@ func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
 
 // NotifyNewBook pushes a "book became available" alert for a completed
 // Chaptarr import. The audience is users opted into the new_book category (on
-// by default) who can also see the instance the import landed on — a chaptarr
-// grant is the books access model — plus admins. format is the Chaptarr book
-// record's media type ("ebook"/"audiobook"): a title's two formats are
-// separate records sharing a foreignBookId, and each import alerts on its own.
+// by default) whose book library is the instance the import landed on — a
+// chaptarr assignment is the books access model, and it scopes admins too;
+// only an admin with no books assignment hears every instance. format is the
+// Chaptarr book record's media type ("ebook"/"audiobook"): a title's two
+// formats are separate records sharing a foreignBookId, and each import
+// alerts on its own.
 func (n *Notifier) NotifyNewBook(title, foreignID, instanceID, format string) {
 	client := n.client()
 	if client == nil || title == "" {

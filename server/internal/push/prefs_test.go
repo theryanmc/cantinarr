@@ -154,25 +154,31 @@ func TestUsersOptedIntoUnknownCategory(t *testing.T) {
 	}
 }
 
-// A new_book audience is the intersection of the opt-in and the instance's
-// visibility: admins always see every instance; a non-admin only via the
-// per-user default row that doubles as the chaptarr access grant.
+// A new_book audience follows the per-instance assignment that doubles as the
+// chaptarr access grant — for admins too, so a household running one library
+// per person is never cross-paged ("ready to read" goes to the person who
+// will read it). The one exception: an admin with no books assignment at all
+// browses Books through the default-instance fallback and keeps hearing every
+// instance rather than being silently muted.
 func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	// admin(1): no grant row needed. alice(2): granted books-a. bob(3):
-	// granted books-a but opted out. carol(4): granted sibling books-b.
-	// dave(5): no chaptarr grant at all.
+	// admin(1): no books assignment. alice(2): assigned books-a. bob(3):
+	// assigned books-a but opted out. carol(4): assigned sibling books-b.
+	// dave(5): no chaptarr assignment at all. erin(6): ADMIN assigned
+	// books-a — the two-library household case.
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (4, 'carol', '', 'user')")
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (6, 'erin', '', 'admin')")
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'chaptarr', 'books-a')")
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'chaptarr', 'books-a')")
 	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (4, 'chaptarr', 'books-b')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (6, 'chaptarr', 'books-a')")
 	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book) VALUES (3, 0)")
 
 	store := NewPrefsStore(database)
@@ -181,17 +187,30 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usersOptedIntoNewBook(books-a): %v", err)
 	}
-	if !equalIDs(got, []int64{1, 2}) {
-		t.Errorf("books-a audience = %v, want [1 2] (admin + granted alice)", got)
+	if !equalIDs(got, []int64{1, 2, 6}) {
+		t.Errorf("books-a audience = %v, want [1 2 6] (unassigned admin + assigned alice + assigned admin erin)", got)
 	}
 
-	// The sibling instance reaches its own grantee (and admins), never books-a's.
+	// The sibling instance reaches its own assignee (and the unassigned
+	// admin) — never books-a's users, and NOT the admin assigned to books-a:
+	// an assignment scopes an admin exactly like anyone else.
 	got, err = store.usersOptedIntoNewBook("books-b")
 	if err != nil {
 		t.Fatalf("usersOptedIntoNewBook(books-b): %v", err)
 	}
 	if !equalIDs(got, []int64{1, 4}) {
-		t.Errorf("books-b audience = %v, want [1 4] (admin + granted carol)", got)
+		t.Errorf("books-b audience = %v, want [1 4] (unassigned admin + assigned carol)", got)
+	}
+
+	// A radarr assignment is not a books assignment: it must neither admit a
+	// user to a book audience nor strip an admin of the unassigned fallback.
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (1, 'radarr', 'movies-a')")
+	got, err = store.usersOptedIntoNewBook("books-b")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewBook(books-b) after radarr row: %v", err)
+	}
+	if !equalIDs(got, []int64{1, 4}) {
+		t.Errorf("books-b audience after radarr row = %v, want [1 4] unchanged", got)
 	}
 
 	// An admin who opts out is excluded like anyone else.
@@ -200,8 +219,8 @@ func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("usersOptedIntoNewBook(books-a): %v", err)
 	}
-	if !equalIDs(got, []int64{2}) {
-		t.Errorf("books-a audience after admin opt-out = %v, want [2]", got)
+	if !equalIDs(got, []int64{2, 6}) {
+		t.Errorf("books-a audience after admin opt-out = %v, want [2 6]", got)
 	}
 }
 
