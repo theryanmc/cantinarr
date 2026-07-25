@@ -516,6 +516,16 @@ class SonarrQueueItem {
 
 /// A single Sonarr history event.
 class SonarrHistoryRecord {
+  /// Sonarr's `eventType` enum value for a completed import, used to filter the
+  /// history query. Sonarr accepts the integer but answers with the name below,
+  /// so both spellings are needed: one to ask, one to confirm what came back.
+  static const int importedEventTypeId = 3;
+
+  /// The name the same event carries in the response body. Matching on it means
+  /// that if a future Sonarr ever renumbered the enum, the row would come back
+  /// empty rather than quietly presenting deletes or grabs as downloads.
+  static const String importedEventType = 'downloadFolderImported';
+
   final int id;
   final String sourceTitle;
   final String eventType;

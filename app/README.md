@@ -53,7 +53,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; sending it opens the dedicated assistant with the prompt already in flight.
 
 ### Discover
-- **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded (ordered by when the file landed, not when the title was added), Airing Next.
+- **Movies / TV tabs** -- discovery rows plus live library rows from the user's default instances: Downloading Soon, Recently Downloaded (ordered by when the file landed, never when the title was added -- Radarr carries the file date on the movie, Sonarr does not, so series recency comes from its import history), Airing Next (soonest air date first).
 - **Cinematic title pages** -- movie/show detail opens under a full-bleed, unblurred backdrop hero: the image parallaxes at half scroll speed (with an iOS overscroll stretch-zoom and a settle-in on load), then hands off to a pinned marquee bar carrying the title and back control. Titles without artwork get a warm ambient-glow stage instead.
 - **Releases tab** -- a unified movie + episode release timeline with list and month-calendar views.
 - **Books tab** -- appears only for users with a Chaptarr grant: opens on a Recently Added row (newest book-file imports, eBook and Audiobook shown separately since they arrive at different times) above owned-aware book search, whose tappable results open the richer book detail where per-format request controls live (see Books). The row is absent for users with no Chaptarr grant and hides while a search is active.
