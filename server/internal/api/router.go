@@ -281,6 +281,7 @@ func NewRouter(
 			r.Get("/requests/options", requestHandler.Options)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
+			r.Get("/requests/book-recent", requestHandler.GetBookRecent)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 

@@ -19,6 +19,13 @@ class MediaCard extends StatelessWidget {
   /// Optional TMDB-style score displayed over the artwork.
   final double? rating;
 
+  /// Headers for the poster request. Chaptarr covers are served through the
+  /// authenticated instance proxy and need the user's bearer token.
+  final Map<String, String>? posterHeaders;
+
+  /// Drawn when there is no artwork. Books want a book, not a film reel.
+  final IconData placeholderIcon;
+
   const MediaCard({
     super.key,
     required this.id,
@@ -30,6 +37,8 @@ class MediaCard extends StatelessWidget {
     this.onTap,
     this.width = 120,
     this.rating,
+    this.posterHeaders,
+    this.placeholderIcon = Icons.movie_outlined,
   });
 
   @override
@@ -60,6 +69,8 @@ class MediaCard extends StatelessWidget {
         statusLabel: statusLabel,
         statusColor: statusColor,
         rating: rating,
+        posterHeaders: posterHeaders,
+        placeholderIcon: placeholderIcon,
       ),
     );
   }
@@ -75,6 +86,8 @@ class _InteractiveMediaCard extends StatefulWidget {
   final String? statusLabel;
   final Color? statusColor;
   final double? rating;
+  final Map<String, String>? posterHeaders;
+  final IconData placeholderIcon;
 
   const _InteractiveMediaCard({
     required this.onTap,
@@ -86,6 +99,8 @@ class _InteractiveMediaCard extends StatefulWidget {
     required this.statusLabel,
     required this.statusColor,
     required this.rating,
+    required this.posterHeaders,
+    required this.placeholderIcon,
   });
 
   @override
@@ -161,8 +176,9 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                             url: widget.posterPath == null
                                 ? null
                                 : widget.imageUrl,
+                            headers: widget.posterHeaders,
                             fit: BoxFit.cover,
-                            icon: Icons.movie_outlined,
+                            icon: widget.placeholderIcon,
                             iconSize: 32,
                           ),
                           const Positioned.fill(

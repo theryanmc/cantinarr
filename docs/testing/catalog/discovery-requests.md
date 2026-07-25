@@ -8,6 +8,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `DISC-001` · P0 · UI/LIVE — Load actual dashboards: movie spotlight, Popular Movies, Top Rated, Coming Soon, Most Anticipated, Downloading Soon, Recently Downloaded; series spotlight, Popular TV Shows, Most Anticipated, Recently Downloaded, Airing Next. Verify identity/image/date/status/detail target.
 - [ ] `DISC-007` · P0 · UI/LIVE — Move a title through unavailable, requested, downloading, partial, and available outside Cantinarr; verify search/detail chips converge over webhook/WebSocket/refetch with requester vocabulary only.
+- [ ] `DISC-009` · P1 · LIVE — Against a real Chaptarr, download one book and side-load another that only a rescan discovers; verify both reach Recently Added within one refresh, covers render, and an eBook and Audiobook of the same title appear as two cards ordered by when each file landed.
 - [ ] `DISC-017` · P1 · LIVE — With Trakt configured, load trending, popular, public lists/items, calendar, anticipated, and recommendations; verify IDs/media types bridge to usable details.
 
 ## Request and approval journeys
