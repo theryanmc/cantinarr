@@ -10,6 +10,7 @@ class NotificationPrefs {
   final bool requestPending;
   final bool newMovie;
   final bool newEpisode;
+  final bool newBook;
   final bool issueCreated;
   final bool agentActionPending;
   final bool plexAccessRequest;
@@ -20,6 +21,7 @@ class NotificationPrefs {
     required this.requestPending,
     required this.newMovie,
     required this.newEpisode,
+    this.newBook = true,
     this.issueCreated = true,
     this.agentActionPending = true,
     this.plexAccessRequest = true,
@@ -32,8 +34,9 @@ class NotificationPrefs {
         requestPending: json['request_pending'] as bool? ?? false,
         newMovie: json['new_movie'] as bool? ?? false,
         newEpisode: json['new_episode'] as bool? ?? false,
-        // Admin categories default on server-side; mirror that when a key is
-        // absent (e.g. an older server).
+        // Categories newer than the connected server (and the admin-only
+        // ones) default on server-side; mirror that when a key is absent.
+        newBook: json['new_book'] as bool? ?? true,
         issueCreated: json['issue_created'] as bool? ?? true,
         agentActionPending: json['agent_action_pending'] as bool? ?? true,
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
@@ -45,6 +48,7 @@ class NotificationPrefs {
         'request_pending': requestPending,
         'new_movie': newMovie,
         'new_episode': newEpisode,
+        'new_book': newBook,
         'issue_created': issueCreated,
         'agent_action_pending': agentActionPending,
         'plex_access_request': plexAccessRequest,
@@ -56,6 +60,7 @@ class NotificationPrefs {
     bool? requestPending,
     bool? newMovie,
     bool? newEpisode,
+    bool? newBook,
     bool? issueCreated,
     bool? agentActionPending,
     bool? plexAccessRequest,
@@ -66,6 +71,7 @@ class NotificationPrefs {
         requestPending: requestPending ?? this.requestPending,
         newMovie: newMovie ?? this.newMovie,
         newEpisode: newEpisode ?? this.newEpisode,
+        newBook: newBook ?? this.newBook,
         issueCreated: issueCreated ?? this.issueCreated,
         agentActionPending: agentActionPending ?? this.agentActionPending,
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,

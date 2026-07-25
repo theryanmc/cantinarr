@@ -170,7 +170,12 @@ class _NotificationPreferencesScreenState
 
   Widget _buildBody() {
     final prefs = _prefs!;
-    final isAdmin = ref.watch(authProvider).valueOrNull?.user?.isAdmin ?? false;
+    final auth = ref.watch(authProvider).valueOrNull;
+    final isAdmin = auth?.user?.isAdmin ?? false;
+    // Same gate as the Books tab: a user without Chaptarr access is never in
+    // a new-book audience (the server scopes recipients by instance grant),
+    // so don't show them a toggle that can't do anything.
+    final showBooks = auth?.connection?.services.chaptarr ?? false;
 
     return ListView(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -229,6 +234,13 @@ class _NotificationPreferencesScreenState
           value: prefs.newEpisode,
           onChanged: (v) => _save(prefs.copyWith(newEpisode: v), prefs),
         ),
+        if (showBooks)
+          _toggle(
+            title: 'New book available',
+            subtitle: 'When a book finishes downloading',
+            value: prefs.newBook,
+            onChanged: (v) => _save(prefs.copyWith(newBook: v), prefs),
+          ),
         _toggle(
           title: 'Plex invite sent',
           subtitle: 'When your Plex invite email goes out',

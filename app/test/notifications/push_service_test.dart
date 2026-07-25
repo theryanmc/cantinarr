@@ -265,6 +265,41 @@ void main() {
       );
     });
 
+    test('new_book opens the book detail pinned to its Chaptarr instance',
+        () async {
+      // A new_book availability alert carries the same book identity fields
+      // as a decision payload and must route identically.
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'new_book',
+        'media_type': 'book',
+        'foreign_id': '29749107',
+        'title': 'Ahsoka (Star Wars)',
+        'instance_id': 'books-a',
+        'book_format': 'ebook',
+      });
+      expect(
+        h.router.pushed,
+        [
+          '/detail/book/29749107'
+              '?title=Ahsoka%20(Star%20Wars)&instance_id=books-a'
+        ],
+      );
+    });
+
+    test('new_book without a usable foreign_id falls back to the Books tab',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'new_book',
+        'media_type': 'book',
+        'foreign_id': '',
+        'title': 'Ahsoka (Star Wars)',
+      });
+      expect(h.router.went, ['/dashboard/books']);
+      expect(h.router.pushed, isEmpty);
+    });
+
     test('blank and non-string foreign_id values fall back to the Books tab',
         () async {
       final h = _Harness();
