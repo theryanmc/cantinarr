@@ -135,6 +135,34 @@ func (h *Handler) GetBookLibrary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, digest)
 }
 
+// GetBookRecent returns the newest book-file imports for the Chaptarr instance
+// this user may see, so the Books tab can show what recently landed.
+//
+// A user with no Chaptarr access gets an empty list, not an error: the row is
+// simply absent for them.
+func (h *Handler) GetBookRecent(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	limit := recentBooksDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > recentBooksMaxItems {
+		limit = recentBooksMaxItems
+	}
+	digest, err := h.service.GetRecentBooksForInstance(claims.UserID, r.URL.Query().Get("instance_id"), limit)
+	if err != nil {
+		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
 func bookRequestErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrChaptarrInstanceForbidden):

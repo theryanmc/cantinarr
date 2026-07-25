@@ -153,20 +153,22 @@ func (s *Service) InvalidateAvailabilityDigests(instanceID string) {
 	s.libraryCache.Delete("series-availability:" + instanceID)
 }
 
-// InvalidateBookDigests drops the cached book availability for one Chaptarr
-// instance so the next status or library read refetches. These are the only two
-// keys holding book availability; the per-title search cache holds metadata and
-// is deliberately left alone.
+// InvalidateBookDigests drops the cached book availability and recency for one
+// Chaptarr instance so the next read refetches. These are the only keys holding
+// book state; the per-title search cache holds metadata and is deliberately
+// left alone.
 //
 // Called by the arr webhook receiver when a Chaptarr library changes
 // out-of-band, so a user who taps a "book is ready" alert lands on fresh state
-// instead of up to the cache TTL of stale "Requested".
+// instead of up to the cache TTL of stale "Requested" — and so a newly imported
+// book appears in the Recently Added row immediately.
 func (s *Service) InvalidateBookDigests(instanceID string) {
 	if s.libraryCache == nil || instanceID == "" {
 		return
 	}
 	s.libraryCache.Delete("book-library:" + instanceID)
 	s.libraryCache.Delete("book-live:" + instanceID)
+	s.libraryCache.Delete("book-recent:" + instanceID)
 }
 
 // getRadarrWithID resolves the same Radarr client as getRadarr but also

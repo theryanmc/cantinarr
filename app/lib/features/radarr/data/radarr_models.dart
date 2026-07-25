@@ -155,6 +155,11 @@ class RadarrMovieFile {
   final bool qualityCutoffNotMet;
   final String? releaseGroup;
 
+  /// When the file landed. This is the only honest "recently downloaded"
+  /// timestamp: the movie record's own `added` is when the movie was added to
+  /// Radarr, which can predate the file by months.
+  final DateTime? dateAdded;
+
   const RadarrMovieFile({
     required this.id,
     this.relativePath,
@@ -162,6 +167,7 @@ class RadarrMovieFile {
     this.quality,
     this.qualityCutoffNotMet = false,
     this.releaseGroup,
+    this.dateAdded,
   });
 
   factory RadarrMovieFile.fromJson(Map<String, dynamic> json) =>
@@ -173,6 +179,7 @@ class RadarrMovieFile {
             as String?,
         qualityCutoffNotMet: json['qualityCutoffNotMet'] as bool? ?? false,
         releaseGroup: json['releaseGroup'] as String?,
+        dateAdded: DateTime.tryParse(json['dateAdded'] as String? ?? ''),
       );
 
   String get sizeFormatted =>

@@ -17,7 +17,9 @@ import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../request/data/book_ownership.dart';
 import '../data/book_library_service.dart';
+import '../data/recent_books_service.dart';
 import '../logic/book_ownership_matcher.dart';
+import 'recently_added_books_row.dart';
 
 /// Dashboard Books tab: search Chaptarr's catalog (books/authors) and request a
 /// book. Chaptarr lookup is search-only (no "popular" feed like TMDB), so this
@@ -64,6 +66,8 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         ref.read(instanceProvider).activeChaptarrInstance?.id;
     ref.invalidate(ownedBooksForInstanceProvider(instanceId));
     ref.invalidate(ownedBooksProvider);
+    ref.invalidate(recentBooksForInstanceProvider(instanceId));
+    ref.invalidate(recentBooksProvider);
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
@@ -281,28 +285,39 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ];
 
     if (ordered.isEmpty) {
+      // The Recently Added row belongs to the idle tab only. A search that
+      // found nothing should say so plainly, not bury the message under a row
+      // of unrelated books.
+      final idle = !_searched && _controller.text.trim().isEmpty;
       return LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.menu_book,
-                      size: 48, color: AppTheme.textSecondary),
-                  const SizedBox(height: 12),
-                  Text(
-                    _searched
-                        ? 'No books found. Try a different search.'
-                        : 'Search for a book or author to request.\nYour library lives in the Books section.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: AppTheme.textSecondary),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment:
+                  idle ? MainAxisAlignment.start : MainAxisAlignment.center,
+              children: [
+                if (idle) const RecentlyAddedBooksRow(),
+                Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.menu_book,
+                          size: 48, color: AppTheme.textSecondary),
+                      const SizedBox(height: 12),
+                      Text(
+                        _searched
+                            ? 'No books found. Try a different search.'
+                            : 'Search for a book or author to request.\nYour library lives in the Books section.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppTheme.textSecondary),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

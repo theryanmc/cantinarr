@@ -12,6 +12,7 @@ import '../../discover/ui/category_row.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/data/radarr_models.dart';
 import '../../radarr/logic/movie_discover_provider.dart';
+import '../logic/library_rows.dart';
 
 /// Dashboard Movies tab: discovery rows + Radarr library rows.
 class DashboardMoviesTab extends ConsumerStatefulWidget {
@@ -70,12 +71,8 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       movies = await service.getMovies();
       if (!mounted) return;
 
-      final downloaded = movies.where((m) => m.hasFile).toList()
-        ..sort((a, b) =>
-            (b.added ?? DateTime(0)).compareTo(a.added ?? DateTime(0)));
-
       setState(() {
-        _recentlyDownloaded = downloaded.take(10).toList();
+        _recentlyDownloaded = recentlyDownloadedMovies(movies);
       });
     } catch (_) {
       // Movie fetch failed; leave _recentlyDownloaded empty.
