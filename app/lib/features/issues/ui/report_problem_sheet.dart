@@ -10,11 +10,13 @@ import '../logic/issues_provider.dart';
 /// optionally narrowed to a TV season/episode.
 class ReportScope {
   final String instanceId;
-  final String mediaType; // 'movie' | 'tv'
+  final String mediaType; // 'movie' | 'tv' | 'book'
   final int tmdbId;
   final int? tvdbId;
   final int? seasonNumber;
   final int? episodeNumber;
+  final String? foreignId; // book: Chaptarr foreignBookId
+  final String? bookFormat; // book: 'ebook' | 'audiobook'
   final String? title;
 
   const ReportScope({
@@ -24,8 +26,28 @@ class ReportScope {
     this.tvdbId,
     this.seasonNumber,
     this.episodeNumber,
+    this.foreignId,
+    this.bookFormat,
     this.title,
   });
+
+  /// Books carry no TMDB identity: the report names the library's
+  /// foreignBookId (and the format, since an ebook and audiobook of the same
+  /// title are distinct records) and the server resolves the durable Chaptarr
+  /// record ids live.
+  const ReportScope.book({
+    required String instanceId,
+    required String foreignId,
+    String? format,
+    String? title,
+  }) : this(
+          instanceId: instanceId,
+          mediaType: 'book',
+          tmdbId: 0,
+          foreignId: foreignId,
+          bookFormat: format,
+          title: title,
+        );
 
   const ReportScope.movie({
     required String instanceId,
@@ -176,6 +198,8 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
             tvdbId: scope.tvdbId,
             seasonNumber: scope.seasonNumber,
             episodeNumber: scope.episodeNumber,
+            foreignId: scope.foreignId,
+            bookFormat: scope.bookFormat,
             category: _category,
             reason: reason.isEmpty ? null : reason,
             title: scope.title,

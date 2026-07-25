@@ -56,7 +56,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance_id, media_type, and category required"})
 		return
 	}
-	if req.TmdbID == 0 && req.TvdbID == 0 {
+	if req.MediaType == "book" {
+		if strings.TrimSpace(req.ForeignID) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for a book report"})
+			return
+		}
+	} else if req.TmdbID == 0 && req.TvdbID == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tmdb_id or tvdb_id required"})
 		return
 	}

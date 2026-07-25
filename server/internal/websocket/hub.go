@@ -607,6 +607,63 @@ func (h *Hub) autoDispatchSonarr(instanceID string, client *sonarr.Client) {
 	h.dispatchDetailedItems("sonarr", instanceID, observations)
 }
 
+// chaptarrQueueSignal projects a Chaptarr detailed queue item into the neutral
+// classifier signal plus its stable download id and durable book identity. It
+// mirrors remediation's chaptarrObservation (kept local so the hub need not
+// import that package). Chaptarr queue payloads never embed the book's current
+// file id, so FileIDAtSnapshot stays nil (unknown).
+func chaptarrQueueSignal(item chaptarr.DetailedQueueItem) arr.QueueObservation {
+	messages := make([]arr.StatusMessage, 0, len(item.StatusMessages))
+	for _, m := range item.StatusMessages {
+		messages = append(messages, arr.StatusMessage{Title: m.Title, Messages: m.Messages})
+	}
+	media := arr.QueueMediaContext{QueueID: item.ID, Title: item.Title, AuthorID: item.AuthorID, BookID: item.BookID}
+	if item.Book != nil {
+		if item.Book.Title != "" {
+			media.Title = item.Book.Title
+		}
+		if media.BookID == 0 {
+			media.BookID = item.Book.ID
+		}
+	}
+	if item.Author != nil && media.AuthorID == 0 {
+		media.AuthorID = item.Author.ID
+	}
+	return arr.QueueObservation{
+		DownloadID: item.DownloadID,
+		AddedAt:    item.Added,
+		Media:      media,
+		Signal: arr.QueueSignal{
+			Status:                item.Status,
+			TrackedDownloadStatus: item.TrackedDownloadStatus,
+			TrackedDownloadState:  item.TrackedDownloadState,
+			ErrorMessage:          item.ErrorMessage,
+			StatusMessages:        messages,
+			Protocol:              item.Protocol,
+			Size:                  item.Size,
+			SizeLeft:              item.Sizeleft,
+		},
+	}
+}
+
+// autoDispatchChaptarr is the Chaptarr analogue of autoDispatchRadarr: books
+// enter remediation observation through the same complete-snapshot channel.
+func (h *Hub) autoDispatchChaptarr(instanceID string, client *chaptarr.Client) {
+	if !h.autoDispatchEnabled() {
+		return
+	}
+	items, err := client.GetQueueDetailed()
+	if err != nil {
+		log.Printf("websocket: auto-dispatch chaptarr detailed queue (%s): %v", instanceID, err)
+		return
+	}
+	observations := make([]arr.QueueObservation, 0, len(items))
+	for _, item := range items {
+		observations = append(observations, chaptarrQueueSignal(item))
+	}
+	h.dispatchDetailedItems("chaptarr", instanceID, observations)
+}
+
 func (h *Hub) pollAllRadarr() {
 	if h.store == nil || h.registry == nil {
 		return
@@ -820,8 +877,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 // departures to push new_book alerts — the same completion witness the Radarr
 // poller uses, and the only one books have (Chaptarr has no webhook path).
 // Unlike the Radarr/Sonarr pollers it does not emit per-item download_progress
-// events: Chaptarr books carry no TMDB id, which those events key on. There is
-// also no auto-dispatch pass; remediation does not cover chaptarr.
+// events: Chaptarr books carry no TMDB id, which those events key on. It ends
+// with the same auto-dispatch observation pass as Radarr/Sonarr, feeding book
+// queue snapshots to remediation.
 func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
@@ -860,4 +918,7 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	h.prevChaptarrQueue[instanceID] = currentQueue
 
 	h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
+
+	// Auto-dispatch pass (see pollRadarrInstance). No-op when the opener is nil.
+	h.autoDispatchChaptarr(instanceID, client)
 }

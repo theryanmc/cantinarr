@@ -15,6 +15,7 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
+import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
@@ -254,6 +255,83 @@ class _RequesterBookDetailScreenState
     await _resolveChaptarrRecords(_loadGeneration);
   }
 
+  /// A book is reportable once the library has a live Chaptarr record for it
+  /// (so there's a download/file to complain about) and the server allows
+  /// reporting — the same gate the movie/TV detail screens apply.
+  bool _canReportBook() {
+    final allow = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.allowReporting ??
+        false;
+    return allow &&
+        _instanceId != null &&
+        _chaptarrRecords.any((record) => record.id > 0);
+  }
+
+  /// Opens the report flow. An ebook and audiobook of the same title are
+  /// distinct Chaptarr records, so when both exist the reporter picks which
+  /// format the problem is about — never a silent merge.
+  Future<void> _onReportProblem(String title) async {
+    final instanceId = _instanceId;
+    if (instanceId == null) return;
+    final formats = _chaptarrRecords
+        .where((record) => record.id > 0)
+        .map((record) => record.format)
+        .where((format) => format != BookFormat.unknown)
+        .toSet()
+        .toList();
+    String? format;
+    if (formats.length == 1) {
+      format = formats.first == BookFormat.audiobook ? 'audiobook' : 'ebook';
+    } else if (formats.length > 1) {
+      final picked = await showModalBottomSheet<BookFormat>(
+        context: context,
+        backgroundColor: AppTheme.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (sheetContext) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 18, 24, 6),
+                child: Text('Which format is the problem with?'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.menu_book_outlined),
+                title: const Text('eBook'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(BookFormat.ebook),
+              ),
+              ListTile(
+                leading: const Icon(Icons.headphones_outlined),
+                title: const Text('Audiobook'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(BookFormat.audiobook),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (picked == null) return;
+      format = picked == BookFormat.audiobook ? 'audiobook' : 'ebook';
+    }
+    if (!mounted) return;
+    await showReportProblemSheet(
+      context,
+      scope: ReportScope.book(
+        instanceId: instanceId,
+        foreignId: _effectiveForeignId,
+        format: format,
+        title: title,
+      ),
+      onSubmitted: _refreshBookTruth,
+    );
+  }
+
   Future<void> _openInChaptarr() async {
     if (_chaptarrRecords.isEmpty) return;
     final instanceId = _instanceId;
@@ -460,6 +538,24 @@ class _RequesterBookDetailScreenState
                   ),
             onRequestCompleted: _onRequestCompleted,
           ),
+          if (_canReportBook()) ...[
+            const SizedBox(height: 18),
+            // Mirrors the shared ReportProblemButton, but routes through the
+            // format picker: an ebook and audiobook are distinct records.
+            OutlinedButton.icon(
+              onPressed: () => _onReportProblem(title),
+              icon: const Icon(Icons.flag_outlined,
+                  size: 18, color: AppTheme.textSecondary),
+              label: const Text('Report a problem',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppTheme.border),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+          ],
           if (isAdmin && _chaptarrRecords.isNotEmpty) ...[
             const SizedBox(height: 18),
             Center(
