@@ -2,6 +2,7 @@ package chaptarr
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type failingTransport struct{ err error }
@@ -390,5 +392,73 @@ func TestFormatOf(t *testing.T) {
 		if got := FormatOf(tc.name); got != tc.want {
 			t.Errorf("FormatOf(%q) = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestGetImportHistoryIsBoundedAndServerFiltered(t *testing.T) {
+	var gotQuery url.Values
+	total := 1
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"page":1,"pageSize":20,"totalRecords":%d,"records":[{"id":88,"eventType":"downloadFolderImported","downloadId":"down-1","authorId":4,"bookId":42}]}`, total)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "key")
+	records, err := c.GetImportHistory(42, "down-1", 20)
+	if err != nil {
+		t.Fatalf("GetImportHistory: %v", err)
+	}
+	if gotQuery.Get("eventType") != "3" || gotQuery.Get("bookId") != "42" || gotQuery.Get("downloadId") != "down-1" {
+		t.Fatalf("import history query = %v", gotQuery)
+	}
+	if len(records) != 1 || records[0].DownloadID != "down-1" || records[0].BookID != 42 {
+		t.Fatalf("records = %+v", records)
+	}
+
+	// A fork that ignores the filters overflows the bound and must fail closed
+	// instead of yielding a partial (and therefore untrustworthy) witness.
+	total = 21
+	if _, err := c.GetImportHistory(42, "down-1", 20); err == nil {
+		t.Fatal("overflowing import history did not fail closed")
+	}
+}
+
+func TestGetBookFilesForBookRefiltersClientSide(t *testing.T) {
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		// A fork ignoring ?bookId= returns every file; the client must refilter.
+		_, _ = io.WriteString(w, `[{"id":5,"authorId":4,"bookId":42},{"id":6,"authorId":4,"bookId":99}]`)
+	}))
+	defer srv.Close()
+
+	files, err := NewClient(srv.URL, "key").GetBookFilesForBook(42)
+	if err != nil {
+		t.Fatalf("GetBookFilesForBook: %v", err)
+	}
+	if gotQuery.Get("bookId") != "42" {
+		t.Fatalf("bookfile query = %v", gotQuery)
+	}
+	if len(files) != 1 || files[0].ID != 5 {
+		t.Fatalf("files = %+v, want only book 42's file", files)
+	}
+}
+
+func TestQueueItemDecodesAddedTimestamp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"totalRecords":1,"records":[{"id":1,"bookId":42,"added":"2026-07-10T09:00:00Z"}]}`)
+	}))
+	defer srv.Close()
+
+	items, err := NewClient(srv.URL, "key").GetQueueDetailed(1, 100)
+	if err != nil {
+		t.Fatalf("GetQueueDetailed: %v", err)
+	}
+	if len(items) != 1 || items[0].Added == nil || !items[0].Added.Equal(time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("items = %+v, want added timestamp decoded", items)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -267,5 +268,86 @@ func TestValidateGrabReleaseCandidateUsesEpisodeSpecificSonarrSearch(t *testing.
 	}
 	if searches != 1 {
 		t.Fatalf("episode searches = %d, want 1", searches)
+	}
+}
+
+func TestValidateQueueItemBookBindsToIssueBookIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/queue") {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"totalRecords": 2,
+			"records": []map[string]any{
+				{"id": 21, "bookId": 999, "downloadId": "other"},
+				{"id": 22, "bookId": 123, "downloadId": "right"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	executor := &Executor{}
+	client := chaptarr.NewClient(server.URL, "test")
+	withIdentity := issueContext{mediaType: "book", bookID: 123}
+	if err := executor.validateQueueItem("book", 21, withIdentity, nil, nil, client); err == nil || !strings.Contains(err.Error(), "not this issue's book 123") {
+		t.Fatalf("unrelated book validation error = %v", err)
+	}
+	if err := executor.validateQueueItem("book", 22, withIdentity, nil, nil, client); err != nil {
+		t.Fatalf("matching book rejected: %v", err)
+	}
+
+	detectorOnly := issueContext{mediaType: "book", arrQueueID: 22, downloadID: "right"}
+	if err := executor.validateQueueItem("book", 22, detectorOnly, nil, nil, client); err != nil {
+		t.Fatalf("detector-bound book queue action rejected: %v", err)
+	}
+	unprovable := issueContext{mediaType: "book"}
+	if err := executor.validateQueueItem("book", 22, unprovable, nil, nil, client); err == nil || !strings.Contains(err.Error(), "cannot be proven") {
+		t.Fatalf("identity-less book validation error = %v", err)
+	}
+}
+
+func TestValidateGrabReleaseCandidateBookScopedSearch(t *testing.T) {
+	searches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/release" {
+			http.NotFound(w, r)
+			return
+		}
+		searches++
+		if r.URL.Query().Get("bookId") != "123" {
+			t.Fatalf("release search was not book-scoped: %s", r.URL.RawQuery)
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"guid": "book-guid", "indexerId": 6}})
+	}))
+	defer server.Close()
+
+	client := chaptarr.NewClient(server.URL, "test")
+	guid, err := (&Executor{}).validateGrabReleaseCandidate(
+		GrabReleaseParams{MediaType: "book", GUID: "book-guid", IndexerID: 6},
+		issueContext{mediaType: "book", bookID: 123},
+		nil, nil, client,
+	)
+	if err != nil || guid != "book-guid" {
+		t.Fatalf("book-scoped release = %q err=%v", guid, err)
+	}
+	if searches != 1 {
+		t.Fatalf("book searches = %d, want 1", searches)
+	}
+
+	if _, err := (&Executor{}).validateGrabReleaseCandidate(
+		GrabReleaseParams{MediaType: "book", GUID: "unknown-guid", IndexerID: 6},
+		issueContext{mediaType: "book", bookID: 123},
+		nil, nil, client,
+	); err == nil || !strings.Contains(err.Error(), "not present in a fresh search") {
+		t.Fatalf("stale book release error = %v", err)
+	}
+
+	if _, err := (&Executor{}).validateGrabReleaseCandidate(
+		GrabReleaseParams{MediaType: "book", GUID: "book-guid", IndexerID: 6},
+		issueContext{mediaType: "book"},
+		nil, nil, client,
+	); err == nil || !strings.Contains(err.Error(), "cannot establish the issue's Chaptarr book") {
+		t.Fatalf("identity-less book release error = %v", err)
 	}
 }

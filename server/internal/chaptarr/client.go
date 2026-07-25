@@ -401,6 +401,7 @@ type QueueItem struct {
 	AuthorID              int             `json:"authorId"`
 	BookID                int             `json:"bookId"`
 	Title                 string          `json:"title"`
+	Added                 *time.Time      `json:"added,omitempty"`
 	Status                string          `json:"status"`
 	TrackedDownloadStatus string          `json:"trackedDownloadStatus"`
 	TrackedDownloadState  string          `json:"trackedDownloadState"`
@@ -430,6 +431,7 @@ type HistoryRecord struct {
 	Quality     json.RawMessage   `json:"quality"`
 	AuthorID    int               `json:"authorId"`
 	BookID      int               `json:"bookId"`
+	DownloadID  string            `json:"downloadId"`
 	Author      *AuthorContext    `json:"author,omitempty"`
 	Book        *BookContext      `json:"book,omitempty"`
 	Data        map[string]string `json:"data,omitempty"`
@@ -732,6 +734,24 @@ func (c *Client) GetBookFile(id int) (*BookFile, error) {
 	return &file, nil
 }
 
+// GetBookFilesForBook lists the files on disk for one book record. The bookId
+// query narrows server-side; the response is re-filtered here so a fork that
+// ignores the parameter still returns only this book's files.
+func (c *Client) GetBookFilesForBook(bookID int) ([]BookFile, error) {
+	var files []BookFile
+	path := fmt.Sprintf("/api/v1/bookfile?bookId=%d", bookID)
+	if err := c.do("GET", path, nil, &files); err != nil {
+		return nil, fmt.Errorf("chaptarr book files: %w", err)
+	}
+	matched := files[:0]
+	for _, f := range files {
+		if f.BookID == bookID {
+			matched = append(matched, f)
+		}
+	}
+	return matched, nil
+}
+
 func (c *Client) GetQualityProfiles() ([]QualityProfile, error) {
 	resp, err := c.doRequest("GET", "/api/v1/qualityprofile")
 	if err != nil {
@@ -957,6 +977,24 @@ func (c *Client) GetHistory(page, pageSize int) (*HistoryPage, error) {
 		return nil, fmt.Errorf("chaptarr history: %w", err)
 	}
 	return &hp, nil
+}
+
+// GetImportHistory returns a bounded server-filtered import witness for one
+// book record and observed download identity, mirroring the Radarr/Sonarr
+// clients. eventType=3 is downloadFolderImported. Callers still revalidate
+// every returned field; the totalRecords bound fails closed (a fork that
+// ignores the filters would overflow it rather than yield a false witness).
+func (c *Client) GetImportHistory(bookID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=3&bookId=%d&downloadId=%s",
+		pageSize, bookID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("chaptarr import history: %w", err)
+	}
+	if hp.TotalRecords > pageSize {
+		return nil, fmt.Errorf("chaptarr import history incomplete: %d records exceeds bound %d", hp.TotalRecords, pageSize)
+	}
+	return hp.Records, nil
 }
 
 // GetWantedMissing returns a page of monitored books with no file.

@@ -68,6 +68,8 @@ type issueContext struct {
 	seasonNumber  int
 	episodeNumber int
 	arrQueueID    int
+	authorID      int
+	bookID        int
 }
 
 // Execute replays one approved action against the arr and returns the
@@ -197,14 +199,14 @@ func requireConfiguredClient(mediaType string, rc *radarr.Client, sc *sonarr.Cli
 // resolution + the validation gate.
 func (e *Executor) loadIssueContext(issueID int64) (issueContext, error) {
 	var instanceID, downloadID sql.NullString
-	var tvdbID, arrQueueID sql.NullInt64
+	var tvdbID, arrQueueID, authorID, bookID sql.NullInt64
 	var ic issueContext
 	err := e.db.QueryRow(
 		`SELECT instance_id, download_id, media_type, tmdb_id, tvdb_id,
-		        season_number, episode_number, arr_queue_id
+		        season_number, episode_number, arr_queue_id, author_id, book_id
 		 FROM issues WHERE id = ?`, issueID,
 	).Scan(&instanceID, &downloadID, &ic.mediaType, &ic.tmdbID, &tvdbID,
-		&ic.seasonNumber, &ic.episodeNumber, &arrQueueID)
+		&ic.seasonNumber, &ic.episodeNumber, &arrQueueID, &authorID, &bookID)
 	if err == sql.ErrNoRows {
 		return issueContext{}, fmt.Errorf("issue %d not found", issueID)
 	}
@@ -215,6 +217,8 @@ func (e *Executor) loadIssueContext(issueID int64) (issueContext, error) {
 	ic.downloadID = downloadID.String
 	ic.tvdbID = int(tvdbID.Int64)
 	ic.arrQueueID = int(arrQueueID.Int64)
+	ic.authorID = int(authorID.Int64)
+	ic.bookID = int(bookID.Int64)
 	return ic, nil
 }
 
@@ -319,11 +323,8 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 				if err := validateDownloadIdentity(queueID, ic.downloadID, items[i].DownloadID); err != nil {
 					return err
 				}
-				// User-reported issues currently support movie/TV only. Book queue
-				// actions therefore require the detector's exact queue + download
-				// identity; there is no user-supplied book id to fall back to.
-				if ic.arrQueueID == 0 || ic.downloadID == "" {
-					return fmt.Errorf("queue item %d cannot be proven to belong to this book issue; not executing", queueID)
+				if err := validateChaptarrMediaIdentity(queueID, ic, items[i]); err != nil {
+					return err
 				}
 				return nil
 			}
@@ -338,6 +339,30 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 func validateDownloadIdentity(queueID int, expected, actual string) error {
 	if expected != "" && actual != expected {
 		return fmt.Errorf("queue item %d no longer matches this issue's download (it was reassigned); not executing", queueID)
+	}
+	return nil
+}
+
+// validateChaptarrMediaIdentity is the book analogue of the movie/TV identity
+// gates. With a stored book record id the queue row must belong to that exact
+// book; without one, only the detector's exact queue + download identity can
+// prove the row is this issue's incident.
+func validateChaptarrMediaIdentity(queueID int, ic issueContext, item chaptarr.DetailedQueueItem) error {
+	if ic.bookID <= 0 {
+		if ic.arrQueueID > 0 && ic.downloadID != "" {
+			return nil
+		}
+		return fmt.Errorf("queue item %d cannot be proven to belong to this book issue; not executing", queueID)
+	}
+	actual := item.BookID
+	if actual == 0 && item.Book != nil {
+		actual = item.Book.ID
+	}
+	if actual == 0 {
+		return fmt.Errorf("queue item %d has no verifiable Chaptarr book identity; not executing", queueID)
+	}
+	if actual != ic.bookID {
+		return fmt.Errorf("queue item %d belongs to book %d, not this issue's book %d; not executing", queueID, actual, ic.bookID)
 	}
 	return nil
 }
@@ -572,10 +597,46 @@ func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueCon
 		}
 
 	case "book":
-		// Book issues do not yet persist a durable author/book id. Proposals of
-		// this kind are rejected earlier; retain this fail-closed guard in case a
-		// legacy row reaches the executor.
-		return "", fmt.Errorf("book release grabs are disabled until issues carry an authoritative book id; not executing")
+		bookID := 0
+		if p.QueueIDToReplace > 0 {
+			items, err := cc.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			if err != nil {
+				return "", fmt.Errorf("re-read replacement queue item: %w", err)
+			}
+			for _, item := range items {
+				if item.ID == p.QueueIDToReplace {
+					bookID = item.BookID
+					if bookID == 0 && item.Book != nil {
+						bookID = item.Book.ID
+					}
+					break
+				}
+			}
+		}
+		if bookID == 0 {
+			bookID = ic.bookID
+		}
+		if bookID == 0 {
+			return "", fmt.Errorf("cannot establish the issue's Chaptarr book for release validation; not executing")
+		}
+		if ic.bookID > 0 && bookID != ic.bookID {
+			return "", fmt.Errorf("replacement queue item belongs to book %d, not this issue's book %d; not executing", bookID, ic.bookID)
+		}
+		releases, err := cc.SearchReleases(bookID)
+		if err != nil {
+			return "", fmt.Errorf("refresh scoped book releases: %w", err)
+		}
+		for _, release := range releases {
+			if release.IndexerID == p.IndexerID && releaseReferenceMatches(p.GUID, release.GUID) {
+				// Chaptarr's release quality is opaque JSON, so candidates carry no
+				// quality name; the proposal's empty quality matches that.
+				if err := validateObservedReleaseMetadata(p, release.Title, "",
+					release.Size, release.Protocol, release.Indexer, release.Rejected, release.Rejections); err != nil {
+					return "", err
+				}
+				return release.GUID, nil
+			}
+		}
 
 	default:
 		return "", fmt.Errorf("unsupported media_type %q", p.MediaType)
@@ -710,8 +771,8 @@ func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueCont
 			if err := validateDownloadIdentity(queueID, ic.downloadID, item.DownloadID); err != nil {
 				return nil, err
 			}
-			if ic.arrQueueID != queueID || ic.downloadID == "" {
-				return nil, fmt.Errorf("book manual import lacks exact detector identity; not importing")
+			if err := validateChaptarrMediaIdentity(queueID, ic, item); err != nil {
+				return nil, err
 			}
 			scope.DownloadID, scope.BookID = item.DownloadID, item.BookID
 			if scope.BookID <= 0 {

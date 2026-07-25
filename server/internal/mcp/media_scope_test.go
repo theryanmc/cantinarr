@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -81,5 +82,45 @@ func TestQueueTargetVerificationRequiresExactScope(t *testing.T) {
 	present := queueTargetVerification(true, 1)
 	if present == nil || !present.TargetPresent {
 		t.Fatalf("exact present verification = %+v", present)
+	}
+}
+
+func TestFilterChaptarrQueueIntersectsBookIdentity(t *testing.T) {
+	items := []chaptarr.DetailedQueueItem{
+		{ID: 7, DownloadID: "old", BookID: 999, AuthorID: 1},
+		{ID: 8, DownloadID: "current", BookID: 123, AuthorID: 456},
+		{ID: 9, DownloadID: "ctx", Book: &chaptarr.BookContext{ID: 123}, Author: &chaptarr.AuthorContext{ID: 456}},
+	}
+	if matched := filterChaptarrQueue(items, mediaReadScope{BookID: 123}); len(matched) != 2 || matched[0].ID != 8 || matched[1].ID != 9 {
+		t.Fatalf("book filter = %+v", matched)
+	}
+	if matched := filterChaptarrQueue(items, mediaReadScope{QueueID: 7, BookID: 123}); len(matched) != 0 {
+		t.Fatalf("unrelated candidate queue row survived: %+v", matched)
+	}
+	if matched := filterChaptarrQueue(items, mediaReadScope{AuthorID: 1}); len(matched) != 1 || matched[0].ID != 7 {
+		t.Fatalf("author filter = %+v", matched)
+	}
+	if matched := filterChaptarrQueue(items, mediaReadScope{QueueID: 8, DownloadID: "stale", BookID: 123}); len(matched) != 0 {
+		t.Fatalf("reassigned download survived filter = %+v", matched)
+	}
+}
+
+func TestFilterChaptarrHistoryMatchesBookThenAuthor(t *testing.T) {
+	records := []chaptarr.HistoryRecord{
+		{ID: 1, BookID: 123, AuthorID: 456},
+		{ID: 2, BookID: 999, AuthorID: 456},
+		{ID: 3, Book: &chaptarr.BookContext{ID: 123}, Author: &chaptarr.AuthorContext{ID: 456}},
+	}
+	if matched := filterChaptarrHistory(records, mediaReadScope{}); len(matched) != 3 {
+		t.Fatalf("unscoped history filter = %+v", matched)
+	}
+	if matched := filterChaptarrHistory(records, mediaReadScope{BookID: 123}); len(matched) != 2 || matched[0].ID != 1 || matched[1].ID != 3 {
+		t.Fatalf("book history filter = %+v", matched)
+	}
+	if matched := filterChaptarrHistory(records, mediaReadScope{AuthorID: 456}); len(matched) != 3 {
+		t.Fatalf("author history filter = %+v", matched)
+	}
+	if matched := filterChaptarrHistory(records, mediaReadScope{BookID: 111}); len(matched) != 0 {
+		t.Fatalf("unrelated book history survived = %+v", matched)
 	}
 }

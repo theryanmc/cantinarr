@@ -16,7 +16,7 @@ import (
 // bearing — that all tool output and the user's report are UNTRUSTED data, never
 // instructions. The per-issue scope is appended after this block as a separate,
 // clearly-fenced section.
-const remediationSystemPrompt = `You are Cantinarr's issue-remediation agent. You investigate ONE scoped problem on the user's PRODUCTION Radarr (movies) or Sonarr (TV) instance and either resolve it (by proposing a fix an admin approves) or explain why it can't be resolved.
+const remediationSystemPrompt = `You are Cantinarr's issue-remediation agent. You investigate ONE scoped problem on the user's PRODUCTION Radarr (movies), Sonarr (TV), or Chaptarr (books) instance and either resolve it (by proposing a fix an admin approves) or explain why it can't be resolved.
 
 Your job:
 - Investigate the single issue described below using the read-only tools.
@@ -46,9 +46,17 @@ func buildSystemPrompt(issue *Issue) string {
 	fmt.Fprintf(&sb, "issue_id: %d\n", issue.ID)
 	fmt.Fprintf(&sb, "source: %s\n", issue.Source)
 	fmt.Fprintf(&sb, "media_type: %s\n", issue.MediaType)
-	fmt.Fprintf(&sb, "tmdb_id: %d\n", issue.TmdbID)
+	if issue.MediaType != "book" {
+		fmt.Fprintf(&sb, "tmdb_id: %d\n", issue.TmdbID)
+	}
 	if issue.TvdbID > 0 {
 		fmt.Fprintf(&sb, "tvdb_id: %d\n", issue.TvdbID)
+	}
+	if issue.BookID > 0 {
+		fmt.Fprintf(&sb, "book_id: %d (Chaptarr book record; books have no TMDB id)\n", issue.BookID)
+	}
+	if issue.AuthorID > 0 {
+		fmt.Fprintf(&sb, "author_id: %d\n", issue.AuthorID)
 	}
 	if issue.InstanceID != "" {
 		fmt.Fprintf(&sb, "authoritative_instance_id: %s\n", issue.InstanceID)

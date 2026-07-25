@@ -268,10 +268,10 @@ CREATE TABLE IF NOT EXISTS shared_codex_account (
 -- AI remediation / issue reporting (Wave 1 ships issues + issue_messages; the
 -- agent_* tables are created now so later waves need no migration). One row per
 -- problem to work (auto-detected or user-reported). Media-scoped like
--- request_log (tmdb_id + media_type), optionally narrowed to a season/episode
--- for TV (0 = whole series/season, Overseerr's sentinel convention). The detail
--- column and any user reason are UNTRUSTED free text: stored verbatim, never
--- interpreted.
+-- request_log (tmdb_id + media_type for movies/TV, author_id + book_id for
+-- books), optionally narrowed to a season/episode for TV (0 = whole
+-- series/season, Overseerr's sentinel convention). The detail column and any
+-- user reason are UNTRUSTED free text: stored verbatim, never interpreted.
 CREATE TABLE IF NOT EXISTS issues (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,                       -- 'auto' | 'user' | 'system'
@@ -284,6 +284,8 @@ CREATE TABLE IF NOT EXISTS issues (
     title TEXT NOT NULL DEFAULT '',
     season_number INTEGER NOT NULL DEFAULT 0,   -- TV scope (0 = whole series unless episode_number > 0, which means Specials)
     episode_number INTEGER NOT NULL DEFAULT 0,  -- TV scope (0 = whole season / movie; >0 = exact episode)
+    author_id INTEGER,                          -- book scope: Chaptarr author record id (books have no TMDB identity)
+    book_id INTEGER,                            -- book scope: Chaptarr book record id (arr-native identity; survives foreign-id re-keys)
     instance_id TEXT,                          -- exact owning arr instance (auto or user report)
     download_id TEXT,                          -- stable download-client hash (auto); keys dedupe + doctor tools
     arr_queue_id INTEGER,                      -- arr queue row observed for this exact incident (auto)
@@ -649,6 +651,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_book INTEGER NOT NULL DEFAULT 1"},
+		// Authoritative book identity for remediation issues. Books carry no
+		// TMDB/TVDB id, so the media-addressed agent actions (grab_release,
+		// trigger_search, rescan) and scoped reads stay disabled for a book
+		// issue until these Chaptarr record ids are stored with it.
+		{alter: "ALTER TABLE issues ADD COLUMN author_id INTEGER"},
+		{alter: "ALTER TABLE issues ADD COLUMN book_id INTEGER"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

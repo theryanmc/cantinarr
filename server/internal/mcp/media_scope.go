@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -10,6 +11,8 @@ import (
 // mediaReadScope is an optional, server-imposed identity filter used by the
 // remediation runner. Ordinary admin MCP calls may omit it; when present, read
 // tools fail closed instead of rendering records for another title/episode.
+// Books have no TMDB/TVDB identity: their scope is the Chaptarr book/author
+// record id.
 type mediaReadScope struct {
 	QueueID       int
 	DownloadID    string
@@ -17,6 +20,8 @@ type mediaReadScope struct {
 	TvdbID        int
 	SeasonNumber  int
 	EpisodeNumber int
+	AuthorID      int
+	BookID        int
 }
 
 func (s mediaReadScope) hasTitleIdentity() bool { return s.TmdbID > 0 || s.TvdbID > 0 }
@@ -119,6 +124,64 @@ func filterSonarrQueue(client *sonarr.Client, items []sonarr.DetailedQueueItem, 
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// filterChaptarrQueue narrows a Chaptarr queue snapshot to the scope. Chaptarr
+// queue rows carry their book/author ids directly, so no client round-trips are
+// needed to resolve identity.
+func filterChaptarrQueue(items []chaptarr.DetailedQueueItem, scope mediaReadScope) []chaptarr.DetailedQueueItem {
+	out := make([]chaptarr.DetailedQueueItem, 0, len(items))
+	for _, item := range items {
+		if scope.QueueID > 0 && item.ID != scope.QueueID {
+			continue
+		}
+		if scope.DownloadID != "" && item.DownloadID != scope.DownloadID {
+			continue
+		}
+		bookID, authorID := item.BookID, item.AuthorID
+		if bookID == 0 && item.Book != nil {
+			bookID = item.Book.ID
+		}
+		if authorID == 0 && item.Author != nil {
+			authorID = item.Author.ID
+		}
+		if scope.BookID > 0 && bookID != scope.BookID {
+			continue
+		}
+		if scope.BookID == 0 && scope.AuthorID > 0 && authorID != scope.AuthorID {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// filterChaptarrHistory narrows book history records to the scope, matching the
+// exact book record when scoped to one, else the author.
+func filterChaptarrHistory(records []chaptarr.HistoryRecord, scope mediaReadScope) []chaptarr.HistoryRecord {
+	if scope.BookID <= 0 && scope.AuthorID <= 0 {
+		return records
+	}
+	out := make([]chaptarr.HistoryRecord, 0, len(records))
+	for _, rec := range records {
+		bookID, authorID := rec.BookID, rec.AuthorID
+		if bookID == 0 && rec.Book != nil {
+			bookID = rec.Book.ID
+		}
+		if authorID == 0 && rec.Author != nil {
+			authorID = rec.Author.ID
+		}
+		if scope.BookID > 0 {
+			if bookID == scope.BookID {
+				out = append(out, rec)
+			}
+			continue
+		}
+		if authorID == scope.AuthorID {
+			out = append(out, rec)
+		}
+	}
+	return out
 }
 
 func filterRadarrHistory(client *radarr.Client, records []radarr.HistoryRecord, scope mediaReadScope) ([]radarr.HistoryRecord, error) {

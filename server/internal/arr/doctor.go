@@ -39,7 +39,9 @@ type QueueSignal struct {
 // QueueMediaContext is the stable media identity the arr already returned with
 // a detailed queue item. Auto-remediation carries it into the issue instead of
 // throwing it away, so the agent is bound to the exact instance, queue row, and
-// movie/episode that triggered the incident.
+// movie/episode/book that triggered the incident. Movies/TV are identified by
+// TMDB/TVDB ids; books carry no TMDB identity and use the Chaptarr author/book
+// record ids instead.
 type QueueMediaContext struct {
 	QueueID       int
 	Title         string
@@ -47,6 +49,8 @@ type QueueMediaContext struct {
 	TvdbID        int
 	SeasonNumber  int
 	EpisodeNumber int
+	AuthorID      int
+	BookID        int
 }
 
 // QueueObservation is one complete, service-neutral queue observation. Queue

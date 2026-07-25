@@ -449,7 +449,7 @@ func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 		        i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
 		        i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 		        i.created_at, i.updated_at, i.closed_at,
-		        i.instance_id, i.download_id, i.arr_queue_id
+		        i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id
 		 FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
 		 WHERE i.id = ?`,
 		issueID,
@@ -816,7 +816,7 @@ func (s *Service) ListIssues(status string) ([]Issue, error) {
 	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
 	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
 	                 i.created_at, i.updated_at, i.closed_at,
-	                 i.instance_id, i.download_id, i.arr_queue_id
+	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
 	var (
 		rows *sql.Rows
@@ -899,12 +899,14 @@ func scanIssue(row rowScanner) (*Issue, error) {
 		instanceID     sql.NullString
 		downloadID     sql.NullString
 		arrQueueID     sql.NullInt64
+		authorID       sql.NullInt64
+		bookID         sql.NullInt64
 	)
 	if err := row.Scan(
 		&iss.ID, &iss.Source, &iss.Status, &category, &reporterID, &reporter,
 		&iss.TmdbID, &tvdbID, &iss.MediaType, &iss.Title, &iss.SeasonNumber, &iss.EpisodeNumber,
 		&iss.Detail, &iss.Occurrences, &iss.Read, &resolution, &resolutionKind,
-		&iss.CreatedAt, &iss.UpdatedAt, &closedAt, &instanceID, &downloadID, &arrQueueID,
+		&iss.CreatedAt, &iss.UpdatedAt, &closedAt, &instanceID, &downloadID, &arrQueueID, &authorID, &bookID,
 	); err != nil {
 		return nil, err
 	}
@@ -932,6 +934,8 @@ func scanIssue(row rowScanner) (*Issue, error) {
 	if arrQueueID.Valid {
 		iss.ArrQueueID = int(arrQueueID.Int64)
 	}
+	iss.AuthorID = int(authorID.Int64)
+	iss.BookID = int(bookID.Int64)
 	return &iss, nil
 }
 
