@@ -98,6 +98,9 @@ func arrWebhookStub(t *testing.T, apiVersion string, schema map[string]any, capt
 		case r.Method == http.MethodGet && r.URL.Path == base:
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == base:
+			if got := r.URL.Query().Get("forceSave"); got != "true" {
+				t.Errorf("forceSave = %q, want true", got)
+			}
 			if err := json.NewDecoder(r.Body).Decode(captured); err != nil {
 				t.Errorf("decode webhook request: %v", err)
 			}
@@ -129,7 +132,7 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 
 	store := newTestStore(t)
 	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
-	if rec := postWebhook(t, NewHandler(store, nil), inst.ID); rec.Code != http.StatusOK {
+	if rec := postWebhook(t, NewHandler(store, nil, "http://192.168.35.150:8585"), inst.ID); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if captured == nil {
@@ -160,6 +163,9 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 	}
 	if got := webhookFieldValue(t, captured, "username"); got != managedWebhookUsername {
 		t.Errorf("username = %v, want %s", got, managedWebhookUsername)
+	}
+	if got := webhookFieldValue(t, captured, "url"); got != "http://192.168.35.150:8585/api/webhooks/arr/"+inst.ID {
+		t.Errorf("private-LAN callback URL = %v", got)
 	}
 }
 
@@ -243,7 +249,7 @@ func TestConfigureWebhookCreatesServerManagedArrRecord(t *testing.T) {
 	for _, serviceType := range []string{"radarr", "sonarr"} {
 		t.Run(serviceType, func(t *testing.T) {
 			var captured map[string]any
-			var capturedMethod, capturedPath string
+			var capturedMethod, capturedPath, capturedForceSave string
 			arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("X-Api-Key") != "synthetic-arr-key" {
 					t.Errorf("arr request did not carry the stored API key")
@@ -256,6 +262,7 @@ func TestConfigureWebhookCreatesServerManagedArrRecord(t *testing.T) {
 					_, _ = w.Write([]byte(`[]`))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/v3/notification":
 					capturedMethod, capturedPath = r.Method, r.URL.Path
+					capturedForceSave = r.URL.Query().Get("forceSave")
 					if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
 						t.Errorf("decode webhook request: %v", err)
 					}
@@ -282,6 +289,9 @@ func TestConfigureWebhookCreatesServerManagedArrRecord(t *testing.T) {
 			}
 			if capturedMethod != http.MethodPost || capturedPath != "/api/v3/notification" || captured == nil {
 				t.Fatalf("arr write = %s %s, want POST /api/v3/notification", capturedMethod, capturedPath)
+			}
+			if capturedForceSave != "true" {
+				t.Errorf("forceSave = %q, want true", capturedForceSave)
 			}
 
 			token, err := store.WebhookToken(inst.ID)
@@ -334,8 +344,9 @@ func TestConfigureWebhookCreatesServerManagedArrRecord(t *testing.T) {
 
 func TestConfigureWebhookUpdatesExistingManagedRecord(t *testing.T) {
 	const legacyQueryToken = "legacy-query-token"
-	var captured map[string]any
+	var tested, captured map[string]any
 	var callbackPath string
+	testedBeforeSave := false
 	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -348,7 +359,23 @@ func TestConfigureWebhookUpdatesExistingManagedRecord(t *testing.T) {
 					"name": "url", "value": "http://old-host" + callbackPath + "?token=" + legacyQueryToken,
 				}},
 			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/notification/test":
+			if got := r.URL.Query().Get("forceTest"); got != "true" {
+				t.Errorf("forceTest = %q, want true", got)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&tested); err != nil {
+				t.Errorf("decode webhook test request: %v", err)
+			}
+			testedBeforeSave = true
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/v3/notification/42":
+			if !testedBeforeSave {
+				t.Error("webhook was saved before the explicit callback test")
+			}
+			if got := r.URL.Query().Get("forceSave"); got != "true" {
+				t.Errorf("forceSave = %q, want true", got)
+			}
 			if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
 				t.Errorf("decode webhook request: %v", err)
 			}
@@ -370,11 +397,17 @@ func TestConfigureWebhookUpdatesExistingManagedRecord(t *testing.T) {
 	}
 	callbackPath = "/api/webhooks/arr/" + inst.ID
 	rec := postWebhook(t, NewHandler(store, nil), inst.ID)
-	if rec.Code != http.StatusOK || captured == nil {
+	if rec.Code != http.StatusOK || tested == nil || captured == nil {
 		t.Fatalf("configure = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := tested["id"]; got != float64(42) {
+		t.Errorf("tested resource id = %v, want 42", got)
 	}
 	if got := captured["id"]; got != float64(42) {
 		t.Errorf("updated resource id = %v, want 42", got)
+	}
+	if got, want := webhookFieldValue(t, tested, "password"), webhookFieldValue(t, captured, "password"); got != want {
+		t.Error("the tested and saved resources used different credentials")
 	}
 	if got := webhookFieldValue(t, captured, "url"); strings.Contains(got.(string), legacyQueryToken) || strings.Contains(got.(string), "token=") {
 		t.Error("adopted webhook retained its legacy query credential")
@@ -382,6 +415,72 @@ func TestConfigureWebhookUpdatesExistingManagedRecord(t *testing.T) {
 	var response map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response["action"] != "updated" {
 		t.Errorf("response = %v, want updated action", response)
+	}
+}
+
+// TestConfigureWebhookUpdateStopsWhenExplicitTestFails protects the forced
+// update sequence: forceSave acknowledges warnings but must never let a real
+// callback failure reach PUT or promote the pending credential.
+func TestConfigureWebhookUpdateStopsWhenExplicitTestFails(t *testing.T) {
+	const verdict = "Unable to send test message: Connection refused"
+	base := "/api/v1/notification"
+	var putCalls atomic.Int32
+	var sentToken string
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == base+"/schema":
+			_ = json.NewEncoder(w).Encode([]any{webhookSchema("chaptarr")})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			existing := webhookSchema("chaptarr")
+			existing["id"] = 17
+			existing["name"] = managedWebhookName
+			_ = json.NewEncoder(w).Encode([]any{existing})
+		case r.Method == http.MethodPost && r.URL.Path == base+"/test":
+			if got := r.URL.Query().Get("forceTest"); got != "true" {
+				t.Errorf("forceTest = %q, want true", got)
+			}
+			var resource map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&resource); err != nil {
+				t.Errorf("decode webhook test request: %v", err)
+			}
+			sentToken, _ = webhookFieldValue(t, resource, "password").(string)
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode([]any{map[string]any{
+				"propertyName": "Url", "errorMessage": verdict,
+				"attemptedValue": sentToken, "severity": "error",
+			}})
+		case r.Method == http.MethodPut:
+			putCalls.Add(1)
+			http.Error(w, "unexpected save", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	oldToken, err := store.WebhookToken(inst.ID)
+	if err != nil {
+		t.Fatalf("seed current webhook credential: %v", err)
+	}
+	rec := postWebhook(t, NewHandler(store, nil), inst.ID)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := putCalls.Load(); got != 0 {
+		t.Fatalf("PUT calls = %d, want 0 after failed callback test", got)
+	}
+	if !strings.Contains(rec.Body.String(), verdict) {
+		t.Errorf("error omitted the arr's test verdict: %s", rec.Body.String())
+	}
+	if sentToken == "" || strings.Contains(rec.Body.String(), sentToken) {
+		t.Fatal("error did not capture and safely redact the pending credential")
+	}
+	current, err := store.WebhookToken(inst.ID)
+	if err != nil || current != oldToken {
+		t.Fatalf("failed update replaced current credential: got %q err=%v", current, err)
 	}
 }
 
@@ -507,6 +606,9 @@ func TestConfigureWebhookSurfacesArrTestFailure(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == base:
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && r.URL.Path == base:
+			if got := r.URL.Query().Get("forceSave"); got != "true" {
+				t.Errorf("forceSave = %q, want true", got)
+			}
 			var resource map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&resource)
 			for _, raw := range resource["fields"].([]any) {
@@ -587,7 +689,7 @@ func TestConfigureWebhookErrorOmitsUnrecognizedBody(t *testing.T) {
 	if strings.Contains(body, upstreamSecret) {
 		t.Fatal("error reflected an unrecognized arr response body")
 	}
-	if !strings.Contains(body, "the arr tests the webhook when saving") {
+	if !strings.Contains(body, "the arr tests the webhook during configuration") {
 		t.Errorf("400 without extractable detail lost the reachability hint: %s", body)
 	}
 }
