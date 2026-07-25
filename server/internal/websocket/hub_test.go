@@ -45,7 +45,7 @@ func (f *fakeOpener) calls() []snapshotCall {
 }
 
 func newTestHub(opener IssueOpener) *Hub {
-	return NewHub(nil, nil, nil, nil, opener)
+	return NewHub(nil, nil, nil, nil, nil, opener)
 }
 
 func stuckItem(downloadID string) arr.QueueObservation {

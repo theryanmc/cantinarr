@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     plex_invite_sent INTEGER NOT NULL DEFAULT 1
 );
 
+-- Durable replacement for the notifier's in-memory new-content dedupe map. The
+-- queue-poll witness and the arr webhook receiver can both report the same
+-- import, and a restart used to reset the suppression window to empty. A claim
+-- suppresses repeats of the same content alert for 10 minutes -- the same window
+-- as before, now surviving a restart. Durable is not permanent: a claim whose
+-- send failed is re-claimable once the window lapses, so a transient gateway
+-- failure can never silence a title forever. Rows older than 24h are swept
+-- whenever a claim is granted, so the table stays bounded without a sweeper.
+CREATE TABLE IF NOT EXISTS content_alert_claims (
+    alert_key  TEXT PRIMARY KEY,
+    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_content_alert_claims_claimed_at
+    ON content_alert_claims(claimed_at);
+
 CREATE TABLE IF NOT EXISTS connect_tokens (
     token TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),
@@ -373,6 +389,26 @@ CREATE TABLE IF NOT EXISTS remediation_observation_watermarks (
     instance_id TEXT PRIMARY KEY,
     service_type TEXT NOT NULL,
     observed_at DATETIME NOT NULL
+);
+
+-- Durable memory of the WebSocket poller's queue-departure completion witness.
+-- A row holds the arr record ids that were in this instance's download queue at
+-- the last successful poll, so a restart resumes the departure diff instead of
+-- re-seeding from empty -- which silently lost every completion that landed
+-- while the process was down, the only witness books have since Chaptarr has no
+-- webhook path.
+--
+-- This is NOT a cached copy of arr state: nothing is ever read from it but set
+-- membership, and every departure is re-verified live against the arr
+-- (HasFile / BookFileCount) before anything is announced. Its freshness story is
+-- explicit -- snapshots older than the poller's staleness cutoff are ignored at
+-- load, rows are dropped when an admin repoints the instance URL, and they are
+-- deleted with the instance.
+CREATE TABLE IF NOT EXISTS arr_queue_witness (
+    instance_id  TEXT PRIMARY KEY,
+    service_type TEXT NOT NULL,
+    observed_at  DATETIME NOT NULL,
+    media_ids    TEXT NOT NULL DEFAULT '[]'
 );
 
 -- Transition-only audit trail. Repeated identical polls do not append rows;

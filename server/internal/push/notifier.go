@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -26,12 +25,6 @@ type Notifier struct {
 	db     *sql.DB
 	prefs  *PrefsStore
 	logger *slog.Logger
-
-	// recentContent dedupes new-content alerts: the queue-poll witness and the
-	// arr webhook receiver can both report the same import, and a season pack
-	// arrives as one webhook per episode file. Keyed by content identity.
-	recentMu      sync.Mutex
-	recentContent map[string]time.Time
 }
 
 // NewNotifier builds a push notifier over the push Manager. A nil manager (or
@@ -52,6 +45,13 @@ func (n *Notifier) client() *Client {
 	}
 	return n.mgr.Client()
 }
+
+// ContentReady reports whether new-content alerts can currently be delivered.
+// The WebSocket poller calls it to hold back the single queue-departure diff it
+// resumes after a restart, so completions that survived the restart are not
+// dropped into a gateway that has not enrolled yet. Steady-state alerts are not
+// gated on it.
+func (n *Notifier) ContentReady() bool { return n.client() != nil }
 
 // NotifyUser pushes a per-user event to its recipient, gated on their opt-in
 // for the matching category. Two events produce a notification today:
@@ -319,29 +319,62 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 // episode still alerts after last week's.
 const contentAlertWindow = 10 * time.Minute
 
-// claimContentAlert reports whether this content alert should send, recording
-// it so duplicates within contentAlertWindow are dropped. id is the content's
+// contentAlertRetention bounds content_alert_claims without a sweeper goroutine:
+// old rows are dropped opportunistically whenever a claim is granted. Well past
+// contentAlertWindow, so it can never shorten the suppression it stores.
+const contentAlertRetention = 24 * time.Hour
+
+// claimContentAlert reports whether this content alert should send, recording it
+// so duplicates within contentAlertWindow are dropped. id is the content's
 // stable identity — the tmdb id for movies/TV, foreignBookId plus format for
 // books. The key includes the title so unresolved ids (tmdb 0) never collapse
 // different content.
+//
+// The claim is durable so the window survives a restart: the queue poller
+// resumes its departure diff across a restart, and without a persisted claim a
+// completion the webhook already announced would be announced a second time.
+// Durable is not permanent — the window is still a window, so a claim whose send
+// failed is re-claimable once it lapses.
 func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool {
 	key := fmt.Sprintf("%s|%s|%s|%s", category, mediaType, id, title)
-	now := time.Now()
-	n.recentMu.Lock()
-	defer n.recentMu.Unlock()
-	for k, t := range n.recentContent {
-		if now.Sub(t) > contentAlertWindow {
-			delete(n.recentContent, k)
-		}
+	if n.db == nil {
+		// No ledger must never silence an alert.
+		return true
 	}
-	if _, dup := n.recentContent[key]; dup {
+	// One statement: the conditional upsert grants the claim only when there is
+	// no row or the existing one has lapsed, and the affected-row count is the
+	// verdict. A SELECT-then-INSERT would race on the shared single-connection
+	// pool without adding anything.
+	res, err := n.db.Exec(`
+        INSERT INTO content_alert_claims (alert_key) VALUES (?)
+        ON CONFLICT(alert_key) DO UPDATE SET claimed_at = CURRENT_TIMESTAMP
+        WHERE content_alert_claims.claimed_at <= datetime('now', ?)`,
+		key, sqliteOffset(-contentAlertWindow))
+	if err != nil {
+		// Fail open: a duplicate alert beats silencing the whole content surface
+		// on a transient database error.
+		n.logger.Error("push: claim content alert", "err", err, "category", category)
+		return true
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		n.logger.Error("push: claim content alert rows", "err", err, "category", category)
+		return true
+	}
+	if rows != 1 {
 		return false
 	}
-	if n.recentContent == nil {
-		n.recentContent = make(map[string]time.Time)
+	if _, err := n.db.Exec(`DELETE FROM content_alert_claims WHERE claimed_at <= datetime('now', ?)`,
+		sqliteOffset(-contentAlertRetention)); err != nil {
+		n.logger.Error("push: sweep content alert claims", "err", err)
 	}
-	n.recentContent[key] = now
 	return true
+}
+
+// sqliteOffset renders a duration as a SQLite datetime() modifier, so the Go
+// constants above stay the single source of truth for both windows.
+func sqliteOffset(d time.Duration) string {
+	return fmt.Sprintf("%+d seconds", int64(d/time.Second))
 }
 
 // send dispatches a notification in the background with panic recovery, so a

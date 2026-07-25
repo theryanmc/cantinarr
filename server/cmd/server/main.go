@@ -171,7 +171,7 @@ func main() {
 	// The auto-dispatch opener is wired after the remediation service exists (it
 	// depends on the notifier composite, which depends on this hub). The hub's
 	// poll loop is therefore started LATER, once SetIssueOpener has run.
-	wsHub := ws.NewHub(authService, registry, instanceStore, contentNotifier, nil)
+	wsHub := ws.NewHub(authService, registry, instanceStore, database, contentNotifier, nil)
 
 	// Notifier composite. Request decisions and issue events fan out to both the
 	// WebSocket hub (live clients) and the push gateway (offline devices). The
