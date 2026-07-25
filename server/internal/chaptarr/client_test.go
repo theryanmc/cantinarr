@@ -401,7 +401,7 @@ func TestGetImportHistoryIsBoundedAndServerFiltered(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"page":1,"pageSize":20,"totalRecords":%d,"records":[{"id":88,"eventType":"downloadFolderImported","downloadId":"down-1","authorId":4,"bookId":42}]}`, total)
+		fmt.Fprintf(w, `{"page":1,"pageSize":20,"totalRecords":%d,"records":[{"id":88,"eventType":"bookFileImported","downloadId":"down-1","authorId":4,"bookId":42}]}`, total)
 	}))
 	defer srv.Close()
 
@@ -454,11 +454,72 @@ func TestQueueItemDecodesAddedTimestamp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	items, err := NewClient(srv.URL, "key").GetQueueDetailed(1, 100)
+	items, err := NewClient(srv.URL, "key").GetQueueDetailed()
 	if err != nil {
 		t.Fatalf("GetQueueDetailed: %v", err)
 	}
 	if len(items) != 1 || items[0].Added == nil || !items[0].Added.Equal(time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("items = %+v, want added timestamp decoded", items)
+	}
+}
+
+// TestGetQueueDetailedFailsClosedOnIncompleteSnapshots pins the snapshot
+// contract remediation observation depends on: truncation, oversize, and
+// duplicate ids are errors, never a silently shortened queue.
+func TestGetQueueDetailedFailsClosedOnIncompleteSnapshots(t *testing.T) {
+	body := `{"totalRecords":2,"records":[{"id":1,"bookId":42}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "key")
+
+	if _, err := c.GetQueueDetailed(); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("short page error = %v", err)
+	}
+	body = `{"totalRecords":1001,"records":[]}`
+	if _, err := c.GetQueueDetailed(); err == nil || !strings.Contains(err.Error(), "oversized") {
+		t.Fatalf("oversized total error = %v", err)
+	}
+	body = `{"totalRecords":2,"records":[{"id":7,"bookId":42},{"id":7,"bookId":43}]}`
+	if _, err := c.GetQueueDetailed(); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate id error = %v", err)
+	}
+}
+
+func TestGetBookDistinguishesMissingFromError(t *testing.T) {
+	status := http.StatusNotFound
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, `{"message":"NotFound"}`)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "key")
+
+	book, err := c.GetBook(123)
+	if err != nil || book != nil {
+		t.Fatalf("deleted book = (%+v, %v), want (nil, nil)", book, err)
+	}
+	status = http.StatusBadGateway
+	if _, err := c.GetBook(123); err == nil {
+		t.Fatal("non-2xx book read did not error")
+	}
+}
+
+func TestGetBooksRefiltersByAuthorClientSide(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A fork ignoring ?authorId= returns every book; the client must refilter.
+		_, _ = io.WriteString(w, `[{"id":1,"authorId":4,"title":"Mine"},{"id":2,"authorId":9,"title":"Other"}]`)
+	}))
+	defer srv.Close()
+
+	books, err := NewClient(srv.URL, "key").GetBooks(4)
+	if err != nil {
+		t.Fatalf("GetBooks: %v", err)
+	}
+	if len(books) != 1 || books[0].ID != 1 {
+		t.Fatalf("books = %+v, want only author 4's book", books)
 	}
 }

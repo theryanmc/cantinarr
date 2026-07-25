@@ -351,3 +351,33 @@ func TestValidateGrabReleaseCandidateBookScopedSearch(t *testing.T) {
 		t.Fatalf("identity-less book release error = %v", err)
 	}
 }
+
+// TestManualImportScopeBookUsesEmbeddedBookContext locks the Book-context id
+// fallback: a queue row whose book id appears only in the embedded Book object
+// must still yield a verifiable import scope.
+func TestManualImportScopeBookUsesEmbeddedBookContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/queue") {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"totalRecords": 1,
+			"records": []map[string]any{
+				{"id": 31, "downloadId": "right", "book": map[string]any{"id": 123, "title": "Example Book"}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := chaptarr.NewClient(server.URL, "test")
+	scope, err := (&Executor{}).manualImportScope("book", 31,
+		issueContext{mediaType: "book", bookID: 123, arrQueueID: 31, downloadID: "right"},
+		nil, nil, client)
+	if err != nil {
+		t.Fatalf("manualImportScope: %v", err)
+	}
+	if scope.BookID != 123 || scope.DownloadID != "right" {
+		t.Fatalf("scope = %+v, want embedded book id 123", scope)
+	}
+}

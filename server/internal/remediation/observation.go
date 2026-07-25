@@ -872,6 +872,9 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 				return s.promoteObservationNeedsAdmin(record.issue.ID, now, observationNeedsCloserLook)
 			}
 			if probe.completed {
+				if bookReceiptCannotProveLiveRow(record.issue, group) {
+					return s.promoteObservedIssue(record.issue.ID, now)
+				}
 				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
 			}
 			if probe.needsAdmin {
@@ -900,6 +903,9 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			return s.promoteObservationNeedsAdmin(record.issue.ID, now, observationNeedsCloserLook)
 		}
 		if probe.completed {
+			if bookReceiptCannotProveLiveRow(record.issue, group) {
+				return s.promoteObservedIssue(record.issue.ID, now)
+			}
 			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
 		}
 		if probe.needsAdmin {
@@ -908,6 +914,16 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 		return s.promoteObservedIssue(record.issue.ID, now)
 	}
 	return nil
+}
+
+// bookReceiptCannotProveLiveRow reports whether a completed-recovery proof must
+// be withheld because the incident's queue row is still signalling a problem.
+// A book receipt binds to the download and book record, not to an exact file,
+// so it cannot prove a still-broken row (e.g. a partially imported multi-file
+// audiobook) is done; the movie/TV witness carries exact-file binding and keeps
+// its close. The escalation path (promote for attention) handles books instead.
+func bookReceiptCannotProveLiveRow(issue *Issue, group observationGroup) bool {
+	return issue.MediaType == "book" && groupHasProblemSignal(group)
 }
 
 func (s *Service) applyAbsentObservation(record *observationRecord, now time.Time, settings Settings) error {
@@ -1558,17 +1574,30 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 				return importReceipt{}, err
 			}
 			for _, record := range history {
-				// Identity binds via the exact book record + download. Chaptarr's
-				// import history does not reliably carry a fileId, so it corroborates
-				// only when present; a mismatch (e.g. one part of a multi-file
-				// audiobook) fails closed to "no receipt", never to a false close.
-				if !strings.EqualFold(record.EventType, "downloadFolderImported") ||
+				// Identity binds via the exact book record + download. Readarr-lineage
+				// forks emit "bookFileImported" for a completed import (their event 3),
+				// not the Radarr/Sonarr "downloadFolderImported" vocabulary.
+				if !strings.EqualFold(record.EventType, "bookFileImported") ||
 					!strings.EqualFold(record.DownloadID, downloadID) ||
 					record.BookID != issue.BookID || record.ID <= 0 {
 					continue
 				}
-				if !fileIDMatches(record.Data) {
-					if _, present := historyFileID(record.Data); present {
+				if fileID, present := historyFileID(record.Data); present {
+					// A supplied fileId corroborates only when it names the exact
+					// current file; a mismatch (e.g. one part of a multi-file
+					// audiobook) fails closed to "no receipt", never a false close.
+					if fileID != currentFileID {
+						continue
+					}
+				} else {
+					// No fileId to bind (the normal Chaptarr case): require the
+					// receipt to postdate this download's attempt so a reused
+					// download id cannot resurrect a months-old import as proof.
+					boundary := download.firstSeenAt
+					if download.addedAt.Valid {
+						boundary = download.addedAt.Time
+					}
+					if boundary.IsZero() || record.Date == nil || record.Date.Before(boundary) {
 						continue
 					}
 				}
@@ -1760,7 +1789,7 @@ func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.Queu
 		if err != nil {
 			return nil, err
 		}
-		items, err := client.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+		items, err := client.GetQueueDetailed()
 		if err != nil {
 			return nil, err
 		}
@@ -1914,10 +1943,18 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 		return arrRecoveryProbe{}, err
 	}
 	guard, err := s.exactRecoveryGuard(issue)
-	if err != nil || guard.completed || guard.needsAdmin {
+	if err != nil || guard.needsAdmin {
 		return guard, err
 	}
 	group := observationGroup{items: matched}
+	if guard.completed {
+		if !bookReceiptCannotProveLiveRow(issue, group) {
+			return guard, nil
+		}
+		// A book receipt cannot prove this still-signalling row done; fall
+		// through to the activity checks so the incident stays live instead of
+		// closing over a partially imported download.
+	}
 	active, err := s.matchingGroupStillActive(issue, group, now)
 	if err != nil {
 		return arrRecoveryProbe{}, err

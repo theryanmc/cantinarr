@@ -45,7 +45,9 @@ func setupBookObservationService(t *testing.T, state *bookFileState) (*Service, 
 			if state.importDownloadID == "" {
 				fmt.Fprint(w, `{"page":1,"pageSize":20,"totalRecords":0,"records":[]}`)
 			} else {
-				fmt.Fprintf(w, `{"page":1,"pageSize":20,"totalRecords":1,"records":[{"id":88,"eventType":"downloadFolderImported","downloadId":%q,"date":%q,"authorId":456,"bookId":123,"book":{"id":123,"title":"Example Book"}}]}`,
+				// Readarr-lineage forks emit "bookFileImported" (their event 3) for a
+				// completed import — never Radarr/Sonarr's "downloadFolderImported".
+				fmt.Fprintf(w, `{"page":1,"pageSize":20,"totalRecords":1,"records":[{"id":88,"eventType":"bookFileImported","downloadId":%q,"date":%q,"authorId":456,"bookId":123,"book":{"id":123,"title":"Example Book"}}]}`,
 					state.importDownloadID, state.importDate.Format(time.RFC3339))
 			}
 		default:
@@ -148,6 +150,70 @@ func TestBookRecoveryWitnessClosesAutoIssue(t *testing.T) {
 	}
 }
 
+// A receipt dated before this download's attempt is a stale import of a reused
+// download id, not proof: without exact-file binding the witness requires the
+// record to postdate the incident, so the issue escalates instead of closing.
+func TestBookRecoveryRejectsStaleReceipt(t *testing.T) {
+	state := &bookFileState{}
+	svc, _ := setupBookObservationService(t, state)
+	enableAutoDispatch(t, svc, 5)
+
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{observedBookProblem("download-1", 9)}, base); err != nil {
+		t.Fatal(err)
+	}
+	state.fileID = 5
+	state.importDownloadID = "download-1"
+	state.importDate = base.Add(-24 * time.Hour) // months/hours before this incident's attempt
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", nil, base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", nil, base.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	issues, err := svc.ListIssues("")
+	if err != nil || len(issues) != 1 {
+		t.Fatalf("issues=%+v err=%v", issues, err)
+	}
+	if issues[0].Status != IssueNeedsAdmin {
+		t.Fatalf("stale-receipt book recovery status = %+v", issues[0])
+	}
+}
+
+// A fresh receipt cannot close a book issue while its queue row still signals a
+// problem (a partially imported multi-file audiobook): the receipt binds only
+// download + book record, not the exact file, so the incident promotes for
+// attention instead of resolving over a live problem.
+func TestBookPartialImportDoesNotCloseWhileQueueRowSignals(t *testing.T) {
+	state := &bookFileState{}
+	svc, _ := setupBookObservationService(t, state)
+	enableAutoDispatch(t, svc, 5)
+
+	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
+	item := observedBookProblem("download-1", 9)
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{item}, base); err != nil {
+		t.Fatal(err)
+	}
+	// One part imports (file + receipt appear) but the SAME problem row stays in
+	// the queue, unchanged, past the min + quiet windows.
+	state.fileID = 5
+	state.importDownloadID = "download-1"
+	state.importDate = base.Add(30 * time.Second)
+	if err := svc.observeQueueSnapshot("chaptarr", "chaptarr-observe", []arr.QueueObservation{item}, base.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	issues, err := svc.ListIssues("")
+	if err != nil || len(issues) != 1 {
+		t.Fatalf("issues=%+v err=%v", issues, err)
+	}
+	if issues[0].Status != IssueOpen {
+		t.Fatalf("partial-import book status = %+v, want promoted open (not resolved)", issues[0])
+	}
+	if issues[0].ClosedAt != nil {
+		t.Fatalf("partial-import book issue closed: %+v", issues[0])
+	}
+}
+
 // Without an import receipt the departed queue row is not proof: the incident
 // escalates for a human instead of closing on file presence alone.
 func TestBookRecoveryWithoutReceiptEscalates(t *testing.T) {
@@ -242,7 +308,7 @@ func TestUserBookScopeKeyLeavesMovieKeysUnchanged(t *testing.T) {
 // decode guard: the JSON shapes used by the fake above must match the client's.
 func TestFakeChaptarrShapesDecode(t *testing.T) {
 	var page chaptarr.HistoryPage
-	if err := json.Unmarshal([]byte(`{"page":1,"pageSize":20,"totalRecords":1,"records":[{"id":88,"eventType":"downloadFolderImported","downloadId":"download-1","authorId":456,"bookId":123}]}`), &page); err != nil {
+	if err := json.Unmarshal([]byte(`{"page":1,"pageSize":20,"totalRecords":1,"records":[{"id":88,"eventType":"bookFileImported","downloadId":"download-1","authorId":456,"bookId":123}]}`), &page); err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Records) != 1 || page.Records[0].DownloadID != "download-1" || page.Records[0].BookID != 123 {

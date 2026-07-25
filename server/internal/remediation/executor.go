@@ -46,15 +46,6 @@ func NewExecutor(registry *instance.Registry, bridge *tmdb.Bridge, db *sql.DB) *
 	return &Executor{registry: registry, bridge: bridge, db: db}
 }
 
-// chaptarrQueuePage / chaptarrQueuePageSize drive the paginated
-// chaptarr.GetQueueDetailed call used by the book validation gate (the client
-// loops from this page until every record is fetched). Radarr/Sonarr expose a
-// non-paginated GetQueueDetailed, so these are book-only.
-const (
-	chaptarrQueuePage     = 1
-	chaptarrQueuePageSize = 100
-)
-
 // issueContext is the stable, cheap-to-fetch identity of an issue's media used to
 // resolve the arr client and to validate a queue-targeting action still applies
 // to THIS issue. User issues usually have no exact queue/download identity, so
@@ -314,7 +305,7 @@ func (e *Executor) validateQueueItem(mediaType string, queueID int, ic issueCont
 		if cc == nil {
 			return nil
 		}
-		items, err := cc.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+		items, err := cc.GetQueueDetailed()
 		if err != nil {
 			return fmt.Errorf("validate queue item: %w", err)
 		}
@@ -599,7 +590,7 @@ func (e *Executor) validateGrabReleaseCandidate(p GrabReleaseParams, ic issueCon
 	case "book":
 		bookID := 0
 		if p.QueueIDToReplace > 0 {
-			items, err := cc.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			items, err := cc.GetQueueDetailed()
 			if err != nil {
 				return "", fmt.Errorf("re-read replacement queue item: %w", err)
 			}
@@ -760,7 +751,7 @@ func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueCont
 			return scope, nil
 		}
 	case "book":
-		items, err := cc.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+		items, err := cc.GetQueueDetailed()
 		if err != nil {
 			return nil, fmt.Errorf("re-read queue before manual import: %w", err)
 		}
@@ -775,6 +766,9 @@ func (e *Executor) manualImportScope(mediaType string, queueID int, ic issueCont
 				return nil, err
 			}
 			scope.DownloadID, scope.BookID = item.DownloadID, item.BookID
+			if scope.BookID == 0 && item.Book != nil {
+				scope.BookID = item.Book.ID
+			}
 			if scope.BookID <= 0 {
 				return nil, fmt.Errorf("queue item %d has no verifiable Chaptarr book id; not importing", queueID)
 			}

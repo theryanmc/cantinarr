@@ -660,7 +660,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 			}
 			sections = append(sections, "Chaptarr is not configured.")
 		} else {
-			items, err := chaptarrClient.GetQueueDetailed(chaptarrQueuePage, chaptarrQueuePageSize)
+			items, err := chaptarrClient.GetQueueDetailed()
 			if err != nil {
 				return nil, err
 			}
