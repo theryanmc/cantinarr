@@ -111,8 +111,8 @@ class InstanceApiService {
     await _dio.delete('/api/instances/$id');
   }
 
-  /// Create or refresh Cantinarr's server-managed Radarr/Sonarr Connect
-  /// webhook. Its callback credential remains entirely server-side.
+  /// Create or refresh Cantinarr's server-managed Radarr/Sonarr/Chaptarr
+  /// Connect webhook. Its callback credential remains entirely server-side.
   Future<void> configureWebhook(String id) async {
     await _dio.post('/api/instances/$id/webhook');
   }

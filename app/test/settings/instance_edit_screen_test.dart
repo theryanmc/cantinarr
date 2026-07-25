@@ -765,6 +765,50 @@ void main() {
     expect(find.text(reason), findsOneWidget);
   });
 
+  testWidgets('offers instant updates for a Chaptarr instance',
+      (tester) async {
+    // Books are the surface that needs this most: a small ebook can finish
+    // downloading between two 30-second polls, so without the webhook its
+    // alert is never sent rather than merely delayed.
+    final adapter = _FakeAdapter(instances: [
+      {
+        'id': 'chaptarr-a',
+        'service_type': 'chaptarr',
+        'name': 'Books A',
+        'url': 'http://books-a',
+        'is_default': false,
+        'sort_order': 0,
+      },
+    ]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'chaptarr-a',
+        initialServiceType: 'chaptarr',
+        initialName: 'Books A',
+        initialUrl: 'http://books-a',
+      ),
+    );
+
+    expect(find.text('Instant updates'), findsOneWidget);
+    // Requester vocabulary, and it must not name the wrong service.
+    expect(find.textContaining('Chaptarr'), findsWidgets);
+    expect(find.textContaining('Radarr'), findsNothing);
+
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, 'Configure instant updates'));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'POST' && r.path == '/api/instances/chaptarr-a/webhook'),
+      isTrue,
+    );
+    expect(find.text('Instant updates are configured.'), findsOneWidget);
+  });
+
   testWidgets('configures instant updates without displaying a webhook token',
       (tester) async {
     const syntheticToken = 'synthetic-webhook-token-that-must-not-render';

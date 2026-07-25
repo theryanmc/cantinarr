@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,10 +20,17 @@ type fakeBroadcaster struct{ events []ws.Event }
 
 func (f *fakeBroadcaster) Broadcast(e ws.Event) { f.events = append(f.events, e) }
 
-type fakeInvalidator struct{ instanceIDs []string }
+type fakeInvalidator struct {
+	instanceIDs []string
+	bookIDs     []string
+}
 
 func (f *fakeInvalidator) InvalidateAvailabilityDigests(id string) {
 	f.instanceIDs = append(f.instanceIDs, id)
+}
+
+func (f *fakeInvalidator) InvalidateBookDigests(id string) {
+	f.bookIDs = append(f.bookIDs, id)
 }
 
 type fakeContent struct {
@@ -35,8 +43,12 @@ func (f *fakeContent) NotifyNewMovie(title string, tmdbID int) { f.movies = appe
 func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
 	f.episodes = append(f.episodes, seriesTitle)
 }
+
+// Books record the full alert tuple: the dedupe claim and collapse id are built
+// from every field, so a test that only checked the title could not tell a
+// correct alert from one that would double-push against the queue witness.
 func (f *fakeContent) NotifyNewBook(title, foreignID, instanceID, format string) {
-	f.books = append(f.books, title)
+	f.books = append(f.books, fmt.Sprintf("%s|%s|%s|%s", title, foreignID, instanceID, format))
 }
 
 type fixture struct {

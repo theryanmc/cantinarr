@@ -56,18 +56,160 @@ func webhookSchema(serviceType string) map[string]any {
 			map[string]any{"name": "headers", "value": []any{}},
 		},
 	}
-	if serviceType == "radarr" {
+	switch serviceType {
+	case "radarr":
 		resource["onMovieAdded"] = false
 		resource["onMovieDelete"] = false
 		resource["onMovieFileDelete"] = false
 		resource["onMovieFileDeleteForUpgrade"] = false
-	} else {
+	case "chaptarr":
+		// The Readarr lineage names the import event onReleaseImport and its
+		// settings carry no headers field.
+		resource["onReleaseImport"] = false
+		resource["onBookDelete"] = false
+		resource["onAuthorDelete"] = false
+		resource["onBookFileDelete"] = false
+		resource["onBookFileDeleteForUpgrade"] = false
+		resource["fields"] = []any{
+			map[string]any{"name": "url", "value": ""},
+			map[string]any{"name": "method", "value": 1},
+			map[string]any{"name": "username", "value": ""},
+			map[string]any{"name": "password", "value": ""},
+		}
+	default:
 		resource["onSeriesAdd"] = false
 		resource["onSeriesDelete"] = false
 		resource["onEpisodeFileDelete"] = false
 		resource["onEpisodeFileDeleteForUpgrade"] = false
 	}
 	return resource
+}
+
+// arrWebhookStub serves the notification schema/list/create endpoints at the
+// given API version and captures the resource Cantinarr writes.
+func arrWebhookStub(t *testing.T, apiVersion string, schema map[string]any, captured *map[string]any) *httptest.Server {
+	t.Helper()
+	base := "/api/" + apiVersion + "/notification"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == base+"/schema":
+			_ = json.NewEncoder(w).Encode([]any{schema})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == base:
+			if err := json.NewDecoder(r.Body).Decode(captured); err != nil {
+				t.Errorf("decode webhook request: %v", err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func mkArrInstance(t *testing.T, store *Store, serviceType, url string) *Instance {
+	t.Helper()
+	inst := &Instance{ServiceType: serviceType, Name: "Media", URL: url, APIKey: "synthetic-arr-key"}
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	return inst
+}
+
+// TestConfigureWebhookRegistersChaptarrAgainstV1 pins that a Chaptarr webhook is
+// installed through the Readarr-lineage v1 notification API and enables an
+// import event. Without an import toggle the record would save cleanly and never
+// fire, which reads to an admin as working instant updates.
+func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
+	var captured map[string]any
+	arr := arrWebhookStub(t, "v1", webhookSchema("chaptarr"), &captured)
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	if rec := postWebhook(t, NewHandler(store, nil), inst.ID); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if captured == nil {
+		t.Fatal("no webhook resource was written to Chaptarr")
+	}
+	if got, _ := captured["onReleaseImport"].(bool); !got {
+		t.Error("onReleaseImport was not enabled, so book imports would never alert")
+	}
+	// The Readarr lineage suppresses the import notification for a book that
+	// replaces an existing file unless onUpgrade is on, so a declared flag must
+	// be enabled.
+	if got, _ := captured["onUpgrade"].(bool); !got {
+		t.Error("onUpgrade was not enabled, so upgraded books would never alert")
+	}
+	if _, present := captured["onEpisodeFileDelete"]; present {
+		t.Error("a Sonarr-only event flag leaked onto a Chaptarr resource")
+	}
+	if got, _ := captured["onBookFileDeleteForUpgrade"].(bool); got {
+		t.Error("onBookFileDeleteForUpgrade must stay false")
+	}
+	// Readarr-lineage webhook settings have no headers field; inventing one
+	// would post a phantom setting.
+	for _, raw := range captured["fields"].([]any) {
+		field, _ := raw.(map[string]any)
+		if name, _ := field["name"].(string); strings.EqualFold(name, "headers") {
+			t.Error("a headers field was invented for a schema that does not declare one")
+		}
+	}
+	if got := webhookFieldValue(t, captured, "username"); got != managedWebhookUsername {
+		t.Errorf("username = %v, want %s", got, managedWebhookUsername)
+	}
+}
+
+// TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent is the fail-loud
+// guarantee. Chaptarr is closed source, so its event vocabulary is inherited
+// rather than verified; if no import toggle exists the admin must see an error
+// at configure time instead of a silently useless webhook.
+func TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent(t *testing.T) {
+	schema := webhookSchema("chaptarr")
+	delete(schema, "onReleaseImport")
+	delete(schema, "onDownload")
+
+	var captured map[string]any
+	arr := arrWebhookStub(t, "v1", schema, &captured)
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	rec := postWebhook(t, NewHandler(store, nil), inst.ID)
+	if rec.Code == http.StatusOK {
+		t.Fatal("configuring a webhook with no import event reported success")
+	}
+	if captured != nil {
+		t.Error("a webhook was written to the arr despite having no import event")
+	}
+}
+
+// TestConfigureWebhookHonorsUnsupportedEventFlags pins that a flag the fork
+// reports unsupported is not written, while an undeclared supports* key is
+// treated as permission rather than refusal.
+func TestConfigureWebhookHonorsUnsupportedEventFlags(t *testing.T) {
+	schema := webhookSchema("chaptarr")
+	schema["onDownload"] = false
+	schema["supportsOnDownload"] = false
+
+	var captured map[string]any
+	arr := arrWebhookStub(t, "v1", schema, &captured)
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	if rec := postWebhook(t, NewHandler(store, nil), inst.ID); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got, _ := captured["onDownload"].(bool); got {
+		t.Error("an event the schema reports unsupported was enabled anyway")
+	}
+	if got, _ := captured["onReleaseImport"].(bool); !got {
+		t.Error("the supported import event should still have been enabled")
+	}
 }
 
 func webhookFieldValue(t *testing.T, resource map[string]any, name string) any {
@@ -310,10 +452,12 @@ func TestInstanceListNeverExposesWebhookToken(t *testing.T) {
 
 func TestConfigureWebhookRejectsUnsupportedAndUnknownInstances(t *testing.T) {
 	store := newTestStore(t)
-	chaptarrID := mkInstance(t, store, "chaptarr", "Books")
+	// A download client has no Connect surface at all. Chaptarr does, so it is
+	// no longer the unsupported case.
+	downloadID := mkInstance(t, store, "sabnzbd", "Downloads")
 	handler := NewHandler(store, nil)
-	if rec := postWebhook(t, handler, chaptarrID); rec.Code != http.StatusBadRequest {
-		t.Errorf("chaptarr status = %d, want 400", rec.Code)
+	if rec := postWebhook(t, handler, downloadID); rec.Code != http.StatusBadRequest {
+		t.Errorf("sabnzbd status = %d, want 400", rec.Code)
 	}
 	if rec := postWebhook(t, handler, "missing-instance"); rec.Code != http.StatusNotFound {
 		t.Errorf("missing status = %d, want 404", rec.Code)

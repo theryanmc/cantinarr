@@ -23,7 +23,8 @@ type witnessRow struct {
 // previous poll's membership. That membership used to live only in RAM, so a
 // restart re-seeded from empty and every completion that landed while the
 // process was down was silently never witnessed — permanently, since the arrs
-// fire their webhooks once and books have no webhook path at all.
+// fire their webhooks once, and books only have one on instances where the
+// admin configured instant updates.
 //
 // Only set membership is ever read back. Nothing here is treated as truth about
 // the arr: a departure is re-verified live against the arr before anything is
