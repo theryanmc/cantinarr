@@ -9,7 +9,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
   ┌───────────────────────────────────────────────────────────┐
   │  Auth (JWT/passkeys)   Requests + Approvals   AI Chat     │
   │        │                     │                   │        │
-  │        │              ┌──────┴──────┐      33 AI Tools    │
+  │        │              ┌──────┴──────┐      34 AI Tools    │
   │        │              │  ID Bridge  │            │        │
   │        │              └──┬───────┬──┘     AI Remediation  │
   │        │                 │       │            Agent       │
@@ -475,22 +475,23 @@ Authenticated MCP request observability records only bounded protocol metadata: 
 
 ### MCP tools
 
-The registry contains 33 in-app AI tools; 31 are also exposed through `/mcp`. `preview_profile_change` and `apply_profile_change` are deliberately hidden from external MCP because their one-use handoff depends on authenticated in-app chat-turn provenance. The remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
+The registry contains 34 in-app AI tools; 32 are also exposed through `/mcp`. `preview_profile_change` and `apply_profile_change` are deliberately hidden from external MCP because their one-use handoff depends on authenticated in-app chat-turn provenance. The remediation agent receives a constrained read-only subset plus issue-scoped human gates. Every shared tool can be disabled from Settings > AI Tools. Interactive execution reauthorizes the current device and role immediately before each tool and rechecks the included-AI grant when shared billing is in use. Tools marked **admin** require the admin role (either flagged directly or gated by a permission the user role doesn't hold):
 
 | Tool | Description |
 |---|---|
 | `search_movies` | Search TMDB for movies |
 | `search_movie_collections` | Search TMDB for movie franchises/collections |
 | `search_tv_shows` | Search TMDB for TV shows |
+| `search_books` | Search the user's book server by title/author; results carry the foreign_book_id the other book tools take |
 | `get_trending` | Trending movies/shows by day or week |
 | `get_movie_details` | Full movie metadata |
 | `get_tv_details` | Full TV show metadata |
 | `get_recommendations` | Similar content suggestions |
-| `check_request_status` | Is this on my server? |
+| `check_request_status` | Is this on my server? (movies/TV by tmdb_id; books by foreign_book_id with per-format state) |
 | `get_request_options` | Show the current user's selectable request options and quality profiles |
-| `request_media` | Add to Radarr/Sonarr, optionally choosing an allowed quality profile (honors the approval queue) |
+| `request_media` | Add to Radarr/Sonarr/Chaptarr (books by foreign_book_id + optional format), optionally choosing an allowed quality profile (honors the approval queue) |
 | `list_my_requests` | User's request history |
-| `display_media` | Curate the visual results carousel |
+| `display_media` | Curate the visual results carousel (movies/TV verified via TMDB; books verified against the user's own lookup by foreign_book_id) |
 | `get_queue` | Combined arr download queue (admin) |
 | `get_calendar` | Upcoming releases (admin) |
 | `get_library` | What's on the server, filterable; for books, drills from the author list into one author's books (or one exact book) with the book ids the per-book action tools take (admin) |

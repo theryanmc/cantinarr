@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -129,36 +131,55 @@ var toolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "search_books",
+		Permission:  auth.PermissionMediaDiscover,
+		Description: "Search for books by title or author on the user's book server. Each result carries the foreign_book_id that check_request_status, request_media, and display_media need for books (books have no TMDB id).",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "The book title or author to search for",
+				},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
 		Name:        "check_request_status",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Check if a movie or TV show is available, requested, or downloading on the media server",
+		Description: "Check if a movie, TV show, or book is available, requested, or downloading on the media server. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books (per-format ebook/audiobook state is included).",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The TMDB ID of the movie or TV show",
+					"description": "The TMDB ID of the movie or TV show (movie/tv only)",
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether this is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether this is a movie, TV show, or book",
+				},
+				"foreign_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Book only: the foreign_book_id from search_books",
 				},
 			},
-			"required": []string{"tmdb_id", "media_type"},
+			"required": []string{"media_type"},
 		},
 	},
 	{
 		Name:        "get_request_options",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie or TV request",
+		Description: "Show whether the current user may choose request options and list the quality profiles available for a movie, TV, or book request",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether the planned request is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether the planned request is a movie, TV show, or book",
 				},
 			},
 			"required": []string{"media_type"},
@@ -167,26 +188,39 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "request_media",
 		Permission:  auth.PermissionMediaRequest,
-		Description: "Request a movie or TV show, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality",
+		Description: "Request a movie, TV show, or book, optionally selecting a quality_profile_id returned by get_request_options when the current user may choose quality. Movies/TV are keyed by tmdb_id; books by the foreign_book_id from search_books plus an optional book_format.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The TMDB ID of the movie or TV show",
+					"description": "The TMDB ID of the movie or TV show (movie/tv only)",
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Whether this is a movie or TV show",
+					"enum":        []string{"movie", "tv", "book"},
+					"description": "Whether this is a movie, TV show, or book",
+				},
+				"foreign_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Book only: the foreign_book_id from search_books (required for book)",
+				},
+				"book_format": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"ebook", "audiobook", "both"},
+					"description": "Book only: which format to request (default: the user's configured preference)",
+				},
+				"title": map[string]interface{}{
+					"type":        "string",
+					"description": "Book only: the exact title from search_books (used when the book must be added to the library)",
 				},
 				"quality_profile_id": map[string]interface{}{
 					"type":        "integer",
 					"minimum":     1,
-					"description": "Optional Radarr/Sonarr quality profile ID. Honored only when the requester is allowed to choose quality; otherwise their configured default is used.",
+					"description": "Optional Radarr/Sonarr quality profile ID (movie/tv only). Honored only when the requester is allowed to choose quality; otherwise their configured default is used.",
 				},
 			},
-			"required": []string{"tmdb_id", "media_type"},
+			"required": []string{"media_type"},
 		},
 	},
 	{
@@ -201,7 +235,7 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "display_media",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Display specific movies or TV shows in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs copied from prior tool results; if you only have exact title/year values, omit tmdb_id and the server will resolve and verify them.",
+		Description: "Display specific movies, TV shows, or books in the UI carousel. Call this whenever your answer names concrete titles to showcase, including recommendations, search/trending picks, franchise/title-list answers, or count answers that enumerate titles. Keep the item order identical to the order you mention in text. Prefer TMDB IDs (movies/TV) or foreign_book_ids (books) copied from prior tool results; if you only have exact title/year values for a movie/show, omit tmdb_id and the server will resolve and verify them.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -218,12 +252,16 @@ var toolDefinitions = []Tool{
 							},
 							"media_type": map[string]interface{}{
 								"type":        "string",
-								"enum":        []string{"movie", "tv"},
-								"description": "Whether this is a movie or TV show",
+								"enum":        []string{"movie", "tv", "book"},
+								"description": "Whether this is a movie, TV show, or book",
+							},
+							"foreign_id": map[string]interface{}{
+								"type":        "string",
+								"description": "Book only: the foreign_book_id from search_books (required for book items)",
 							},
 							"title": map[string]interface{}{
 								"type":        "string",
-								"description": "Exact title from the prior search/tool result for this TMDB ID",
+								"description": "Exact title from the prior search/tool result for this item",
 							},
 							"year": map[string]interface{}{
 								"type":        "string",
@@ -248,6 +286,11 @@ type MediaResultItem struct {
 	VoteAverage float64 `json:"vote_average,omitempty"`
 	Overview    string  `json:"overview,omitempty"`
 	MediaType   string  `json:"media_type,omitempty"`
+	// Book identity/artwork. Books have no TMDB id (ID stays 0): ForeignID is
+	// the Chaptarr foreignBookId the detail route keys on, and PosterURL is an
+	// absolute external metadata-CDN cover (never an arr-origin URL).
+	ForeignID string `json:"foreign_id,omitempty"`
+	PosterURL string `json:"poster_url,omitempty"`
 }
 
 // ToolResult holds the plain-text output (for LLM consumption) and optional
@@ -580,13 +623,74 @@ func (s *ToolServer) getRecommendations(input json.RawMessage) (*ToolResult, err
 	}, nil
 }
 
+// searchBooks looks a query up on the user's effective Chaptarr instance.
+// Books have no TMDB identity: every hit surfaces the foreign_book_id the
+// other book flows key on, plus a carousel item with its external cover.
+func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResult, error) {
+	var params struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(input, &params); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	results, err := s.request.SearchBooksForUser(userID, params.Query)
+	if errors.Is(err, request.ErrNoChaptarrAccess) {
+		return &ToolResult{Text: "Books are not available for this account (no book server is configured or granted)."}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return &ToolResult{Text: fmt.Sprintf("No books found for %q.", params.Query)}, nil
+	}
+	const maxBookResults = 10
+	if len(results) > maxBookResults {
+		results = results[:maxBookResults]
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Found %d book(s) for %q:", len(results), params.Query)
+	items := make([]MediaResultItem, 0, len(results))
+	for _, r := range results {
+		fmt.Fprintf(&sb, "\n- %s", r.Title)
+		if r.AuthorName != "" {
+			fmt.Fprintf(&sb, " by %s", r.AuthorName)
+		}
+		if r.Year > 0 {
+			fmt.Fprintf(&sb, " (%d)", r.Year)
+		}
+		fmt.Fprintf(&sb, " [foreign_book_id: %s]", r.ForeignBookID)
+		year := ""
+		if r.Year > 0 {
+			year = strconv.Itoa(r.Year)
+		}
+		items = append(items, MediaResultItem{
+			Title: r.Title, Year: year, Overview: r.Overview,
+			MediaType: "book", ForeignID: r.ForeignBookID, PosterURL: r.RemoteCover,
+		})
+	}
+	sb.WriteString("\nUse the foreign_book_id with check_request_status, request_media, and display_media.")
+	return &ToolResult{Text: sb.String(), StructuredData: items}, nil
+}
+
 func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*ToolResult, error) {
 	var params struct {
 		TmdbID    int    `json:"tmdb_id"`
 		MediaType string `json:"media_type"`
+		ForeignID string `json:"foreign_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	if params.MediaType == "book" {
+		if strings.TrimSpace(params.ForeignID) == "" {
+			return &ToolResult{Text: "A book status check requires the foreign_id from search_books."}, nil
+		}
+		status, err := s.request.GetUserBookStatus(userID, params.ForeignID)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(status)
+		return &ToolResult{Text: string(data)}, nil
 	}
 	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
 	if err != nil {
@@ -603,8 +707,8 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if params.MediaType != "movie" && params.MediaType != "tv" {
-		return &ToolResult{Text: "Request options require media_type movie or tv."}, nil
+	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" {
+		return &ToolResult{Text: "Request options require media_type movie, tv, or book."}, nil
 	}
 	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType)
 	if err != nil {
@@ -618,14 +722,23 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	var params struct {
 		TmdbID           int    `json:"tmdb_id"`
 		MediaType        string `json:"media_type"`
+		ForeignID        string `json:"foreign_id"`
+		BookFormat       string `json:"book_format"`
+		Title            string `json:"title"`
 		QualityProfileID int    `json:"quality_profile_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if params.MediaType == "book" && strings.TrimSpace(params.ForeignID) == "" {
+		return &ToolResult{Text: "A book request requires the foreign_id from search_books."}, nil
+	}
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
 		TmdbID:           params.TmdbID,
 		MediaType:        params.MediaType,
+		ForeignID:        params.ForeignID,
+		BookFormat:       params.BookFormat,
+		Title:            params.Title,
 		QualityProfileID: params.QualityProfileID,
 	})
 	if err != nil {
@@ -637,15 +750,18 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 
 const maxDisplayMediaItems = 10
 
-func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
-	tmdbClient := s.creds.TMDB()
-	if tmdbClient == nil {
-		return &ToolResult{Text: "TMDB is not configured on the server."}, nil
+func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolResult, error) {
+	// Book items verify against the user's Chaptarr lookup, so a missing TMDB
+	// credential only fails the movie/TV items rather than the whole call.
+	var tmdbClient *tmdb.Client
+	if s.creds != nil {
+		tmdbClient = s.creds.TMDB()
 	}
 	var params struct {
 		Items []struct {
 			TmdbID    int    `json:"tmdb_id"`
 			MediaType string `json:"media_type"`
+			ForeignID string `json:"foreign_id"`
 			Title     string `json:"title"`
 			Year      string `json:"year"`
 		} `json:"items"`
@@ -657,6 +773,17 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 		params.Items = params.Items[:maxDisplayMediaItems]
 	}
 
+	// Book verification re-runs the user's scoped lookup once and matches by
+	// foreign id, so a model-invented id or title can never reach the carousel.
+	var bookResults []request.BookSearchResult
+	bookResultsFor := func(query string) []request.BookSearchResult {
+		results, err := s.request.SearchBooksForUser(userID, query)
+		if err != nil {
+			return nil
+		}
+		return results
+	}
+
 	items := make([]MediaResultItem, 0, len(params.Items))
 	var failures []string
 	for _, p := range params.Items {
@@ -664,7 +791,45 @@ func (s *ToolServer) displayMedia(input json.RawMessage) (*ToolResult, error) {
 			failures = append(failures, fmt.Sprintf("%s %d: missing title; pass the exact title for every displayed item", p.MediaType, p.TmdbID))
 			continue
 		}
+		if (p.MediaType == "movie" || p.MediaType == "tv") && tmdbClient == nil {
+			failures = append(failures, fmt.Sprintf("%s %q: TMDB is not configured on the server", p.MediaType, p.Title))
+			continue
+		}
 		switch p.MediaType {
+		case "book":
+			foreignID := strings.TrimSpace(p.ForeignID)
+			if foreignID == "" {
+				failures = append(failures, fmt.Sprintf("book %q: missing foreign_id; copy it from search_books", p.Title))
+				continue
+			}
+			var match *request.BookSearchResult
+			for i := range bookResults {
+				if bookResults[i].ForeignBookID == foreignID {
+					match = &bookResults[i]
+					break
+				}
+			}
+			if match == nil {
+				bookResults = append(bookResults, bookResultsFor(p.Title)...)
+				for i := range bookResults {
+					if bookResults[i].ForeignBookID == foreignID {
+						match = &bookResults[i]
+						break
+					}
+				}
+			}
+			if match == nil {
+				failures = append(failures, fmt.Sprintf("book %q: foreign_id %s did not match a lookup for that title; copy both from search_books", p.Title, foreignID))
+				continue
+			}
+			year := ""
+			if match.Year > 0 {
+				year = strconv.Itoa(match.Year)
+			}
+			items = append(items, MediaResultItem{
+				Title: match.Title, Year: year, Overview: match.Overview,
+				MediaType: "book", ForeignID: match.ForeignBookID, PosterURL: match.RemoteCover,
+			})
 		case "movie":
 			tmdbID := p.TmdbID
 			if tmdbID <= 0 {

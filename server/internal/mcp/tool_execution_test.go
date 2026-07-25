@@ -1229,3 +1229,99 @@ func TestGetLibraryBookDrillDown(t *testing.T) {
 		t.Fatalf("missing book view = %q", res.Text)
 	}
 }
+
+// TestBookRequesterToolWiring pins the requester-facing book surface: search
+// surfaces the foreign_book_id every other book flow keys on, display_media
+// verifies book items against the user's own lookup, and the request/status
+// tools demand the foreign id instead of inventing one.
+func TestBookRequesterToolWiring(t *testing.T) {
+	chaptarrSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/book/lookup":
+			fmt.Fprint(w, `[{"title":"Example Book","authorName":"The Author","foreignBookId":"fb-1","year":2020,"overview":"About things.","images":[{"coverType":"cover","url":"/mediacover/1.jpg","remoteUrl":"https://covers.example.org/1.jpg"}]}]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(chaptarrSrv.Close)
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	res, err := database.Exec("INSERT INTO users (username, password_hash, role) VALUES ('reader', '', 'user')")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	uid, _ := res.LastInsertId()
+
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x21}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	inst := &instance.Instance{ServiceType: "chaptarr", Name: "Books", URL: chaptarrSrv.URL, APIKey: "key", IsDefault: true}
+	if err := store.Create(inst); err != nil {
+		t.Fatalf("create instance: %v", err)
+	}
+	if err := store.SetUserDefault(uid, "chaptarr", inst.ID); err != nil {
+		t.Fatalf("grant chaptarr: %v", err)
+	}
+	registry := instance.NewRegistry(store)
+	service := requestsvc.NewService(database, registry, nil, nil)
+	server := NewToolServer(nil, service, registry, nil)
+	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) {
+		return auth.RoleUser, nil
+	})
+	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
+
+	search, err := server.ExecuteTool(context.Background(), "search_books",
+		json.RawMessage(`{"query":"example"}`), callCtx)
+	if err != nil {
+		t.Fatalf("search_books: %v", err)
+	}
+	if !strings.Contains(search.Text, "foreign_book_id: fb-1") {
+		t.Fatalf("search text lacks the foreign id: %q", search.Text)
+	}
+	searchJSON, _ := json.Marshal(search.StructuredData)
+	for _, want := range []string{`"media_type":"book"`, `"foreign_id":"fb-1"`, `"poster_url":"https://covers.example.org/1.jpg"`} {
+		if !strings.Contains(string(searchJSON), want) {
+			t.Fatalf("search structured data lacks %s: %s", want, searchJSON)
+		}
+	}
+
+	display, err := server.ExecuteTool(context.Background(), "display_media",
+		json.RawMessage(`{"items":[{"media_type":"book","title":"Example Book","foreign_id":"fb-1"}]}`), callCtx)
+	if err != nil {
+		t.Fatalf("display_media: %v", err)
+	}
+	displayJSON, _ := json.Marshal(display.StructuredData)
+	if !strings.Contains(string(displayJSON), `"foreign_id":"fb-1"`) ||
+		!strings.Contains(string(displayJSON), `"poster_url":"https://covers.example.org/1.jpg"`) {
+		t.Fatalf("display structured data = %s (text %q)", displayJSON, display.Text)
+	}
+
+	invented, err := server.ExecuteTool(context.Background(), "display_media",
+		json.RawMessage(`{"items":[{"media_type":"book","title":"Example Book","foreign_id":"fb-nope"}]}`), callCtx)
+	if err != nil {
+		t.Fatalf("display_media invented id: %v", err)
+	}
+	inventedJSON, _ := json.Marshal(invented.StructuredData)
+	if strings.Contains(string(inventedJSON), "fb-nope") {
+		t.Fatalf("invented foreign id reached the carousel: %s", inventedJSON)
+	}
+	if !strings.Contains(invented.Text, "did not match") {
+		t.Fatalf("invented foreign id text = %q", invented.Text)
+	}
+
+	if res, err := server.ExecuteTool(context.Background(), "request_media",
+		json.RawMessage(`{"media_type":"book"}`), callCtx); err != nil || !strings.Contains(res.Text, "requires the foreign_id") {
+		t.Fatalf("book request without foreign id = %v / %v", res, err)
+	}
+	if res, err := server.ExecuteTool(context.Background(), "check_request_status",
+		json.RawMessage(`{"media_type":"book"}`), callCtx); err != nil || !strings.Contains(res.Text, "requires the foreign_id") {
+		t.Fatalf("book status without foreign id = %v / %v", res, err)
+	}
+}

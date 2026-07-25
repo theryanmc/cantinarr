@@ -345,8 +345,10 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.requestMedia(input, callCtx.UserID)
 	case "list_my_requests":
 		return s.listMyRequests(callCtx.UserID)
+	case "search_books":
+		return s.searchBooks(input, callCtx.UserID)
 	case "display_media":
-		return s.displayMedia(input)
+		return s.displayMedia(input, callCtx.UserID)
 	case "get_queue":
 		return s.getQueue(input, callCtx.InstanceID)
 	case "get_calendar":

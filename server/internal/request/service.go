@@ -3439,3 +3439,70 @@ func sonarrProfileExists(profiles []sonarr.QualityProfile, id int) bool {
 	}
 	return false
 }
+
+// BookSearchResult is one requester-facing book search hit for the AI surface:
+// the metadata needed to pick a title plus the foreignBookId every book flow
+// (request_media, check_request_status, the detail route) keys on. RemoteCover
+// is an external metadata-CDN URL — arr-origin URLs are never surfaced.
+type BookSearchResult struct {
+	Title         string `json:"title"`
+	AuthorName    string `json:"author_name,omitempty"`
+	Year          int    `json:"year,omitempty"`
+	ForeignBookID string `json:"foreign_book_id"`
+	Overview      string `json:"overview,omitempty"`
+	RemoteCover   string `json:"remote_cover,omitempty"`
+}
+
+// ErrNoChaptarrAccess reports that the user has no usable Chaptarr instance
+// (none configured, or no per-user books grant).
+var ErrNoChaptarrAccess = errors.New("books are not available for this account")
+
+// SearchBooksForUser looks a query up on the user's effective Chaptarr
+// instance (their per-user grant, or the admin default for admins) — the same
+// resolution every book request uses, so the AI assistant sees exactly the
+// catalog the Books tab would.
+func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	client, _, err := s.resolveChaptarr(userID, "")
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, ErrNoChaptarrAccess
+	}
+	results, err := client.LookupBook(query)
+	if err != nil {
+		return nil, fmt.Errorf("book lookup: %w", err)
+	}
+	out := make([]BookSearchResult, 0, len(results))
+	for _, r := range results {
+		if strings.TrimSpace(r.ForeignBookID) == "" {
+			continue // not addressable by any request flow
+		}
+		cover := strings.TrimSpace(r.RemoteCover)
+		if cover == "" {
+			for _, img := range r.Images {
+				if strings.TrimSpace(img.RemoteURL) != "" {
+					cover = img.RemoteURL
+					break
+				}
+			}
+		}
+		author := r.AuthorName
+		if author == "" && r.Author != nil {
+			author = r.Author.AuthorName
+		}
+		out = append(out, BookSearchResult{
+			Title:         r.Title,
+			AuthorName:    author,
+			Year:          r.Year,
+			ForeignBookID: r.ForeignBookID,
+			Overview:      r.Overview,
+			RemoteCover:   cover,
+		})
+	}
+	return out, nil
+}

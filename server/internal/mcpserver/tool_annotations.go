@@ -18,6 +18,7 @@ var mcpToolBehaviors = map[string]mcpToolBehavior{
 	"search_movies":                {readOnly: true, idempotent: true, openWorld: true},
 	"search_movie_collections":     {readOnly: true, idempotent: true, openWorld: true},
 	"search_tv_shows":              {readOnly: true, idempotent: true, openWorld: true},
+	"search_books":                 {readOnly: true, idempotent: true, openWorld: true},
 	"get_trending":                 {readOnly: true, idempotent: true, openWorld: true},
 	"get_movie_details":            {readOnly: true, idempotent: true, openWorld: true},
 	"get_tv_details":               {readOnly: true, idempotent: true, openWorld: true},

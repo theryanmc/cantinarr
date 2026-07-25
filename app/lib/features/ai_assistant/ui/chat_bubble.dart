@@ -353,12 +353,25 @@ class _MediaResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = AppConfig.tmdbPoster(item.posterPath, width: 342);
-
     final mediaType = item.mediaType ?? 'movie';
+    final isBook = mediaType == 'book';
+    // Books carry an absolute external cover URL; movies/TV carry a TMDB
+    // poster path. Never build a TMDB URL for a book (its foreign id is not a
+    // TMDB id) and never dereference anything but the server-vetted URLs.
+    final directPoster = item.posterUrl?.trim() ?? '';
+    final imageUrl = directPoster.isNotEmpty
+        ? directPoster
+        : (isBook ? null : AppConfig.tmdbPoster(item.posterPath, width: 342));
+    final foreignId = item.foreignId?.trim() ?? '';
+    final String? route = isBook
+        ? (foreignId.isEmpty
+            ? null
+            : '/detail/book/${Uri.encodeComponent(foreignId)}'
+                '?title=${Uri.encodeComponent(item.title)}')
+        : '/detail/$mediaType/${item.id}';
 
     return GestureDetector(
-      onTap: () => context.push('/detail/$mediaType/${item.id}'),
+      onTap: route == null ? null : () => context.push(route),
       child: SizedBox(
         width: 120,
         child: Column(
@@ -373,9 +386,9 @@ class _MediaResultCard extends StatelessWidget {
                   fit: StackFit.expand,
                   children: [
                     CachedImage(
-                      url: item.posterPath == null ? null : imageUrl,
+                      url: !isBook && item.posterPath == null ? null : imageUrl,
                       fit: BoxFit.cover,
-                      icon: Icons.movie_outlined,
+                      icon: isBook ? Icons.menu_book : Icons.movie_outlined,
                       iconSize: 28,
                     ),
                     // Rating badge
