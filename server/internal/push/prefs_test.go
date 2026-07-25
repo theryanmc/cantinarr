@@ -18,7 +18,7 @@ func TestPrefsGetDefaultsForMissingRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true}
+	want := Prefs{RequestDecision: false, RequestPending: true, NewMovie: true, NewEpisode: true, NewBook: true, IssueCreated: true, AgentActionPending: true, PlexAccessRequest: true, PlexInviteSent: true}
 	if got != want {
 		t.Errorf("default prefs = %+v, want %+v", got, want)
 	}
@@ -32,7 +32,7 @@ func TestPrefsSetThenGet(t *testing.T) {
 	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
 
 	store := NewPrefsStore(database)
-	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, PlexAccessRequest: true}
+	want := Prefs{RequestDecision: true, RequestPending: false, NewMovie: false, NewEpisode: true, NewBook: true, PlexAccessRequest: true}
 	if err := store.Set(1, want); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -146,6 +146,62 @@ func TestUsersOptedIntoUnknownCategory(t *testing.T) {
 	store := NewPrefsStore(database)
 	if _, err := store.usersOptedInto("bogus"); err == nil {
 		t.Error("expected error for unknown category")
+	}
+	// new_book must go through the instance-scoped query: an unscoped audience
+	// would leak book alerts to users without any chaptarr grant.
+	if _, err := store.usersOptedInto(CategoryNewBook); err == nil {
+		t.Error("expected error for unscoped new_book recipient query")
+	}
+}
+
+// A new_book audience is the intersection of the opt-in and the instance's
+// visibility: admins always see every instance; a non-admin only via the
+// per-user default row that doubles as the chaptarr access grant.
+func TestUsersOptedIntoNewBookScopesToInstanceAccess(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin(1): no grant row needed. alice(2): granted books-a. bob(3):
+	// granted books-a but opted out. carol(4): granted sibling books-b.
+	// dave(5): no chaptarr grant at all.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'bob', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (4, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'chaptarr', 'books-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'chaptarr', 'books-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (4, 'chaptarr', 'books-b')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book) VALUES (3, 0)")
+
+	store := NewPrefsStore(database)
+
+	got, err := store.usersOptedIntoNewBook("books-a")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewBook(books-a): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 2}) {
+		t.Errorf("books-a audience = %v, want [1 2] (admin + granted alice)", got)
+	}
+
+	// The sibling instance reaches its own grantee (and admins), never books-a's.
+	got, err = store.usersOptedIntoNewBook("books-b")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewBook(books-b): %v", err)
+	}
+	if !equalIDs(got, []int64{1, 4}) {
+		t.Errorf("books-b audience = %v, want [1 4] (admin + granted carol)", got)
+	}
+
+	// An admin who opts out is excluded like anyone else.
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book) VALUES (1, 0)")
+	got, err = store.usersOptedIntoNewBook("books-a")
+	if err != nil {
+		t.Fatalf("usersOptedIntoNewBook(books-a): %v", err)
+	}
+	if !equalIDs(got, []int64{2}) {
+		t.Errorf("books-a audience after admin opt-out = %v, want [2]", got)
 	}
 }
 

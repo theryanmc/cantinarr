@@ -440,12 +440,13 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `request_pending` | on | admins | a new request needs review (badge = queue depth) |
 | `new_movie` | on | everyone | a movie finishes importing (collapse-keyed per title) |
 | `new_episode` | on | everyone | new episode(s) import for a series |
+| `new_book` | on | admins + that instance's grantees | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
 | `issue_created` | on | admins | a tracked problem becomes actionable after the quiet recovery window, or durable status proof remains unavailable |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval |
 | `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
 | `plex_invite_sent` | on | requester | their Plex invite email went out (one-tap or auto) |
 
-Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`; book request decisions add `foreign_id`, the Chaptarr foreignBookId, plus `title`, `book_format`, and the pinned `instance_id`, since books store `tmdb_id` 0) the app routes on tap.
+Bodies are server-authored templates (untrusted text never hits the lock screen), sends are fire-and-forget with a 30s timeout, a 10-minute in-process dedupe window absorbs the overlap between queue polling and webhooks, and tokens the gateway reports dead are pruned automatically. Payloads carry deep-link data (`type`, `tmdb_id`/`issue_id`/`user_id`; book payloads — request decisions and `new_book` alerts — add `foreign_id`, the Chaptarr foreignBookId, plus `title`, `book_format`, and the pinned `instance_id`, since books store `tmdb_id` 0) the app routes on tap. Books have no webhook path, so the Chaptarr queue poller is the sole `new_book` witness: a record that leaves the download queue with a file on disk imported; one that leaves without a file failed and stays silent.
 
 ### Plex invites
 

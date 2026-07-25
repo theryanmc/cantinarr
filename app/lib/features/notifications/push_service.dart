@@ -122,11 +122,12 @@ class PushService {
 
   /// Routes a tapped notification to the right screen from its custom payload:
   /// the approvals queue for `request_pending`; the media detail page for an
-  /// approval decision or a new-content alert (a book decision opens the book
-  /// detail via its `foreign_id`, or the Books tab when an older server's
-  /// payload omits it); the agent approval queue for a pending fix; the issue
-  /// thread for an issue/decision update; and the remediation settings for the
-  /// auto-dispatch circuit-breaker notice.
+  /// approval decision or a new-content alert (a book payload — decision or
+  /// `new_book` availability — opens the book detail via its `foreign_id`, or
+  /// the Books tab when an older server's payload omits it); the agent
+  /// approval queue for a pending fix; the issue thread for an issue/decision
+  /// update; and the remediation settings for the auto-dispatch
+  /// circuit-breaker notice.
   void _routeNotification(Object? arguments) {
     final data = _asStringMap(arguments);
     final type = data['type'] as String?;
@@ -152,9 +153,10 @@ class PushService {
       case 'request_decision':
       case 'new_movie':
       case 'new_episode':
+      case 'new_book':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
-        // keyed on its Chaptarr foreignBookId, which newer servers include as
-        // foreign_id on decision payloads). With a foreign_id, deep-link to
+        // keyed on its Chaptarr foreignBookId, carried as foreign_id on
+        // decision and new_book payloads). With a foreign_id, deep-link to
         // the requester book detail; without one (old servers) the Books tab
         // is the only reachable book surface. Movie/TV open media detail; an
         // unknown media_type keeps the movie fallback.

@@ -12,6 +12,7 @@ type Prefs struct {
 	RequestPending     bool `json:"request_pending"`
 	NewMovie           bool `json:"new_movie"`
 	NewEpisode         bool `json:"new_episode"`
+	NewBook            bool `json:"new_book"`
 	IssueCreated       bool `json:"issue_created"`
 	AgentActionPending bool `json:"agent_action_pending"`
 	PlexAccessRequest  bool `json:"plex_access_request"`
@@ -25,6 +26,11 @@ const (
 	CategoryRequestPending  = "request_pending"
 	CategoryNewMovie        = "new_movie"
 	CategoryNewEpisode      = "new_episode"
+	// CategoryNewBook tells users a Chaptarr book import landed. On by
+	// default, but scoped: only admins and users granted the instance the
+	// import landed on are eligible (usersOptedIntoNewBook), because a
+	// chaptarr grant is the books access model.
+	CategoryNewBook = "new_book"
 	// CategoryIssueCreated notifies admins of a new AI-remediation issue
 	// (user-reported or auto-detected). Admin-scoped, on by default.
 	CategoryIssueCreated = "issue_created"
@@ -47,6 +53,7 @@ var defaultPrefs = Prefs{
 	RequestPending:     true,
 	NewMovie:           true,
 	NewEpisode:         true,
+	NewBook:            true,
 	IssueCreated:       true,
 	AgentActionPending: true,
 	PlexAccessRequest:  true,
@@ -64,6 +71,7 @@ var categoryColumn = map[string]struct {
 	CategoryRequestPending:     {"request_pending", defaultPrefs.RequestPending},
 	CategoryNewMovie:           {"new_movie", defaultPrefs.NewMovie},
 	CategoryNewEpisode:         {"new_episode", defaultPrefs.NewEpisode},
+	CategoryNewBook:            {"new_book", defaultPrefs.NewBook},
 	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	CategoryPlexAccessRequest:  {"plex_access_request", defaultPrefs.PlexAccessRequest},
@@ -86,10 +94,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request, plex_invite_sent
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -103,18 +111,19 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, issue_created, agent_action_pending, plex_access_request, plex_invite_sent)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
 		   new_movie        = excluded.new_movie,
 		   new_episode      = excluded.new_episode,
+		   new_book         = excluded.new_book,
 		   issue_created    = excluded.issue_created,
 		   agent_action_pending = excluded.agent_action_pending,
 		   plex_access_request  = excluded.plex_access_request,
 		   plex_invite_sent     = excluded.plex_invite_sent`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -127,6 +136,12 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 // request_pending category is additionally limited to admins, since only
 // admins act on pending requests.
 func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
+	if category == CategoryNewBook {
+		// new_book is per-instance truth: a chaptarr grant is the books access
+		// model, so an unscoped audience would leak book alerts to users who
+		// cannot see any books. Force callers through the scoped query.
+		return nil, fmt.Errorf("category %q requires usersOptedIntoNewBook", category)
+	}
 	col, ok := categoryColumn[category]
 	if !ok {
 		return nil, fmt.Errorf("unknown notification category %q", category)
@@ -148,8 +163,37 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		category == CategoryAgentActionPending || category == CategoryPlexAccessRequest {
 		query += " AND u.role = 'admin'"
 	}
+	return s.queryUserIDs(query)
+}
 
-	rows, err := s.db.Query(query)
+// usersOptedIntoNewBook returns the ids of every user opted into new_book who
+// can also see the given Chaptarr instance: admins (implicit access to every
+// instance) and users granted this instance via their per-user default row.
+// Book availability is per-instance truth, so unlike the other new-content
+// categories the audience is scoped to the instance the import landed on.
+func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
+	col := categoryColumn[CategoryNewBook]
+	def := 0
+	if col.defaultVal {
+		def = 1
+	}
+	// Column name comes from the trusted categoryColumn table, never user input.
+	query := fmt.Sprintf(
+		`SELECT u.id FROM users u
+		 LEFT JOIN notification_prefs p ON p.user_id = u.id
+		 WHERE COALESCE(p.%s, %d) = 1
+		   AND (u.role = 'admin' OR EXISTS (
+		     SELECT 1 FROM user_default_instances d
+		     WHERE d.user_id = u.id AND d.instance_id = ?))`,
+		col.column, def,
+	)
+	return s.queryUserIDs(query, instanceID)
+}
+
+// queryUserIDs runs a query whose result set is a single user-id column and
+// returns the ids.
+func (s *PrefsStore) queryUserIDs(query string, args ...any) ([]int64, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query opted-in users: %w", err)
 	}

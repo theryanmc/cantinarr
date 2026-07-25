@@ -130,14 +130,16 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
--- self-service API: request_decision off, request_pending/new_movie/new_episode
--- on. Kept separate from user_request_settings (admin-managed request policy).
+-- self-service API: request_decision off, everything else (request_pending,
+-- the new_movie/new_episode/new_book content alerts, ...) on. Kept separate
+-- from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     request_decision INTEGER NOT NULL DEFAULT 0,
     request_pending  INTEGER NOT NULL DEFAULT 1,
     new_movie        INTEGER NOT NULL DEFAULT 1,
     new_episode      INTEGER NOT NULL DEFAULT 1,
+    new_book         INTEGER NOT NULL DEFAULT 1,
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
@@ -643,6 +645,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// live truth (and heal to "not requested" only when the record is truly
 		// gone). NULL for pending/denied rows and pre-migration history.
 		{alter: "ALTER TABLE request_log ADD COLUMN book_record_id INTEGER"},
+		// Book availability alerts: pushed when a Chaptarr book import lands.
+		// On by default like the other new-content categories; the audience is
+		// additionally scoped in SQL to users who can see the instance.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_book INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

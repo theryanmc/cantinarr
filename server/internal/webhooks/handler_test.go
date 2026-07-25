@@ -28,11 +28,15 @@ func (f *fakeInvalidator) InvalidateAvailabilityDigests(id string) {
 type fakeContent struct {
 	movies   []string
 	episodes []string
+	books    []string
 }
 
 func (f *fakeContent) NotifyNewMovie(title string, tmdbID int) { f.movies = append(f.movies, title) }
 func (f *fakeContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
 	f.episodes = append(f.episodes, seriesTitle)
+}
+func (f *fakeContent) NotifyNewBook(title, foreignID, instanceID, format string) {
+	f.books = append(f.books, title)
 }
 
 type fixture struct {

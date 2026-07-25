@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -230,6 +231,59 @@ func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
 	n.notifyNewContent(CategoryNewEpisode, "tv", "New episode available", "New on "+seriesTitle, seriesTitle, tmdbID)
 }
 
+// NotifyNewBook pushes a "book became available" alert for a completed
+// Chaptarr import. The audience is users opted into the new_book category (on
+// by default) who can also see the instance the import landed on — a chaptarr
+// grant is the books access model — plus admins. format is the Chaptarr book
+// record's media type ("ebook"/"audiobook"): a title's two formats are
+// separate records sharing a foreignBookId, and each import alerts on its own.
+func (n *Notifier) NotifyNewBook(title, foreignID, instanceID, format string) {
+	client := n.client()
+	if client == nil || title == "" {
+		return
+	}
+	if !n.claimContentAlert(CategoryNewBook, "book", foreignID+"|"+format, title) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedIntoNewBook(instanceID)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryNewBook)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	// Books have no TMDB id: the payload carries the same deep-link identity a
+	// book request decision does (foreign_id, pinned instance, title hint), so
+	// the app's existing book tap routing applies unchanged.
+	data := map[string]any{
+		"type":        CategoryNewBook,
+		"media_type":  "book",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	if format != "" {
+		data["book_format"] = format
+	}
+	n.sendWithOptions(client, recipients, "New book available", bookReadyBody(title, format), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s:%s", CategoryNewBook, foreignID, format),
+	})
+}
+
+// bookReadyBody derives the availability copy from the imported record's
+// format, using the same eBook/Audiobook nomenclature as the decision copy.
+func bookReadyBody(title, format string) string {
+	switch format {
+	case "ebook":
+		return title + " eBook is ready to read"
+	case "audiobook":
+		return title + " Audiobook is ready to play"
+	default:
+		return title + " is ready"
+	}
+}
+
 // notifyNewContent is the shared body for the new-content notifications: it
 // resolves the opted-in audience for the category and dispatches one collapsed
 // push carrying the media identity for tap routing.
@@ -238,7 +292,7 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 	if client == nil || mediaTitle == "" {
 		return
 	}
-	if !n.claimContentAlert(category, mediaType, mediaTitle, tmdbID) {
+	if !n.claimContentAlert(category, mediaType, strconv.Itoa(tmdbID), mediaTitle) {
 		return
 	}
 	recipients, err := n.prefs.usersOptedInto(category)
@@ -266,10 +320,12 @@ func (n *Notifier) notifyNewContent(category, mediaType, title, body, mediaTitle
 const contentAlertWindow = 10 * time.Minute
 
 // claimContentAlert reports whether this content alert should send, recording
-// it so duplicates within contentAlertWindow are dropped. The key includes the
-// title so unresolved ids (tmdbID 0) never collapse different content.
-func (n *Notifier) claimContentAlert(category, mediaType, title string, tmdbID int) bool {
-	key := fmt.Sprintf("%s|%s|%d|%s", category, mediaType, tmdbID, title)
+// it so duplicates within contentAlertWindow are dropped. id is the content's
+// stable identity — the tmdb id for movies/TV, foreignBookId plus format for
+// books. The key includes the title so unresolved ids (tmdb 0) never collapse
+// different content.
+func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool {
+	key := fmt.Sprintf("%s|%s|%s|%s", category, mediaType, id, title)
 	now := time.Now()
 	n.recentMu.Lock()
 	defer n.recentMu.Unlock()

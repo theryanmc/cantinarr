@@ -46,6 +46,7 @@ type Event struct {
 type ContentNotifier interface {
 	NotifyNewMovie(title string, tmdbID int)
 	NotifyNewEpisode(seriesTitle string, tmdbID int)
+	NotifyNewBook(title, foreignID, instanceID, format string)
 }
 
 // IssueOpener is the auto-dispatch seam: after every successful detailed queue
@@ -90,8 +91,8 @@ type Hub struct {
 	registry    *instance.Registry
 	store       *instance.Store
 
-	// content pushes new-movie/new-episode notifications to opted-in users
-	// when a download completes. nil when push is not configured.
+	// content pushes new-movie/new-episode/new-book notifications to opted-in
+	// users when a download completes. nil when push is not configured.
 	content ContentNotifier
 
 	// opener receives stuck/blocked downloads for auto-dispatch. nil (the zero
@@ -100,8 +101,9 @@ type Hub struct {
 	opener IssueOpener
 
 	// Previous polling state for detecting transitions
-	prevRadarrQueue map[string]map[int]float64 // instanceID -> movieId -> progress
-	prevSonarrQueue map[string]map[int]float64 // instanceID -> seriesId -> progress
+	prevRadarrQueue   map[string]map[int]float64  // instanceID -> movieId -> progress
+	prevSonarrQueue   map[string]map[int]float64  // instanceID -> seriesId -> progress
+	prevChaptarrQueue map[string]map[int]struct{} // instanceID -> set of book record ids
 
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
@@ -137,6 +139,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		opener:             opener,
 		prevRadarrQueue:    make(map[string]map[int]float64),
 		prevSonarrQueue:    make(map[string]map[int]float64),
+		prevChaptarrQueue:  make(map[string]map[int]struct{}),
 		prevArrQueueHash:   make(map[string]string),
 		prevDownloadsHash:  make(map[string]string),
 		downloadsErrLogged: make(map[string]bool),
@@ -812,11 +815,13 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	h.autoDispatchSonarr(instanceID, client)
 }
 
-// pollChaptarrInstance emits an arr_queue_changed invalidation ping whenever the
-// instance's download queue composition changes. Unlike the Radarr/Sonarr
-// pollers it does not emit per-item download_progress events: Chaptarr books
-// carry no TMDB id, which those events key on. There is also no auto-dispatch
-// pass; remediation does not cover chaptarr.
+// pollChaptarrInstance emits an arr_queue_changed invalidation ping whenever
+// the instance's download queue composition changes, and witnesses queue
+// departures to push new_book alerts — the same completion witness the Radarr
+// poller uses, and the only one books have (Chaptarr has no webhook path).
+// Unlike the Radarr/Sonarr pollers it does not emit per-item download_progress
+// events: Chaptarr books carry no TMDB id, which those events key on. There is
+// also no auto-dispatch pass; remediation does not cover chaptarr.
 func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
@@ -824,10 +829,35 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 		return
 	}
 
+	currentQueue := make(map[int]struct{}, len(queue))
 	tuples := make([]string, 0, len(queue))
 	for _, item := range queue {
+		currentQueue[item.BookID] = struct{}{}
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.BookID, item.Status, item.Sizeleft))
 	}
+
+	// A book record that left the queue and now has a file finished importing.
+	// Ebook and audiobook are separate records sharing a foreignBookId, so each
+	// format alerts on its own import; a record that departed without a file
+	// failed or was removed — say nothing.
+	prevQueue := h.prevChaptarrQueue[instanceID]
+	if prevQueue != nil && h.content != nil {
+		for bookID := range prevQueue {
+			if _, stillInQueue := currentQueue[bookID]; stillInQueue || bookID <= 0 {
+				continue
+			}
+			book, err := client.GetBook(bookID)
+			if err != nil {
+				log.Printf("websocket: get completed chaptarr book %d: %v", bookID, err)
+				continue
+			}
+			if book.Statistics.BookFileCount == 0 {
+				continue
+			}
+			h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+		}
+	}
+	h.prevChaptarrQueue[instanceID] = currentQueue
 
 	h.noteArrQueueComposition(instanceID, "chaptarr", tuples)
 }

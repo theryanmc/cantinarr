@@ -100,7 +100,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Notifications (iOS)
 - **Native APNs push** via a `MethodChannel` -- no Firebase. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
-- **Per-category preferences** -- request decisions, new movies, new episodes, Plex invite sent, and admin-only categories (new requests, issues, agent fixes, Plex access requests), plus a test-push diagnostic.
+- **Per-category preferences** -- request decisions, new movies, new episodes, new books (shown with Books access), Plex invite sent, and admin-only categories (new requests, issues, agent fixes, Plex access requests), plus a test-push diagnostic.
 
 ### Settings
 - **Setup Checklist** (admin) -- a live wizard at `/setup`: which features are configured and which aren't, derived by the server from actual configuration (never stored progress, so it's resumable and editable by construction). Each step opens the real settings screen and re-derives on return; unknown items from newer servers still render, which is how future features announce themselves. The optional **Completed media downloads** item points back to the module instances and completes once server roots and at least one effective instance mapping exist. Surfaced as a Settings tile with an "X of Y configured" subtitle and a muteable drawer reminder with the remaining count.

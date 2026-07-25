@@ -412,6 +412,7 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n.NotifyAdmins("request_pending", map[string]interface{}{"title": "X"})
 	n.NotifyNewMovie("The Matrix", 603)
 	n.NotifyNewEpisode("Severance", 95396)
+	n.NotifyNewBook("Ahsoka", "29749107", "books-a", "ebook")
 }
 
 func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
@@ -495,6 +496,108 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 	opts, _ := body["options"].(map[string]any)
 	if opts["collapse_id"] != "new_episode:95396" {
 		t.Errorf("collapse_id = %v, want new_episode:95396", opts["collapse_id"])
+	}
+}
+
+// A book import alerts the users who can actually open it: opted-in holders
+// of that instance's grant plus admins — never a sibling instance's users —
+// and the payload carries the book deep-link identity the app already routes.
+func TestNotifyNewBookScopesRecipientsAndCarriesBookIdentity(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin(1) has implicit access; alice(2) is granted books-a; carol(3) is
+	// granted the sibling books-b and must not hear about books-a imports.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'carol', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'chaptarr', 'books-a')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (3, 'chaptarr', 'books-b')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	if len(ids) != 2 || !got["1"] || !got["2"] {
+		t.Errorf("new_book recipients = %v, want admin(1) and alice(2)", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "New book available" {
+		t.Errorf("title = %v, want \"New book available\"", notif["title"])
+	}
+	if notif["body"] != "Ahsoka (Star Wars) eBook is ready to read" {
+		t.Errorf("body = %v, want format-scoped availability copy", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "new_book" || data["media_type"] != "book" {
+		t.Errorf("data = %v, want type/media_type new_book/book", data)
+	}
+	if data["foreign_id"] != "29749107" || data["instance_id"] != "books-a" ||
+		data["title"] != "Ahsoka (Star Wars)" || data["book_format"] != "ebook" {
+		t.Errorf("book deep-link data = %v, want foreign_id/instance/title/format", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "new_book:29749107:ebook" {
+		t.Errorf("collapse_id = %v, want new_book:29749107:ebook", opts["collapse_id"])
+	}
+}
+
+// The audiobook record of the same title alerts independently with its own
+// copy — and a user without any chaptarr grant is never targeted.
+func TestNotifyNewBookAudiobookCopyAndNoUngrantedRecipients(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (2, 'chaptarr', 'books-a')")
+	// dave has new_book on by default but no grant: with alice as the only
+	// grantee, he must not widen the audience.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "audiobook")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("new_book recipients = %v, want just granted alice(2)", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["body"] != "Ahsoka (Star Wars) Audiobook is ready to play" {
+		t.Errorf("body = %v, want audiobook availability copy", notif["body"])
+	}
+}
+
+func TestNotifyNewBookNoEligibleRecipientsIsNoop(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// dave is opted in by default but holds no chaptarr grant, so a book
+	// import has no eligible audience and nothing is sent.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (5, 'dave', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyNewBook("Ahsoka (Star Wars)", "29749107", "books-a", "ebook")
+
+	select {
+	case <-cap.ch:
+		t.Fatal("unexpected notification: nobody can see books-a")
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing sent
 	}
 }
 
