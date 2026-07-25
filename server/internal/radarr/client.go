@@ -542,6 +542,34 @@ func (c *Client) GetImportHistory(movieID int, downloadID string, pageSize int) 
 	return resp.Records, nil
 }
 
+// GetImportHistorySince returns the completed-import history records dated
+// after since, newest first, read from one bounded page. complete reports
+// whether that page provably covered the whole window: it reached a record at
+// or before since, or it held every record the instance has. Callers must
+// treat an incomplete window as "more imports than one page can enumerate",
+// never as an empty one.
+func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&includeMovie=true&eventType=3", pageSize)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, false, fmt.Errorf("radarr import history since: %w", err)
+	}
+	complete = resp.TotalRecords <= len(resp.Records)
+	for _, rec := range resp.Records {
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
 type CalendarItem struct {
 	ID              int        `json:"id"`
 	Title           string     `json:"title"`

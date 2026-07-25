@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,20 +33,43 @@ const (
 	downloadsPollPeriod = 15 * time.Second
 )
 
-// queueWitnessStaleAfter bounds how far back a restart may resume: a persisted
-// queue snapshot older than this is ignored and the instance re-seeds exactly as
-// on a first boot. Long enough to cover a container restart, an image pull, or a
-// host reboot; short enough that we never announce content the user has already
+// queueWitnessStaleAfter bounds how far back any resumption may reach — a
+// restart's persisted snapshot and an in-process poll gap alike. A window older
+// than this is dropped whole and the instance re-seeds exactly as on a first
+// boot. Long enough to cover a container restart, an image pull, or a host
+// reboot; short enough that we never announce content the user has already
 // found by opening the app, where availability is always computed live.
 const queueWitnessStaleAfter = 6 * time.Hour
 
-// restoredAlertCap bounds the single departure diff resumed after a restart.
-// Above it the whole batch is dropped rather than partially delivered:
-// new-content alerts fan out to the entire household by default and the only
-// remedy a user has is a permanent category opt-out, so a burst of stale alerts
-// costs more trust than silence — and past this count the app's live view is the
-// better answer anyway. Steady-state departures are never capped.
+// restoredAlertCap bounds the single announce batch resumed after a restart or
+// a poll gap — witnessed queue departures and history catch-up together. Above
+// it the whole batch is dropped rather than partially delivered: new-content
+// alerts fan out to the entire household by default and the only remedy a user
+// has is a permanent category opt-out, so a burst of stale alerts costs more
+// trust than silence — and past this count the app's live view is the better
+// answer anyway. Steady-state departures are never capped.
 const restoredAlertCap = 10
+
+// queueResumeAfter is the gap between successful polls beyond which the next
+// one is treated as a resumption rather than steady state: the departure diff
+// becomes capped (it may hold a gap's worth of stale completions) and the
+// import-history catch-up runs to recover completions no queue snapshot ever
+// witnessed. It covers arr/network outages and process suspensions the same
+// way a restart is covered, and must sit far above the poll period so a
+// missed tick or two stays steady state.
+const queueResumeAfter = 5 * time.Minute
+
+// catchUpHistoryPageSize bounds the single history page a resumption reads.
+// One page must prove it covered the whole gap; a window holding more import
+// records than this is a mass job (bulk manual import, weeks of automation),
+// and the whole batch is dropped rather than sampled.
+const catchUpHistoryPageSize = 200
+
+// errImportBacklogOverflow reports that the catch-up window holds more import
+// history than one bounded page can prove complete. It is a "too many to
+// announce" verdict, not a failure: the resumed batch is dropped whole, the
+// same as a batch over restoredAlertCap.
+var errImportBacklogOverflow = errors.New("import history window overflow")
 
 // downloadClientTypes are the service types polled for downloads_queue events.
 var downloadClientTypes = []string{"sabnzbd", "qbittorrent", "nzbget", "transmission"}
@@ -132,6 +156,13 @@ type Hub struct {
 	// cleared as soon as that first diff is resolved.
 	restoredWitness map[string]time.Time
 
+	// lastPollAt records when each arr instance's queue was last successfully
+	// polled and resolved. A gap of queueResumeAfter or more means completions
+	// may have been grabbed and imported entirely unwatched — an arr or network
+	// outage while the process stayed up — so the next poll runs the same
+	// capped resumption as a restart. Written only from the poll goroutine.
+	lastPollAt map[string]time.Time
+
 	// prevArrQueueHash tracks the queue composition (id/status/sizeleft
 	// tuples) per arr instance so any change can emit an invalidation ping.
 	prevArrQueueHash map[string]string // instanceID -> composition hash
@@ -174,6 +205,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		downloadsErrLogged: make(map[string]bool),
 		witness:            newQueueWitness(database),
 		restoredWitness:    make(map[string]time.Time),
+		lastPollAt:         make(map[string]time.Time),
 	}
 }
 
@@ -466,51 +498,203 @@ func (h *Hub) restoreQueueWitness() {
 			continue
 		}
 		h.restoredWitness[instanceID] = row.observedAt
+		h.lastPollAt[instanceID] = row.observedAt
 	}
 	if len(h.restoredWitness) > 0 {
 		log.Printf("websocket: resumed queue witness for %d instance(s)", len(h.restoredWitness))
 	}
 }
 
-// gateRestoredDiff decides what the first diff after a restore may announce.
-// hold=true means: persist nothing, announce nothing, keep the restored
-// membership in memory and retry on the next tick.
+// resumeOrigin reports when this instance's queue was last watched, when that
+// was long enough ago to make this tick a resumption, plus whether the
+// knowledge came from a restored boot snapshot — the only case that may hold
+// for gateway readiness, because only a fresh process has a gateway that has
+// not had time to enroll. A zero time means steady state.
+func (h *Hub) resumeOrigin(instanceID string) (since time.Time, boot bool) {
+	if observedAt, restored := h.restoredWitness[instanceID]; restored {
+		return observedAt, true
+	}
+	if last, ok := h.lastPollAt[instanceID]; ok && time.Since(last) >= queueResumeAfter {
+		return last, false
+	}
+	return time.Time{}, false
+}
+
+// resolveAnnouncements decides what one successful poll may announce. In
+// steady state it passes the departure diff through untouched — never capped,
+// and at zero extra cost (importsSince is not called). On a resumption — a
+// process restart or a poll gap of queueResumeAfter or more — it recovers what
+// happened while nobody watched and applies every storm guard:
 //
-// It cannot wedge. Once the restored snapshot ages past queueWitnessStaleAfter
-// the staleness arm drops it unconditionally, so a permanently unreachable push
-// gateway costs one batch of alerts rather than a stuck poller.
-//
-// A hold requires push to be configured but unenrolled, so it cannot happen on a
-// push-disabled server (contentReady reports true when there is no notifier).
-// While one is in effect this instance's queue membership stays frozen, which
-// also defers its request_status_changed broadcasts — accepted because the push
-// those alerts exist for is undeliverable during exactly that window, and
-// availability is recomputed live on every read, so a connected client converges
-// on its next fetch rather than showing anything wrong.
-func (h *Hub) gateRestoredDiff(instanceID string, departed []int) (announce []int, hold bool) {
-	observedAt, restored := h.restoredWitness[instanceID]
-	if !restored {
+//   - Completions grabbed AND imported entirely inside the gap never appear in
+//     any queue snapshot, so no membership diff can see them. importsSince
+//     replays the arr's own import-history event log (the durable form of the
+//     same event its webhook delivers, written only by the download-import
+//     path — a library rescan or restore stamps no such records) and its ids
+//     are merged into the departure diff. History may only ever ADD alerts:
+//     a fetch failure degrades to the witnessed departures, never silences
+//     them, and every merged id still passes the same live re-verification
+//     (HasFile / BookFileCount) before anything is announced.
+//   - A window older than queueWitnessStaleAfter describes completions the
+//     user has long since found in the app: the whole batch is dropped.
+//   - A merged batch over restoredAlertCap, or a window importsSince reports
+//     as too big to enumerate (errImportBacklogOverflow), is dropped whole
+//     rather than partially delivered.
+//   - On a boot resumption only, a non-empty batch waits (hold=true: persist
+//     nothing, announce nothing, retry next tick) until the push gateway
+//     enrolls, so recovered alerts are not dropped into a nil client. It
+//     cannot wedge: the staleness arm above drops the batch unconditionally
+//     once the snapshot ages out. A hold requires push configured but
+//     unenrolled, so it cannot happen on a push-disabled server. While one is
+//     in effect this instance's membership stays frozen, which also defers its
+//     request_status_changed broadcasts — accepted because the push those
+//     alerts exist for is undeliverable during exactly that window, and
+//     availability is recomputed live on every read.
+func (h *Hub) resolveAnnouncements(instanceID string, departed []int, importsSince func(time.Time) ([]int, error)) (announce []int, hold bool) {
+	since, boot := h.resumeOrigin(instanceID)
+	if since.IsZero() {
 		return departed, false // steady state is never gated
 	}
-	if time.Since(observedAt) > queueWitnessStaleAfter {
+	if time.Since(since) > queueWitnessStaleAfter {
 		delete(h.restoredWitness, instanceID)
 		if len(departed) > 0 {
 			log.Printf("websocket: dropping %d stale resumed completion(s) for %s", len(departed), instanceID)
 		}
 		return nil, false
 	}
-	// Announcing into a gateway that has not enrolled yet would drop these
-	// permanently: the send is fire-and-forget and the membership is about to be
-	// overwritten. Wait for it instead.
-	if len(departed) > 0 && !h.contentReady() {
+	catchup, err := importsSince(since)
+	if errors.Is(err, errImportBacklogOverflow) {
+		delete(h.restoredWitness, instanceID)
+		log.Printf("websocket: skipping resumed alerts for %s: over %d imports while unwatched", instanceID, catchUpHistoryPageSize)
+		return nil, false
+	}
+	if err != nil {
+		log.Printf("websocket: import catch-up (%s): %v (announcing witnessed departures only)", instanceID, err)
+		catchup = nil
+	}
+	merged := unionInts(departed, catchup)
+	if len(merged) > 0 && boot && !h.contentReady() {
 		return nil, true
 	}
 	delete(h.restoredWitness, instanceID)
-	if len(departed) > restoredAlertCap {
-		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(departed), instanceID)
+	if len(merged) > restoredAlertCap {
+		log.Printf("websocket: skipping %d resumed completion alert(s) for %s (over cap)", len(merged), instanceID)
 		return nil, false
 	}
-	return departed, false
+	return merged, false
+}
+
+// unionInts merges two id sets into one sorted, duplicate-free slice.
+func unionInts(a, b []int) []int {
+	seen := make(map[int]struct{}, len(a)+len(b))
+	var out []int
+	for _, ids := range [][]int{a, b} {
+		for _, id := range ids {
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// radarrImportsSince lists the distinct movie ids with a completed-import
+// history record dated after since. The event name is re-checked against the
+// response (the query asks by enum id) so a renumbered enum in a fork yields
+// an empty catch-up rather than presenting deletions as imports — history may
+// only ever add alerts, so an unrecognized vocabulary degrades to the queue
+// witness instead of misfiring.
+func radarrImportsSince(client *radarr.Client, since time.Time) ([]int, error) {
+	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, errImportBacklogOverflow
+	}
+	seen := make(map[int]struct{}, len(records))
+	var ids []int
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "downloadFolderImported") || rec.MovieID <= 0 {
+			continue
+		}
+		if _, dup := seen[rec.MovieID]; dup {
+			continue
+		}
+		seen[rec.MovieID] = struct{}{}
+		ids = append(ids, rec.MovieID)
+	}
+	sort.Ints(ids)
+	return ids, nil
+}
+
+// sonarrImportsSince is the Sonarr analogue of radarrImportsSince, collapsing
+// per-episode-file import records to their distinct series ids so a season
+// pack imported during the gap becomes one alert, not twenty.
+func sonarrImportsSince(client *sonarr.Client, since time.Time) ([]int, error) {
+	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, errImportBacklogOverflow
+	}
+	seen := make(map[int]struct{}, len(records))
+	var ids []int
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "downloadFolderImported") {
+			continue
+		}
+		seriesID := rec.SeriesID
+		if seriesID <= 0 && rec.Series != nil {
+			seriesID = rec.Series.ID
+		}
+		if seriesID <= 0 && rec.Episode != nil {
+			seriesID = rec.Episode.SeriesID
+		}
+		if seriesID <= 0 {
+			continue
+		}
+		if _, dup := seen[seriesID]; dup {
+			continue
+		}
+		seen[seriesID] = struct{}{}
+		ids = append(ids, seriesID)
+	}
+	sort.Ints(ids)
+	return ids, nil
+}
+
+// chaptarrImportsSince is the Chaptarr analogue of radarrImportsSince. The
+// event name is re-checked against the shared Readarr-lineage import
+// vocabulary (the same set the webhook receiver accepts), so both witnesses
+// agree on what counts as an import and an unrecognized fork vocabulary
+// contributes nothing rather than misfiring.
+func chaptarrImportsSince(client *chaptarr.Client, since time.Time) ([]int, error) {
+	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, errImportBacklogOverflow
+	}
+	seen := make(map[int]struct{}, len(records))
+	var ids []int
+	for _, rec := range records {
+		if !chaptarr.IsImportEventType(rec.EventType) || rec.BookID <= 0 {
+			continue
+		}
+		if _, dup := seen[rec.BookID]; dup {
+			continue
+		}
+		seen[rec.BookID] = struct{}{}
+		ids = append(ids, rec.BookID)
+	}
+	sort.Ints(ids)
+	return ids, nil
 }
 
 // saveQueueWitness records this instance's current queue membership. A failure
@@ -934,7 +1118,9 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+		return radarrImportsSince(client, since)
+	})
 	if hold {
 		h.noteArrQueueComposition(instanceID, "radarr", tuples)
 		h.autoDispatchRadarr(instanceID, client)
@@ -944,6 +1130,7 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevRadarrQueue[instanceID] = currentQueue
 	h.saveQueueWitness(instanceID, "radarr", progressKeys(currentQueue))
+	h.lastPollAt[instanceID] = time.Now()
 
 	for _, movieID := range announce {
 		movie, err := client.GetMovie(movieID)
@@ -1021,7 +1208,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+		return sonarrImportsSince(client, since)
+	})
 	if hold {
 		h.noteArrQueueComposition(instanceID, "sonarr", tuples)
 		h.autoDispatchSonarr(instanceID, client)
@@ -1031,6 +1220,7 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	// Persist before announcing — see pollChaptarrInstance.
 	h.prevSonarrQueue[instanceID] = currentQueue
 	h.saveQueueWitness(instanceID, "sonarr", progressKeys(currentQueue))
+	h.lastPollAt[instanceID] = time.Now()
 
 	for _, seriesID := range announce {
 		series, err := client.GetSeries(seriesID)
@@ -1113,7 +1303,9 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 		sort.Ints(departed)
 	}
 
-	announce, hold := h.gateRestoredDiff(instanceID, departed)
+	announce, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) ([]int, error) {
+		return chaptarrImportsSince(client, since)
+	})
 	if hold {
 		// Keep the restored membership and retry next tick, so these
 		// completions are not lost to an unenrolled gateway.
@@ -1128,6 +1320,7 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	// h.content check — enabling push later must not start from amnesia.
 	h.prevChaptarrQueue[instanceID] = currentQueue
 	h.saveQueueWitness(instanceID, "chaptarr", setKeys(currentQueue))
+	h.lastPollAt[instanceID] = time.Now()
 
 	if h.content != nil {
 		for _, bookID := range announce {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
@@ -197,46 +198,18 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	}
 }
 
-// bookImportEvents and bookLibraryEvents are normalized Chaptarr event names.
+// Import events are recognized by chaptarr.IsImportEventType — one vocabulary
+// shared with the queue poller's import-history catch-up, so the two witnesses
+// can never disagree about what counts as an import. An unrecognized name is
+// simply acknowledged and the queue poller witnesses the import instead.
 //
-// Chaptarr is distributed as an image rather than source, so its event
-// vocabulary is inherited from the Readarr lineage rather than verified. Both
-// sets are therefore generous, and normalizeEventType folds case and word
-// separators, so a fork spelling the import "ReleaseImport", "Download" or
-// "bookFileImported" all land here. An unrecognized name is simply acknowledged
-// and the queue poller witnesses the import instead.
-//
-// Rename, retag and delete are deliberately NOT import events: announcing "your
-// book is ready" because a file was renamed would be worse than announcing it
-// 30 seconds late.
-var bookImportEvents = map[string]struct{}{
-	"download": {}, "releaseimport": {}, "bookfileimport": {}, "bookfileimported": {},
-	"bookimport": {}, "bookimported": {}, "downloadimported": {},
-}
-
+// bookLibraryEvents are the normalized non-import Chaptarr event names that
+// still change what the library shows (grabs, adds, deletes, renames): they
+// invalidate caches and ping clients, and must never push a "ready" alert.
 var bookLibraryEvents = map[string]struct{}{
 	"grab": {}, "bookadd": {}, "bookadded": {}, "authoradd": {}, "authoradded": {},
 	"bookdelete": {}, "authordelete": {}, "bookfiledelete": {}, "rename": {},
 	"retag": {}, "bookretag": {},
-}
-
-// normalizeEventType folds an arr event name to lowercase letters so casing and
-// word separators cannot cause a miss. Absurdly long input is rejected outright
-// rather than normalized.
-func normalizeEventType(s string) string {
-	if len(s) > 64 {
-		return ""
-	}
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-			out = append(out, r)
-		case r >= 'A' && r <= 'Z':
-			out = append(out, r+('a'-'A'))
-		}
-	}
-	return string(out)
 }
 
 // handleBookEvent applies a Chaptarr callback.
@@ -247,11 +220,11 @@ func normalizeEventType(s string) string {
 // event name and record id are read, and the alert itself is built from a live
 // read of the record, so a drifted or forged body cannot fabricate an alert.
 func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
-	event := normalizeEventType(payload.EventType)
+	event := chaptarr.NormalizeEventType(payload.EventType)
 	if event == "test" {
 		return
 	}
-	_, isImport := bookImportEvents[event]
+	isImport := chaptarr.IsImportEventType(payload.EventType)
 	_, isLibraryChange := bookLibraryEvents[event]
 	if !isImport && !isLibraryChange {
 		return

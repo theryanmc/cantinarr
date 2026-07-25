@@ -2,6 +2,7 @@ package push
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 )
 
@@ -116,5 +117,39 @@ func TestClaimContentAlertWithoutLedgerFailsOpen(t *testing.T) {
 	}
 	if !n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
 		t.Error("a duplicate must still send when there is no ledger to consult")
+	}
+}
+
+// TestClaimContentAlertBreaksStorms pins the burst cap: a mass job announcing
+// one distinct title after another — a bulk manual import's webhooks, several
+// instances resuming at once — delivers the first contentAlertStormCap alerts
+// in the window and suppresses the rest, so a household is never paged once
+// per title of a hundred-title job.
+func TestClaimContentAlertBreaksStorms(t *testing.T) {
+	n, database := newDedupeNotifier(t)
+
+	for i := 1; i <= contentAlertStormCap; i++ {
+		if !n.claimContentAlert(CategoryNewMovie, "movie", fmt.Sprint(i), fmt.Sprintf("Movie %d", i)) {
+			t.Fatalf("alert %d of %d was suppressed below the cap", i, contentAlertStormCap)
+		}
+	}
+	if n.claimContentAlert(CategoryNewMovie, "movie", "999", "Movie 999") {
+		t.Fatal("the alert past the cap must be suppressed")
+	}
+	// The suppressed title's claim is still recorded, so the burst cannot be
+	// re-tried item by item through the other witness of the same import.
+	var claimed int
+	if err := database.QueryRow(
+		`SELECT COUNT(*) FROM content_alert_claims WHERE alert_key LIKE '%999%'`).Scan(&claimed); err != nil {
+		t.Fatalf("count suppressed claim: %v", err)
+	}
+	if claimed != 1 {
+		t.Fatalf("suppressed alert left %d claim rows, want 1", claimed)
+	}
+
+	// Once the window slides past the burst, fresh content alerts again.
+	lapseClaims(t, database)
+	if !n.claimContentAlert(CategoryNewMovie, "movie", "1000", "Movie 1000") {
+		t.Error("an alert after the window lapsed must send")
 	}
 }

@@ -523,3 +523,36 @@ func TestGetBooksRefiltersByAuthorClientSide(t *testing.T) {
 		t.Fatalf("books = %+v, want only author 4's book", books)
 	}
 }
+
+// TestGetImportHistorySinceSkipsUndatedRecords pins the Readarr-lineage
+// catch-up reader: the v1 endpoint with the import event filter, cursor
+// windowing, and that a record without a date is skipped — it can neither be
+// windowed nor prove the page reached past the cursor.
+func TestGetImportHistorySinceSkipsUndatedRecords(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/history" || r.URL.Query().Get("eventType") != "3" {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"page":1,"pageSize":10,"totalRecords":3,"records":[
+			{"id":3,"bookId":7,"eventType":"bookFileImported","date":"2026-07-25T12:30:00Z"},
+			{"id":2,"bookId":8,"eventType":"bookFileImported"},
+			{"id":1,"bookId":9,"eventType":"bookFileImported","date":"2026-07-25T11:00:00Z"}]}`)
+	}))
+	t.Cleanup(server.Close)
+
+	since, err := time.Parse(time.RFC3339, "2026-07-25T12:00:00Z")
+	if err != nil {
+		t.Fatalf("parse since: %v", err)
+	}
+	records, complete, err := NewClient(server.URL, "key").GetImportHistorySince(since, 10)
+	if err != nil {
+		t.Fatalf("GetImportHistorySince() error = %v", err)
+	}
+	if !complete {
+		t.Fatal("a dated record at or before the cursor must prove the window complete")
+	}
+	if len(records) != 1 || records[0].BookID != 7 {
+		t.Fatalf("in-window records = %+v, want only book 7", records)
+	}
+}

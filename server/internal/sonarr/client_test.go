@@ -440,3 +440,36 @@ func TestDetailedQueueFileStateRequiresConsistentEpisodeIdentity(t *testing.T) {
 		t.Fatalf("mismatched episode identity produced file ID %v", *got)
 	}
 }
+
+// TestGetImportHistorySinceCarriesSeriesIdentity pins the catch-up reader: the
+// v3 endpoint with the import event filter, cursor windowing, completeness
+// proof, and the top-level seriesId each record must carry so a resumed poll
+// can collapse per-episode imports to one series alert.
+func TestGetImportHistorySinceCarriesSeriesIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/history" || r.URL.Query().Get("eventType") != "3" {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalRecords":3,"records":[
+			{"id":3,"episodeId":301,"seriesId":6,"eventType":"downloadFolderImported","date":"2026-07-25T12:30:00Z"},
+			{"id":2,"episodeId":302,"seriesId":6,"eventType":"downloadFolderImported","date":"2026-07-25T12:20:00Z"},
+			{"id":1,"episodeId":100,"seriesId":4,"eventType":"downloadFolderImported","date":"2026-07-25T11:00:00Z"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	since, err := time.Parse(time.RFC3339, "2026-07-25T12:00:00Z")
+	if err != nil {
+		t.Fatalf("parse since: %v", err)
+	}
+	records, complete, err := NewClient(server.URL, "key").GetImportHistorySince(since, 10)
+	if err != nil {
+		t.Fatalf("GetImportHistorySince() error = %v", err)
+	}
+	if !complete {
+		t.Fatal("a page reaching past the cursor must prove the window complete")
+	}
+	if len(records) != 2 || records[0].SeriesID != 6 || records[1].SeriesID != 6 {
+		t.Fatalf("in-window records = %+v, want two series-6 imports", records)
+	}
+}

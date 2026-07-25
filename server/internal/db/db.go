@@ -154,6 +154,10 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
 -- send failed is re-claimable once the window lapses, so a transient gateway
 -- failure can never silence a title forever. Rows older than 24h are swept
 -- whenever a claim is granted, so the table stays bounded without a sweeper.
+-- The rows granted inside the window are also counted as the content-alert
+-- storm breaker: past a burst cap the alert is suppressed (and logged) while
+-- the claim stays recorded, so a mass import cannot page the household once
+-- per title through either witness.
 CREATE TABLE IF NOT EXISTS content_alert_claims (
     alert_key  TEXT PRIMARY KEY,
     claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -396,14 +400,17 @@ CREATE TABLE IF NOT EXISTS remediation_observation_watermarks (
 -- the last successful poll, so a restart resumes the departure diff instead of
 -- re-seeding from empty -- which silently lost every completion that landed
 -- while the process was down, the only witness books have since Chaptarr has no
--- webhook path.
+-- webhook path. observed_at doubles as the import-history catch-up cursor: on a
+-- resumption the poller replays the arr's own import event log since this
+-- moment to recover completions no queue snapshot ever saw (grabbed AND
+-- imported entirely while unwatched).
 --
 -- This is NOT a cached copy of arr state: nothing is ever read from it but set
--- membership, and every departure is re-verified live against the arr
--- (HasFile / BookFileCount) before anything is announced. Its freshness story is
--- explicit -- snapshots older than the poller's staleness cutoff are ignored at
--- load, rows are dropped when an admin repoints the instance URL, and they are
--- deleted with the instance.
+-- membership and the cursor, and every completion is re-verified live against
+-- the arr (HasFile / BookFileCount) before anything is announced. Its freshness
+-- story is explicit -- snapshots older than the poller's staleness cutoff are
+-- ignored at load, rows are dropped when an admin repoints the instance URL,
+-- and they are deleted with the instance.
 CREATE TABLE IF NOT EXISTS arr_queue_witness (
     instance_id  TEXT PRIMARY KEY,
     service_type TEXT NOT NULL,

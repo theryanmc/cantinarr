@@ -1024,6 +1024,36 @@ func (c *Client) GetImportHistory(bookID int, downloadID string, pageSize int) (
 	return hp.Records, nil
 }
 
+// GetImportHistorySince returns the completed-import history records dated
+// after since, newest first, read from one bounded page (eventType=3 —
+// bookFileImported in the Readarr-lineage enum). complete reports whether that
+// page provably covered the whole window: it reached a dated record at or
+// before since, or it held every record the instance has. A record without a
+// date can neither prove the boundary nor be windowed, so it is skipped.
+// Callers must treat an incomplete window as "more imports than one page can
+// enumerate", never as an empty one.
+func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=3", pageSize)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, false, fmt.Errorf("chaptarr import history since: %w", err)
+	}
+	complete = hp.TotalRecords <= len(hp.Records)
+	for _, rec := range hp.Records {
+		if rec.Date == nil {
+			continue
+		}
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
 // GetWantedMissing returns a page of monitored books with no file.
 func (c *Client) GetWantedMissing(page, pageSize int) (*WantedPage, error) {
 	var wp WantedPage
