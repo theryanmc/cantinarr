@@ -240,6 +240,42 @@ class _RequestFlowAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// Accepts a request and then serves a status read that has not caught up (or
+/// has moved on), reproducing Chaptarr truth that lags a just-accepted add.
+class _LaggingStatusAdapter implements HttpClientAdapter {
+  _LaggingStatusAdapter({required this.postBody, required this.afterBody});
+
+  final Map<String, dynamic> postBody;
+  final Map<String, dynamic> afterBody;
+  var posts = 0;
+  var _submitted = false;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      posts++;
+      _submitted = true;
+      return _json(postBody);
+    }
+    return _json(_submitted ? afterBody : {'status': 'unavailable'});
+  }
+
+  ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
+        jsonEncode(body),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+
+  @override
+  void close({bool force = false}) {}
+}
+
 RequestService _service(Map<String, dynamic> resp) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = _GetAdapter(resp);
@@ -406,6 +442,63 @@ void main() {
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
   });
 
+  testWidgets('a confirmed request is not re-offered when live truth lags',
+      (tester) async {
+    // Chaptarr has not materialised the record yet, so the status read after the
+    // accepted POST still reports the format as never requested.
+    final adapter = _LaggingStatusAdapter(
+      postBody: {
+        'status': 'requested',
+        'book_formats': {'audiobook': 'requested'},
+      },
+      afterBody: {'status': 'unavailable'},
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(_row('audiobook'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Audiobook requested.'), findsOneWidget);
+    expect(find.text('Requested'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+    // Only the untouched format is still on offer.
+    expect(find.text('Request'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
+
+    await tester.tap(_row('audiobook'));
+    await tester.pumpAndSettle();
+    expect(adapter.posts, 1);
+  });
+
+  testWidgets('an admin denial still overrides a confirmed request',
+      (tester) async {
+    final adapter = _LaggingStatusAdapter(
+      postBody: {
+        'status': 'pending',
+        'book_formats': {'ebook': 'pending'},
+      },
+      afterBody: {
+        'status': 'denied',
+        'book_formats': {'ebook': 'denied'},
+      },
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    // Remembering the submission must never hide a decision made about it.
+    expect(find.text('Request Denied'), findsOneWidget);
+    expect(find.text('Request again'), findsOneWidget);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
+  });
+
   testWidgets('a request the server holds for approval says so', (tester) async {
     final adapter = _GetAdapter({
       'status': 'pending',
@@ -420,7 +513,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('eBook is pending approval.'), findsOneWidget);
-    expect(find.text('Pending Approval'), findsOneWidget);
+    // The requested format holds the approval state the server reported, even
+    // though this stub's status read only ever mentions the other format.
+    expect(find.text('Pending Approval'), findsNWidgets(2));
+    expect(find.text('Request'), findsNothing);
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
   });
 
   testWidgets('unknown book truth is visible and blocks request mutation',
