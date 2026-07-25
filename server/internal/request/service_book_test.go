@@ -1742,3 +1742,169 @@ func newChaptarrBookTestService(t *testing.T, chaptarrURL string) (*Service, int
 
 	return NewService(database, instance.NewRegistry(store), nil, nil), uid
 }
+
+// TestBookStatusFollowsRekeyedRecord reproduces the field failure where
+// Chaptarr files the record a request created under its own canonical
+// foreignBookId: the logged id stops matching live truth, and the status read
+// used to demote the accepted request to "not requested" — re-offering a
+// duplicate request for a book that was already downloading. The persisted
+// record id is the identity that survives the re-key.
+func TestBookStatusFollowsRekeyedRecord(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/book" {
+			_, _ = w.Write([]byte(`[{"id":43,"title":"Flock","foreignBookId":"canon-777","mediaType":"audiobook","monitored":true,"statistics":{"bookFileCount":0}}]`))
+			return
+		}
+		http.Error(w, "unexpected route", http.StatusNotFound)
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	var instanceID string
+	if err := svc.db.QueryRow("SELECT id FROM service_instances").Scan(&instanceID); err != nil {
+		t.Fatalf("read instance id: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, book_record_id, instance_id, media_type, title, status)
+		 VALUES (?, 0, 'lookup-777', 'audiobook', 43, ?, 'book', 'Flock', 'requested')`,
+		uid, instanceID,
+	); err != nil {
+		t.Fatalf("seed request row: %v", err)
+	}
+
+	st, err := svc.GetUserBookStatus(uid, "lookup-777")
+	if err != nil {
+		t.Fatalf("GetUserBookStatus: %v", err)
+	}
+	if st.BookFormats[BookFormatAudiobook] != StatusRequested {
+		t.Fatalf("audiobook = %q, want requested via the stored record id", st.BookFormats[BookFormatAudiobook])
+	}
+	if st.CanonicalForeignID != "canon-777" {
+		t.Fatalf("canonical_foreign_id = %q, want canon-777", st.CanonicalForeignID)
+	}
+	if st.Status != StatusRequested {
+		t.Fatalf("collapsed status = %q, want requested", st.Status)
+	}
+}
+
+// TestBookStatusHealsWhenStoredRecordIsGone keeps the healing property intact:
+// a stored record id whose record no longer exists is proof the request is
+// gone, so the format returns to requestable instead of sticking forever.
+func TestBookStatusHealsWhenStoredRecordIsGone(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/book" {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		http.Error(w, "unexpected route", http.StatusNotFound)
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	var instanceID string
+	if err := svc.db.QueryRow("SELECT id FROM service_instances").Scan(&instanceID); err != nil {
+		t.Fatalf("read instance id: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, book_record_id, instance_id, media_type, title, status)
+		 VALUES (?, 0, 'lookup-888', 'audiobook', 99, ?, 'book', 'Flock', 'requested')`,
+		uid, instanceID,
+	); err != nil {
+		t.Fatalf("seed request row: %v", err)
+	}
+
+	st, err := svc.GetUserBookStatus(uid, "lookup-888")
+	if err != nil {
+		t.Fatalf("GetUserBookStatus: %v", err)
+	}
+	if st.BookFormats[BookFormatAudiobook] != StatusUnavailable {
+		t.Fatalf("audiobook = %q, want unavailable once the record is gone", st.BookFormats[BookFormatAudiobook])
+	}
+	if st.CanonicalForeignID != "" {
+		t.Fatalf("canonical_foreign_id = %q, want empty for a vanished record", st.CanonicalForeignID)
+	}
+}
+
+// TestBookRequestPersistsCreatedRecordIdentity drives the full request flow
+// against a Chaptarr that files the created record under a different
+// foreignBookId than the lookup id: the created record id must be persisted
+// with the history row, the canonical id returned to the client, and the very
+// next status read must resolve live truth instead of demoting the request.
+func TestBookRequestPersistsCreatedRecordIdentity(t *testing.T) {
+	added := false
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			if added {
+				_, _ = w.Write([]byte(`[{"id":51,"title":"Flock","foreignBookId":"canon-999","mediaType":"ebook","monitored":true,"statistics":{"bookFileCount":0}}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Flock",
+					"titleSlug":"flock",
+					"foreignBookId":"lookup-999",
+					"author":{"authorName":"Kate Stewart","foreignAuthorId":"author-9"},
+					"editions":[{"id":1,"foreignEditionId":"edition-1","title":"Flock","format":"Kindle Edition","links":null}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":11,"name":"Any"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":22,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":33,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			added = true
+			// Chaptarr resolves the submitted lookup id to its own canonical
+			// work id at creation time.
+			_, _ = w.Write([]byte(`{"id":51,"title":"Flock","foreignBookId":"canon-999","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "lookup-999",
+		Title:      "Flock",
+		BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if resp.CanonicalForeignID != "canon-999" {
+		t.Fatalf("canonical_foreign_id = %q, want canon-999", resp.CanonicalForeignID)
+	}
+
+	var recordID int
+	if err := svc.db.QueryRow(
+		"SELECT COALESCE(book_record_id, 0) FROM request_log WHERE foreign_id = 'lookup-999'",
+	).Scan(&recordID); err != nil {
+		t.Fatalf("read persisted record id: %v", err)
+	}
+	if recordID != 51 {
+		t.Fatalf("book_record_id = %d, want 51", recordID)
+	}
+
+	st, err := svc.GetUserBookStatus(uid, "lookup-999")
+	if err != nil {
+		t.Fatalf("GetUserBookStatus: %v", err)
+	}
+	if st.BookFormats[BookFormatEbook] != StatusRequested {
+		t.Fatalf("ebook = %q, want requested (resolved through the created record)", st.BookFormats[BookFormatEbook])
+	}
+	if st.CanonicalForeignID != "canon-999" {
+		t.Fatalf("status canonical_foreign_id = %q, want canon-999", st.CanonicalForeignID)
+	}
+}

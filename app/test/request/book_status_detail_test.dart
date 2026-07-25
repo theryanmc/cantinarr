@@ -402,6 +402,18 @@ void main() {
       expect(d.isRequestable(BookRequestFormat.audiobook), isFalse);
     });
 
+    test('a canonical foreign id is surfaced and survives ownership overlay',
+        () async {
+      final d = await _service({
+        'status': 'requested',
+        'book_formats': {'ebook': 'requested'},
+        'canonical_foreign_id': '  canon-9  ',
+      }).checkBookStatusDetail('fb');
+
+      expect(d.canonicalForeignId, 'canon-9');
+      expect(d.withOwnership(null).canonicalForeignId, 'canon-9');
+    });
+
     test('status lookup is pinned to the selected Chaptarr instance', () async {
       final adapter = _GetAdapter({'status': 'unavailable'});
       final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -440,6 +452,54 @@ void main() {
     expect(find.text('Request'), findsOneWidget);
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+  });
+
+  testWidgets('a re-keyed record reports its canonical id to the panel owner',
+      (tester) async {
+    final ids = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookFormatPanel(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: _service({
+              'status': 'requested',
+              'book_formats': {'audiobook': 'requested'},
+              'canonical_foreign_id': 'canon-1',
+            }),
+            onCanonicalForeignId: ids.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(ids, ['canon-1']);
+  });
+
+  testWidgets('a canonical id equal to the panel id is not reported',
+      (tester) async {
+    final ids = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookFormatPanel(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: _service({
+              'status': 'requested',
+              'book_formats': {'audiobook': 'requested'},
+              'canonical_foreign_id': 'fb',
+            }),
+            onCanonicalForeignId: ids.add,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(ids, isEmpty);
   });
 
   testWidgets('a confirmed request is not re-offered when live truth lags',

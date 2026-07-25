@@ -130,6 +130,26 @@ void main() {
     expect(find.text('Request'), findsNothing);
   });
 
+  testWidgets('a re-keyed record re-addresses the book by its canonical id',
+      (tester) async {
+    final adapter = _BooksAdapter();
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+
+    router.go('/detail/book/lookup-29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    // The first read goes out under the routed lookup id; the server resolves
+    // the stored record, answers with the library's canonical id, and every
+    // later read uses that id.
+    expect(adapter.statusForeignIds.first, 'lookup-29749107');
+    expect(adapter.statusForeignIds.last, '29749107');
+    // The owned digest row (canonical id) binds: the monitored audiobook reads
+    // Requested while the untouched eBook row remains the open action.
+    expect(find.text('Requested'), findsOneWidget);
+    expect(find.text('Request'), findsOneWidget);
+    expect(find.text('Not requested'), findsNothing);
+  });
+
   testWidgets('a known format stays visible beside an unknown sibling',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(
@@ -492,6 +512,7 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool bookFiles;
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
+  final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
   final _requestedFormats = <String, String>{};
 
@@ -564,6 +585,9 @@ class _BooksAdapter implements HttpClientAdapter {
       statusInstanceIds.add(
         options.queryParameters['instance_id'].toString(),
       );
+      statusForeignIds.add(
+        options.queryParameters['foreign_id'].toString(),
+      );
       body = switch (options.queryParameters['foreign_id']) {
         '29749107' => {
             'status': 'requested',
@@ -571,6 +595,13 @@ class _BooksAdapter implements HttpClientAdapter {
               'audiobook': 'requested',
               ..._requestedFormats,
             },
+          },
+        // A request logged under a metadata lookup id whose created record
+        // Chaptarr filed under the canonical library id above.
+        'lookup-29749107' => {
+            'status': 'requested',
+            'book_formats': {'audiobook': 'requested'},
+            'canonical_foreign_id': '29749107',
           },
         '555' => {
             'status': partiallyUnknownStatus ? 'partial' : 'requested',
