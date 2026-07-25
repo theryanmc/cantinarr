@@ -27,9 +27,11 @@ const (
 	CategoryNewMovie        = "new_movie"
 	CategoryNewEpisode      = "new_episode"
 	// CategoryNewBook tells users a Chaptarr book import landed. On by
-	// default, but scoped: only admins and users granted the instance the
-	// import landed on are eligible (usersOptedIntoNewBook), because a
-	// chaptarr grant is the books access model.
+	// default, but scoped per instance (usersOptedIntoNewBook): the audience
+	// is the users assigned to the instance the import landed on — a chaptarr
+	// assignment is the books access model, and it scopes admins too, so a
+	// household running one library per person is not cross-paged. Only an
+	// admin with no books assignment at all hears every instance.
 	CategoryNewBook = "new_book"
 	// CategoryIssueCreated notifies admins of a new AI-remediation issue
 	// (user-reported or auto-detected). Admin-scoped, on by default.
@@ -166,11 +168,17 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 	return s.queryUserIDs(query)
 }
 
-// usersOptedIntoNewBook returns the ids of every user opted into new_book who
-// can also see the given Chaptarr instance: admins (implicit access to every
-// instance) and users granted this instance via their per-user default row.
-// Book availability is per-instance truth, so unlike the other new-content
-// categories the audience is scoped to the instance the import landed on.
+// usersOptedIntoNewBook returns the ids of every user opted into new_book
+// whose book library is the given Chaptarr instance. Book availability is
+// per-instance truth, and Chaptarr instances are per-person libraries, so
+// unlike the other new-content categories the audience follows the assignment
+// row — for admins too: "ready to read" is a call to action for the person
+// who will read it, and an admin running a sibling library must not be paged
+// for every import in someone else's (their oversight lives in the
+// request/issue categories). One deliberate exception keeps the pre-existing
+// behavior: an admin with no books assignment at all browses Books through
+// the default-instance fallback, so they keep hearing every instance rather
+// than being silently muted by a screen they never visited.
 func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
 	col := categoryColumn[CategoryNewBook]
 	def := 0
@@ -182,9 +190,12 @@ func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
 		`SELECT u.id FROM users u
 		 LEFT JOIN notification_prefs p ON p.user_id = u.id
 		 WHERE COALESCE(p.%s, %d) = 1
-		   AND (u.role = 'admin' OR EXISTS (
+		   AND (EXISTS (
 		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.instance_id = ?))`,
+		     WHERE d.user_id = u.id AND d.instance_id = ?)
+		   OR (u.role = 'admin' AND NOT EXISTS (
+		     SELECT 1 FROM user_default_instances d
+		     WHERE d.user_id = u.id AND d.service_type = 'chaptarr')))`,
 		col.column, def,
 	)
 	return s.queryUserIDs(query, instanceID)

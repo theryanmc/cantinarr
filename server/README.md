@@ -445,7 +445,7 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `request_pending` | on | admins | a new request needs review (badge = queue depth) |
 | `new_movie` | on | everyone | a movie finishes importing (collapse-keyed per title) |
 | `new_episode` | on | everyone | new episode(s) import for a series |
-| `new_book` | on | admins + that instance's grantees | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
+| `new_book` | on | that instance's assigned users — an assignment scopes admins too; an admin with no books assignment hears every instance | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
 | `issue_created` | on | admins | a tracked problem becomes actionable after the quiet recovery window, or durable status proof remains unavailable |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval |
 | `plex_access_request` | on | admins | a user shared their Plex email for a server invite (collapse-keyed per user; body says whether auto-invite already handled it) |
