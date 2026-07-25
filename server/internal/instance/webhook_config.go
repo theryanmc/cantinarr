@@ -68,7 +68,7 @@ func (h *Handler) ConfigureWebhook(w http.ResponseWriter, r *http.Request) {
 		// problem, anything else names the rejected setting.
 		hint := ""
 		if strings.Contains(err.Error(), "status 400") {
-			hint = fmt.Sprintf(" (the arr tests the webhook when saving; the callback %s must be reachable from the arr's own network — not from browsers)", callbackURL)
+			hint = fmt.Sprintf(" (the arr tests the webhook during configuration; the callback %s must be reachable from the arr's own network — not from browsers)", callbackURL)
 		}
 		log.Printf("instance: configure %s webhook for %s failed: %v (callback %s)", inst.ServiceType, instanceID, err, callbackURL)
 		errorBody, encodeErr := json.Marshal(map[string]string{
@@ -222,7 +222,12 @@ func (c *arrConfigurationClient) upsertWebhook(ctx context.Context, serviceType,
 	}
 
 	if current == nil {
-		if err := c.doJSON(ctx, http.MethodPost, base, template, nil); err != nil {
+		// The callback is constructed by the Cantinarr server rather than accepted
+		// as an arbitrary URL from the app. A private/cluster-local origin is
+		// therefore an intentional, trusted destination. Servarr lineage APIs
+		// report those destinations as warnings and require forceSave to acknowledge
+		// them; real validation errors and the provider's callback test still fail.
+		if err := c.doJSON(ctx, http.MethodPost, base+"?forceSave=true", template, nil); err != nil {
 			return "", err
 		}
 		return "created", nil
@@ -233,7 +238,14 @@ func (c *arrConfigurationClient) upsertWebhook(ctx context.Context, serviceType,
 	}
 	template["id"] = id
 	resourcePath := base + "/" + strconv.FormatInt(id, 10)
-	if err := c.doJSON(ctx, http.MethodPut, resourcePath, template, nil); err != nil {
+	// A forced update skips the lineage controller's built-in provider test.
+	// Test the exact updated resource explicitly first so forceSave acknowledges
+	// warning-severity private origins without turning reachability failures into
+	// apparent success.
+	if err := c.doJSON(ctx, http.MethodPost, base+"/test?forceTest=true", template, nil); err != nil {
+		return "", err
+	}
+	if err := c.doJSON(ctx, http.MethodPut, resourcePath+"?forceSave=true", template, nil); err != nil {
 		return "", err
 	}
 	return "updated", nil
