@@ -96,6 +96,12 @@ class MediaResultItem {
   final String? overview;
   final String? mediaType;
 
+  /// Book identity/artwork: books have no TMDB id ([id] stays 0). [foreignId]
+  /// is the Chaptarr foreignBookId the detail route keys on and [posterUrl] is
+  /// an absolute external cover URL (used verbatim instead of a TMDB path).
+  final String? foreignId;
+  final String? posterUrl;
+
   const MediaResultItem({
     required this.id,
     required this.title,
@@ -104,17 +110,21 @@ class MediaResultItem {
     this.voteAverage,
     this.overview,
     this.mediaType,
+    this.foreignId,
+    this.posterUrl,
   });
 
   factory MediaResultItem.fromJson(Map<String, dynamic> json) =>
       MediaResultItem(
-        id: json['id'] as int,
+        id: json['id'] as int? ?? 0,
         title: json['title'] as String,
         year: json['year'] as String?,
         posterPath: json['poster_path'] as String?,
         voteAverage: (json['vote_average'] as num?)?.toDouble(),
         overview: json['overview'] as String?,
         mediaType: json['media_type'] as String?,
+        foreignId: json['foreign_id'] as String?,
+        posterUrl: json['poster_url'] as String?,
       );
 }
 

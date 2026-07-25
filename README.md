@@ -12,7 +12,7 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 │                                                              │
 │  ┌──────────┐ ┌───────────┐ ┌─────────┐ ┌────────────────┐   │
 │  │ Auth/JWT │ │ Requests  │ │ Issues +│ │ AI Chat        │   │
-│  │ Passkeys │ │+ Approvals│ │ AI Agent│ │ + 33 AI Tools  │   │
+│  │ Passkeys │ │+ Approvals│ │ AI Agent│ │ + 34 AI Tools  │   │
 │  └──────────┘ └─────┬─────┘ └─────────┘ └────────────────┘   │
 │                     │                                        │
 │  ┌──────────────────┴───────────────────┐  ┌──────────────┐  │

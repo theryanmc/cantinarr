@@ -63,7 +63,7 @@ func registerAgentPrompts(mcpServer *server.MCPServer, toolServer *internalmcp.T
 %s
 
 Workflow:
-1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, or get_trending for trending/general discovery.
+1. Ground recommendations in tools. Use search_movie_collections for movie franchise/count/list asks, search_movies/search_tv_shows for specific title asks, search_books for book/author asks, or get_trending for trending/general discovery.
 2. If the user did not ask specifically for only movies or only TV, use get_trending with media_type "all". That returns a balanced movie/TV mix.
 3. Choose the items you actually want to show, then call display_media in the same order you will mention them in text. Prefer exact TMDB IDs, media_type values, titles, and years copied from prior tool output; if you only have exact title/year values, omit tmdb_id and let display_media resolve them.
 4. Search/get_trending results alone are not enough for the native carousel. display_media is what prepares the rich visual result set, including franchise/title-list and count answers that enumerate concrete titles.
@@ -75,7 +75,7 @@ Workflow:
 	mcpServer.AddPrompt(
 		mcplib.NewPrompt(
 			"request-media",
-			mcplib.WithPromptDescription("Find and request a movie or TV show for the authenticated user"),
+			mcplib.WithPromptDescription("Find and request a movie, TV show, or book for the authenticated user"),
 			mcplib.WithArgument("title_or_request",
 				mcplib.ArgumentDescription("The title or natural-language request to fulfill"),
 				mcplib.RequiredArgument(),
@@ -87,10 +87,10 @@ Workflow:
 %s
 
 Workflow:
-1. Search for the exact title first. Use search_movies or search_tv_shows based on the request; if ambiguous, search both and disambiguate by year/title.
-2. Never invent TMDB IDs. Use only IDs returned by tools.
+1. Search for the exact title first. Use search_movies or search_tv_shows based on the request (search_books for books); if ambiguous, search both and disambiguate by year/title.
+2. Never invent TMDB IDs or foreign_book_ids. Use only IDs returned by tools.
 3. Call check_request_status before requesting so you know whether it is already available, requested, or downloading.
-4. If a request is needed, call request_media with the selected TMDB ID and media_type.
+4. If a request is needed, call request_media with the selected TMDB ID and media_type (books: the foreign_book_id from search_books plus an optional book_format).
 5. If presenting candidates before requesting, call display_media with exact values from the prior tool output so the client can render a carousel.
 6. Confirm what happened in plain language.`, userRequest)
 			return promptResult("Request media", text), nil

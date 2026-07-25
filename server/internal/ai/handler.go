@@ -389,6 +389,9 @@ func (h *Handler) configuredServices() []string {
 	if h.toolServer.GetSonarr() != nil {
 		services = append(services, "Sonarr (TV)")
 	}
+	if h.toolServer.GetChaptarr() != nil {
+		services = append(services, "Chaptarr (books)")
+	}
 	return services
 }
 
