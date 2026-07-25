@@ -12,6 +12,13 @@ import '../../discover/ui/category_row.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/logic/tv_discover_provider.dart';
+import '../logic/library_rows.dart';
+
+/// How far back the "Recently Downloaded" row looks. Sonarr writes one import
+/// record per episode, so a season pack spends a dozen of these on one series —
+/// the page has to be deep enough that a single big import does not crowd every
+/// other show out of the row.
+const _importHistoryPageSize = 100;
 
 /// Dashboard TV tab: discovery rows + Sonarr library rows.
 class DashboardTvTab extends ConsumerStatefulWidget {
@@ -64,20 +71,33 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     final service =
         SonarrApiService(backendDio: backendDio, instanceId: defaultSonarr.id);
 
-    List<SonarrSeries> series = [];
+    // Both rows are the library joined to a second source, so a failed series
+    // fetch leaves nothing to join and the dependent calls are skipped. The
+    // rows keep what they are already showing rather than blanking the landing
+    // screen over one transient error.
+    final List<SonarrSeries> series;
     try {
       series = await service.getSeries();
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingLibrary = false);
+      return;
+    }
+    if (!mounted) return;
+
+    try {
+      final imports = await service.getHistory(
+        pageSize: _importHistoryPageSize,
+        eventType: SonarrHistoryRecord.importedEventTypeId,
+      );
       if (!mounted) return;
 
-      // "Recently Downloaded" = series with downloaded episodes, sorted by percent complete
-      final downloaded = series.where((s) => s.percentComplete > 0).toList()
-        ..sort((a, b) => b.percentComplete.compareTo(a.percentComplete));
-
       setState(() {
-        _recentlyDownloaded = downloaded.take(10).toList();
+        _recentlyDownloaded = recentlyDownloadedSeries(series, imports.records);
       });
     } catch (_) {
-      // Series fetch failed; leave _recentlyDownloaded empty.
+      // History fetch failed. A series record carries no import date, so there
+      // is no second source to fall back to — leave the row as it is rather
+      // than ordering it by something that is not recency.
     }
 
     try {
@@ -88,19 +108,11 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
       );
       if (!mounted) return;
 
-      // "Airing Next" = unique series from calendar entries
-      final airingSeriesIds = calendarEntries
-          .map((e) => e['seriesId'] as int?)
-          .whereType<int>()
-          .toSet();
-      final airingNext =
-          series.where((s) => airingSeriesIds.contains(s.id)).toList();
-
       setState(() {
-        _airingNext = airingNext.take(10).toList();
+        _airingNext = airingNextSeries(series, calendarEntries);
       });
     } catch (_) {
-      // Calendar fetch failed; leave _airingNext empty.
+      // Calendar fetch failed; leave _airingNext as it is.
     }
 
     if (mounted) setState(() => _isLoadingLibrary = false);

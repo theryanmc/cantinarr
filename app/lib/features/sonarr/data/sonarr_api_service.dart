@@ -187,16 +187,21 @@ class SonarrApiService {
     });
   }
 
-  /// Fetches a page of history events, newest first.
+  /// Fetches a page of history events, newest first. Pass [eventType] (one of
+  /// the ids on [SonarrHistoryRecord]) to narrow the page to a single kind of
+  /// event, so a caller after imports does not spend the page on grabs and
+  /// failures.
   Future<SonarrHistoryPage> getHistory({
     int page = 1,
     int pageSize = 50,
+    int? eventType,
   }) async {
     final resp = await _dio.get('$_basePath/history', queryParameters: {
       'page': page,
       'pageSize': pageSize,
       'sortKey': 'date',
       'sortDirection': 'descending',
+      if (eventType != null) 'eventType': eventType,
     });
     return SonarrHistoryPage.fromJson(resp.data as Map<String, dynamic>);
   }
