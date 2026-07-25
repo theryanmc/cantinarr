@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     season_scope TEXT,
     quality_profile_id INTEGER,
     book_format TEXT,
+    book_record_id INTEGER,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
@@ -635,6 +636,13 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN arr_added_at DATETIME"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
+		// The numeric Chaptarr record id a fulfilled book-format request created
+		// or monitored. Metadata refreshes can re-key a record's foreignBookId
+		// away from the id the request was logged under; the record id is the
+		// arr-native identity that survives, so status reads can keep resolving
+		// live truth (and heal to "not requested" only when the record is truly
+		// gone). NULL for pending/denied rows and pre-migration history.
+		{alter: "ALTER TABLE request_log ADD COLUMN book_record_id INTEGER"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

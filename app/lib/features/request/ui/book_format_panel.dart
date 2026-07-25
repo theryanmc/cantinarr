@@ -29,6 +29,11 @@ class BookFormatPanel extends StatefulWidget {
 
   final FutureOr<void> Function()? onRequestCompleted;
 
+  /// Reports the library's own foreignBookId when the server resolved this
+  /// book's request through a record Chaptarr filed under a different id.
+  /// The owner should re-address the book by it (and rebuild this panel).
+  final ValueChanged<String>? onCanonicalForeignId;
+
   const BookFormatPanel({
     super.key,
     required this.foreignId,
@@ -41,6 +46,7 @@ class BookFormatPanel extends StatefulWidget {
     this.ebookDownload,
     this.audiobookDownload,
     this.onRequestCompleted,
+    this.onCanonicalForeignId,
   });
 
   @override
@@ -149,6 +155,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         _loading = false;
       });
       _syncPendingRecheck();
+      final canonical = detail.canonicalForeignId ?? '';
+      if (canonical.isNotEmpty && canonical != widget.foreignId) {
+        widget.onCanonicalForeignId?.call(canonical);
+      }
     } finally {
       _activeChecks--;
     }

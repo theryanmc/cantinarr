@@ -64,12 +64,19 @@ class BookRequestStatusDetail {
   final bool isKnown;
   final BookStatusUnknownReason? unknownReason;
 
+  /// The foreignBookId the library files this book under today, when it
+  /// differs from the id the status lookup used. Chaptarr can re-key a created
+  /// record to its own canonical id; the server resolves the request through
+  /// the stored record id and reports the live id here so screens can follow.
+  final String? canonicalForeignId;
+
   const BookRequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.formats = const {},
     this.ownership,
     this.isKnown = true,
     this.unknownReason,
+    this.canonicalForeignId,
   });
 
   BookStatusUnknownReason? get effectiveUnknownReason =>
@@ -90,6 +97,7 @@ class BookRequestStatusDetail {
         unknownReason: !ownershipStatusKnown
             ? BookStatusUnknownReason.formatNeedsAttention
             : unknownReason,
+        canonicalForeignId: canonicalForeignId,
       );
 
   /// User-facing state precedence: a file is Available; an active queue item is
@@ -544,11 +552,17 @@ class RequestService {
           status != RequestStatus.unavailable) {
         isKnown = false;
       }
+      final rawCanonical = data['canonical_foreign_id'];
+      final canonical =
+          rawCanonical is String && rawCanonical.trim().isNotEmpty
+              ? rawCanonical.trim()
+              : null;
       return BookRequestStatusDetail(
         status: status ?? RequestStatus.unavailable,
         formats: formats,
         isKnown: isKnown,
         unknownReason: unknownReason,
+        canonicalForeignId: canonical,
       );
     } catch (_) {
       return const BookRequestStatusDetail(isKnown: false);

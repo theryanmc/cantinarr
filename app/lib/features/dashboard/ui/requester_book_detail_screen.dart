@@ -59,6 +59,14 @@ class _RequesterBookDetailScreenState
   int _recordsLoadGeneration = 0;
   String? _instanceId;
 
+  /// The foreignBookId the library files this book under, when the server
+  /// reported it differs from [widget.foreignId] (Chaptarr re-keys created
+  /// records to its own canonical ids). Ownership binding, live records, and
+  /// the format panel all follow this id once known.
+  String? _canonicalForeignId;
+
+  String get _effectiveForeignId => _canonicalForeignId ?? widget.foreignId;
+
   @override
   void initState() {
     super.initState();
@@ -98,6 +106,7 @@ class _RequesterBookDetailScreenState
     _metadata = widget.initialBook;
     _chaptarrRecords = const [];
     _filesByBook = const {};
+    _canonicalForeignId = null;
     _metadataLoading = widget.initialBook == null &&
         (widget.titleHint?.trim().isNotEmpty ?? false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -188,7 +197,7 @@ class _RequesterBookDetailScreenState
       final books = await service.getBooks();
       final matches = books
           .where((book) =>
-              book.id > 0 && book.foreignBookId == widget.foreignId)
+              book.id > 0 && book.foreignBookId == _effectiveForeignId)
           .toList(growable: false)
         ..sort((a, b) => a.format.index.compareTo(b.format.index));
       final filesByBook = <int, List<ChaptarrBookFile>>{};
@@ -218,6 +227,17 @@ class _RequesterBookDetailScreenState
     } catch (_) {
       // A transient Chaptarr failure keeps the optional link hidden.
     }
+  }
+
+  /// Follows the library's canonical id once the server reports one: the
+  /// digest row can then bind, live records resolve, and the format panel
+  /// re-keys onto the id every future read will agree on.
+  void _onCanonicalForeignId(String canonical) {
+    if (!mounted || canonical.isEmpty || canonical == _effectiveForeignId) {
+      return;
+    }
+    setState(() => _canonicalForeignId = canonical);
+    _resolveChaptarrRecords(_loadGeneration);
   }
 
   Future<void> _onRequestCompleted() async {
@@ -283,7 +303,7 @@ class _RequesterBookDetailScreenState
     OwnedTitle? owned;
     for (final title in titles) {
       if (title.foreignBookId.isNotEmpty &&
-          title.foreignBookId == widget.foreignId) {
+          title.foreignBookId == _effectiveForeignId) {
         owned = title;
         break;
       }
@@ -408,13 +428,14 @@ class _RequesterBookDetailScreenState
           ],
           const SizedBox(height: 24),
           BookFormatPanel(
-            foreignId: widget.foreignId,
+            foreignId: _effectiveForeignId,
             title: title,
             instanceId: instanceId,
             service: _requestService,
             ownership: ownership,
             ownershipStatusKnown: owned?.statusKnown ?? true,
             refreshTick: requestRefreshTick,
+            onCanonicalForeignId: _onCanonicalForeignId,
             ebookDownload: !downloadsEnabled ||
                     instanceId == null ||
                     ebookFiles.isEmpty
