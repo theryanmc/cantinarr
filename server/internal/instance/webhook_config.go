@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -56,19 +57,29 @@ func (h *Handler) ConfigureWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := newArrConfigurationClient(inst.URL, inst.APIKey)
+	client := newArrConfigurationClient(inst.URL, inst.APIKey, token)
 	action, err := client.upsertWebhook(r.Context(), inst.ServiceType, callbackURL, token)
 	if err != nil {
-		// arrConfigurationClient errors contain method/path/status only, never a
-		// response body or the request payload carrying the callback credential.
-		// A 400 on the notification save usually means the arr tested the
-		// webhook and could not reach the callback — the one URL that must be
-		// reachable from the arr's own network, not from browsers.
+		// arrConfigurationClient errors carry method/path/status plus, on a
+		// validation failure, the arr's own errorMessage — extracted from the
+		// narrow lineage validation shape only, never the raw body (which can
+		// echo submitted credentials) — so the admin sees the arr's actual
+		// verdict: "Unable to send test message: …" is a callback-reachability
+		// problem, anything else names the rejected setting.
 		hint := ""
 		if strings.Contains(err.Error(), "status 400") {
-			hint = " (the arr tests the webhook when saving; check that the callback URL derived from CANTINARR_PUBLIC_URL is reachable from the arr's own network)"
+			hint = fmt.Sprintf(" (the arr tests the webhook when saving; the callback %s must be reachable from the arr's own network — not from browsers)", callbackURL)
 		}
-		http.Error(w, fmt.Sprintf(`{"error":"failed to configure %s webhook: %s%s"}`, inst.ServiceType, err, hint), http.StatusBadGateway)
+		log.Printf("instance: configure %s webhook for %s failed: %v (callback %s)", inst.ServiceType, instanceID, err, callbackURL)
+		errorBody, encodeErr := json.Marshal(map[string]string{
+			"error": fmt.Sprintf("failed to configure %s webhook: %s%s", inst.ServiceType, err, hint),
+		})
+		if encodeErr != nil {
+			errorBody = []byte(`{"error":"failed to configure webhook"}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(errorBody)
 		return
 	}
 	if err := h.store.PromoteWebhookToken(instanceID, token); err != nil {
@@ -135,12 +146,26 @@ type arrConfigurationClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	// redact holds the secrets this client's requests carry (instance API key,
+	// candidate webhook credential); any error detail extracted from a response
+	// has every occurrence replaced before it can reach a log or an admin.
+	redact []string
 }
 
-func newArrConfigurationClient(baseURL, apiKey string) *arrConfigurationClient {
+func newArrConfigurationClient(baseURL, apiKey string, redact ...string) *arrConfigurationClient {
+	secrets := make([]string, 0, len(redact)+1)
+	if apiKey != "" {
+		secrets = append(secrets, apiKey)
+	}
+	for _, s := range redact {
+		if s != "" {
+			secrets = append(secrets, s)
+		}
+	}
 	return &arrConfigurationClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
+		redact:  secrets,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 			// Never carry an instance API key to a redirect target.
@@ -403,6 +428,71 @@ func notificationResourceID(resource map[string]any, listPath string) (int64, er
 	return 0, fmt.Errorf("GET %s returned an invalid managed Webhook id", listPath)
 }
 
+// arrValidationDetailMaxLen bounds how much extracted error text may travel
+// into an error string — enough for a few validation failures, never a body.
+const arrValidationDetailMaxLen = 300
+
+// arrValidationDetail extracts the arr's own verdict from an error response.
+// Only the narrow, well-known lineage shapes are read: the validation-failure
+// array's propertyName + errorMessage, or a top-level message/error string.
+// Arbitrary body content is never reflected — in particular attemptedValue,
+// which echoes submitted field values (the webhook credential among them), is
+// deliberately ignored. An unrecognized body yields "".
+func arrValidationDetail(body []byte) string {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+
+	var failures []map[string]any
+	if err := decoder.Decode(&failures); err == nil {
+		var parts []string
+		for _, failure := range failures {
+			message, _ := failure["errorMessage"].(string)
+			if message == "" {
+				continue
+			}
+			if property, _ := failure["propertyName"].(string); property != "" {
+				message = property + ": " + message
+			}
+			parts = append(parts, message)
+		}
+		return strings.Join(parts, "; ")
+	}
+
+	var envelope map[string]any
+	decoder = json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&envelope); err == nil {
+		if message, _ := envelope["message"].(string); message != "" {
+			return message
+		}
+		if message, _ := envelope["error"].(string); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
+// sanitizeDetail makes extracted error text safe to carry: secrets this
+// client's requests held are redacted, control characters stripped, whitespace
+// collapsed, and the whole thing bounded.
+func (c *arrConfigurationClient) sanitizeDetail(detail string) string {
+	for _, secret := range c.redact {
+		detail = strings.ReplaceAll(detail, secret, "[redacted]")
+	}
+	detail = strings.Join(strings.Fields(detail), " ")
+	cleaned := make([]rune, 0, len(detail))
+	for _, r := range detail {
+		if unicode.IsControl(r) {
+			continue
+		}
+		cleaned = append(cleaned, r)
+	}
+	if len(cleaned) > arrValidationDetailMaxLen {
+		cleaned = append(cleaned[:arrValidationDetailMaxLen], '…')
+	}
+	return string(cleaned)
+}
+
 func (c *arrConfigurationClient) doJSON(ctx context.Context, method, requestPath string, body, out any) error {
 	var requestBody io.Reader
 	if body != nil {
@@ -427,7 +517,10 @@ func (c *arrConfigurationClient) doJSON(ctx context.Context, method, requestPath
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxArrConfigurationBytes))
+		encoded, _ := io.ReadAll(io.LimitReader(resp.Body, maxArrConfigurationBytes))
+		if detail := c.sanitizeDetail(arrValidationDetail(encoded)); detail != "" {
+			return fmt.Errorf("%s %s returned status %d: %s", method, requestPath, resp.StatusCode, detail)
+		}
 		return fmt.Errorf("%s %s returned status %d", method, requestPath, resp.StatusCode)
 	}
 	if out == nil {

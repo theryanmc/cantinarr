@@ -489,3 +489,129 @@ func TestConfiguredPublicURLWinsOverRequestOrigin(t *testing.T) {
 		t.Fatalf("callback URL = %q", got)
 	}
 }
+
+// TestConfigureWebhookSurfacesArrTestFailure pins the diagnosability of the
+// most common configure failure: the arr saves a webhook only after testing
+// it, and its 400 carries the verdict ("Unable to send test message: …").
+// That verdict must reach the admin — extracted from the validation shape
+// only, with the submitted credential redacted even when the arr echoes it
+// back in attemptedValue — together with the exact callback URL to check.
+func TestConfigureWebhookSurfacesArrTestFailure(t *testing.T) {
+	var sentToken string
+	base := "/api/v1/notification"
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == base+"/schema":
+			_ = json.NewEncoder(w).Encode([]any{webhookSchema("chaptarr")})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == base:
+			var resource map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&resource)
+			for _, raw := range resource["fields"].([]any) {
+				field, _ := raw.(map[string]any)
+				if name, _ := field["name"].(string); strings.EqualFold(name, "password") {
+					sentToken, _ = field["value"].(string)
+				}
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{
+					"propertyName":   "Url",
+					"errorMessage":   "Unable to send test message: Connection refused",
+					"attemptedValue": sentToken,
+					"severity":       "error",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "chaptarr", arr.URL)
+	rec := postWebhook(t, NewHandler(store, nil), inst.ID)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Unable to send test message: Connection refused") {
+		t.Errorf("error omitted the arr's verdict: %s", body)
+	}
+	if !strings.Contains(body, "/api/webhooks/arr/") {
+		t.Errorf("error omitted the callback URL to check: %s", body)
+	}
+	if sentToken == "" {
+		t.Fatal("stub captured no webhook credential")
+	}
+	if strings.Contains(body, sentToken) {
+		t.Fatal("error reflected the webhook credential echoed by the arr")
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("error body is not valid JSON despite carrying arr text: %v — %s", err, body)
+	}
+}
+
+// TestConfigureWebhookErrorOmitsUnrecognizedBody pins that only the known
+// validation shapes are ever extracted: an arbitrary 400 body (HTML, secrets
+// under other keys) is not reflected, and the reachability hint still guides.
+func TestConfigureWebhookErrorOmitsUnrecognizedBody(t *testing.T) {
+	const upstreamSecret = "html-body-secret-sentinel"
+	base := "/api/v3/notification"
+	arr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == base+"/schema":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]any{webhookSchema("radarr")})
+		case r.Method == http.MethodGet && r.URL.Path == base:
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == base:
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("<html>" + upstreamSecret + "</html>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer arr.Close()
+
+	store := newTestStore(t)
+	inst := mkArrInstance(t, store, "radarr", arr.URL)
+	rec := postWebhook(t, NewHandler(store, nil), inst.ID)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, upstreamSecret) {
+		t.Fatal("error reflected an unrecognized arr response body")
+	}
+	if !strings.Contains(body, "the arr tests the webhook when saving") {
+		t.Errorf("400 without extractable detail lost the reachability hint: %s", body)
+	}
+}
+
+// TestArrValidationDetailReadsOnlyKnownShapes pins the extractor's contract.
+func TestArrValidationDetailReadsOnlyKnownShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"validation array", `[{"propertyName":"Url","errorMessage":"Unable to send test message: timeout","attemptedValue":"secret"}]`,
+			"Url: Unable to send test message: timeout"},
+		{"array without property", `[{"errorMessage":"Invalid"}]`, "Invalid"},
+		{"multiple failures", `[{"errorMessage":"A"},{"errorMessage":"B"}]`, "A; B"},
+		{"message envelope", `{"message":"NotFound"}`, "NotFound"},
+		{"error envelope", `{"error":"boom"}`, "boom"},
+		{"secret under other key", `{"apiKey":"secret-sentinel"}`, ""},
+		{"html", `<html>oops</html>`, ""},
+		{"empty", ``, ""},
+	}
+	for _, tc := range cases {
+		if got := arrValidationDetail([]byte(tc.body)); got != tc.want {
+			t.Errorf("%s: arrValidationDetail = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
