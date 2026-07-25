@@ -208,7 +208,7 @@ var toolDefinitions = []Tool{
 				"book_format": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"ebook", "audiobook", "both"},
-					"description": "Book only: which format to request (default: the user's configured preference)",
+					"description": "Book only: which format to request. Omitting it defaults to \"both\", which requests the ebook AND the audiobook as two separate records — ask the user which format they want when the conversation doesn't make it clear.",
 				},
 				"title": map[string]interface{}{
 					"type":        "string",
@@ -692,6 +692,9 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 		data, _ := json.Marshal(status)
 		return &ToolResult{Text: string(data)}, nil
 	}
+	if params.TmdbID <= 0 {
+		return &ToolResult{Text: "A movie/TV status check requires the tmdb_id from search results."}, nil
+	}
 	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
 	if err != nil {
 		return nil, err
@@ -733,6 +736,9 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 	if params.MediaType == "book" && strings.TrimSpace(params.ForeignID) == "" {
 		return &ToolResult{Text: "A book request requires the foreign_id from search_books."}, nil
 	}
+	if params.MediaType != "book" && params.TmdbID <= 0 {
+		return &ToolResult{Text: "A movie/TV request requires the tmdb_id from search results."}, nil
+	}
 	resp, err := s.request.CreateMediaRequest(userID, &request.CreateRequest{
 		TmdbID:           params.TmdbID,
 		MediaType:        params.MediaType,
@@ -773,15 +779,25 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 		params.Items = params.Items[:maxDisplayMediaItems]
 	}
 
-	// Book verification re-runs the user's scoped lookup once and matches by
-	// foreign id, so a model-invented id or title can never reach the carousel.
-	var bookResults []request.BookSearchResult
-	bookResultsFor := func(query string) []request.BookSearchResult {
-		results, err := s.request.SearchBooksForUser(userID, query)
-		if err != nil {
-			return nil
+	// Book verification matches foreign ids against the user's OWN lookups —
+	// first the cache their recent search_books call populated (no network),
+	// then at most one live lookup per distinct title — so a model-invented id
+	// or title can never reach the carousel. Lookup outcomes are memoized per
+	// title so ten items cost at most a few Chaptarr round-trips, not ten.
+	type bookLookup struct {
+		results []request.BookSearchResult
+		err     error
+	}
+	bookLookups := map[string]bookLookup{}
+	bookResultsFor := func(title string) bookLookup {
+		key := strings.ToLower(strings.TrimSpace(title))
+		if cached, ok := bookLookups[key]; ok {
+			return cached
 		}
-		return results
+		results, err := s.request.SearchBooksForUser(userID, title)
+		looked := bookLookup{results: results, err: err}
+		bookLookups[key] = looked
+		return looked
 	}
 
 	items := make([]MediaResultItem, 0, len(params.Items))
@@ -802,24 +818,29 @@ func (s *ToolServer) displayMedia(input json.RawMessage, userID int64) (*ToolRes
 				failures = append(failures, fmt.Sprintf("book %q: missing foreign_id; copy it from search_books", p.Title))
 				continue
 			}
-			var match *request.BookSearchResult
-			for i := range bookResults {
-				if bookResults[i].ForeignBookID == foreignID {
-					match = &bookResults[i]
-					break
-				}
-			}
-			if match == nil {
-				bookResults = append(bookResults, bookResultsFor(p.Title)...)
-				for i := range bookResults {
-					if bookResults[i].ForeignBookID == foreignID {
-						match = &bookResults[i]
+			match, cached := s.request.CachedBookByForeignID(userID, foreignID)
+			var lookupErr error
+			if !cached {
+				looked := bookResultsFor(p.Title)
+				lookupErr = looked.err
+				for i := range looked.results {
+					if looked.results[i].ForeignBookID == foreignID {
+						match = &looked.results[i]
 						break
 					}
 				}
 			}
 			if match == nil {
-				failures = append(failures, fmt.Sprintf("book %q: foreign_id %s did not match a lookup for that title; copy both from search_books", p.Title, foreignID))
+				switch {
+				case errors.Is(lookupErr, request.ErrNoChaptarrAccess):
+					failures = append(failures, fmt.Sprintf("book %q: books are not available for this account", p.Title))
+				case lookupErr != nil:
+					// Host-free by construction: transport errors can embed the
+					// instance URL and this text reaches the model/chat.
+					failures = append(failures, fmt.Sprintf("book %q: the book lookup failed; retry without changing the foreign_id", p.Title))
+				default:
+					failures = append(failures, fmt.Sprintf("book %q: foreign_id %s did not match a lookup for that title; copy both from search_books", p.Title, foreignID))
+				}
 				continue
 			}
 			year := ""

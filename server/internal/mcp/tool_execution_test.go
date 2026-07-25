@@ -1239,7 +1239,9 @@ func TestBookRequesterToolWiring(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/v1/book/lookup":
-			fmt.Fprint(w, `[{"title":"Example Book","authorName":"The Author","foreignBookId":"fb-1","year":2020,"overview":"About things.","images":[{"coverType":"cover","url":"/mediacover/1.jpg","remoteUrl":"https://covers.example.org/1.jpg"}]}]`)
+			// fb-1 carries a proper external remoteUrl; fb-2 mirrors this fork's
+			// common shape — only arr-relative cover paths, which must be dropped.
+			fmt.Fprint(w, `[{"title":"Example Book","authorName":"The Author","foreignBookId":"fb-1","year":2020,"overview":"About things.","images":[{"coverType":"cover","url":"/mediacover/1.jpg","remoteUrl":"https://covers.example.org/1.jpg"}]},{"title":"Relative Cover","foreignBookId":"fb-2","remoteCover":"/MediaCoverProxy/2.jpg","images":[{"coverType":"cover","url":"/MediaCoverProxy/2.jpg"}]}]`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1323,5 +1325,25 @@ func TestBookRequesterToolWiring(t *testing.T) {
 	if res, err := server.ExecuteTool(context.Background(), "check_request_status",
 		json.RawMessage(`{"media_type":"book"}`), callCtx); err != nil || !strings.Contains(res.Text, "requires the foreign_id") {
 		t.Fatalf("book status without foreign id = %v / %v", res, err)
+	}
+
+	// Loosening the schema's required list for books must not let a tmdb-less
+	// movie call slip into the request/status pipeline with tmdb_id=0.
+	if res, err := server.ExecuteTool(context.Background(), "request_media",
+		json.RawMessage(`{"media_type":"movie"}`), callCtx); err != nil || !strings.Contains(res.Text, "requires the tmdb_id") {
+		t.Fatalf("movie request without tmdb id = %v / %v", res, err)
+	}
+	if res, err := server.ExecuteTool(context.Background(), "check_request_status",
+		json.RawMessage(`{"media_type":"movie"}`), callCtx); err != nil || !strings.Contains(res.Text, "requires the tmdb_id") {
+		t.Fatalf("movie status without tmdb id = %v / %v", res, err)
+	}
+
+	// Arr-relative cover paths (this fork's normal lookup shape) are dropped:
+	// clients must never receive an arr-origin or relative artwork URL.
+	if !strings.Contains(string(searchJSON), `"foreign_id":"fb-2"`) {
+		t.Fatalf("relative-cover record missing from search: %s", searchJSON)
+	}
+	if strings.Contains(string(searchJSON), "MediaCoverProxy") {
+		t.Fatalf("arr-relative cover surfaced to the client: %s", searchJSON)
 	}
 }

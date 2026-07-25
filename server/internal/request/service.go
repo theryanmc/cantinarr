@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -3443,7 +3444,9 @@ func sonarrProfileExists(profiles []sonarr.QualityProfile, id int) bool {
 // BookSearchResult is one requester-facing book search hit for the AI surface:
 // the metadata needed to pick a title plus the foreignBookId every book flow
 // (request_media, check_request_status, the detail route) keys on. RemoteCover
-// is an external metadata-CDN URL — arr-origin URLs are never surfaced.
+// is best-effort artwork and only ever an absolute external URL — arr-origin
+// or relative cover paths are dropped rather than surfaced to a client (this
+// fork's lookups often carry no external cover at all, so it is usually empty).
 type BookSearchResult struct {
 	Title         string `json:"title"`
 	AuthorName    string `json:"author_name,omitempty"`
@@ -3457,6 +3460,27 @@ type BookSearchResult struct {
 // (none configured, or no per-user books grant).
 var ErrNoChaptarrAccess = errors.New("books are not available for this account")
 
+// bookSearchCacheTTL keeps just-searched results addressable by foreign id for
+// the immediate follow-up (display_media verification) without re-querying
+// Chaptarr once per displayed item.
+const bookSearchCacheTTL = 60 * time.Second
+
+// externalCoverURL returns the cover only when it is an absolute http(s) URL
+// with a real host. Instance URLs must never reach clients, and this fork
+// commonly returns arr-relative /MediaCoverProxy paths (broken server-side) in
+// cover fields, so anything else is dropped.
+func externalCoverURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	return raw
+}
+
 // SearchBooksForUser looks a query up on the user's effective Chaptarr
 // instance (their per-user grant, or the admin default for admins) — the same
 // resolution every book request uses, so the AI assistant sees exactly the
@@ -3466,7 +3490,7 @@ func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchRe
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
-	client, _, err := s.resolveChaptarr(userID, "")
+	client, instanceID, err := s.resolveChaptarr(userID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -3482,27 +3506,58 @@ func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchRe
 		if strings.TrimSpace(r.ForeignBookID) == "" {
 			continue // not addressable by any request flow
 		}
-		cover := strings.TrimSpace(r.RemoteCover)
-		if cover == "" {
-			for _, img := range r.Images {
-				if strings.TrimSpace(img.RemoteURL) != "" {
-					cover = img.RemoteURL
-					break
-				}
+		cover := externalCoverURL(r.RemoteCover)
+		for _, img := range r.Images {
+			if remote := externalCoverURL(img.RemoteURL); remote != "" {
+				cover = remote // images[].remoteUrl is the repo-preferred source
+				break
 			}
 		}
 		author := r.AuthorName
 		if author == "" && r.Author != nil {
 			author = r.Author.AuthorName
 		}
-		out = append(out, BookSearchResult{
+		result := BookSearchResult{
 			Title:         r.Title,
 			AuthorName:    author,
 			Year:          r.Year,
 			ForeignBookID: r.ForeignBookID,
 			Overview:      r.Overview,
 			RemoteCover:   cover,
-		})
+		}
+		out = append(out, result)
+		if s.libraryCache != nil {
+			if data, err := json.Marshal(result); err == nil {
+				s.libraryCache.Set(bookSearchCacheKey(instanceID, r.ForeignBookID), data, bookSearchCacheTTL)
+			}
+		}
 	}
 	return out, nil
+}
+
+func bookSearchCacheKey(instanceID, foreignID string) string {
+	return "booksearch|" + instanceID + "|" + foreignID
+}
+
+// CachedBookByForeignID returns a book the user's own recent search surfaced,
+// keyed by foreign id on their effective instance. It performs no network I/O:
+// a miss means the id was not in a recent search and the caller must re-verify
+// with a live lookup (or reject).
+func (s *Service) CachedBookByForeignID(userID int64, foreignID string) (*BookSearchResult, bool) {
+	if s.libraryCache == nil {
+		return nil, false
+	}
+	_, instanceID, err := s.resolveChaptarr(userID, "")
+	if err != nil || instanceID == "" {
+		return nil, false
+	}
+	data, ok := s.libraryCache.Get(bookSearchCacheKey(instanceID, strings.TrimSpace(foreignID)))
+	if !ok {
+		return nil, false
+	}
+	var result BookSearchResult
+	if json.Unmarshal(data, &result) != nil {
+		return nil, false
+	}
+	return &result, true
 }

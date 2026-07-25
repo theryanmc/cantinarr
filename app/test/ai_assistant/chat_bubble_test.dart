@@ -4,6 +4,9 @@ import 'package:cantinarr/features/config_changes/data/config_change_models.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+import 'package:cantinarr/core/widgets/cached_image.dart';
 
 void main() {
   testWidgets('shows media carousel while assistant message is streaming',
@@ -160,6 +163,87 @@ void main() {
       find.widgetWithText(TextButton, 'Restore previous settings'),
       findsNothing,
     );
+  });
+
+  testWidgets('book chat cards use the external cover and book detail route',
+      (tester) async {
+    String? pushedLocation;
+    final router = GoRouter(
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (_, __) => Scaffold(
+            body: ChatBubble(
+              message: ChatMessage(
+                id: 'assistant-book',
+                role: ChatRole.assistant,
+                content: 'Try this one:',
+                timestamp: DateTime(2026),
+                mediaResults: const [
+                  MediaResultItem(
+                    id: 0,
+                    title: 'Example Book',
+                    year: '2020',
+                    mediaType: 'book',
+                    foreignId: 'edition/OL123',
+                    posterUrl: 'https://covers.example.org/1.jpg',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        GoRoute(
+          path: '/detail/:type/:id',
+          builder: (_, state) {
+            pushedLocation = state.uri.toString();
+            return const Scaffold(body: SizedBox());
+          },
+        ),
+      ],
+    );
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    // The card loads the server-vetted external cover verbatim — never a
+    // TMDB URL built from a foreign id.
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, 'https://covers.example.org/1.jpg');
+
+    await tester.tap(find.text('Example Book (2020)'));
+    await tester.pumpAndSettle();
+    expect(pushedLocation, isNotNull);
+    expect(pushedLocation, contains('/detail/book/edition%2FOL123'));
+    expect(Uri.parse(pushedLocation!).queryParameters['title'], 'Example Book');
+  });
+
+  testWidgets('book chat cards without a cover fall back to the book icon',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatBubble(
+            message: ChatMessage(
+              id: 'assistant-book-2',
+              role: ChatRole.assistant,
+              content: 'Another:',
+              timestamp: DateTime(2026),
+              mediaResults: const [
+                MediaResultItem(
+                  id: 0,
+                  title: 'Coverless Book',
+                  mediaType: 'book',
+                  foreignId: 'fb-2',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, isNull);
+    expect(find.byIcon(Icons.menu_book), findsOneWidget);
   });
 }
 
