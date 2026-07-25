@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type failingTransport struct{ err error }
@@ -141,6 +142,70 @@ func TestGetImportHistoryRejectsTruncatedResult(t *testing.T) {
 	if _, err := NewClient(server.URL, "key").GetImportHistory(42, "id", 20); err == nil {
 		t.Fatal("accepted incomplete filtered history")
 	}
+}
+
+// TestGetImportHistorySinceWindowsAndProvesCompleteness pins the catch-up
+// reader's two jobs: only records dated after the cursor are returned, and
+// completeness holds exactly when the page reached past the window boundary.
+func TestGetImportHistorySinceWindowsAndProvesCompleteness(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("eventType") != "3" || q.Get("pageSize") != "3" || q.Get("sortDirection") != "descending" {
+			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalRecords":9,"records":[
+			{"id":3,"movieId":30,"eventType":"downloadFolderImported","date":"2026-07-25T12:30:00Z"},
+			{"id":2,"movieId":20,"eventType":"downloadFolderImported","date":"2026-07-25T12:10:00Z"},
+			{"id":1,"movieId":10,"eventType":"downloadFolderImported","date":"2026-07-25T11:00:00Z"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	since := mustTime(t, "2026-07-25T12:00:00Z")
+	records, complete, err := NewClient(server.URL, "key").GetImportHistorySince(since, 3)
+	if err != nil {
+		t.Fatalf("GetImportHistorySince() error = %v", err)
+	}
+	if !complete {
+		t.Fatal("a page reaching past the cursor must prove the window complete")
+	}
+	if len(records) != 2 || records[0].MovieID != 30 || records[1].MovieID != 20 {
+		t.Fatalf("in-window records = %+v, want movies 30 and 20", records)
+	}
+}
+
+// TestGetImportHistorySinceReportsUnprovenWindow pins the overflow signal: a
+// full page whose oldest record is still inside the window cannot claim it
+// enumerated everything, and callers must not treat it as a smaller truth.
+func TestGetImportHistorySinceReportsUnprovenWindow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"totalRecords":50,"records":[
+			{"id":2,"movieId":20,"eventType":"downloadFolderImported","date":"2026-07-25T12:10:00Z"},
+			{"id":1,"movieId":10,"eventType":"downloadFolderImported","date":"2026-07-25T12:05:00Z"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	since := mustTime(t, "2026-07-25T12:00:00Z")
+	records, complete, err := NewClient(server.URL, "key").GetImportHistorySince(since, 2)
+	if err != nil {
+		t.Fatalf("GetImportHistorySince() error = %v", err)
+	}
+	if complete {
+		t.Fatal("a full in-window page with more records upstream claimed completeness")
+	}
+	if len(records) != 2 {
+		t.Fatalf("in-window records = %d, want 2", len(records))
+	}
+}
+
+func mustTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse %q: %v", value, err)
+	}
+	return parsed
 }
 
 func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {

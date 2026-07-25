@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,9 +14,10 @@ import (
 // recordingContent captures ContentNotifier calls so the Chaptarr departure
 // witness can be pinned without a push gateway.
 type recordingContent struct {
-	mu     sync.Mutex
-	books  []string // "title|foreignID|instanceID|format"
-	movies []string // "title|tmdbID"
+	mu       sync.Mutex
+	books    []string // "title|foreignID|instanceID|format"
+	movies   []string // "title|tmdbID"
+	episodes []string // "seriesTitle|tmdbID"
 }
 
 func (r *recordingContent) NotifyNewMovie(title string, tmdbID int) {
@@ -23,7 +25,11 @@ func (r *recordingContent) NotifyNewMovie(title string, tmdbID int) {
 	defer r.mu.Unlock()
 	r.movies = append(r.movies, fmt.Sprintf("%s|%d", title, tmdbID))
 }
-func (r *recordingContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {}
+func (r *recordingContent) NotifyNewEpisode(seriesTitle string, tmdbID int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.episodes = append(r.episodes, fmt.Sprintf("%s|%d", seriesTitle, tmdbID))
+}
 func (r *recordingContent) NotifyNewBook(title, foreignID, instanceID, format string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -42,11 +48,20 @@ func (r *recordingContent) movieCalls() []string {
 	return append([]string(nil), r.movies...)
 }
 
+func (r *recordingContent) episodeCalls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.episodes...)
+}
+
 // chaptarrBackend is a minimal Chaptarr API double: a mutable queue plus a
-// fixed book table, recording every book lookup it serves.
+// fixed book table, recording every book lookup it serves. history holds the
+// records array for /api/v1/history; empty means no history at all, so the
+// catch-up reader sees a provably complete empty window.
 type chaptarrBackend struct {
 	mu        sync.Mutex
 	queue     string         // JSON records array for /api/v1/queue
+	history   string         // JSON records array for /api/v1/history
 	books     map[int]string // id -> JSON body for /api/v1/book/{id}
 	bookAsked []int          // ids requested via /api/v1/book/{id}
 }
@@ -59,6 +74,13 @@ func (b *chaptarrBackend) handler() http.HandlerFunc {
 		switch {
 		case r.URL.Path == "/api/v1/queue":
 			fmt.Fprintf(w, `{"records":%s}`, b.queue)
+		case r.URL.Path == "/api/v1/history":
+			records := b.history
+			if records == "" {
+				records = "[]"
+			}
+			count := strings.Count(records, `"id":`)
+			fmt.Fprintf(w, `{"page":1,"pageSize":200,"totalRecords":%d,"records":%s}`, count, records)
 		default:
 			var id int
 			if _, err := fmt.Sscanf(r.URL.Path, "/api/v1/book/%d", &id); err == nil {
@@ -77,6 +99,12 @@ func (b *chaptarrBackend) setQueue(records string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.queue = records
+}
+
+func (b *chaptarrBackend) setHistory(records string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.history = records
 }
 
 func (b *chaptarrBackend) asked() []int {

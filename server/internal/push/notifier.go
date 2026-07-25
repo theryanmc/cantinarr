@@ -324,6 +324,17 @@ const contentAlertWindow = 10 * time.Minute
 // contentAlertWindow, so it can never shorten the suppression it stores.
 const contentAlertRetention = 24 * time.Hour
 
+// contentAlertStormCap bounds how many distinct content alerts may fan out
+// within one contentAlertWindow before the rest of the burst is suppressed. It
+// is the live-path analogue of the poller's resumed-batch cap: a mass job — a
+// bulk manual import firing one webhook per title, several instances resuming
+// at once — would otherwise page every opted-in household member once per
+// title, and the only remedy a user has is a permanent category opt-out. Past
+// this rate the app's live view is the better answer. Sized above the poller's
+// per-instance resumed cap so one full resumed batch never starves a
+// concurrent organic alert; suppressed alerts are logged, never silent.
+const contentAlertStormCap = 12
+
 // claimContentAlert reports whether this content alert should send, recording it
 // so duplicates within contentAlertWindow are dropped. id is the content's
 // stable identity — the tmdb id for movies/TV, foreignBookId plus format for
@@ -367,6 +378,24 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 	if _, err := n.db.Exec(`DELETE FROM content_alert_claims WHERE claimed_at <= datetime('now', ?)`,
 		sqliteOffset(-contentAlertRetention)); err != nil {
 		n.logger.Error("push: sweep content alert claims", "err", err)
+	}
+	// Storm breaker: the claim above stays recorded (so the other witness of
+	// the same import cannot re-try it), but past the burst cap the alert
+	// itself is suppressed. Counting granted claims counts distinct content,
+	// not devices, and the count includes this claim — the first cap-many in a
+	// window deliver, the rest of the burst is dropped and logged.
+	var inWindow int
+	if err := n.db.QueryRow(`SELECT COUNT(*) FROM content_alert_claims WHERE claimed_at > datetime('now', ?)`,
+		sqliteOffset(-contentAlertWindow)).Scan(&inWindow); err != nil {
+		// Fail open, same as the claim itself: a burst slipping through beats
+		// silencing the surface on a transient database error.
+		n.logger.Error("push: count content alert window", "err", err, "category", category)
+		return true
+	}
+	if inWindow > contentAlertStormCap {
+		n.logger.Warn("push: suppressing content alert burst",
+			"category", category, "title", title, "in_window", inWindow, "cap", contentAlertStormCap)
+		return false
 	}
 	return true
 }
