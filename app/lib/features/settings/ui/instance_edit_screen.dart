@@ -109,7 +109,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'transmission';
 
   bool get _supportsWebhook =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr';
+      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
 
@@ -1433,7 +1433,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
           ),
 
-          // Webhook setup (Radarr/Sonarr, editing only). Cantinarr installs
+          // Webhook setup (source instances, editing only). Cantinarr installs
           // its own Connect record; the callback credential never reaches the
           // app or clipboard.
           if (widget.isEditing && _supportsWebhook) ...[
@@ -1446,8 +1446,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             const SizedBox(height: 8),
             Text(
               'Cantinarr can create or refresh its Connect → Webhook record in '
-              '${_serviceType == 'sonarr' ? 'Sonarr' : 'Radarr'}. Imports, '
-              'deletes and adds made there will reach Cantinarr immediately. '
+              '$_serviceLabel. ${_isChaptarr ? 'Books that finish downloading '
+                  'are announced the moment they land, instead of on the next '
+                  'check.' : 'Imports, deletes and adds made there will reach '
+                  'Cantinarr immediately.'} '
               'The callback credential stays securely on the server.',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),

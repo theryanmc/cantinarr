@@ -1077,7 +1077,9 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 // pollChaptarrInstance emits an arr_queue_changed invalidation ping whenever
 // the instance's download queue composition changes, and witnesses queue
 // departures to push new_book alerts — the same completion witness the Radarr
-// poller uses, and the only one books have (Chaptarr has no webhook path).
+// poller uses. It is the fallback witness for books: instances where the admin
+// never configured instant updates, and imports of files already on disk, which
+// the Readarr lineage does not announce over its webhook.
 // Unlike the Radarr/Sonarr pollers it does not emit per-item download_progress
 // events: Chaptarr books carry no TMDB id, which those events key on. It ends
 // with the same auto-dispatch observation pass as Radarr/Sonarr, feeding book

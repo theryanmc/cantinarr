@@ -8,6 +8,8 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `INST-001` · P0 · UI/LIVE — Create and test one valid instance of each supported type: Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, and Tautulli; verify type-specific credentials and capabilities work.
 - [ ] `INST-013` · P0 · LIVE — Configure instant updates on Radarr and Sonarr; verify Cantinarr rotates a server-only credential, upserts one managed Connect webhook, and the app never receives the secret.
+- [ ] `INST-020` · P0 · LIVE — Configure instant updates on a real Chaptarr; verify the managed `Cantinarr` record appears under Connect with an import event enabled, and that a fork exposing no import toggle fails the configure call with a readable message instead of saving a webhook that never fires.
+- [ ] `INST-021` · P1 · LIVE — Confirm the Chaptarr webhook installs against the Readarr-lineage `/api/v1` notification API and that repeating the configure call updates the same record rather than adding a duplicate.
 
 ## Realtime convergence
 
@@ -21,5 +23,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `PUSH-025` · P0 · LIVE — Restart the container with a Chaptarr book download in flight and let it import while the server is down; verify the alert arrives on the first poll after boot (books have no webhook, so this is their only witness), arrives once, and carries the right format copy.
 - [ ] `PUSH-026` · P1 · LIVE — Restart with a movie/episode download in flight; verify exactly one alert across the webhook and the resumed poll diff, and that a restart more than 6 hours after the import stays silent.
 - [ ] `PUSH-027` · P1 · LIVE — Restart with the push gateway unreachable, then restore it; verify the resumed alert waits for enrollment rather than being lost, and that a gateway left down past the 6-hour cutoff drops the batch without wedging the poller.
+- [ ] `PUSH-028` · P0 · LIVE — With Chaptarr instant updates configured, request a small ebook that imports in under 30 seconds; verify the alert arrives (the queue poller alone cannot witness it) and arrives exactly once despite the poller also running.
+- [ ] `PUSH-029` · P1 · LIVE — Verify a Chaptarr rename, retag, or delete refreshes the app without ever pushing a "ready" alert, and that a real Chaptarr import event name outside the recognized set still leaves the poller to alert.
 - [ ] `PUSH-017` · P0 · LIVE/UI — Tap every notification type from foreground, background, and terminated app; verify exact detail/approval/issue/action/users/Plex/settings destination (book request decisions and new-book alerts open the book detail via the payload's foreign id; older payloads without one open the Books tab) and no duplicate navigation.
 - [ ] `PUSH-023` · P1 · LIVE — Use self-test from preferences and admin per-user diagnostics; verify delivered/no-token/not-configured/partial/failure results and no test notification changes product badges.

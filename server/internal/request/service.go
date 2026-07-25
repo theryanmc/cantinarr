@@ -1355,10 +1355,7 @@ func (s *Service) finishBookMutation(r *resolvedRequest, title string, lastErr e
 		}
 		return "", "", lastErr
 	}
-	if s.libraryCache != nil && r.instanceID != "" {
-		s.libraryCache.Delete("book-library:" + r.instanceID)
-		s.libraryCache.Delete("book-live:" + r.instanceID)
-	}
+	s.InvalidateBookDigests(r.instanceID)
 	if succeeded != len(r.bookFormats) {
 		return StatusPartial, title, nil
 	}

@@ -1,10 +1,14 @@
-// Package webhooks receives Sonarr/Radarr "Connect → Webhook" callbacks so
-// library changes made outside Cantinarr (manual imports, deletes, adds) are
-// pushed instantly instead of caught on the next poll or user-driven refresh.
-// Each callback authenticates with the instance's server-only Basic credential.
-// These requests carry no user session and translate into the same websocket
-// events and push notifications the queue-poll witness already emits, so the
-// app needs no new event handling.
+// Package webhooks receives Radarr/Sonarr/Chaptarr "Connect → Webhook"
+// callbacks so library changes made outside Cantinarr (manual imports, deletes,
+// adds) are pushed instantly instead of caught on the next poll or user-driven
+// refresh. Each callback authenticates with the instance's server-only Basic
+// credential. These requests carry no user session and translate into the same
+// websocket events and push notifications the queue-poll witness already emits,
+// so the app needs no new event handling.
+//
+// It matters most for books: a small ebook can be grabbed and imported inside a
+// single 30-second poll interval, so without this callback its alert is never
+// sent at all rather than merely delayed.
 package webhooks
 
 import (
@@ -14,6 +18,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,10 +34,12 @@ type Broadcaster interface {
 	Broadcast(event ws.Event)
 }
 
-// AvailabilityInvalidator drops cached availability digests for an instance.
-// *request.Service satisfies it.
+// AvailabilityInvalidator drops cached availability digests for an instance —
+// movie/series for Radarr/Sonarr, book for Chaptarr. *request.Service satisfies
+// it.
 type AvailabilityInvalidator interface {
 	InvalidateAvailabilityDigests(instanceID string)
+	InvalidateBookDigests(instanceID string)
 }
 
 // Handler terminates the arr webhook callbacks.
@@ -65,6 +72,39 @@ type arrPayload struct {
 		TvdbID int    `json:"tvdbId"`
 		TmdbID int    `json:"tmdbId"`
 	} `json:"series"`
+	// Chaptarr sends a singular book on import and a plural list on grab. Only
+	// the record id is read; identity comes from a live lookup.
+	Book *struct {
+		ID int `json:"id"`
+	} `json:"book"`
+	Books []struct {
+		ID int `json:"id"`
+	} `json:"books"`
+}
+
+// bookIDs returns the usable Chaptarr record ids in the payload, deduplicated
+// and ordered so repeated fields cannot produce repeated lookups.
+func (p arrPayload) bookIDs() []int {
+	seen := make(map[int]struct{})
+	var ids []int
+	add := func(id int) {
+		if id <= 0 {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if p.Book != nil {
+		add(p.Book.ID)
+	}
+	for _, b := range p.Books {
+		add(b.ID)
+	}
+	sort.Ints(ids)
+	return ids
 }
 
 // HandleArr receives the server-managed Sonarr/Radarr Connect webhook. The
@@ -73,7 +113,7 @@ type arrPayload struct {
 func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 	instanceID := chi.URLParam(r, "instanceID")
 	inst, err := h.store.Get(instanceID)
-	if err != nil || inst == nil || (inst.ServiceType != "radarr" && inst.ServiceType != "sonarr") {
+	if err != nil || inst == nil || !instance.SupportsManagedWebhook(inst.ServiceType) {
 		http.Error(w, `{"error":"unknown instance"}`, http.StatusNotFound)
 		return
 	}
@@ -95,6 +135,19 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if inst.ServiceType == "chaptarr" {
+		h.handleBookEvent(instanceID, payload)
+	} else {
+		h.handleVideoEvent(instanceID, inst.ServiceType, payload)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleVideoEvent applies a Radarr/Sonarr callback. Movies and series carry a
+// TMDB id, so these events drive request_status_changed directly.
+func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPayload) {
 	switch payload.EventType {
 	case "Test":
 		// Sonarr/Radarr's "Test" button — succeed without side effects.
@@ -106,7 +159,7 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 			Type: "arr_queue_changed",
 			Data: map[string]interface{}{
 				"instance_id":  instanceID,
-				"service_type": inst.ServiceType,
+				"service_type": serviceType,
 			},
 		})
 
@@ -142,9 +195,122 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 	default:
 		// Health, Rename, ApplicationUpdate, … — acknowledged, no action.
 	}
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+// bookImportEvents and bookLibraryEvents are normalized Chaptarr event names.
+//
+// Chaptarr is distributed as an image rather than source, so its event
+// vocabulary is inherited from the Readarr lineage rather than verified. Both
+// sets are therefore generous, and normalizeEventType folds case and word
+// separators, so a fork spelling the import "ReleaseImport", "Download" or
+// "bookFileImported" all land here. An unrecognized name is simply acknowledged
+// and the queue poller witnesses the import instead.
+//
+// Rename, retag and delete are deliberately NOT import events: announcing "your
+// book is ready" because a file was renamed would be worse than announcing it
+// 30 seconds late.
+var bookImportEvents = map[string]struct{}{
+	"download": {}, "releaseimport": {}, "bookfileimport": {}, "bookfileimported": {},
+	"bookimport": {}, "bookimported": {}, "downloadimported": {},
+}
+
+var bookLibraryEvents = map[string]struct{}{
+	"grab": {}, "bookadd": {}, "bookadded": {}, "authoradd": {}, "authoradded": {},
+	"bookdelete": {}, "authordelete": {}, "bookfiledelete": {}, "rename": {},
+	"retag": {}, "bookretag": {},
+}
+
+// normalizeEventType folds an arr event name to lowercase letters so casing and
+// word separators cannot cause a miss. Absurdly long input is rejected outright
+// rather than normalized.
+func normalizeEventType(s string) string {
+	if len(s) > 64 {
+		return ""
+	}
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out = append(out, r)
+		case r >= 'A' && r <= 'Z':
+			out = append(out, r+('a'-'A'))
+		}
+	}
+	return string(out)
+}
+
+// handleBookEvent applies a Chaptarr callback.
+//
+// Books have no TMDB id, so this path never emits request_status_changed (0
+// would collide across every book); arr_queue_changed is the invalidation ping
+// the app already consumes. The payload is treated purely as a trigger: only the
+// event name and record id are read, and the alert itself is built from a live
+// read of the record, so a drifted or forged body cannot fabricate an alert.
+func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
+	event := normalizeEventType(payload.EventType)
+	if event == "test" {
+		return
+	}
+	_, isImport := bookImportEvents[event]
+	_, isLibraryChange := bookLibraryEvents[event]
+	if !isImport && !isLibraryChange {
+		return
+	}
+
+	// Invalidate before announcing so a user who taps the alert lands on fresh
+	// availability rather than a cached "Requested".
+	h.requests.InvalidateBookDigests(instanceID)
+	h.hub.Broadcast(ws.Event{
+		Type: "arr_queue_changed",
+		Data: map[string]interface{}{
+			"instance_id":  instanceID,
+			"service_type": "chaptarr",
+		},
+	})
+	if !isImport {
+		return
+	}
+
+	ids := payload.bookIDs()
+	if len(ids) == 0 {
+		log.Printf("webhooks: chaptarr %q import carried no book id; leaving it to the queue poller", payload.EventType)
+		return
+	}
+	for _, id := range ids {
+		h.bookImported(instanceID, id)
+	}
+}
+
+// bookImported announces a completed book import after confirming it against
+// the live record, applying the same guards as the queue-departure witness so
+// the two witnesses produce an identical alert and dedupe against each other.
+func (h *Handler) bookImported(instanceID string, bookID int) {
+	if h.content == nil || h.registry == nil {
+		return
+	}
+	client, err := h.registry.GetChaptarrClient(instanceID)
+	if err != nil {
+		log.Printf("webhooks: chaptarr client for imported book %d: %v", bookID, err)
+		return
+	}
+	book, err := client.GetBook(bookID)
+	if err != nil {
+		log.Printf("webhooks: get imported chaptarr book %d: %v", bookID, err)
+		return
+	}
+	// Chaptarr answers 404 with (nil, nil) for a record deleted between the
+	// import and this read.
+	if book == nil {
+		return
+	}
+	// No file means the import ghosted or the file was already removed; the
+	// queue witness stays silent in the same case.
+	if book.Statistics.BookFileCount == 0 {
+		return
+	}
+	// Raw MediaType, exactly as the poller passes it: any normalization here
+	// would change the dedupe key and produce two pushes for one import.
+	h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
 }
 
 // tokenMatches checks the Basic Auth password against every credential valid
