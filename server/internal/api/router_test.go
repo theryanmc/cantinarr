@@ -15,6 +15,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/mediapath"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -223,13 +224,16 @@ func TestConfigHandlerFailsClosedWhenUserDefaultsUnavailable(t *testing.T) {
 
 func TestConfigHandlerReportsMediaDownloadCapabilityWithoutExposingRoots(t *testing.T) {
 	store, creds, remediationSvc, userID := newConfigHandlerTestState(t)
+	rootSentinel := t.TempDir()
 	enabled := createConfigInstance(t, store, "radarr", "Mapped movies", true)
-	enabled.MediaDownloadMode = instance.MediaDownloadModeIdentity
+	enabled.MediaDownloadMode = instance.MediaDownloadModeMapped
+	enabled.MediaPathMappings = []mediapath.Mapping{
+		{ArrPath: "/movies", CantinarrPath: rootSentinel},
+	}
 	if err := store.Update(&enabled); err != nil {
-		t.Fatalf("enable migrated media downloads: %v", err)
+		t.Fatalf("enable media downloads: %v", err)
 	}
 	disabled := createConfigInstance(t, store, "sonarr", "Unmapped TV", true)
-	rootSentinel := t.TempDir()
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
 		UserID: userID,

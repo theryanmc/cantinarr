@@ -21,8 +21,12 @@ var ErrPendingBookRequests = errors.New("instance has pending book requests")
 
 const (
 	MediaDownloadModeDisabled = "disabled"
-	MediaDownloadModeIdentity = "identity"
 	MediaDownloadModeMapped   = "mapped"
+
+	// legacyMediaDownloadModeIdentity is the retired pre-launch bridge that
+	// synthesized root→root mappings from the deployment roots. Stored rows
+	// may still carry it; they read as disabled until next saved.
+	legacyMediaDownloadModeIdentity = "identity"
 )
 
 // Instance represents a configured service instance (Radarr, Sonarr, SABnzbd,
@@ -38,9 +42,8 @@ type Instance struct {
 	Password    string `json:"password"`
 	IsDefault   bool   `json:"is_default"`
 	SortOrder   int    `json:"sort_order"`
-	// MediaDownloadMode is disabled for new instances, identity for instances
-	// migrated from the original global exact-path feature, and mapped after an
-	// admin saves explicit per-instance path mappings.
+	// MediaDownloadMode is disabled until an admin saves explicit per-instance
+	// path mappings (mapped). Downloads have no implicit configuration.
 	MediaDownloadMode string              `json:"-"`
 	MediaPathMappings []mediapath.Mapping `json:"-"`
 	CreatedAt         time.Time           `json:"created_at"`
@@ -48,25 +51,13 @@ type Instance struct {
 
 const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, created_at"
 
-// EffectiveMediaPathMappings returns the instance's current routing rules.
-// Identity mode is the upgrade bridge for the original global same-path
-// behavior; new and explicitly-edited instances use mapped/disabled instead.
-func (inst *Instance) EffectiveMediaPathMappings(roots []string) []mediapath.Mapping {
-	switch inst.MediaDownloadMode {
-	case MediaDownloadModeIdentity:
-		mappings := make([]mediapath.Mapping, 0, len(roots))
-		for _, root := range roots {
-			mappings = append(mappings, mediapath.Mapping{
-				ArrPath:       root,
-				CantinarrPath: root,
-			})
-		}
-		return mappings
-	case MediaDownloadModeMapped:
-		return append([]mediapath.Mapping(nil), inst.MediaPathMappings...)
-	default:
+// EffectiveMediaPathMappings returns the instance's current routing rules:
+// exactly the mappings an admin saved, or nothing.
+func (inst *Instance) EffectiveMediaPathMappings() []mediapath.Mapping {
+	if inst.MediaDownloadMode != MediaDownloadModeMapped {
 		return nil
 	}
+	return append([]mediapath.Mapping(nil), inst.MediaPathMappings...)
 }
 
 // MediaDownloadsConfigured is safe for requester-facing capability metadata:
@@ -79,7 +70,7 @@ func (inst *Instance) MediaDownloadsConfigured(roots []string) bool {
 	// capability when at least one current rule still names an accessible target
 	// inside the deployment's present allowlist; ticket-time resolution remains
 	// the final file-specific authority.
-	for _, mapping := range inst.EffectiveMediaPathMappings(roots) {
+	for _, mapping := range inst.EffectiveMediaPathMappings() {
 		if _, err := mediapath.Validate([]mediapath.Mapping{mapping}, roots); err == nil {
 			return true
 		}
@@ -147,9 +138,13 @@ func scanInstance(scanner rowScanner) (Instance, error) {
 	); err != nil {
 		return Instance{}, err
 	}
-	if inst.MediaDownloadMode != MediaDownloadModeDisabled &&
-		inst.MediaDownloadMode != MediaDownloadModeIdentity &&
-		inst.MediaDownloadMode != MediaDownloadModeMapped {
+	switch inst.MediaDownloadMode {
+	case MediaDownloadModeDisabled, MediaDownloadModeMapped:
+	case legacyMediaDownloadModeIdentity:
+		// Retired bridge value; reads as disabled (silently — rows self-heal
+		// on the instance's next save).
+		inst.MediaDownloadMode = MediaDownloadModeDisabled
+	default:
 		log.Printf("instance: invalid media download mode for %s; downloads disabled", inst.ID)
 		inst.MediaDownloadMode = MediaDownloadModeDisabled
 	}
@@ -173,8 +168,6 @@ func normalizeMediaDownloadConfig(inst *Instance) {
 		return
 	}
 	switch inst.MediaDownloadMode {
-	case MediaDownloadModeIdentity:
-		inst.MediaPathMappings = nil
 	case MediaDownloadModeMapped:
 		if len(inst.MediaPathMappings) == 0 {
 			inst.MediaDownloadMode = MediaDownloadModeDisabled

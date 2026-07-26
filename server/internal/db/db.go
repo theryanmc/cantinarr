@@ -649,9 +649,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		// therefore cannot break the previously working webhook.
 		{alter: "ALTER TABLE service_instances ADD COLUMN webhook_pending_token TEXT NOT NULL DEFAULT ''"},
 		{
-			// Completed-media downloads were originally one global identity-path
-			// switch. Preserve that exact behavior for instances that predate the
-			// per-instance mapper; newly-created instances explicitly start disabled.
+			// Historical rung, immutable: it briefly bridged the original global
+			// identity-path downloads. The bridge was retired pre-launch — the
+			// store now reads 'identity' as disabled, so rows this backfill wrote
+			// (or still writes on an old database crossing it today) mean
+			// downloads stay off until an admin saves explicit mappings.
 			alter: "ALTER TABLE service_instances ADD COLUMN media_download_mode TEXT NOT NULL DEFAULT 'disabled'",
 			backfill: []string{
 				"UPDATE service_instances SET media_download_mode = 'identity' WHERE service_type IN ('radarr', 'sonarr', 'chaptarr')",

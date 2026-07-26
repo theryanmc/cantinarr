@@ -690,7 +690,7 @@ func TestCoverageChecksInstanceAccessForNonAdmins(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	// Identity migration mode covers paths under the configured roots.
+	// The helper's default same-path mappings cover paths under the roots.
 	if len(verdicts) != 1 || !verdicts[0] {
 		t.Fatalf("verdicts = %v, want [true]", verdicts)
 	}
@@ -730,12 +730,17 @@ func TestSafeFilenameRemovesHeaderControls(t *testing.T) {
 
 func newTestHandler(t *testing.T, store *fakeInstanceStore, resolver metadataResolver, roots []string) *Handler {
 	t.Helper()
-	// Tests written for the original global-root behavior model a database that
-	// has crossed the compatibility migration, where existing arr instances use
-	// identity mappings until an admin replaces or disables them.
+	// Tests without explicit mapping config model an admin who saved same-path
+	// mappings for every deployment root (arr and Cantinarr namespaces align).
 	for _, inst := range store.instances {
 		if inst.MediaDownloadMode == "" {
-			inst.MediaDownloadMode = instance.MediaDownloadModeIdentity
+			inst.MediaDownloadMode = instance.MediaDownloadModeMapped
+			for _, root := range roots {
+				inst.MediaPathMappings = append(inst.MediaPathMappings, mediapath.Mapping{
+					ArrPath:       root,
+					CantinarrPath: root,
+				})
+			}
 		}
 	}
 	h, err := newHandler(store, store, resolver, roots)

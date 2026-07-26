@@ -575,11 +575,7 @@ type openedMediaFile struct {
 }
 
 func (h *Handler) effectiveMappings(inst *instance.Instance) []mediapath.Mapping {
-	roots := make([]string, 0, len(h.roots))
-	for _, root := range h.roots {
-		roots = append(roots, root.path)
-	}
-	return inst.EffectiveMediaPathMappings(roots)
+	return inst.EffectiveMediaPathMappings()
 }
 
 func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fileID int) (*openedMediaFile, error) {

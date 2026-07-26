@@ -128,15 +128,19 @@ func TestPerInstanceMediaPathMappingsPreserveClearAndValidate(t *testing.T) {
 	h.SetMediaDownloadRoots([]string{root})
 	existing := &Instance{
 		ServiceType:       "chaptarr",
-		MediaDownloadMode: MediaDownloadModeIdentity,
+		MediaDownloadMode: MediaDownloadModeMapped,
+		MediaPathMappings: []mediapath.Mapping{{ArrPath: "/kept", CantinarrPath: books}},
 	}
 
 	preserved := &Instance{ServiceType: "chaptarr"}
 	if err := h.applyMediaPathMappings(preserved, nil, existing); err != nil {
 		t.Fatal(err)
 	}
-	if preserved.MediaDownloadMode != MediaDownloadModeIdentity {
-		t.Fatalf("omitted update mode = %q, want identity", preserved.MediaDownloadMode)
+	if preserved.MediaDownloadMode != MediaDownloadModeMapped ||
+		len(preserved.MediaPathMappings) != 1 ||
+		preserved.MediaPathMappings[0].ArrPath != "/kept" {
+		t.Fatalf("omitted update config = %q %+v, want preserved mapped rows",
+			preserved.MediaDownloadMode, preserved.MediaPathMappings)
 	}
 
 	empty := []mediapath.Mapping{}
@@ -244,42 +248,6 @@ func TestInstanceHTTPWritesPreserveOmittedMappingsAndDisableNewInstances(t *test
 	}
 	if createdStored.MediaDownloadMode != MediaDownloadModeDisabled || created.MediaDownloads {
 		t.Fatalf("new omitted mapping config = stored %q response enabled %t", createdStored.MediaDownloadMode, created.MediaDownloads)
-	}
-	if created.MediaDownloadMode != MediaDownloadModeDisabled {
-		t.Fatalf("response media_download_mode = %q, want disabled", created.MediaDownloadMode)
-	}
-}
-
-// The admin editor distinguishes explicitly saved mappings from the
-// migration's identity bridge, whose rows are synthesized per current root.
-func TestResponseReportsMediaDownloadMode(t *testing.T) {
-	root := t.TempDir()
-	h := NewHandler(newTestStore(t), nil)
-	h.SetMediaDownloadRoots([]string{root})
-
-	identity := &Instance{
-		ID:                "radarr-legacy",
-		ServiceType:       "radarr",
-		MediaDownloadMode: MediaDownloadModeIdentity,
-	}
-	response := h.toResponse(identity)
-	if response.MediaDownloadMode != MediaDownloadModeIdentity {
-		t.Fatalf("identity response mode = %q", response.MediaDownloadMode)
-	}
-	if len(response.MediaPathMappings) != 1 ||
-		response.MediaPathMappings[0].ArrPath != root ||
-		response.MediaPathMappings[0].CantinarrPath != root {
-		t.Fatalf("identity response mappings = %+v", response.MediaPathMappings)
-	}
-
-	mapped := &Instance{
-		ID:                "radarr-mapped",
-		ServiceType:       "radarr",
-		MediaDownloadMode: MediaDownloadModeMapped,
-		MediaPathMappings: []mediapath.Mapping{{ArrPath: "/movies", CantinarrPath: root}},
-	}
-	if got := h.toResponse(mapped).MediaDownloadMode; got != MediaDownloadModeMapped {
-		t.Fatalf("mapped response mode = %q", got)
 	}
 }
 
