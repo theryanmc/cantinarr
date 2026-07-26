@@ -633,6 +633,7 @@ class _RequesterBookDetailScreenState
           fileId: file.id,
           label: _bookFileLabel(file, i),
           subtitle: details.isEmpty ? null : details,
+          reportedPath: file.path,
         ));
       }
     }

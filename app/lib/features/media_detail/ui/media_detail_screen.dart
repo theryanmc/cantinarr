@@ -279,6 +279,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                               fileId:
                                                   _downloadMovieFile!.id,
                                               label: 'Download movie',
+                                              reportedPath:
+                                                  _downloadMovieFile!.path,
                                             ),
                                           if (_arrLink != null)
                                             TextButton.icon(
@@ -662,6 +664,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
             ? episode.seasonEpisodeLabel
             : '${episode.seasonEpisodeLabel} · $title',
         subtitle: details.isEmpty ? null : details.join(' · '),
+        reportedPath: file?.path,
       ));
     }
     return result;

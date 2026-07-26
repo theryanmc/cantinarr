@@ -587,6 +587,136 @@ func TestMissingOrRemovedInstanceMappingFailsBeforeMetadataResolution(t *testing
 	}
 }
 
+func TestCoverageIsLexicalAndPerPath(t *testing.T) {
+	root := t.TempDir()
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"chaptarr-a": {
+				ID:                "chaptarr-a",
+				ServiceType:       "chaptarr",
+				MediaDownloadMode: instance.MediaDownloadModeMapped,
+				MediaPathMappings: []mediapath.Mapping{
+					{ArrPath: "/media-server/media/ebooks", CantinarrPath: root},
+				},
+			},
+		},
+		allowed: true,
+	}
+	resolver := &fakeMetadataResolver{}
+	h := newTestHandler(t, store, resolver, []string{root})
+
+	response, verdicts := coverageCheck(t, h, &auth.Claims{UserID: 42, Role: auth.RoleUser}, `{
+		"instance_id": "chaptarr-a",
+		"paths": [
+			"/media-server/media/ebooks/Author/Book.epub",
+			"/media-server/media/audiobooks/Author/Book.m4b",
+			"/media/ebooks/Author/Book.epub",
+			"relative/path.epub",
+			"/media-server/media/ebooks/../../secret"
+		]
+	}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	want := []bool{true, false, false, false, false}
+	if len(verdicts) != len(want) {
+		t.Fatalf("verdicts = %v, want %v", verdicts, want)
+	}
+	for index := range want {
+		if verdicts[index] != want[index] {
+			t.Fatalf("verdicts = %v, want %v", verdicts, want)
+		}
+	}
+	// The covered file does not exist on disk: coverage is a mapping-shape
+	// answer, never a file-existence oracle. The arr is never consulted.
+	if len(resolver.calls) != 0 {
+		t.Fatalf("resolver calls = %d, want 0", len(resolver.calls))
+	}
+	if strings.Contains(response.Body.String(), root) {
+		t.Fatalf("response leaked a server path: %s", response.Body.String())
+	}
+}
+
+func TestCoverageAuthorizationAndBounds(t *testing.T) {
+	root := t.TempDir()
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"radarr-main": {ID: "radarr-main", ServiceType: "radarr"},
+		},
+		allowed: false,
+	}
+	h := newTestHandler(t, store, &fakeMetadataResolver{}, []string{root})
+	claims := &auth.Claims{UserID: 42, Role: auth.RoleUser}
+
+	if response, _ := coverageCheck(t, h, nil, `{"instance_id":"radarr-main","paths":["/a/b"]}`); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous status = %d", response.Code)
+	}
+	if response, _ := coverageCheck(t, h, claims, `{"instance_id":"radarr-main","paths":["/a/b"]}`); response.Code != http.StatusForbidden {
+		t.Fatalf("no instance access status = %d", response.Code)
+	}
+	if response, _ := coverageCheck(t, h, claims, `{"instance_id":"missing","paths":["/a/b"]}`); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown instance status = %d", response.Code)
+	}
+	if response, _ := coverageCheck(t, h, claims, `{"instance_id":"radarr-main","paths":[]}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("empty paths status = %d", response.Code)
+	}
+	tooMany := `{"instance_id":"radarr-main","paths":[` +
+		strings.Repeat(`"/a/b",`, maxCoveragePaths) + `"/a/b"]}`
+	if response, _ := coverageCheck(t, h, claims, tooMany); response.Code != http.StatusBadRequest {
+		t.Fatalf("too many paths status = %d", response.Code)
+	}
+
+	unconfigured, err := newHandler(store, store, &fakeMetadataResolver{}, nil)
+	if err != nil {
+		t.Fatalf("newHandler() error = %v", err)
+	}
+	defer unconfigured.Close()
+	if response, _ := coverageCheck(t, unconfigured, claims, `{"instance_id":"radarr-main","paths":["/a/b"]}`); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconfigured status = %d", response.Code)
+	}
+}
+
+func TestCoverageChecksInstanceAccessForNonAdmins(t *testing.T) {
+	root := t.TempDir()
+	store := &fakeInstanceStore{
+		instances: map[string]*instance.Instance{
+			"radarr-main": {ID: "radarr-main", ServiceType: "radarr"},
+		},
+		allowed: true,
+	}
+	h := newTestHandler(t, store, &fakeMetadataResolver{}, []string{root})
+
+	response, verdicts := coverageCheck(t, h, &auth.Claims{UserID: 42, Role: auth.RoleUser}, `{"instance_id":"radarr-main","paths":["`+strings.ReplaceAll(filepath.Join(root, "movie.mkv"), `\`, `\\`)+`"]}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	// Identity migration mode covers paths under the configured roots.
+	if len(verdicts) != 1 || !verdicts[0] {
+		t.Fatalf("verdicts = %v, want [true]", verdicts)
+	}
+	if len(store.accessCalls) != 1 || store.accessCalls[0].userID != 42 {
+		t.Fatalf("access calls = %#v", store.accessCalls)
+	}
+}
+
+func coverageCheck(t *testing.T, h *Handler, claims *auth.Claims, body string) (*httptest.ResponseRecorder, []bool) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/api/media-files/coverage", strings.NewReader(body))
+	if claims != nil {
+		ctx := context.WithValue(request.Context(), auth.ClaimsKey, claims)
+		request = request.WithContext(ctx)
+	}
+	response := httptest.NewRecorder()
+	h.Coverage(response, request)
+	var decoded coverageResponse
+	if response.Code == http.StatusOK {
+		if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode coverage response: %v; body = %s", err, response.Body.String())
+		}
+	}
+	return response, decoded.Covered
+}
+
 func TestSafeFilenameRemovesHeaderControls(t *testing.T) {
 	got := safeFilename("folder/evil\r\nX-Evil: injected.epub", 5)
 	if got != "evilX-Evil: injected.epub" {

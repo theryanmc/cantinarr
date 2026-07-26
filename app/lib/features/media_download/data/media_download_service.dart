@@ -83,6 +83,37 @@ class MediaDownloadService {
     }
   }
 
+  static const _coverageBatchLimit = 100;
+
+  /// Which of [paths] this instance's media path mappings can serve, aligned
+  /// by index. The server answers lexically (mapping shape only, no
+  /// filesystem probes). Throws when a verdict cannot be established —
+  /// including on servers predating the endpoint — so callers fail open and
+  /// leave ticket issuance as the authority.
+  Future<List<bool>> checkCoverage({
+    required String instanceId,
+    required List<String> paths,
+  }) async {
+    final verdicts = <bool>[];
+    for (var start = 0; start < paths.length; start += _coverageBatchLimit) {
+      final end = start + _coverageBatchLimit > paths.length
+          ? paths.length
+          : start + _coverageBatchLimit;
+      final chunk = paths.sublist(start, end);
+      final response = await _dio.post('/api/media-files/coverage', data: {
+        'instance_id': instanceId,
+        'paths': chunk,
+      });
+      final data = response.data;
+      final covered = data is Map<String, dynamic> ? data['covered'] : null;
+      if (covered is! List || covered.length != chunk.length) {
+        throw const MediaDownloadException('Coverage is unavailable.');
+      }
+      verdicts.addAll(covered.map((flag) => flag == true));
+    }
+    return verdicts;
+  }
+
   Uri _resolveDownloadUrl(dynamic value) {
     final raw = value is String ? value.trim() : '';
     final base = Uri.tryParse(_dio.options.baseUrl);

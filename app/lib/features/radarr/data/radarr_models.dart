@@ -150,6 +150,10 @@ class RadarrImage {
 class RadarrMovieFile {
   final int id;
   final String? relativePath;
+
+  /// Absolute path exactly as Radarr reported it — drives the download
+  /// coverage check against this instance's media path mappings.
+  final String? path;
   final int? size;
   final String? quality;
   final bool qualityCutoffNotMet;
@@ -163,6 +167,7 @@ class RadarrMovieFile {
   const RadarrMovieFile({
     required this.id,
     this.relativePath,
+    this.path,
     this.size,
     this.quality,
     this.qualityCutoffNotMet = false,
@@ -174,6 +179,7 @@ class RadarrMovieFile {
       RadarrMovieFile(
         id: json['id'] as int,
         relativePath: json['relativePath'] as String?,
+        path: json['path'] as String?,
         size: (json['size'] as num?)?.toInt(),
         quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
             as String?,
