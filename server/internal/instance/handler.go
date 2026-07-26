@@ -44,6 +44,11 @@ type instanceResponse struct {
 	IsDefault         bool                `json:"is_default"`
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
+	// MediaDownloadMode lets the admin editor tell explicitly saved mappings
+	// from the migration's identity bridge, whose rows are synthesized from
+	// the current media roots rather than stored. Admin-only payload; the
+	// requester /api/config never carries mapping configuration.
+	MediaDownloadMode string              `json:"media_download_mode"`
 	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
 }
 
@@ -68,6 +73,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		IsDefault:         inst.IsDefault,
 		SortOrder:         inst.SortOrder,
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
+		MediaDownloadMode: inst.MediaDownloadMode,
 		MediaPathMappings: mappings,
 	}
 }

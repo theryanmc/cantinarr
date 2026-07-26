@@ -77,6 +77,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _arrRootFoldersError;
   String? _arrRootFoldersFetchedFor;
 
+  /// True while this instance still runs on the migration's identity bridge:
+  /// its mapping rows are synthesized from the server's current media roots
+  /// (and follow future root changes) rather than saved configuration.
+  bool _legacyIdentityMappings = false;
+
   /// Fresh instance list from the server — the login-time copy in the auth
   /// state can be stale, and both the first-of-type auto-default and the
   /// default-takeover confirmation depend on what actually exists right now.
@@ -322,6 +327,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _legacyIdentityMappings =
+            (details['media_download_mode'] as String?) == 'identity';
         if (details.containsKey('media_path_mappings')) {
           final rawMappings = details['media_path_mappings'] as List? ?? [];
           _replaceMediaPathMappings(rawMappings
@@ -1206,6 +1213,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             ],
           ],
           if (_mediaMappingsLoaded) ...[
+            if (_legacyIdentityMappings && _mediaPathMappings.isNotEmpty)
+              const _MediaMappingNotice(
+                icon: Icons.history_toggle_off,
+                message: 'Compatibility default from before per-instance '
+                    'mappings: these rows mirror the server media folders '
+                    'and follow future changes to them. Save this instance '
+                    'to keep exactly the rows you see, or remove them and '
+                    'save to turn downloads off for it.',
+              ),
             if (_mediaPathMappings.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 6),
