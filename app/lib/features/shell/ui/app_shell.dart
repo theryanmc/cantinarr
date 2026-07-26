@@ -71,6 +71,11 @@ class _AppShellState extends ConsumerState<AppShell>
   late final AnimationController _searchBarAnim;
   late final Animation<double> _searchBarCurve;
 
+  /// Last module route the search bar was shown over. Its collapse state
+  /// belongs to that page, so it survives a pushed route and resets when a
+  /// different module page takes over.
+  String? _searchBarPath;
+
   // Shimmer sweep rotation for aiReady state
   late final AnimationController _shimmerRotationAnim;
 
@@ -95,8 +100,26 @@ class _AppShellState extends ConsumerState<AppShell>
     );
     WidgetsBinding.instance.addObserver(this);
     _searchFocusNode.addListener(_onSearchFocusChanged);
+    _searchBarPath = _searchBarPathFor(widget.currentPath);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initLibraries());
   }
+
+  @override
+  void didUpdateWidget(covariant AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A different module page means a fresh scroll view sitting at the top, so
+    // the search bar comes back with it. Pushed routes (detail pages, forms)
+    // aren't module pages, so popping back leaves the bar as its page had it.
+    final path = _searchBarPathFor(widget.currentPath);
+    if (path != null && path != _searchBarPath) {
+      _searchBarPath = path;
+      _searchBarAnim.forward();
+    }
+  }
+
+  /// [path] when it owns the search bar, else null (pushed routes don't).
+  static String? _searchBarPathFor(String path) =>
+      _moduleTypeForPath(path) == null ? null : path;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -335,6 +358,11 @@ class _AppShellState extends ConsumerState<AppShell>
     if (isUserDrag) {
       _dismissKeyboard();
     }
+
+    // Pushed routes show the secondary bar, not the search bar. Scrolling one
+    // must not decide what the module page underneath looks like once the user
+    // pops back to it.
+    if (_searchBarPathFor(widget.currentPath) == null) return false;
 
     if (atTop) {
       _searchBarAnim.forward();
