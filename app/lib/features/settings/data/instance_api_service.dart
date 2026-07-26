@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import '../../../core/models/backend_connection.dart';
 
@@ -56,6 +58,32 @@ class InstanceApiService {
     return (resp.data as List<dynamic>)
         .map((root) => root as String)
         .toList(growable: false);
+  }
+
+  /// Library root folders the saved arr instance reports right now, read
+  /// through the admin arr proxy (Radarr/Sonarr speak v3, Chaptarr v1). These
+  /// are the only path prefixes a media path mapping can ever match, so the
+  /// editor offers them as mapping sources. Arr responses may arrive without
+  /// a JSON content type, so a String body is decoded here; unexpected shapes
+  /// yield an empty list while transport failures propagate for a retry.
+  Future<List<String>> listArrRootFolders({
+    required String instanceId,
+    required String serviceType,
+  }) async {
+    final version = serviceType == 'chaptarr' ? 'v1' : 'v3';
+    final resp =
+        await _dio.get('/api/instances/$instanceId/api/$version/rootfolder');
+    dynamic data = resp.data;
+    if (data is String && data.trim().isNotEmpty) {
+      data = jsonDecode(data);
+    }
+    if (data is! List) return const [];
+    return [
+      for (final folder in data)
+        if (folder is Map && folder['path'] is String &&
+            (folder['path'] as String).trim().isNotEmpty)
+          (folder['path'] as String).trim(),
+    ];
   }
 
   Future<ServiceInstance> createInstance({

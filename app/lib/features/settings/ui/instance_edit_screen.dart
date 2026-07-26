@@ -12,6 +12,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
+import '../logic/arr_path_match.dart';
 
 /// Form for creating or editing a service instance.
 class InstanceEditScreen extends ConsumerStatefulWidget {
@@ -66,6 +67,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool _mediaMappingsLoaded = false;
   bool _mediaMappingApiSupported = false;
   bool _mediaMappingsDirty = false;
+
+  // Library folders the saved arr instance reports live (edit mode only) —
+  // the only prefixes a mapping's arr path can ever match. Suggestions and
+  // mismatch warnings derive strictly from a successful read, so a proxy
+  // hiccup never paints working mappings with alarms.
+  List<String> _arrRootFolders = const [];
+  bool _arrRootFoldersKnown = false;
+  String? _arrRootFoldersError;
+  String? _arrRootFoldersFetchedFor;
 
   /// Fresh instance list from the server — the login-time copy in the auth
   /// state can be stale, and both the first-of-type auto-default and the
@@ -154,7 +164,34 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _isDefault = widget.initialIsDefault;
     if (widget.isEditing) _loadDetails();
     _loadMediaRoots();
+    _loadArrRootFolders();
     _loadDirectory();
+  }
+
+  /// Reads the library folders this saved instance reports through the arr
+  /// proxy. Unsaved instances have nothing to proxy to, so this is edit-only.
+  Future<void> _loadArrRootFolders() async {
+    if (!widget.isEditing || !_supportsMediaDownloads) return;
+    final serviceType = _serviceType;
+    _arrRootFoldersFetchedFor = serviceType;
+    try {
+      final folders = await InstanceApiService(
+        backendDio: ref.read(backendClientProvider),
+      ).listArrRootFolders(
+        instanceId: widget.instanceId!,
+        serviceType: serviceType,
+      );
+      if (!mounted || serviceType != _serviceType) return;
+      setState(() {
+        _arrRootFolders = folders;
+        _arrRootFoldersKnown = true;
+        _arrRootFoldersError = null;
+      });
+    } catch (_) {
+      if (!mounted || serviceType != _serviceType) return;
+      setState(() => _arrRootFoldersError =
+          'Could not read the library folders $_serviceLabel reports.');
+    }
   }
 
   Future<void> _loadMediaRoots() async {
@@ -301,6 +338,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               'Update the Cantinarr server to configure media downloads.';
         }
       });
+      // Deep links may open the editor without a service type; retry the
+      // reported-folders read once the record names the real one.
+      if (_arrRootFoldersFetchedFor != _serviceType) _loadArrRootFolders();
     } catch (_) {
       // Connection fields remain manually editable, but mapping data must not
       // be guessed: omitting it on Save preserves the server's current rules.
@@ -330,6 +370,25 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   void _addMediaPathMapping() {
     setState(() {
       _mediaPathMappings.add(_MediaPathMappingFields(
+        onChanged: _markMediaMappingsDirty,
+      ));
+      _mediaMappingsDirty = true;
+    });
+  }
+
+  /// Starts a mapping from a live reported folder, reusing the first row
+  /// whose arr path is still blank before adding a new one.
+  void _useReportedArrPath(String path) {
+    for (final mapping in _mediaPathMappings) {
+      if (mapping.arrPath.text.trim().isEmpty) {
+        mapping.arrPath.text = path;
+        setState(() {});
+        return;
+      }
+    }
+    setState(() {
+      _mediaPathMappings.add(_MediaPathMappingFields(
+        arrPath: path,
         onChanged: _markMediaMappingsDirty,
       ));
       _mediaMappingsDirty = true;
@@ -1100,6 +1159,52 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               ),
             const SizedBox(height: 10),
           ],
+          if (widget.isEditing && canAdd) ...[
+            if (_arrRootFoldersError != null)
+              _MediaMappingNotice(
+                icon: Icons.sync_problem_outlined,
+                message: _arrRootFoldersError!,
+                action: TextButton(
+                  onPressed: () {
+                    setState(() => _arrRootFoldersError = null);
+                    _loadArrRootFolders();
+                  },
+                  child: const Text('Retry'),
+                ),
+              ),
+            if (_arrRootFoldersKnown && _arrRootFolders.isNotEmpty) ...[
+              Text(
+                'Reported by $_serviceLabel — tap to map',
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final folder in _arrRootFolders)
+                    ActionChip(
+                      avatar: const Icon(
+                        Icons.folder_open_outlined,
+                        size: 14,
+                        color: AppTheme.accent,
+                      ),
+                      label: Text(folder),
+                      labelStyle: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 12,
+                      ),
+                      onPressed: () => _useReportedArrPath(folder),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+          ],
           if (_mediaMappingsLoaded) ...[
             if (_mediaPathMappings.isEmpty)
               const Padding(
@@ -1226,6 +1331,48 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               );
             },
           ),
+          if (_arrRootFoldersKnown && _arrRootFolders.isNotEmpty)
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: mapping.arrPath,
+              builder: (context, value, _) {
+                final text = value.text.trim();
+                final unrelated = text.isNotEmpty &&
+                    !_arrRootFolders.any(
+                      (folder) => arrPathRelatesToReportedRoot(text, folder),
+                    );
+                if (!unrelated) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          size: 15,
+                          color: AppTheme.warning,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '$_serviceLabel does not report any library folder '
+                          'under this path, so downloads are unlikely to '
+                          'match. Tap a reported folder above to use a path '
+                          '$_serviceLabel actually sees.',
+                          style: const TextStyle(
+                            color: AppTheme.warning,
+                            fontSize: 11.5,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

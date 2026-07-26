@@ -6,9 +6,15 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingAdapter implements HttpClientAdapter {
-  _RecordingAdapter({this.mediaRootsStatus = 200});
+  _RecordingAdapter({
+    this.mediaRootsStatus = 200,
+    this.rootFolderBody,
+    this.rootFolderContentType = 'application/json',
+  });
 
   final int mediaRootsStatus;
+  final String? rootFolderBody;
+  final String rootFolderContentType;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -24,6 +30,21 @@ class _RecordingAdapter implements HttpClientAdapter {
     }
     final path = options.uri.path;
     requests.add((method: options.method, path: path, body: body));
+
+    if (path.endsWith('/rootfolder')) {
+      return ResponseBody.fromString(
+        rootFolderBody ??
+            jsonEncode([
+              {'id': 1, 'path': '/media-server/media/ebooks'},
+              {'id': 2, 'path': '  '},
+              {'id': 3},
+            ]),
+        200,
+        headers: {
+          'content-type': [rootFolderContentType],
+        },
+      );
+    }
 
     if (path == '/api/instances/media-roots') {
       return ResponseBody.fromString(
@@ -98,6 +119,66 @@ void main() {
       _service(adapter).listMediaRoots(),
       throwsA(isA<DioException>()),
     );
+  });
+
+  test('listArrRootFolders speaks v1 to Chaptarr and keeps only real paths',
+      () async {
+    final adapter = _RecordingAdapter();
+    final folders = await _service(adapter).listArrRootFolders(
+      instanceId: 'chaptarr-a',
+      serviceType: 'chaptarr',
+    );
+
+    expect(folders, ['/media-server/media/ebooks']);
+    expect(adapter.requests.single.method, 'GET');
+    expect(
+      adapter.requests.single.path,
+      '/api/instances/chaptarr-a/api/v1/rootfolder',
+    );
+  });
+
+  test('listArrRootFolders speaks v3 to Radarr and Sonarr', () async {
+    final adapter = _RecordingAdapter();
+    final service = _service(adapter);
+    await service.listArrRootFolders(
+      instanceId: 'radarr-a',
+      serviceType: 'radarr',
+    );
+    await service.listArrRootFolders(
+      instanceId: 'sonarr-a',
+      serviceType: 'sonarr',
+    );
+
+    expect(adapter.requests[0].path, '/api/instances/radarr-a/api/v3/rootfolder');
+    expect(adapter.requests[1].path, '/api/instances/sonarr-a/api/v3/rootfolder');
+  });
+
+  test('listArrRootFolders decodes a body served without a JSON content type',
+      () async {
+    final adapter = _RecordingAdapter(
+      rootFolderBody: jsonEncode([
+        {'id': 7, 'path': '/books'},
+      ]),
+      rootFolderContentType: 'text/plain; charset=utf-8',
+    );
+
+    final folders = await _service(adapter).listArrRootFolders(
+      instanceId: 'chaptarr-a',
+      serviceType: 'chaptarr',
+    );
+    expect(folders, ['/books']);
+  });
+
+  test('listArrRootFolders yields nothing for an unexpected shape', () async {
+    final adapter = _RecordingAdapter(
+      rootFolderBody: jsonEncode({'error': 'shape'}),
+    );
+
+    final folders = await _service(adapter).listArrRootFolders(
+      instanceId: 'radarr-a',
+      serviceType: 'radarr',
+    );
+    expect(folders, isEmpty);
   });
 
   test('create conditionally includes ordered media path mappings', () async {
