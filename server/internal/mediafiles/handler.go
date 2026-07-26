@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -498,6 +499,9 @@ func (h *Handler) effectiveMappings(inst *instance.Instance) []mediapath.Mapping
 func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fileID int) (*openedMediaFile, error) {
 	localPath, ok := mediapath.Translate(reportedPath, h.effectiveMappings(inst))
 	if !ok {
+		// Clients only learn that no mapping matched; the arr-reported path is
+		// operator diagnostics and stays in the server log.
+		log.Printf("mediafiles: instance %s has no media path mapping covering reported path %q (file id %d)", inst.ID, reportedPath, fileID)
 		return nil, errMediaPathUnmapped
 	}
 	if !filepath.IsAbs(localPath) {

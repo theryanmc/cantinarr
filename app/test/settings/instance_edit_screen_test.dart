@@ -20,6 +20,7 @@ class _FakeAdapter implements HttpClientAdapter {
     this.instances = const [],
     this.pins = const [],
     this.mediaRoots = const ['/media'],
+    this.arrRootFolders = const [],
     this.webhookError,
     this.testError,
   });
@@ -27,6 +28,7 @@ class _FakeAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
   final List<String> mediaRoots;
+  final List<String> arrRootFolders;
   final String? webhookError;
   final String? testError;
   final List<({String method, String path, dynamic body})> requests = [];
@@ -48,6 +50,11 @@ class _FakeAdapter implements HttpClientAdapter {
     dynamic response = <String, dynamic>{};
     if (options.method == 'GET' && path == '/api/instances/media-roots') {
       response = mediaRoots;
+    } else if (options.method == 'GET' && path.endsWith('/rootfolder')) {
+      response = [
+        for (var i = 0; i < arrRootFolders.length; i++)
+          {'id': i + 1, 'path': arrRootFolders[i]},
+      ];
     } else if (options.method == 'GET' && path == '/api/instances') {
       response = instances;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
@@ -454,6 +461,106 @@ void main() {
     expect(update.body['media_path_mappings'], [
       {'arr_path': '/uhd', 'cantinarr_path': '/media/uhd'},
     ]);
+  });
+
+  testWidgets('edit offers reported arr folders and tap-to-map fills a row',
+      (tester) async {
+    final editable = {
+      ..._radarrB,
+      'media_downloads': false,
+      'media_path_mappings': const [],
+    };
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_mainRadarr), editable],
+      arrRootFolders: const ['/media-server/movies'],
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    // The reported folders come from this exact instance via the arr proxy.
+    expect(
+      adapter.requests.any((request) =>
+          request.method == 'GET' &&
+          request.path == '/api/instances/radarr-b/api/v3/rootfolder'),
+      isTrue,
+    );
+    final chip =
+        find.widgetWithText(ActionChip, '/media-server/movies');
+    await tester.ensureVisible(chip);
+    expect(find.text('Reported by Radarr — tap to map'), findsOneWidget);
+
+    await tester.tap(chip);
+    await tester.pumpAndSettle();
+    final source = find.widgetWithText(TextField, 'Radarr path');
+    expect(tester.widget<TextField>(source).controller!.text,
+        '/media-server/movies');
+    // A reported folder is by definition covered, so no mismatch warning.
+    expect(find.textContaining('does not report any library folder'),
+        findsNothing);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cantinarr path'), '/media/movies');
+    final save = find.widgetWithText(ElevatedButton, 'Save Changes');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final update = adapter.requests.singleWhere((request) =>
+        request.method == 'PUT' && request.path == '/api/instances/radarr-b');
+    expect(update.body['media_path_mappings'], [
+      {
+        'arr_path': '/media-server/movies',
+        'cantinarr_path': '/media/movies',
+      },
+    ]);
+  });
+
+  testWidgets('warns when a mapping matches no reported arr folder',
+      (tester) async {
+    final mapped = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_path_mappings': [
+        {'arr_path': '/movies', 'cantinarr_path': '/media/movies'},
+      ],
+    };
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_mainRadarr), mapped],
+      arrRootFolders: const ['/media-server/movies'],
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    // The saved source path exists nowhere in what Radarr reports, so the
+    // row carries a warning until it is corrected.
+    final warning =
+        find.textContaining('does not report any library folder');
+    await tester.ensureVisible(warning);
+    expect(warning, findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, 'Radarr path'),
+        '/media-server/movies/kids');
+    await tester.pump();
+    expect(find.textContaining('does not report any library folder'),
+        findsNothing);
   });
 
   testWidgets('unrelated edit preserves unchanged legacy identity mappings',
