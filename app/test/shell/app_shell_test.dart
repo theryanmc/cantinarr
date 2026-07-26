@@ -100,6 +100,92 @@ void main() {
     expect(focusNode.hasFocus, isFalse);
   });
 
+  testWidgets('side-scrolling a shelf leaves the search bar alone',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    const pageScroll = ValueKey('page-scroll');
+    const posterRow = ValueKey('poster-row');
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => Scaffold(
+                body: ListView(
+                  key: pageScroll,
+                  children: [
+                    const SizedBox(height: 400),
+                    SizedBox(
+                      height: 200,
+                      child: ListView.builder(
+                        key: posterRow,
+                        scrollDirection: Axis.horizontal,
+                        itemCount: 20,
+                        itemBuilder: (_, __) => const SizedBox(width: 120),
+                      ),
+                    ),
+                    const SizedBox(height: 1600),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_authenticatedAiState),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final topBar = find.byKey(const ValueKey('module-top-bar'));
+    final expanded = tester.getSize(topBar).height;
+    expect(expanded, greaterThan(0));
+
+    await tester.drag(find.byKey(posterRow), const Offset(-200, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(topBar).height,
+      expanded,
+      reason: 'swiping a shelf forward must not hide the search bar',
+    );
+
+    // The page's own vertical scroll still owns the chrome.
+    await tester.drag(find.byKey(pageScroll), const Offset(0, -200));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(topBar).height, lessThan(expanded));
+
+    await tester.drag(find.byKey(posterRow), const Offset(200, 0));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(topBar).height,
+      lessThan(expanded),
+      reason: 'a shelf back at its start must not pop the search bar open',
+    );
+  });
+
   testWidgets(
       'search-bar assistant submit opens route over previous shell content',
       (tester) async {
