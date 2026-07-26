@@ -313,6 +313,12 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
+    // Side-scrolling shelves (poster rows, chip strips) bubble their
+    // notifications up to this listener too. Only the page's own vertical
+    // scroll may drive the shell chrome: otherwise swiping a row sideways
+    // hides the search bar, and swiping it back to the start pops it open.
+    if (notification.metrics.axis != Axis.vertical) return false;
+
     final atTop =
         notification.metrics.pixels <= notification.metrics.minScrollExtent + 4;
 
