@@ -38,6 +38,41 @@ void main() {
     expect(ticket.expiresAt, DateTime.utc(2026, 7, 22, 18));
   });
 
+  test('checkCoverage posts the instance paths and aligns verdicts', () async {
+    final adapter = _TicketAdapter(response: {
+      'covered': [true, false],
+    });
+    final service = MediaDownloadService(backendDio: _dio(adapter));
+
+    final verdicts = await service.checkCoverage(
+      instanceId: 'chaptarr-a',
+      paths: ['/books/A.epub', r'Z:\Audiobooks\A.m4b'],
+    );
+
+    expect(verdicts, [true, false]);
+    expect(adapter.method, 'POST');
+    expect(adapter.path, '/api/media-files/coverage');
+    expect(adapter.data, {
+      'instance_id': 'chaptarr-a',
+      'paths': ['/books/A.epub', r'Z:\Audiobooks\A.m4b'],
+    });
+  });
+
+  test('checkCoverage rejects a verdict list that does not align', () async {
+    final adapter = _TicketAdapter(response: {
+      'covered': [true],
+    });
+    final service = MediaDownloadService(backendDio: _dio(adapter));
+
+    await expectLater(
+      service.checkCoverage(
+        instanceId: 'chaptarr-a',
+        paths: ['/books/A.epub', '/books/B.epub'],
+      ),
+      throwsA(isA<MediaDownloadException>()),
+    );
+  });
+
   test('accepts an absolute URL only when it has the backend origin', () async {
     final service = MediaDownloadService(
       backendDio: _dio(_TicketAdapter(response: {

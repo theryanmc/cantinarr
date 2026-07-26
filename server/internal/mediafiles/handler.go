@@ -30,12 +30,14 @@ import (
 )
 
 const (
-	defaultTicketTTL          = 10 * time.Minute
-	defaultMaxTickets         = 1024
-	defaultMaxTicketsPerUser  = 32
-	maxTicketRequestBodyBytes = 4096
-	ticketRandomBytes         = 32
-	maxDownloadFilenameBytes  = 240
+	defaultTicketTTL            = 10 * time.Minute
+	defaultMaxTickets           = 1024
+	defaultMaxTicketsPerUser    = 32
+	maxTicketRequestBodyBytes   = 4096
+	ticketRandomBytes           = 32
+	maxDownloadFilenameBytes    = 240
+	maxCoveragePaths            = 200
+	maxCoverageRequestBodyBytes = 256 * 1024
 )
 
 var (
@@ -247,52 +249,8 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := auth.GetClaims(r.Context())
-	if claims == nil {
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	currentUser, err := h.users.GetUser(claims.UserID)
-	if errors.Is(err, sql.ErrNoRows) {
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	if err != nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-		return
-	}
-	if currentUser == nil {
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	if !auth.HasPermission(currentUser.Role, auth.PermissionMediaDownload) {
-		writeJSONError(w, http.StatusForbidden, "permission denied")
-		return
-	}
-	inst, err := h.store.Get(request.InstanceID)
-	if err != nil {
-		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-		return
-	}
-	if inst == nil || !supportedService(inst.ServiceType) {
-		writeJSONError(w, http.StatusNotFound, "media file unavailable")
-		return
-	}
-
-	isAdmin := auth.HasPermission(currentUser.Role, auth.PermissionInstancesManage)
-	if !isAdmin {
-		allowed, err := h.store.UserCanAccessInstance(claims.UserID, inst.ID, inst.ServiceType)
-		if err != nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
-			return
-		}
-		if !allowed {
-			writeJSONError(w, http.StatusForbidden, "permission denied")
-			return
-		}
-	}
-	if len(h.effectiveMappings(inst)) == 0 {
-		writeJSONError(w, http.StatusNotFound, "media file unavailable")
+	inst, userID, ok := h.resolveAuthorizedInstance(w, r, request.InstanceID)
+	if !ok {
 		return
 	}
 
@@ -313,7 +271,7 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 	_ = opened.file.Close()
 
 	ticket := downloadTicket{
-		userID:      claims.UserID,
+		userID:      userID,
 		instanceID:  inst.ID,
 		serviceType: inst.ServiceType,
 		fileID:      request.FileID,
@@ -333,6 +291,134 @@ func (h *Handler) IssueTicket(w http.ResponseWriter, r *http.Request) {
 		SizeBytes: opened.info.Size(),
 		ExpiresAt: expiresAt,
 	})
+}
+
+// resolveAuthorizedInstance performs the caller/instance authorization shared
+// by the authenticated media-file capability endpoints, writing the error
+// response itself when any link in the chain fails. An instance is returned
+// only when the caller currently holds the download permission, may use this
+// exact instance, and the instance has at least one effective mapping.
+func (h *Handler) resolveAuthorizedInstance(w http.ResponseWriter, r *http.Request, instanceID string) (*instance.Instance, int64, bool) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return nil, 0, false
+	}
+	currentUser, err := h.users.GetUser(claims.UserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return nil, 0, false
+	}
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
+		return nil, 0, false
+	}
+	if currentUser == nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+		return nil, 0, false
+	}
+	if !auth.HasPermission(currentUser.Role, auth.PermissionMediaDownload) {
+		writeJSONError(w, http.StatusForbidden, "permission denied")
+		return nil, 0, false
+	}
+	inst, err := h.store.Get(instanceID)
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
+		return nil, 0, false
+	}
+	if inst == nil || !supportedService(inst.ServiceType) {
+		writeJSONError(w, http.StatusNotFound, "media file unavailable")
+		return nil, 0, false
+	}
+	if !auth.HasPermission(currentUser.Role, auth.PermissionInstancesManage) {
+		allowed, err := h.store.UserCanAccessInstance(claims.UserID, inst.ID, inst.ServiceType)
+		if err != nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "temporarily unavailable, retry shortly")
+			return nil, 0, false
+		}
+		if !allowed {
+			writeJSONError(w, http.StatusForbidden, "permission denied")
+			return nil, 0, false
+		}
+	}
+	if len(h.effectiveMappings(inst)) == 0 {
+		writeJSONError(w, http.StatusNotFound, "media file unavailable")
+		return nil, 0, false
+	}
+	return inst, claims.UserID, true
+}
+
+type coverageRequest struct {
+	InstanceID string   `json:"instance_id"`
+	Paths      []string `json:"paths"`
+}
+
+type coverageResponse struct {
+	Covered []bool `json:"covered"`
+}
+
+// Coverage reports which arr-reported file paths this instance's current
+// mappings can serve, so clients only offer download affordances that can
+// actually succeed. The verdict is purely lexical — mapping translation plus
+// root containment, never a filesystem probe — so callers learn nothing about
+// which files exist on disk, only how the admin's mappings are shaped (which
+// ticket issuance's per-file conflict response already reveals).
+func (h *Handler) Coverage(w http.ResponseWriter, r *http.Request) {
+	if len(h.roots) == 0 {
+		writeJSONError(w, http.StatusServiceUnavailable, "media downloads are not configured")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxCoverageRequestBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request coverageRequest
+	if err := decoder.Decode(&request); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	request.InstanceID = strings.TrimSpace(request.InstanceID)
+	if request.InstanceID == "" || len(request.InstanceID) > 128 ||
+		len(request.Paths) == 0 || len(request.Paths) > maxCoveragePaths {
+		writeJSONError(w, http.StatusBadRequest,
+			fmt.Sprintf("instance_id and 1-%d paths are required", maxCoveragePaths))
+		return
+	}
+
+	inst, _, ok := h.resolveAuthorizedInstance(w, r, request.InstanceID)
+	if !ok {
+		return
+	}
+
+	covered := make([]bool, len(request.Paths))
+	for index, path := range request.Paths {
+		covered[index] = h.pathCovered(inst, path)
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(coverageResponse{Covered: covered})
+}
+
+// pathCovered is the lexical half of openMediaFile: would this arr-reported
+// path translate into one of the allowed roots. It deliberately never touches
+// the filesystem.
+func (h *Handler) pathCovered(inst *instance.Instance, reportedPath string) bool {
+	localPath, ok := mediapath.Translate(reportedPath, h.effectiveMappings(inst))
+	if !ok || !filepath.IsAbs(localPath) {
+		return false
+	}
+	cleaned := filepath.Clean(localPath)
+	for _, allowedRoot := range h.roots {
+		if withinRoot(allowedRoot.path, cleaned) {
+			return true
+		}
+	}
+	return false
 }
 
 // Download serves a previously-issued capability. Tickets are deliberately
@@ -509,8 +595,11 @@ func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fi
 	}
 	cleaned := filepath.Clean(localPath)
 	for _, allowedRoot := range h.roots {
+		if !withinRoot(allowedRoot.path, cleaned) {
+			continue
+		}
 		relative, err := filepath.Rel(allowedRoot.path, cleaned)
-		if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		if err != nil {
 			continue
 		}
 		file, err := allowedRoot.root.Open(relative)
@@ -533,6 +622,15 @@ func (h *Handler) openMediaFile(inst *instance.Instance, reportedPath string, fi
 
 func supportedService(serviceType string) bool {
 	return serviceType == "radarr" || serviceType == "sonarr" || serviceType == "chaptarr"
+}
+
+// withinRoot reports whether candidate is root itself or lexically inside it.
+func withinRoot(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

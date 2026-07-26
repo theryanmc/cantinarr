@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/media_download_models.dart';
 import '../data/media_download_service.dart';
+import '../logic/media_coverage_provider.dart';
 
 typedef MediaDownloadLauncher = Future<bool> Function(Uri uri);
 
@@ -22,6 +23,11 @@ class MediaDownloadButton extends ConsumerStatefulWidget {
   final bool iconOnly;
   final bool outlined;
 
+  /// The file's arr-reported path. When set, the button removes itself once
+  /// the server confirms no mapping covers the path; unknown verdicts fail
+  /// open (ticket issuance stays the authority).
+  final String? reportedPath;
+
   const MediaDownloadButton({
     super.key,
     required this.instanceId,
@@ -29,6 +35,7 @@ class MediaDownloadButton extends ConsumerStatefulWidget {
     required this.label,
     this.iconOnly = false,
     this.outlined = false,
+    this.reportedPath,
   });
 
   @override
@@ -81,6 +88,14 @@ class _MediaDownloadButtonState extends ConsumerState<MediaDownloadButton> {
 
   @override
   Widget build(BuildContext context) {
+    final path = widget.reportedPath?.trim() ?? '';
+    if (path.isNotEmpty) {
+      final key = MediaCoverageNotifier.keyFor(widget.instanceId, path);
+      final verdict = ref
+          .watch(mediaCoverageProvider.select((verdicts) => verdicts[key]));
+      ref.read(mediaCoverageProvider.notifier).ensure(widget.instanceId, path);
+      if (verdict == false) return const SizedBox.shrink();
+    }
     final onPressed = _busy || widget.fileId <= 0 ? null : _download;
     if (widget.iconOnly) {
       return IconButton(
@@ -104,7 +119,7 @@ class _MediaDownloadButtonState extends ConsumerState<MediaDownloadButton> {
   }
 }
 
-class MediaDownloadChoiceButton extends StatelessWidget {
+class MediaDownloadChoiceButton extends ConsumerWidget {
   final String instanceId;
   final List<MediaDownloadChoice> choices;
   final String label;
@@ -123,9 +138,29 @@ class MediaDownloadChoiceButton extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final available =
-        choices.where((choice) => choice.fileId > 0).toList(growable: false);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final verdicts = ref.watch(mediaCoverageProvider);
+    final notifier = ref.read(mediaCoverageProvider.notifier);
+    var anyCandidate = false;
+    final available = <MediaDownloadChoice>[];
+    for (final choice in choices) {
+      if (choice.fileId <= 0) continue;
+      anyCandidate = true;
+      final path = choice.reportedPath?.trim() ?? '';
+      if (path.isNotEmpty) {
+        notifier.ensure(instanceId, path);
+        if (verdicts[MediaCoverageNotifier.keyFor(instanceId, path)] ==
+            false) {
+          continue;
+        }
+      }
+      available.add(choice);
+    }
+    // Every real candidate is confirmed outside the instance's mappings:
+    // offering a picker of guaranteed failures helps nobody.
+    if (available.isEmpty && anyCandidate) {
+      return const SizedBox.shrink();
+    }
     if (available.length == 1) {
       return MediaDownloadButton(
         instanceId: instanceId,
@@ -133,6 +168,7 @@ class MediaDownloadChoiceButton extends StatelessWidget {
         label: label,
         iconOnly: iconOnly,
         outlined: outlined,
+        reportedPath: available.single.reportedPath,
       );
     }
 
@@ -196,6 +232,7 @@ class MediaDownloadChoiceButton extends StatelessWidget {
                       fileId: choice.fileId,
                       label: 'Download ${choice.label}',
                       iconOnly: true,
+                      reportedPath: choice.reportedPath,
                     ),
                   ),
               ],

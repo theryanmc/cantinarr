@@ -305,6 +305,7 @@ The proxy is also a transport trust boundary. `CONNECT`, `TRACE`, and `TRACK` ar
 
 ```
 POST     /api/media-files/tickets                    # authenticated: { instance_id, file_id }
+POST     /api/media-files/coverage                   # authenticated: { instance_id, paths[] } -> { covered[] }
 GET|HEAD /api/media-files/download/{ticket}          # public bearer capability until expires_at
 ```
 
@@ -313,6 +314,8 @@ Ticket issuance requires `media:download`, re-checks the caller's current accoun
 Bytes are available only when two boundaries agree: the live arr path must match a mapping owned by that exact instance, and the mapped Cantinarr path must remain beneath a configured `CANTINARR_MEDIA_ROOTS` root. In Docker the target is the container path of a read-only mount; for a native server it is an absolute local directory readable by the server process. This lets instances that both report `/ebooks` safely map to different mounts, and lets a Chaptarr instance map as many independent ebook/audiobook trees as it uses. Mapping does not infer media format from a directory name; the exact Chaptarr record remains authoritative. Files outside either boundary, directory entries, and symlink escapes are refused.
 
 Instances that predate per-instance mappings retain the former identity behavior: each global root is treated as both the arr prefix and Cantinarr prefix until an admin saves explicit mappings. Newly created instances start with downloads disabled. `/api/config.services.media_downloads` remains a compatibility aggregate and is true when at least one instance visible to the current user has an effective download mapping; each returned instance also reports its own path-free download capability so current clients show controls only for the selected instance. Neither response exposes roots or mapping paths.
+
+The `coverage` endpoint takes up to 200 arr-reported paths under the same authorization as ticket issuance and answers, per path, whether this instance's current mappings would translate it into an allowed root. The verdict is purely lexical -- it never touches the filesystem -- so it reveals mapping shape (which the ticket flow's per-file conflict already does) but nothing about which files exist. Clients use it to withhold download affordances for files no mapping covers -- for example an audiobook tree that is deliberately not mounted -- instead of offering buttons that can only fail; an instance-level capability alone cannot express that per-file truth.
 
 Tickets are opaque, bounded, reusable for ten minutes so browser HEAD probes and resumed Range requests work, and contain neither JWTs nor server paths. Every GET/HEAD re-checks that the user still exists, uses the user's current role, re-checks effective-instance access for non-admins, re-fetches the live file record, and applies the current mapping. Responses are attachment-only `application/octet-stream` with no-store, no-referrer, nosniff, same-origin resource policy, and sandbox CSP headers; errors never expose arr hosts, filesystem paths, or OS details. Delivery covers the primary files indexed by Radarr, Sonarr, and Chaptarr, not arbitrary neighboring files, subtitles, extras, or directories. Multi-file audiobooks remain individual file choices rather than being packaged into an archive.
 

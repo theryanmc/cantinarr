@@ -404,6 +404,7 @@ class _FileCard extends ConsumerWidget {
               fileId: file.id,
               label: 'Download movie file',
               iconOnly: true,
+              reportedPath: file.path,
             ),
         ],
       ),

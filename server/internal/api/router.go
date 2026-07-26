@@ -259,6 +259,14 @@ func NewRouter(
 			auth.RequirePermission(auth.PermissionMediaDownload),
 		).Post("/media-files/tickets", mediaFilesHandler.IssueTicket)
 
+		// Batch lexical check of arr-reported paths against the instance's
+		// mappings so clients can hide download affordances that could never
+		// succeed. Never touches the filesystem.
+		r.With(
+			authService.AuthMiddleware,
+			auth.RequirePermission(auth.PermissionMediaDownload),
+		).Post("/media-files/coverage", mediaFilesHandler.Coverage)
+
 		// Device push-token + notification preference routes (authenticated).
 		// Any signed-in user may register/clear the APNs token for one of their
 		// own devices, read/update their own notification preferences, and fire

@@ -294,6 +294,7 @@ class _FormatSection extends ConsumerWidget {
             fileId: files[i].id,
             label: _chaptarrFileLabel(files[i], i),
             subtitle: _chaptarrFileSubtitle(files[i]),
+            reportedPath: files[i].path,
           ),
     ];
     return InkWell(

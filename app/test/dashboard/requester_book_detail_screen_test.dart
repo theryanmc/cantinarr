@@ -217,6 +217,42 @@ void main() {
     expect(find.textContaining(r'Z:\'), findsNothing);
   });
 
+  testWidgets('a download affordance is withheld for files outside the mappings',
+      (tester) async {
+    final adapter = _BooksAdapter(
+      bookFiles: true,
+      coverage: {
+        '/library/E. K. Johnston/Ahsoka.epub': true,
+        r'Z:\Audiobooks\E. K. Johnston\Ahsoka.m4b': false,
+      },
+    );
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      authState: _downloadBooksState,
+      adapter: adapter,
+    );
+
+    router.go('/detail/book/29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byTooltip('Download eBook'),
+      250,
+      scrollable: _detailScrollable(),
+    );
+    expect(find.byTooltip('Download eBook'), findsOneWidget);
+    // The audiobook file exists in Chaptarr but no mapping covers it, so no
+    // affordance that could only ever fail is offered.
+    expect(find.byTooltip('Download audiobook'), findsNothing);
+    expect(
+      adapter.coveragePaths.toSet(),
+      containsAll({
+        '/library/E. K. Johnston/Ahsoka.epub',
+        r'Z:\Audiobooks\E. K. Johnston\Ahsoka.m4b',
+      }),
+    );
+  });
+
   testWidgets('enabling this instance refreshes downloads on an open detail',
       (tester) async {
     final (:router, :container) = await _pumpRouter(
@@ -510,6 +546,10 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool mismatchedLookupAuthor;
   final bool partiallyUnknownStatus;
   final bool bookFiles;
+
+  /// Coverage verdicts by reported path; unlisted paths count as covered.
+  final Map<String, bool> coverage;
+  final coveragePaths = <String>[];
   final libraryInstanceIds = <String>[];
   final statusInstanceIds = <String>[];
   final statusForeignIds = <String>[];
@@ -523,6 +563,7 @@ class _BooksAdapter implements HttpClientAdapter {
     this.mismatchedLookupAuthor = false,
     this.partiallyUnknownStatus = false,
     this.bookFiles = false,
+    this.coverage = const {},
   });
 
   @override
@@ -532,7 +573,15 @@ class _BooksAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final Object body;
-    if (options.method == 'POST' && options.path == '/api/requests') {
+    if (options.method == 'POST' &&
+        options.path == '/api/media-files/coverage') {
+      final data = Map<String, dynamic>.from(options.data as Map);
+      final paths = (data['paths'] as List).cast<String>();
+      coveragePaths.addAll(paths);
+      body = {
+        'covered': [for (final path in paths) coverage[path] ?? true],
+      };
+    } else if (options.method == 'POST' && options.path == '/api/requests') {
       final data = Map<String, dynamic>.from(options.data as Map);
       requestBodies.add(data);
       final format = data['book_format'] as String;

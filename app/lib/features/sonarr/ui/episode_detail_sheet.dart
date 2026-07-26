@@ -179,6 +179,7 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
                     fileId: e.episodeFileId,
                     label: 'Download episode',
                     outlined: true,
+                    reportedPath: e.episodeFile?.path,
                   ),
                 ),
               ],
