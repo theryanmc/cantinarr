@@ -138,12 +138,31 @@ func TestMediaDownloadsConfiguredUsesCurrentAccessibleRoots(t *testing.T) {
 		t.Fatal("mapping with an unavailable target was advertised")
 	}
 
-	identity := &Instance{
+	// The retired identity bridge advertises nothing: only explicitly saved
+	// mappings count, and a stored legacy row reads back as disabled.
+	legacy := &Instance{
 		ServiceType:       "radarr",
-		MediaDownloadMode: MediaDownloadModeIdentity,
+		MediaDownloadMode: "identity",
 	}
-	if !identity.MediaDownloadsConfigured([]string{root}) {
-		t.Fatal("legacy identity mapping over an accessible root was not advertised")
+	if legacy.MediaDownloadsConfigured([]string{root}) {
+		t.Fatal("retired identity mode was advertised")
+	}
+
+	s := newTestStore(t)
+	storedID := mkInstance(t, s, "radarr", "Legacy")
+	if _, err := s.db.Exec(
+		"UPDATE service_instances SET media_download_mode = 'identity' WHERE id = ?",
+		storedID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.Get(storedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.MediaDownloadMode != MediaDownloadModeDisabled || len(stored.MediaPathMappings) != 0 {
+		t.Fatalf("stored legacy identity read back as %q %+v, want disabled with no mappings",
+			stored.MediaDownloadMode, stored.MediaPathMappings)
 	}
 }
 
