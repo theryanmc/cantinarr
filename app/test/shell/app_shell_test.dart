@@ -186,6 +186,48 @@ void main() {
     );
   });
 
+  testWidgets('scrolling a pushed route leaves the module search bar alone',
+      (tester) async {
+    final router = await _pumpScrollShell(tester);
+    final topBar = find.byKey(const ValueKey('module-top-bar'));
+    final expanded = tester.getSize(topBar).height;
+    expect(expanded, greaterThan(0));
+
+    router.push('/movie/1');
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const ValueKey('detail-scroll')),
+        const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    router.pop();
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(topBar).height,
+      expanded,
+      reason: 'the dashboard is still at the top, so its search bar is too',
+    );
+  });
+
+  testWidgets('opening another module page brings the search bar back',
+      (tester) async {
+    final router = await _pumpScrollShell(tester);
+    final topBar = find.byKey(const ValueKey('module-top-bar'));
+    final expanded = tester.getSize(topBar).height;
+
+    await tester.drag(
+        find.byKey(const ValueKey('dash-scroll')), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(topBar).height, lessThan(expanded));
+
+    router.go('/radarr/library');
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(topBar).height,
+      expanded,
+      reason: 'a fresh module page starts at the top with its search bar shown',
+    );
+  });
+
   testWidgets(
       'search-bar assistant submit opens route over previous shell content',
       (tester) async {
@@ -507,6 +549,59 @@ Future<void> _pumpAdminDrawer(
 
   await tester.tap(find.byIcon(Icons.menu));
   await tester.pumpAndSettle();
+}
+
+/// Shell over long scrollable pages: two module routes and one pushed route.
+Future<GoRouter> _pumpScrollShell(WidgetTester tester) async {
+  tester.view.physicalSize = const Size(390, 844);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(() {
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
+  Widget page(String key) => Scaffold(
+        body: ListView(
+          key: ValueKey(key),
+          children: const [SizedBox(height: 3000)],
+        ),
+      );
+
+  final router = GoRouter(
+    initialLocation: '/dashboard/movies',
+    routes: [
+      ShellRoute(
+        builder: (context, state, child) =>
+            AppShell(currentPath: state.uri.path, child: child),
+        routes: [
+          GoRoute(
+            path: '/dashboard/movies',
+            builder: (_, __) => page('dash-scroll'),
+          ),
+          GoRoute(
+            path: '/radarr/library',
+            builder: (_, __) => page('radarr-scroll'),
+          ),
+          GoRoute(path: '/movie/1', builder: (_, __) => page('detail-scroll')),
+        ],
+      ),
+    ],
+  );
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        authProvider.overrideWith(
+          () => _FakeAuthNotifier(_authenticatedAiState),
+        ),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+        realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+      ],
+      child: MaterialApp.router(routerConfig: router),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return router;
 }
 
 const _authenticatedAiState = AuthState(
