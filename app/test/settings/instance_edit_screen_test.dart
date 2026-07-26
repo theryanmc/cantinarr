@@ -463,6 +463,58 @@ void main() {
     ]);
   });
 
+  testWidgets('legacy identity mappings are labeled as a compatibility default',
+      (tester) async {
+    final legacy = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_download_mode': 'identity',
+      'media_path_mappings': [
+        {'arr_path': '/media/ebooks', 'cantinarr_path': '/media/ebooks'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [Map.of(_mainRadarr), legacy]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    expect(find.textContaining('Compatibility default'), findsOneWidget);
+  });
+
+  testWidgets('explicitly saved mappings carry no compatibility notice',
+      (tester) async {
+    final mapped = {
+      ..._radarrB,
+      'media_downloads': true,
+      'media_download_mode': 'mapped',
+      'media_path_mappings': [
+        {'arr_path': '/movies', 'cantinarr_path': '/media/movies'},
+      ],
+    };
+    final adapter = _FakeAdapter(instances: [Map.of(_mainRadarr), mapped]);
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+
+    expect(find.textContaining('Compatibility default'), findsNothing);
+  });
+
   testWidgets('edit offers reported arr folders and tap-to-map fills a row',
       (tester) async {
     final editable = {
