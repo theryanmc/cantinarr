@@ -52,6 +52,7 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 | `README.md` | Product pitch, feature list, quick start, configuration & env-var tables |
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
+| `docs/books-setup.md` | End-to-end book automation setup: Chaptarr instance, per-user access grant (no global default), instant updates, download path mappings |
 | `docs/store-release.md` | Store release pipeline: how builds reach TestFlight/Play, signing secrets, one-time store-console setup |
 | `AGENTS.md` | Workflows, verification, conventions (this file) |
 

@@ -128,7 +128,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 |---|---|---|
 | TMDB access token | Admin UI | Required for media discovery and search ([get one here](https://www.themoviedb.org/settings/api)) |
 | Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
-| Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings |
+| Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings -- full walkthrough in [`docs/books-setup.md`](docs/books-setup.md) |
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
 | Tautulli instance | Admin UI | Plex activity, watch history, stats |
 | Anthropic/OpenAI/Gemini API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
@@ -233,6 +233,10 @@ Movies don't need bridging -- Radarr natively supports TMDB IDs. Books are keyed
 ## API Reference
 
 Full API documentation is in [`server/README.md`](server/README.md#api-reference).
+
+## Related Projects
+
+- [**mam-chaptarr-protonvpn-skill**](https://github.com/windoze95/mam-chaptarr-protonvpn-skill) -- an agent skill for building the layer *below* Cantinarr's books module: a VPN-isolated Gluetun/ProtonVPN stack running Chaptarr and qBittorrent in one network namespace, with forwarded-port sync, separated indexer and tracker-host sessions, and end-to-end verification. Useful if you're standing up book automation from scratch and want the container topology right the first time. Independent project; [`docs/books-setup.md`](docs/books-setup.md) shows where it fits.
 
 ## Contributing
 
