@@ -1002,10 +1002,10 @@ func (s *Service) promoteObservationNeedsAdmin(issueID int64, now time.Time, rea
 		"UPDATE issue_observations SET promoted_at=COALESCE(promoted_at,?),updated_at=? WHERE issue_id=?",
 		now, now, issueID,
 	)
-	var title, source, status string
+	var status string
 	var closed sql.NullTime
-	if err := s.db.QueryRow("SELECT title,source,status,closed_at FROM issues WHERE id=?", issueID).Scan(&title, &source, &status, &closed); err == nil && !closed.Valid && status == IssueNeedsAdmin {
-		s.notifyIssueCreatedWithSource(issueID, title, source)
+	if err := s.db.QueryRow("SELECT status,closed_at FROM issues WHERE id=?", issueID).Scan(&status, &closed); err == nil && !closed.Valid && status == IssueNeedsAdmin {
+		s.queueIssueAlert(issueID, now)
 	}
 	return nil
 }
@@ -1016,13 +1016,12 @@ func (s *Service) promoteObservedIssue(issueID int64, now time.Time) error {
 		return err
 	}
 	defer tx.Rollback()
-	var source, title string
 	var promoted sql.NullTime
 	if err := tx.QueryRow(
-		`SELECT i.source, i.title, o.promoted_at
+		`SELECT o.promoted_at
 		 FROM issues i JOIN issue_observations o ON o.issue_id=i.id
 		 WHERE i.id=? AND i.closed_at IS NULL`, issueID,
-	).Scan(&source, &title, &promoted); err != nil {
+	).Scan(&promoted); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -1060,7 +1059,7 @@ func (s *Service) promoteObservedIssue(issueID int64, now time.Time) error {
 		var current string
 		var closed sql.NullTime
 		if err := s.db.QueryRow("SELECT status,closed_at FROM issues WHERE id=?", issueID).Scan(&current, &closed); err == nil && !closed.Valid && current == IssueOpen {
-			s.notifyIssueCreatedWithSource(issueID, title, source)
+			s.queueIssueAlert(issueID, now)
 		}
 	} else {
 		s.pingIssueUpdated(issueID)
@@ -1698,6 +1697,7 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 		}()
 		go func() {
 			a.sweepObservedInstances()
+			a.svc.flushIssueAlerts(time.Now().UTC())
 			ticker := time.NewTicker(observationSweepPeriod)
 			defer ticker.Stop()
 			for {
@@ -1706,6 +1706,10 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 					return
 				case <-ticker.C:
 					a.sweepObservedInstances()
+					// Owed admin pushes advance on the same clock that moves
+					// incidents in and out of tracking, so a hold-down is
+					// always measured against fresh state.
+					a.svc.flushIssueAlerts(time.Now().UTC())
 				}
 			}
 		}()

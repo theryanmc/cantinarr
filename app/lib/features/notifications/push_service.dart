@@ -191,6 +191,15 @@ class PushService {
         final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';
         router.push('/detail/$mediaType/$tmdbId');
       case 'issue_created':
+        // A coalesced alert stands for a whole wave of incidents, so it carries
+        // no issue_id — the list is the only honest destination. A single-issue
+        // alert still deep-links to its thread.
+        final createdId = _asInt(data['issue_id']);
+        if (createdId == null || createdId <= 0) {
+          router.push('/issues');
+          return;
+        }
+        router.push('/issues/$createdId');
       case 'issue_updated':
       case 'issue_resolved':
       case 'agent_action_decided':

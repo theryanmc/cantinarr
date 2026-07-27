@@ -357,6 +357,19 @@ CREATE INDEX IF NOT EXISTS idx_issue_observations_scope
 CREATE INDEX IF NOT EXISTS idx_issue_observations_service
     ON issue_observations(service_type, issue_id);
 
+-- Admin pushes owed for issues that have left passive tracking, held until the
+-- promotion proves durable. Promotion is an edge, not a verdict: the next
+-- complete snapshot routinely returns an incident to tracking (a stalled
+-- download resumes) or the agent closes it outright, and either way no admin
+-- ever needed paging. One row per issue, so a whole wave of episode-scoped
+-- incidents coalesces into a single alert instead of one per episode.
+CREATE TABLE IF NOT EXISTS issue_alert_queue (
+    issue_id INTEGER PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+    queued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP -- restarted whenever the issue falls back to tracking
+);
+CREATE INDEX IF NOT EXISTS idx_issue_alert_queue_queued_at
+    ON issue_alert_queue(queued_at);
+
 CREATE TABLE IF NOT EXISTS issue_observation_downloads (
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     download_id TEXT NOT NULL,

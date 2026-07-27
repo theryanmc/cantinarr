@@ -350,6 +350,69 @@ func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
 	}
 }
 
+// A batch cause produces one incident per exact media scope, so a coalesced
+// alert has to say how many rather than fan out one identical line per episode.
+// It also collapses by source: the summary is a state, and a later summary
+// replaces it instead of stacking.
+func TestNotifyAdminsCoalescesAnIssueWave(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"source":     "auto",
+		"count":      13,
+		"open_count": 13,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Problems need attention" {
+		t.Errorf("title = %v, want plural automatic-incident copy", notif["title"])
+	}
+	if notif["body"] != "Cantinarr found 13 media problems that did not recover automatically" {
+		t.Errorf("body = %v, want a counted summary", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if _, ok := data["issue_id"]; ok {
+		t.Errorf("coalesced alert deep-linked a single incident: %v", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "issue_created:auto" {
+		t.Errorf("collapse_id = %v, want issue_created:auto", opts["collapse_id"])
+	}
+}
+
+// The singular path must not gain a collapse id: distinct one-off reports are
+// distinct alerts, and collapsing them would hide one behind the next.
+func TestNotifyAdminsKeepsSingleIssueAlertUncollapsed(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{"issue_id": 7, "count": 1})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "New problem reported" {
+		t.Errorf("title = %v, want singular reporter copy", notif["title"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if _, ok := opts["collapse_id"]; ok {
+		t.Errorf("single issue alert collapsed: %v", opts["collapse_id"])
+	}
+}
+
 func TestNotifyAdminsUsesSharedAIHealthIssueCopy(t *testing.T) {
 	database, err := dbOpen(t)
 	if err != nil {
