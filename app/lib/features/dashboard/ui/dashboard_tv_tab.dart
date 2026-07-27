@@ -135,18 +135,18 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
       child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          if (discover.popularTV.isNotEmpty)
+          if (discover.featured.isNotEmpty)
             FeaturedMediaHero(
-              item: discover.popularTV.first,
+              item: discover.featured.first,
               eyebrow: 'Series spotlight',
               onTap: () => context.push(
-                '/detail/tv/${discover.popularTV.first.id}',
+                '/detail/tv/${discover.featured.first.id}',
               ),
             ),
           CategoryRow(
-            title: 'Popular TV Shows',
-            items: discover.popularTV.skip(1).toList(growable: false),
-            isLoading: discover.isLoadingPopular,
+            title: discover.featuredTitle,
+            items: discover.featured.skip(1).toList(growable: false),
+            isLoading: discover.isLoadingFeatured,
           ),
           if (discover.anticipated.isNotEmpty)
             CategoryRow(

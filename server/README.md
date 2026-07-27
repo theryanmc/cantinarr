@@ -171,6 +171,15 @@ PUT    /api/admin/update-status            # set the management-portal URL ({ ma
 ```
 Backs the app's "update available" banner. The server compares its own build version against the latest published GitHub release (`windoze95/cantinarr`), cached ~12h, best-effort and non-blocking; only real semver-tagged builds check (dev/`latest`/PR builds never contact GitHub), and `CANTINARR_DISABLE_UPDATE_CHECK=1` turns it off. `management_url` is an optional admin-set link to a container-management portal the banner points at. Unlike instance URLs (which only the server dials), this link opens **on the admin's own devices**, so it must be reachable from them -- a cluster-internal name that only the server resolves won't work from a phone. The running version is also surfaced to all clients (for the About screen) in `/api/config` as `version`.
 
+### Discovery settings (admin)
+```
+GET    /api/admin/discovery-settings       # source + english_only, the valid sources, trakt_configured
+PUT    /api/admin/discovery-settings       # set the row source ({ source, english_only })
+```
+Decides what backs the headline row on the Movies and TV tabs. `source` is one of `tmdb_trending` (TMDB's weekly trending feed, the default), `trakt_trending` (Trakt trending, ranked by who is watching right now), or `tmdb_popular` (TMDB's lifetime popularity ranking). TMDB's popularity value is a lifetime score, so `tmdb_popular` fills with long-running catalogue shows and nightly talk shows -- the trending feeds are short-window and self-correcting, which is why one of them is the default. `trakt_configured` reports whether the Trakt source can be selected at all; picking it without a Trakt client ID falls back to `tmdb_trending` rather than blanking the row.
+
+`english_only` drops titles whose original language is not English from the discovery and recommendation feeds. It never applies to search or to detail lookups -- a title you went looking for stays findable -- and a title the metadata source did not classify is kept rather than hidden.
+
 ### AI configuration history (admin)
 ```
 GET    /api/admin/external-settings-changes          # list AI/MCP profile/custom-format writes
@@ -230,6 +239,7 @@ GET    /api/admin/agent-runs/{id}          # admin: full audit trail of one agen
 ### Discover & media (user)
 ```
 GET /api/discover/trending | /discover/movies/popular | /discover/tv/popular
+GET /api/discover/movies/featured | /discover/tv/featured  # the configured headline row
 GET /api/discover/movies/top-rated | upcoming | now-playing
 GET /api/discover/movies | /api/discover/tv          # filterable discover
 GET /api/search                                      # multi-search
@@ -239,7 +249,7 @@ GET /api/genres/movie | /api/genres/tv | /api/providers/movie
 GET /api/trakt/trending | popular | lists | lists/{user}/{slug}/items
 GET /api/trakt/calendar | anticipated | recommendations
 ```
-TMDB and Trakt are proxied server-side -- client devices never hold those keys.
+TMDB and Trakt are proxied server-side -- client devices never hold those keys. `/featured` serves whichever feed the admin selected (see [Discovery settings](#discovery-settings-admin)), normalized to the TMDB page shape plus a `source` field so one client parser handles every source and the row can name what it is showing. The discovery and recommendation feeds also honor the admin's `english_only` preference; search and detail lookups never do.
 
 ### AI chat (user)
 ```
@@ -544,7 +554,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | AI configuration history | `external_setting_changes` (append-only AI/MCP quality-profile/custom-format outcomes, server-held before/applied snapshots, and linked quality-profile restores) |
 | Remediation | `issues` (exact arr-scoped reports plus admin-only system alerts, with closure provenance; book issues store the Chaptarr author/book record ids in place of TMDB/TVDB identity), `issue_observations` (durable retry/settle clocks, baseline + compact import receipt), `issue_observation_downloads` (incident download IDs + arr attempt/file boundaries), `issue_observation_attempts` (transition audit), `remediation_queue_snapshots` (latest successful minimal typed snapshot), `remediation_observation_failures` (bounded outage timer), `remediation_observation_watermarks` (monotonic per-instance success/failure ordering), `issue_messages`, `agent_runs`, `agent_steps`, `agent_actions` (one active proposal per issue; immutable proposal + approved params) |
 | MCP OAuth | `oauth_clients`, `oauth_authorization_codes`, `oauth_refresh_tokens` |
-| Misc | `settings` (encrypted KV: JWT secret, push key, request policy, Plex token + invite config), `tmdb_tvdb_cache` (30-day TTL) |
+| Misc | `settings` (encrypted KV: JWT secret, push key, request policy, Plex token + invite config, and the `server_settings` blob holding the management-portal URL plus the discovery row source/language preferences), `tmdb_tvdb_cache` (30-day TTL) |
 
 ## Project Structure
 

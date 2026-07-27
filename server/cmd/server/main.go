@@ -257,20 +257,22 @@ func main() {
 	wsHub.SetIssueOpener(autoDispatcher)
 	go wsHub.Run(ctx)
 
+	// Server settings: the admin-configured management-portal URL the update
+	// banner links to, plus the discovery preferences the rows read per request.
+	serverSettings := serversettings.NewService(database)
+
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
 	defer apiCache.Close()
-	discoverHandler := discover.NewHandler(creds, apiCache)
+	discoverHandler := discover.NewHandler(creds, apiCache, serverSettings)
 
 	// Arr webhook receiver (Sonarr/Radarr → Connect → Webhook): pushes
 	// out-of-band library changes (manual imports, deletes) into the same WS
 	// events and content pushes the queue-poll witness emits.
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
 
-	// Update checker (GitHub release comparison) + server settings (the
-	// admin-configured management-portal URL the update banner links to).
+	// Update checker (GitHub release comparison).
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
-	serverSettings := serversettings.NewService(database)
 
 	// Router
 	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)

@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
 // TTL constants for different content types.
@@ -22,15 +23,33 @@ const (
 	ttlTrakt          = 10 * time.Minute
 )
 
+// DiscoveryPrefs supplies the admin-chosen discovery preferences. The handler
+// reads them per request, so changing the source or the language filter takes
+// effect on the next row refresh rather than on the next restart.
+type DiscoveryPrefs interface {
+	Get() serversettings.Settings
+}
+
 // Handler serves discovery endpoints, proxying TMDB/Trakt with caching.
 type Handler struct {
 	creds *credentials.Registry
 	cache *cache.Cache
+	prefs DiscoveryPrefs
 }
 
 // NewHandler creates a new discover handler.
-func NewHandler(creds *credentials.Registry, c *cache.Cache) *Handler {
-	return &Handler{creds: creds, cache: c}
+func NewHandler(creds *credentials.Registry, c *cache.Cache, prefs DiscoveryPrefs) *Handler {
+	return &Handler{creds: creds, cache: c, prefs: prefs}
+}
+
+// discoveryPrefs reads the current preferences, falling back to the defaults
+// when no settings service is wired in.
+func (h *Handler) discoveryPrefs() (source string, englishOnly bool) {
+	if h.prefs == nil {
+		return serversettings.DefaultDiscoverySource, false
+	}
+	current := h.prefs.Get()
+	return current.DiscoverySource, current.DiscoveryEnglishOnly
 }
 
 // helper: write raw JSON bytes as response
@@ -51,8 +70,25 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return n
 }
 
-// cachedTMDB checks credentials, then cache, then calls TMDB on miss.
+// cachedTMDB checks credentials, then cache, then calls TMDB on miss. The body
+// comes back verbatim — use it for lookups the admin's row preferences must not
+// touch (search, details, genres, providers).
 func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
+	h.serveTMDB(w, cacheKey, ttl, path, params, false)
+}
+
+// cachedTMDBFeed is cachedTMDB for the discovery feeds, honoring the admin's
+// English-only preference. The preference is part of the cache key so flipping
+// it never serves the other variant's rows.
+func (h *Handler) cachedTMDBFeed(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values) {
+	_, englishOnly := h.discoveryPrefs()
+	if englishOnly {
+		cacheKey += ":en"
+	}
+	h.serveTMDB(w, cacheKey, ttl, path, params, englishOnly)
+}
+
+func (h *Handler) serveTMDB(w http.ResponseWriter, cacheKey string, ttl time.Duration, path string, params url.Values, englishOnly bool) {
 	tmdbClient := h.creds.TMDB()
 	if tmdbClient == nil {
 		http.Error(w, `{"error":"TMDB is not configured"}`, http.StatusServiceUnavailable)
@@ -66,6 +102,9 @@ func (h *Handler) cachedTMDB(w http.ResponseWriter, cacheKey string, ttl time.Du
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
+	}
+	if englishOnly {
+		data = filterEnglishFeed(data)
 	}
 	h.cache.Set(cacheKey, data, ttl)
 	writeJSON(w, data)
@@ -101,42 +140,42 @@ func (h *Handler) Trending(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("trending:%s:%d", tw, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, fmt.Sprintf("/trending/all/%s", tw), params)
+	h.cachedTMDBFeed(w, key, ttlTrending, fmt.Sprintf("/trending/all/%s", tw), params)
 }
 
 func (h *Handler) PopularMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("pop_movies:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, "/movie/popular", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/popular", params)
 }
 
 func (h *Handler) PopularTV(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("pop_tv:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, "/tv/popular", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/tv/popular", params)
 }
 
 func (h *Handler) TopRatedMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("top_movies:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, "/movie/top_rated", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/top_rated", params)
 }
 
 func (h *Handler) UpcomingMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("upcoming:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, "/movie/upcoming", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/upcoming", params)
 }
 
 func (h *Handler) NowPlayingMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("now_playing:%d", page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlTrending, "/movie/now_playing", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/movie/now_playing", params)
 }
 
 func (h *Handler) DiscoverMovies(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +189,7 @@ func (h *Handler) DiscoverMovies(w http.ResponseWriter, r *http.Request) {
 		params.Set("page", "1")
 	}
 	key := "disc_movies:" + params.Encode()
-	h.cachedTMDB(w, key, ttlTrending, "/discover/movie", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/movie", params)
 }
 
 func (h *Handler) DiscoverTV(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +203,7 @@ func (h *Handler) DiscoverTV(w http.ResponseWriter, r *http.Request) {
 		params.Set("page", "1")
 	}
 	key := "disc_tv:" + params.Encode()
-	h.cachedTMDB(w, key, ttlTrending, "/discover/tv", params)
+	h.cachedTMDBFeed(w, key, ttlTrending, "/discover/tv", params)
 }
 
 func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +249,7 @@ func (h *Handler) MovieRecommendations(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("movie_rec:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/recommendations", id), params)
+	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/recommendations", id), params)
 }
 
 func (h *Handler) TVRecommendations(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +257,7 @@ func (h *Handler) TVRecommendations(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("tv_rec:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/recommendations", id), params)
+	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/recommendations", id), params)
 }
 
 func (h *Handler) SimilarMovies(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +265,7 @@ func (h *Handler) SimilarMovies(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("movie_sim:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/similar", id), params)
+	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/movie/%s/similar", id), params)
 }
 
 func (h *Handler) SimilarTV(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +273,7 @@ func (h *Handler) SimilarTV(w http.ResponseWriter, r *http.Request) {
 	page := queryInt(r, "page", 1)
 	key := fmt.Sprintf("tv_sim:%s:%d", id, page)
 	params := url.Values{"page": {strconv.Itoa(page)}}
-	h.cachedTMDB(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/similar", id), params)
+	h.cachedTMDBFeed(w, key, ttlRecommendation, fmt.Sprintf("/tv/%s/similar", id), params)
 }
 
 func (h *Handler) MovieGenres(w http.ResponseWriter, r *http.Request) {

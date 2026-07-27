@@ -175,6 +175,11 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/update-status", updateStatusHandler(updateChecker, serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/update-status", updateServerSettingsHandler(updateChecker, serverSettings))
 
+			// Which feed backs the headline discovery rows, and whether those
+			// rows drop non-English originals.
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
+
 			// Plex integration: link the admin's Plex account (PIN flow), pick
 			// the server/libraries invites share, and send one-tap invites for
 			// a user's shared Plex email.
@@ -312,6 +317,9 @@ func NewRouter(
 			r.Get("/discover/trending", discoverHandler.Trending)
 			r.Get("/discover/movies/popular", discoverHandler.PopularMovies)
 			r.Get("/discover/tv/popular", discoverHandler.PopularTV)
+			// The headline rows: whichever feed the admin configured, in one shape.
+			r.Get("/discover/movies/featured", discoverHandler.FeaturedMovies)
+			r.Get("/discover/tv/featured", discoverHandler.FeaturedTV)
 			r.Get("/discover/movies/top-rated", discoverHandler.TopRatedMovies)
 			r.Get("/discover/movies/upcoming", discoverHandler.UpcomingMovies)
 			r.Get("/discover/movies/now-playing", discoverHandler.NowPlayingMovies)

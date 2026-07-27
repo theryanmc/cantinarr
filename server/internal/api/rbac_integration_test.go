@@ -469,7 +469,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	webhookHandler := webhooks.NewHandler(store, instanceRegistry, hub, requestService, nil)
 	discoverCache := cache.New()
 	t.Cleanup(discoverCache.Close)
-	discoverHandler := discover.NewHandler(registry, discoverCache)
+	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database))
 
 	cfg := &config.Config{
 		PublicURL:          "http://cantinarr.test",

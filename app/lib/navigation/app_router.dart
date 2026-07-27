@@ -44,6 +44,7 @@ import '../features/radarr/ui/radarr_wanted_screen.dart';
 import '../features/settings/ui/ai_tools_screen.dart';
 import '../features/settings/ui/credentials_screen.dart';
 import '../features/settings/ui/devices_screen.dart';
+import '../features/settings/ui/discovery_settings_screen.dart';
 import '../features/settings/ui/plex_settings_screen.dart';
 import '../features/settings/ui/instance_edit_screen.dart';
 import '../features/settings/ui/pending_requests_screen.dart';
@@ -584,6 +585,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/settings/request-settings',
             builder: (_, __) =>
                 const AppAmbientBackground(child: RequestSettingsScreen()),
+          ),
+          GoRoute(
+            path: '/settings/discovery',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: DiscoverySettingsScreen()),
           ),
           GoRoute(
             path: '/settings/devices',

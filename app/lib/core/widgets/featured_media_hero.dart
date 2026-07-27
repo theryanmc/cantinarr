@@ -36,9 +36,13 @@ class _FeaturedMediaHeroState extends State<FeaturedMediaHero> {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final emphasized = _isHovered || _isFocused;
     final imagePath = widget.item.backdropPath ?? widget.item.posterPath;
-    final imageUrl = widget.item.backdropPath != null
-        ? AppConfig.tmdbBackdrop(imagePath, width: 1280)
-        : AppConfig.tmdbPoster(imagePath, width: 780);
+    // Trakt-sourced rows carry absolute CDN URLs rather than TMDB paths, so
+    // only a bare path gets the TMDB image host prefixed onto it.
+    final imageUrl = imagePath != null && imagePath.startsWith('http')
+        ? imagePath
+        : widget.item.backdropPath != null
+            ? AppConfig.tmdbBackdrop(imagePath, width: 1280)
+            : AppConfig.tmdbPoster(imagePath, width: 780);
     final year = _year(widget.item.releaseDate);
     final rating = widget.item.voteAverage;
 
