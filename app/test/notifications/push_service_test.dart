@@ -373,11 +373,23 @@ void main() {
       });
     }
 
-    test('issue payloads without a usable issue_id do not navigate', () async {
+    test('a coalesced issue_created alert opens the issue list', () async {
+      // A wave of incidents has no single thread to open, so the alert carries
+      // a count instead of an issue_id and the list is the honest destination.
       final h = _Harness();
-      await _emitNativeCall('onNotificationTap', {'type': 'issue_created'});
       await _emitNativeCall(
-          'onNotificationTap', {'type': 'issue_updated', 'issue_id': 0});
+          'onNotificationTap', {'type': 'issue_created', 'count': 13});
+      await _emitNativeCall(
+          'onNotificationTap', {'type': 'issue_created', 'issue_id': 0});
+      expect(h.router.pushed, ['/issues', '/issues']);
+    });
+
+    test('non-created issue payloads without an issue_id do not navigate',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {'type': 'issue_updated'});
+      await _emitNativeCall(
+          'onNotificationTap', {'type': 'issue_resolved', 'issue_id': 0});
       expect(h.router.pushed, isEmpty);
     });
 

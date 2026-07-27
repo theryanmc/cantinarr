@@ -23,7 +23,10 @@ const (
 // issue notifies admins. It satisfies the Notifier interface.
 type fakeNotifier struct {
 	adminEvents []string
-	userEvents  []string
+	// adminData is adminEvents' payload, index-aligned, for the assertions that
+	// care what an alert said (a coalesced wave carries a count, not an issue id).
+	adminData  []map[string]interface{}
+	userEvents []string
 }
 
 func (f *fakeNotifier) NotifyUser(userID int64, eventType string, data map[string]interface{}) {
@@ -32,6 +35,7 @@ func (f *fakeNotifier) NotifyUser(userID int64, eventType string, data map[strin
 
 func (f *fakeNotifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 	f.adminEvents = append(f.adminEvents, eventType)
+	f.adminData = append(f.adminData, data)
 }
 
 // setupTestService builds a remediation service over an in-memory DB (which runs

@@ -151,16 +151,46 @@ func (n *Notifier) notifyIssueCreated(client *Client, data map[string]interface{
 	if v, ok := data["issue_id"]; ok {
 		out["issue_id"] = v
 	}
-	title := "New problem reported"
-	body := "Someone reported a problem with their media"
-	if str(data["source"]) == "auto" {
-		title = "Problem needs attention"
-		body = "Cantinarr found a media problem that did not recover automatically"
-	} else if str(data["source"]) == "system" {
-		title = "Shared AI needs attention"
-		body = "Cantinarr's shared AI model failed its daily response test"
+	source := str(data["source"])
+	count, ok := intval(data["count"])
+	if !ok || count < 1 {
+		count = 1
 	}
-	n.sendWithOptions(client, recipients, title, body, out, SendOptions{})
+	title, body := issueAlertText(source, count)
+	var opts SendOptions
+	if count > 1 {
+		// A coalesced wave is a state summary, not one incident's event:
+		// collapsing by source replaces the previous summary instead of stacking
+		// another identical line, which is the whole point of coalescing.
+		opts.CollapseID = fmt.Sprintf("%s:%s", CategoryIssueCreated, source)
+	}
+	n.sendWithOptions(client, recipients, title, body, out, opts)
+}
+
+// issueAlertText picks the fixed lock-screen template for an issue alert. Every
+// string is server-authored and the count is an integer the server computed, so
+// no untrusted title or reason reaches the lock screen at any count.
+func issueAlertText(source string, count int) (title, body string) {
+	switch source {
+	case "auto":
+		if count > 1 {
+			return "Problems need attention",
+				fmt.Sprintf("Cantinarr found %d media problems that did not recover automatically", count)
+		}
+		return "Problem needs attention",
+			"Cantinarr found a media problem that did not recover automatically"
+	case "system":
+		// Shared-AI health is a single server-wide condition; it never batches.
+		return "Shared AI needs attention",
+			"Cantinarr's shared AI model failed its daily response test"
+	default:
+		if count > 1 {
+			return "New problems reported",
+				fmt.Sprintf("%d problems were reported with media", count)
+		}
+		return "New problem reported",
+			"Someone reported a problem with their media"
+	}
 }
 
 // notifyAgentActionPending pushes "the AI proposed a fix, approve it" to opted-in

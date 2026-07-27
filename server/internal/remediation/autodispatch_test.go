@@ -80,12 +80,14 @@ func TestObservationStartsSilentAndPromotesExactlyOnce(t *testing.T) {
 	if count, _ := svc.OpenIssueCount(); count != 1 {
 		t.Fatalf("promoted attention count = %d, want 1", count)
 	}
+	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" || drainJobs(svc) != 1 {
 		t.Fatalf("promotion events/jobs = %v", notifier.adminEvents)
 	}
 	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base.Add(12*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+	deliverIssueAlerts(svc, base.Add(12*time.Minute))
 	if len(notifier.adminEvents) != 1 || drainJobs(svc) != 0 {
 		t.Fatalf("repeat poll re-promoted: events=%v", notifier.adminEvents)
 	}

@@ -28,6 +28,15 @@ type testFileState struct {
 	historyMovieID   int
 }
 
+// deliverIssueAlerts flushes the admin-alert queue far enough past `at` that an
+// alert queued by a promotion at `at` has served its hold-down. Promotion no
+// longer pages directly, so a test asserting on the admin push runs this rather
+// than modelling the sweeper's cadence. Calling it when nothing is due is a
+// no-op, which is what proves a flapped promotion never pages.
+func deliverIssueAlerts(svc *Service, at time.Time) {
+	svc.flushIssueAlerts(at.Add(issueAlertHoldDown))
+}
+
 func setupObservationService(t *testing.T, movieHasFile bool) (*Service, *fakeNotifier, int64) {
 	state := &testFileState{hasFile: movieHasFile, fileID: 10}
 	return setupObservationServiceWithState(t, state)
@@ -212,6 +221,7 @@ func TestEmptySnapshotSettlesThenMissingPromotes(t *testing.T) {
 	if issue.Status != IssueOpen || issue.ClosedAt != nil {
 		t.Fatalf("missing-file issue = %+v", issue)
 	}
+	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" {
 		t.Fatalf("events=%v", notifier.adminEvents)
 	}
@@ -223,6 +233,7 @@ func TestEmptySnapshotSettlesThenMissingPromotes(t *testing.T) {
 	if issue.Status != IssueOpen || issue.ClosedAt != nil {
 		t.Fatalf("repeated empty snapshot restarted settled issue: %+v", issue)
 	}
+	deliverIssueAlerts(svc, base.Add(12*time.Minute))
 	if len(notifier.adminEvents) != 1 || drainJobs(svc) != 0 {
 		t.Fatalf("repeated empty snapshot re-alerted/re-enqueued: %v", notifier.adminEvents)
 	}
@@ -358,6 +369,7 @@ func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 			if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
 				t.Fatalf("ambiguous receipt falsely proved recovery: %+v", issues)
 			}
+			deliverIssueAlerts(svc, base.Add(11*time.Minute))
 			if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" || drainJobs(svc) != 1 {
 				t.Fatalf("ambiguous receipt bypassed attention: events=%v", notifier.adminEvents)
 			}
@@ -506,6 +518,7 @@ func TestWrongImportWitnessNeverSilentlyCloses(t *testing.T) {
 			if len(issues) != 1 || issues[0].Status != IssueNeedsAdmin || issues[0].ClosedAt != nil || drainJobs(svc) != 0 {
 				t.Fatalf("issue=%+v", issues)
 			}
+			deliverIssueAlerts(svc, base.Add(11*time.Minute))
 			if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" {
 				t.Fatalf("events=%v", notifier.adminEvents)
 			}
@@ -531,6 +544,7 @@ func TestPreexistingFileDoesNotProveUpgradeRecovery(t *testing.T) {
 	if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
 		t.Fatalf("preexisting file falsely proved recovery: %+v", issues)
 	}
+	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" {
 		t.Fatalf("upgrade failure did not promote: %v", notifier.adminEvents)
 	}
@@ -570,6 +584,7 @@ func TestIDLessAutoIncidentEscalatesAfterUncertainSettleWithoutAgent(t *testing.
 	}
 	issues, _ := svc.ListIssues("")
 	jobs := drainJobs(svc)
+	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if len(issues) != 1 || issues[0].Status != IssueNeedsAdmin || jobs != 0 || len(notifier.adminEvents) != 1 {
 		t.Fatalf("issues=%+v jobs=%d events=%v", issues, jobs, notifier.adminEvents)
 	}
@@ -834,6 +849,7 @@ func TestContinuousQueueFailureEscalatesQuietReportWithoutAgent(t *testing.T) {
 	svc.noteObservationFailure("radarr", "radarr-observe", context.DeadlineExceeded, base)
 	svc.noteObservationFailure("radarr", "radarr-observe", context.DeadlineExceeded, base.Add(11*time.Minute))
 	issue, _ := svc.GetIssue(response.IssueID)
+	deliverIssueAlerts(svc, base.Add(11*time.Minute))
 	if issue.Status != IssueNeedsAdmin || drainJobs(svc) != 0 || len(notifier.adminEvents) != 1 {
 		t.Fatalf("issue=%+v jobs=%d events=%v", issue, drainJobs(svc), notifier.adminEvents)
 	}
@@ -850,11 +866,13 @@ func TestOldInstanceFailureDoesNotImmediatelyEscalateLateReport(t *testing.T) {
 	_, _ = svc.db.Exec("UPDATE issue_observations SET first_seen_at=? WHERE issue_id=?", base.Add(9*time.Minute), response.IssueID)
 	svc.noteObservationFailure("radarr", "radarr-observe", context.DeadlineExceeded, base.Add(10*time.Minute))
 	issue, _ := svc.GetIssue(response.IssueID)
+	deliverIssueAlerts(svc, base.Add(10*time.Minute))
 	if issue.Status != IssueObserving || len(notifier.adminEvents) != 0 {
 		t.Fatalf("late report escalated early: %+v events=%v", issue, notifier.adminEvents)
 	}
 	svc.noteObservationFailure("radarr", "radarr-observe", context.DeadlineExceeded, base.Add(20*time.Minute))
 	issue, _ = svc.GetIssue(response.IssueID)
+	deliverIssueAlerts(svc, base.Add(20*time.Minute))
 	if issue.Status != IssueNeedsAdmin || len(notifier.adminEvents) != 1 {
 		t.Fatalf("late report did not age independently: %+v events=%v", issue, notifier.adminEvents)
 	}

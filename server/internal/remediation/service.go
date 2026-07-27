@@ -514,6 +514,27 @@ func (s *Service) notifyIssueCreatedWithSource(issueID int64, title, source stri
 	s.notifier.NotifyAdmins("issue_created", data)
 }
 
+// notifyIssueBatch fires one coalesced issue_created push for a promotion wave
+// that cleared its hold-down together. A batch problem is scoped per incident —
+// one auto issue per episode — so a season's worth of stuck downloads would
+// otherwise page an admin once per episode with byte-identical text. The count
+// is server-authored, so carrying it in the body keeps the untrusted-text
+// invariant intact; no issue_id rides along because there is no single issue to
+// deep-link, and the app routes a countless payload to the Issues list.
+func (s *Service) notifyIssueBatch(source string, count int) {
+	if s.notifier == nil || count <= 0 {
+		return
+	}
+	data := map[string]interface{}{"count": count}
+	if source != "" {
+		data["source"] = source
+	}
+	if open, err := s.OpenIssueCount(); err == nil {
+		data["open_count"] = open
+	}
+	s.notifier.NotifyAdmins("issue_created", data)
+}
+
 // GetIssue loads one issue row (without its thread).
 func (s *Service) GetIssue(issueID int64) (*Issue, error) {
 	row := s.db.QueryRow(
