@@ -131,19 +131,19 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
       child: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          if (discover.popularMovies.isNotEmpty)
+          if (discover.featured.isNotEmpty)
             FeaturedMediaHero(
-              item: discover.popularMovies.first,
+              item: discover.featured.first,
               eyebrow: 'Movie spotlight',
               onTap: () => context.push(
-                '/detail/movie/${discover.popularMovies.first.id}',
+                '/detail/movie/${discover.featured.first.id}',
               ),
             ),
           // Discovery rows
           CategoryRow(
-            title: 'Popular Movies',
-            items: discover.popularMovies.skip(1).toList(growable: false),
-            isLoading: discover.isLoadingPopular,
+            title: discover.featuredTitle,
+            items: discover.featured.skip(1).toList(growable: false),
+            isLoading: discover.isLoadingFeatured,
           ),
           if (discover.topRated.isNotEmpty)
             CategoryRow(

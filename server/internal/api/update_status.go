@@ -40,7 +40,7 @@ func updateServerSettingsHandler(checker *update.Checker, settings *serversettin
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
 			return
 		}
-		saved, err := settings.Set(serversettings.Settings{ManagementURL: body.ManagementURL})
+		saved, err := settings.SetManagementURL(body.ManagementURL)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})

@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
 const (
@@ -99,9 +100,42 @@ func echoUpstream(req *http.Request) (int, string) {
 
 // --- test environment ---
 
+// stubPrefs is a settable DiscoveryPrefs, so a test can choose the row source
+// and the language filter without going through the settings table.
+type stubPrefs struct {
+	mu       sync.Mutex
+	settings serversettings.Settings
+}
+
+func (s *stubPrefs) Get() serversettings.Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.settings
+}
+
+func (s *stubPrefs) set(source string, englishOnly bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings = serversettings.Settings{
+		DiscoverySource:      source,
+		DiscoveryEnglishOnly: englishOnly,
+	}
+}
+
 type env struct {
 	upstream *fakeUpstream
+	prefs    *stubPrefs
+	creds    *credentials.Registry
 	router   chi.Router
+}
+
+// setTMDBOnly configures TMDB and deliberately leaves Trakt unset, which is the
+// shape a server has when an admin picks Trakt without a client ID.
+func (e *env) setTMDBOnly(t *testing.T) {
+	t.Helper()
+	if err := e.creds.SetCredential(credentials.KeyTMDBAccessToken, testTMDBToken); err != nil {
+		t.Fatalf("set TMDB credential: %v", err)
+	}
 }
 
 // newEnv wires the handler over a real credentials registry (in-memory DB,
@@ -131,12 +165,17 @@ func newEnv(t *testing.T, configured bool) *env {
 	}
 	responseCache := cache.New()
 	t.Cleanup(responseCache.Close)
-	handler := NewHandler(creds, responseCache)
+	prefs := &stubPrefs{}
+	prefs.set(serversettings.DefaultDiscoverySource, false)
+	handler := NewHandler(creds, responseCache, prefs)
 
 	router := chi.NewRouter()
 	router.Get("/discover/trending", handler.Trending)
 	router.Get("/discover/movies", handler.DiscoverMovies)
 	router.Get("/discover/tv", handler.DiscoverTV)
+	router.Get("/discover/tv/popular", handler.PopularTV)
+	router.Get("/discover/tv/featured", handler.FeaturedTV)
+	router.Get("/discover/movies/featured", handler.FeaturedMovies)
 	router.Get("/search", handler.Search)
 	router.Get("/media/movie/{id}", handler.MovieDetail)
 	router.Get("/media/tv/{id}", handler.TVDetail)
@@ -147,7 +186,7 @@ func newEnv(t *testing.T, configured bool) *env {
 	http.DefaultTransport = upstream
 	t.Cleanup(func() { http.DefaultTransport = previous })
 
-	return &env{upstream: upstream, router: router}
+	return &env{upstream: upstream, prefs: prefs, creds: creds, router: router}
 }
 
 func (e *env) do(t *testing.T, path string) *httptest.ResponseRecorder {
