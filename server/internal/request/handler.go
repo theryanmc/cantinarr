@@ -42,6 +42,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.MediaType == "book" {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
+		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
 		if req.ForeignID == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for book requests"})
 			return

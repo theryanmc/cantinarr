@@ -346,6 +346,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
               ? null
               : chaptarrImageSource(ref, ordered[i].cover, instanceId),
           instanceId: instanceId,
+          searchedTerm: _searchedTerm,
         ),
       );
     });
@@ -379,6 +380,10 @@ class _BookResultTile extends StatelessWidget {
   final ChaptarrImageSource? cover;
   final String? instanceId;
 
+  /// The term these results belong to. It travels to the detail page so a
+  /// request can hand the server the search that already found this record.
+  final String searchedTerm;
+
   const _BookResultTile({
     required this.book,
     required this.canonicalForeignId,
@@ -387,6 +392,7 @@ class _BookResultTile extends StatelessWidget {
     required this.sourceIdentity,
     this.cover,
     required this.instanceId,
+    this.searchedTerm = '',
   });
 
   @override
@@ -473,6 +479,10 @@ class _BookResultTile extends StatelessWidget {
           ? () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
                 '?title=${Uri.encodeQueryComponent(book.title)}'
+                // The term that surfaced this row travels with it: requesting
+                // the book makes the server find this exact record again, and
+                // this is the search already known to return it.
+                '${searchedTerm.isEmpty ? '' : '&q=${Uri.encodeQueryComponent(searchedTerm)}'}'
                 '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
                 extra: book,
               )

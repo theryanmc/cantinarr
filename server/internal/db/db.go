@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     quality_profile_id INTEGER,
     book_format TEXT,
     book_record_id INTEGER,
+    search_term TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
@@ -705,6 +706,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// live truth (and heal to "not requested" only when the record is truly
 		// gone). NULL for pending/denied rows and pre-migration history.
 		{alter: "ALTER TABLE request_log ADD COLUMN book_record_id INTEGER"},
+		// The term the requester actually searched. A book add has to re-find its
+		// metadata record by searching, and this is the one term already proven to
+		// return it, so approval must replay the same starting point the submit had.
+		{alter: "ALTER TABLE request_log ADD COLUMN search_term TEXT"},
 		// Book availability alerts: pushed when a Chaptarr book import lands.
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.

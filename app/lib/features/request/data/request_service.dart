@@ -584,13 +584,20 @@ class RequestService {
     required String title,
     BookRequestFormat format = BookRequestFormat.both,
     String? instanceId,
+    String? searchTerm,
   }) async {
     try {
+      final term = searchTerm?.trim() ?? '';
       final resp = await _backendDio.post('/api/requests', data: {
         'media_type': 'book',
         'foreign_id': foreignId,
         'title': title,
         'book_format': format.value,
+        // The server has to find this book's metadata record again to add it,
+        // and Chaptarr's lookup is a fuzzy text search — so hand it the term
+        // that already produced this row instead of making it guess from the
+        // title. Absent for notification/deep-link arrivals, which had no search.
+        if (term.isNotEmpty) 'search_term': term,
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
       });

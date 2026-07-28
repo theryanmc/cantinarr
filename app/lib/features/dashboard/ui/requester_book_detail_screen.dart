@@ -35,12 +35,18 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final ChaptarrBook? initialBook;
   final String? instanceId;
 
+  /// The term the requester searched to reach this book, when they arrived from
+  /// search. Requesting an untracked book makes the server find this exact
+  /// metadata record again, and this is the search already proven to return it.
+  final String? searchTerm;
+
   const RequesterBookDetailScreen({
     super.key,
     required this.foreignId,
     this.titleHint,
     this.initialBook,
     this.instanceId,
+    this.searchTerm,
   });
 
   @override
@@ -527,6 +533,7 @@ class _RequesterBookDetailScreenState
             foreignId: _effectiveForeignId,
             title: title,
             instanceId: instanceId,
+            searchTerm: widget.searchTerm,
             service: _requestService,
             ownership: ownership,
             ownershipStatusKnown: owned?.statusKnown ?? true,

@@ -199,6 +199,12 @@ type CreateRequest struct {
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
 	ForeignID  string `json:"foreign_id"`
 	BookFormat string `json:"book_format"`
+	// SearchTerm is the text the requester actually searched to find this book.
+	// Chaptarr's book lookup is a fuzzy text search, so adding a title that isn't
+	// tracked yet means finding its metadata record again — and this term is the
+	// one already proven to return it. Optional: deep links and notification taps
+	// have no search behind them and fall back to title-derived terms.
+	SearchTerm string `json:"search_term,omitempty"`
 	// InstanceID pins book operations to the Chaptarr instance the requester is
 	// viewing. It is optional for backward compatibility; omitted uses the
 	// user's effective grant (or the admin default).
@@ -369,6 +375,7 @@ type resolvedRequest struct {
 	tvdbID           int
 	foreignID        string // Chaptarr foreignBookId (book requests)
 	bookFormat       string
+	searchTerm       string // the requester's own search text (book requests)
 	instanceID       string
 	bookFormats      map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
@@ -604,6 +611,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		tvdbID:     req.TvdbID,
 		foreignID:  req.ForeignID,
 		bookFormat: normalizeBookFormat(req.BookFormat),
+		searchTerm: strings.TrimSpace(req.SearchTerm),
 		instanceID: strings.TrimSpace(req.InstanceID),
 		mediaType:  req.MediaType,
 		title:      req.Title,
@@ -808,9 +816,9 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		} else {
 			insertedBookFormat = pendingFormat
 			res, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
-				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm),
 			)
 			if err == nil {
 				requestID, _ := res.LastInsertId()
@@ -1075,7 +1083,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("title is required to add a new book")
 	}
 
-	match, lookupErr := lookupBookForAdd(client, r.foreignID, r.title)
+	match, lookupErr := lookupBookForAdd(client, r.foreignID, r.title, r.searchTerm)
 	if match == nil {
 		if lookupErr != nil {
 			return "", "", fmt.Errorf("book lookup failed: %w", lookupErr)
@@ -1147,10 +1155,10 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 //
 // A nil result with a nil error means every term answered and none of them knew
 // this id; a nil result with an error means no term could be asked at all.
-func lookupBookForAdd(client *chaptarr.Client, foreignID, title string) (*chaptarr.LookupResult, error) {
+func lookupBookForAdd(client *chaptarr.Client, foreignID, title, searchTerm string) (*chaptarr.LookupResult, error) {
 	foreignID = strings.TrimSpace(foreignID)
 	var firstErr error
-	for _, term := range bookLookupTerms(foreignID, title) {
+	for _, term := range bookLookupTerms(foreignID, title, searchTerm) {
 		results, err := client.LookupBook(term)
 		if err != nil {
 			if firstErr == nil {
@@ -1169,14 +1177,20 @@ func lookupBookForAdd(client *chaptarr.Client, foreignID, title string) (*chapta
 
 // bookLookupTerms is the ordered search-term list lookupBookForAdd tries.
 //
-// The requester's title comes first: it is the term that already works for the
-// ordinary case, so the common path still costs exactly one lookup. The rest are
-// fallbacks for the titles that defeat a text search — a long title carrying a
-// subtitle and a parenthetical series suffix routinely ranks other editions
-// first or returns nothing, which is how a book the user just found in search
-// became unrequestable a screen later.
-func bookLookupTerms(foreignID, title string) []string {
-	terms := make([]string, 0, 5)
+// The requester's own search text comes first when it is known, because it is
+// the one term already proven to return this record — the user was looking at a
+// row it produced when they tapped Request. Chaptarr's own UI never has this
+// problem: its web client posts the whole record straight back from the search
+// results, so it re-searches nothing. Cantinarr's client keeps only the id and
+// title, so the server has to find the row again, and replaying the same search
+// is the closest thing to being handed it.
+//
+// The rest are fallbacks for requests that carry no search behind them (a
+// notification tap, a deep link) and for titles that defeat a text search: a
+// long title with a subtitle and a parenthetical series suffix routinely ranks
+// other editions first or returns nothing at all.
+func bookLookupTerms(foreignID, title, searchTerm string) []string {
+	terms := make([]string, 0, 6)
 	add := func(term string) {
 		term = strings.TrimSpace(term)
 		if term == "" {
@@ -1189,6 +1203,7 @@ func bookLookupTerms(foreignID, title string) []string {
 		}
 		terms = append(terms, term)
 	}
+	add(searchTerm)
 	add(title)
 	// Readarr-lineage id-addressed lookups. Chaptarr forks that support them
 	// answer exactly; ones that don't return nothing or unrelated rows, which the
@@ -2951,9 +2966,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0), COALESCE(search_term, '') FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID, &r.searchTerm)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -3092,9 +3107,9 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 				continue
 			}
 			failedRes, insertErr := tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
-				r.userID, r.foreignID, format, r.instanceID, title, StatusPending,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?)`,
+				r.userID, r.foreignID, format, r.instanceID, title, StatusPending, sqlNullStr(r.searchTerm),
 			)
 			if insertErr != nil {
 				return nil, fmt.Errorf("retain failed book format: %w", insertErr)

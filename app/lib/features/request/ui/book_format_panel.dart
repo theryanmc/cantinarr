@@ -16,6 +16,11 @@ class BookFormatPanel extends StatefulWidget {
   final String foreignId;
   final String title;
   final String? instanceId;
+
+  /// The search text that surfaced this book, when it came from a search. The
+  /// server needs it to re-find the exact metadata record at add time; a
+  /// notification or deep-link arrival simply has none.
+  final String? searchTerm;
   final RequestService service;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
@@ -39,6 +44,7 @@ class BookFormatPanel extends StatefulWidget {
     required this.foreignId,
     required this.title,
     this.instanceId,
+    this.searchTerm,
     required this.service,
     this.ownership,
     this.ownershipStatusKnown = true,
@@ -201,6 +207,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           title: widget.title,
           format: format,
           instanceId: widget.instanceId,
+          searchTerm: widget.searchTerm,
         );
       } on RequestSubmissionException catch (e) {
         failureMessage = e.message;

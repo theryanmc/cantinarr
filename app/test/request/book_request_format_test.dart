@@ -179,6 +179,36 @@ void main() {
     expect(item.requestedBookFormat, isNull);
   });
 
+  test('requestBook sends the search term that found the book', () async {
+    final adapter = _CaptureAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'Ten Algorithms: A Guide (Part 1) (A Series)',
+      format: BookRequestFormat.ebook,
+      searchTerm: '  ten algorithms  ',
+    );
+
+    expect(adapter.body['search_term'], 'ten algorithms');
+  });
+
+  test('requestBook omits an absent search term', () async {
+    final adapter = _CaptureAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'A Book',
+      format: BookRequestFormat.ebook,
+      searchTerm: '   ',
+    );
+
+    expect(adapter.body.containsKey('search_term'), isFalse);
+  });
+
   test('requestBook carries the server message for a parked request', () async {
     final adapter = _CaptureAdapter(response: {
       'status': 'pending',

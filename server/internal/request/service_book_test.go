@@ -2116,9 +2116,10 @@ func TestBookRequestLookupTransportFailureStaysAnError(t *testing.T) {
 	}
 }
 
-func TestBookLookupTermsTryTitleFirstThenIDThenHeadline(t *testing.T) {
-	terms := bookLookupTerms("fde-1", "Ten Algorithms: A Guide (Part 1) (A Series)")
+func TestBookLookupTermsTrySearchThenTitleThenIDThenHeadline(t *testing.T) {
+	terms := bookLookupTerms("fde-1", "Ten Algorithms: A Guide (Part 1) (A Series)", "a guide part 1")
 	want := []string{
+		"a guide part 1",
 		"Ten Algorithms: A Guide (Part 1) (A Series)",
 		"edition:fde-1",
 		"work:fde-1",
@@ -2133,9 +2134,18 @@ func TestBookLookupTermsTryTitleFirstThenIDThenHeadline(t *testing.T) {
 			t.Fatalf("terms[%d] = %q, want %q (full list %#v)", i, terms[i], want[i], terms)
 		}
 	}
-	// A title that is already its own headline must not be searched twice.
-	if got := bookLookupTerms("", "Flock"); len(got) != 1 || got[0] != "Flock" {
+	// A title that is already its own headline must not be searched twice, and a
+	// search term equal to the title must not be repeated either.
+	if got := bookLookupTerms("", "Flock", ""); len(got) != 1 || got[0] != "Flock" {
 		t.Fatalf("terms = %#v, want a single Flock term", got)
+	}
+	if got := bookLookupTerms("", "Flock", "flock"); len(got) != 1 {
+		t.Fatalf("terms = %#v, want the duplicate search term collapsed", got)
+	}
+	// A search term that happens to equal the headline collapses too: the point
+	// is to search each distinct string once, not to preserve a fixed shape.
+	if got := bookLookupTerms("", "Ten Algorithms: A Guide", "ten algorithms"); len(got) != 2 {
+		t.Fatalf("terms = %#v, want search term + full title only", got)
 	}
 }
 
@@ -2152,5 +2162,78 @@ func TestMainBookTitleReducesToTheSearchableHeadline(t *testing.T) {
 		if got := mainBookTitle(input); got != want {
 			t.Fatalf("mainBookTitle(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+// TestPendingBookApprovalReplaysTheRequestersSearchTerm covers the household
+// where approval is required: the add happens minutes or days after the search,
+// under an admin who never typed anything. The term that found the book has to
+// survive on the row, or approval would fall back to searching the full title —
+// the exact query that fails for the titles this whole path exists to rescue.
+func TestPendingBookApprovalReplaysTheRequestersSearchTerm(t *testing.T) {
+	const fullTitle = "Ten Algorithms: Foundational Data and Workflow Mapping (Part 1) (A Series)"
+	var terms []string
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			term := r.URL.Query().Get("term")
+			terms = append(terms, term)
+			if term != "ten algorithms every" {
+				// Only the requester's own search returns this record, exactly as
+				// the provider behaved when they found it.
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[
+				{"title":"Ten Algorithms","titleSlug":"ten","foreignBookId":"replay-1","author":{"authorName":"A. Writer","foreignAuthorId":"gr:5"},"editions":[{"foreignEditionId":"replay-1","links":[],"images":[]}]}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`{"id":11,"title":"Ten Algorithms","foreignBookId":"replay-1","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	_, instanceID, err := svc.resolveChaptarr(uid, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.createPending(&resolvedRequest{
+		userID:     uid,
+		mediaType:  "book",
+		foreignID:  "replay-1",
+		title:      fullTitle,
+		bookFormat: BookFormatEbook,
+		instanceID: instanceID,
+		searchTerm: "ten algorithms every",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	adminID := createTestAdmin(t, svc)
+	var requestID int64
+	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'replay-1' AND status = 'pending'").Scan(&requestID); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := svc.ApproveRequest(adminID, requestID, nil)
+	if err != nil {
+		t.Fatalf("ApproveRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("approval status = %s, want requested", resp.Status)
+	}
+	if len(terms) == 0 || terms[0] != "ten algorithms every" {
+		t.Fatalf("approval lookup terms = %#v, want the requester's stored search replayed first", terms)
 	}
 }
