@@ -178,6 +178,44 @@ void main() {
 
     expect(item.requestedBookFormat, isNull);
   });
+
+  test('requestBook carries the server message for a parked request', () async {
+    final adapter = _CaptureAdapter(response: {
+      'status': 'pending',
+      'book_formats': {'ebook': 'pending'},
+      'message': "This book couldn't be matched in the library.",
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    final result = await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'A Book',
+      format: BookRequestFormat.ebook,
+    );
+
+    expect(result?.status, RequestStatus.pending);
+    expect(result?.isKnown, isTrue);
+    expect(result?.message, "This book couldn't be matched in the library.");
+  });
+
+  test('requestBook leaves the message empty when the server omits it',
+      () async {
+    final adapter = _CaptureAdapter(response: {
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+
+    final result = await RequestService(backendDio: dio).requestBook(
+      foreignId: 'book-123',
+      title: 'A Book',
+      format: BookRequestFormat.ebook,
+    );
+
+    expect(result?.message, isEmpty);
+  });
 }
 
 class _CaptureAdapter implements HttpClientAdapter {

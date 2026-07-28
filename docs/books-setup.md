@@ -58,3 +58,9 @@ An instance offers downloads only once explicit mappings are saved for it.
 - Searching a title returns results, and requesting an eBook or Audiobook row reads **Requested** until it downloads.
 - A grab that completes in Chaptarr flips the row to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, a completed book offers a working download from a device.
+
+## Requests that land in the approval queue instead
+
+Adding a book Chaptarr doesn't already track means finding its metadata record again, and Chaptarr's book lookup is a fuzzy text search — so a title the requester just found in search can still be unfindable a screen later. Cantinarr searches several ways before giving up (the exact title, id-addressed terms, then the title's headline without its subtitle and trailing parentheticals) and accepts only an exact `foreignBookId` match.
+
+When none of them find it, the request is **saved as pending** rather than failed, and the requester is told so. Resolve it from the admin side: add the author (or the book) in Chaptarr directly, then approve the pending request — approval replays the add, and a book whose author is already tracked no longer depends on the lookup. Denying it is the other valid answer. Either way the request stays visible instead of disappearing.

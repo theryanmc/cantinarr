@@ -180,10 +180,16 @@ class BookRequestSubmission {
   final Map<BookRequestFormat, RequestStatus> formats;
   final bool isKnown;
 
+  /// A server explanation for an outcome the status alone would misrepresent —
+  /// today, a book parked for an admin because the library couldn't match it.
+  /// Empty when the status speaks for itself.
+  final String message;
+
   const BookRequestSubmission({
     required this.status,
     this.formats = const {},
     this.isKnown = true,
+    this.message = '',
   });
 
   bool succeeded(BookRequestFormat format) {
@@ -624,10 +630,12 @@ class RequestService {
           isKnown = false;
         }
       }
+      final rawMessage = data?['message'];
       return BookRequestSubmission(
         status: status,
         formats: formats,
         isKnown: isKnown,
+        message: rawMessage is String ? rawMessage.trim() : '',
       );
     } on DioException catch (e) {
       throw RequestSubmissionException(

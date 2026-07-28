@@ -226,7 +226,12 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         return;
       }
       final resolved = submission.formats[format] ?? submission.status;
-      final outcome = _formatOutcome(format, resolved);
+      // A server explanation outranks the generic status line: "pending
+      // approval" would read as a policy hold when the real reason is that the
+      // book couldn't be matched and is waiting on an admin to add it.
+      final outcome = submission.message.isNotEmpty
+          ? submission.message
+          : _formatOutcome(format, resolved);
       _rememberSubmission(format, resolved);
       await _refreshAfterSubmission();
       if (!mounted) return;

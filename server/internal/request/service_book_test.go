@@ -1908,3 +1908,249 @@ func TestBookRequestPersistsCreatedRecordIdentity(t *testing.T) {
 		t.Fatalf("status canonical_foreign_id = %q, want canon-999", st.CanonicalForeignID)
 	}
 }
+
+// TestBookRequestRecoversWhenFullTitleLookupMissesTheID reproduces the field
+// failure: a requester finds a book in search, opens it, taps Request, and the
+// add is refused because re-searching the *full* title no longer returns the
+// very record the search produced. Chaptarr's lookup is fuzzy text matching, so
+// a long title carrying a subtitle and parenthetical suffixes routinely misses.
+// The exact foreignBookId is still the only thing that may satisfy the lookup.
+func TestBookRequestRecoversWhenFullTitleLookupMissesTheID(t *testing.T) {
+	const fullTitle = "10 Algorithms Every Forward Deployed Engineer Should Know: Foundational Data and Workflow Mapping (Part 1) (Guide to Forward-Deployed Engineering)"
+	var terms []string
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			term := r.URL.Query().Get("term")
+			terms = append(terms, term)
+			if term == "10 Algorithms Every Forward Deployed Engineer Should Know" {
+				_, _ = w.Write([]byte(`[
+					{
+						"title":"10 Algorithms Every Forward Deployed Engineer Should Know",
+						"titleSlug":"10-algorithms",
+						"foreignBookId":"fde-1",
+						"author":{"authorName":"Tyler Wyselaskie","foreignAuthorId":"gr:99"},
+						"editions":[{"foreignEditionId":"fde-1","title":"10 Algorithms","links":[],"images":[]}]
+					}
+				]`))
+				return
+			}
+			// Every other term answers, but with other books — exactly the shape
+			// that used to end the request with "book not found for foreign id".
+			_, _ = w.Write([]byte(`[{"title":"Some Other Book","foreignBookId":"other-77"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":7,"title":"10 Algorithms","foreignBookId":"fde-1","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "fde-1",
+		Title:      fullTitle,
+		BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested (the book must be added and monitored)", resp.Status)
+	}
+	if addBody == nil {
+		t.Fatal("AddBook was never called; the request was refused instead of added")
+	}
+	if len(terms) == 0 || terms[0] != fullTitle {
+		t.Fatalf("first lookup term = %#v, want the requester's exact title tried first", terms)
+	}
+	if got := addBody["mediaType"]; got != "ebook" {
+		t.Fatalf("mediaType = %v, want ebook", got)
+	}
+}
+
+// TestBookRequestOnlyAcceptsAnExactForeignIDMatch guards the property that makes
+// trying several search terms safe: no term may promote a different book.
+func TestBookRequestOnlyAcceptsAnExactForeignIDMatch(t *testing.T) {
+	var added bool
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			// A near-miss: same title and author, different edition id.
+			_, _ = w.Write([]byte(`[
+				{"title":"Flock","foreignBookId":"other-edition","author":{"authorName":"A. Writer","foreignAuthorId":"gr:1"},"editions":[]}
+			]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			added = true
+			_, _ = w.Write([]byte(`{"id":1}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "wanted-edition",
+		Title:      "Flock",
+		BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if added {
+		t.Fatal("a lookup row with a different foreignBookId was added; only an exact id match may add")
+	}
+	if resp.Status != StatusPending {
+		t.Fatalf("status = %s, want pending (unresolved metadata parks the request)", resp.Status)
+	}
+}
+
+// TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved covers the floor:
+// a request whose metadata record cannot be re-found must not evaporate with an
+// error toast. It lands in the approval queue, where an admin can add the author
+// in Chaptarr and approve it, or deny it — either way it is not forgotten.
+func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
+	var added bool
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			added = true
+			_, _ = w.Write([]byte(`{"id":1}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "ghost-1",
+		Title:      "A Book The Provider Forgot",
+		BookFormat: BookFormatEbook,
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest returned an error instead of parking the request: %v", err)
+	}
+	if added {
+		t.Fatal("AddBook was called without a resolved metadata record")
+	}
+	if resp.Status != StatusPending {
+		t.Fatalf("status = %s, want pending", resp.Status)
+	}
+	if resp.Message == "" {
+		t.Fatal("parked request carried no message; the requester would read pending as normal approval")
+	}
+	if got := resp.BookFormats[BookFormatEbook]; got != StatusPending {
+		t.Fatalf("book_formats[ebook] = %q, want pending", got)
+	}
+	var count int
+	if err := svc.db.QueryRow(
+		"SELECT COUNT(*) FROM request_log WHERE user_id=? AND foreign_id='ghost-1' AND media_type='book' AND book_format='ebook' AND status='pending'",
+		uid,
+	).Scan(&count); err != nil {
+		t.Fatalf("count parked rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("parked pending rows = %d, want 1 (the request must survive the failed add)", count)
+	}
+}
+
+// TestBookRequestLookupTransportFailureStaysAnError separates "the provider does
+// not know this book" from "the provider could not be asked". Only the former is
+// parked; an unreachable Chaptarr must still tell the requester to retry.
+func TestBookRequestLookupTransportFailureStaysAnError(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/book" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	_, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "unreachable-1",
+		Title:      "Flock",
+		BookFormat: BookFormatEbook,
+	})
+	if err == nil {
+		t.Fatal("CreateMediaRequest succeeded; a lookup that could not be performed must not be parked as pending")
+	}
+	if errors.Is(err, ErrBookMetadataUnresolved) {
+		t.Fatalf("error = %v, want a lookup failure rather than an unresolved-metadata verdict", err)
+	}
+	var count int
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE foreign_id='unreachable-1'").Scan(&count); err != nil {
+		t.Fatalf("count rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("request_log rows = %d, want 0", count)
+	}
+}
+
+func TestBookLookupTermsTryTitleFirstThenIDThenHeadline(t *testing.T) {
+	terms := bookLookupTerms("fde-1", "Ten Algorithms: A Guide (Part 1) (A Series)")
+	want := []string{
+		"Ten Algorithms: A Guide (Part 1) (A Series)",
+		"edition:fde-1",
+		"work:fde-1",
+		"readarr:fde-1",
+		"Ten Algorithms",
+	}
+	if len(terms) != len(want) {
+		t.Fatalf("terms = %#v, want %#v", terms, want)
+	}
+	for i := range want {
+		if terms[i] != want[i] {
+			t.Fatalf("terms[%d] = %q, want %q (full list %#v)", i, terms[i], want[i], terms)
+		}
+	}
+	// A title that is already its own headline must not be searched twice.
+	if got := bookLookupTerms("", "Flock"); len(got) != 1 || got[0] != "Flock" {
+		t.Fatalf("terms = %#v, want a single Flock term", got)
+	}
+}
+
+func TestMainBookTitleReducesToTheSearchableHeadline(t *testing.T) {
+	cases := map[string]string{
+		"Ten Algorithms: A Guide (Part 1) (A Series)": "Ten Algorithms",
+		"Ahsoka (Star Wars)":                          "Ahsoka",
+		"Flock":                                       "Flock",
+		"  Dune: Messiah  ":                           "Dune",
+		"(Untitled)":                                  "(Untitled)",
+		":leading colon":                              ":leading colon",
+	}
+	for input, want := range cases {
+		if got := mainBookTitle(input); got != want {
+			t.Fatalf("mainBookTitle(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
