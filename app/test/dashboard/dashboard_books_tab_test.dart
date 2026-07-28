@@ -261,23 +261,75 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Choose a matching library record'),
+      find.text('Choose the library record above'),
       findsNWidgets(2),
     );
-    expect(
-      find.byKey(const ValueKey(
-          'book-result:lookup-flock:lookup-flock:lookup:0')),
-      findsOneWidget,
+    final firstAmbiguous = find.byKey(
+      const ValueKey('book-result:lookup-flock:lookup-flock:lookup:0'),
     );
+    expect(firstAmbiguous, findsOneWidget);
     expect(
       find.byKey(const ValueKey(
           'book-result:lookup-flock:lookup-flock:lookup:1')),
       findsOneWidget,
     );
+    // The record the guidance points at is on screen, above both lookup rows.
     expect(
       find.byKey(const ValueKey(
           'book-result:library-flock:library-flock:library:0')),
       findsOneWidget,
+    );
+    expect(adapter.statusForeignIds, isEmpty);
+
+    // An unbindable row is still a real metadata record: it opens, addressed by
+    // its own lookup id rather than a guessed library one.
+    await tester.tap(firstAmbiguous);
+    await tester.pumpAndSettle();
+
+    final screen = tester.widget<RequesterBookDetailScreen>(
+      find.byType(RequesterBookDetailScreen),
+    );
+    expect(screen.foreignId, 'lookup-flock');
+    expect(adapter.statusForeignIds, everyElement('lookup-flock'));
+  });
+
+  testWidgets('an exact library id outranks a same-title sibling row',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) =
+        await _pumpRouter(tester, aliasSibling: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final searchField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Search books or authors…',
+    );
+    await tester.enterText(searchField, 'flock');
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pumpAndSettle();
+
+    // The row carrying the library's own id binds to it and reports its state;
+    // the sibling's resemblance no longer cancels that identity.
+    expect(
+      find.byKey(const ValueKey(
+          'book-result:library-flock:library-flock:lookup:0')),
+      findsOneWidget,
+    );
+    expect(find.text('Audiobook requested'), findsOneWidget);
+    // With the record spoken for, the sibling is simply a book they don't have.
+    expect(
+      find.byKey(const ValueKey(
+          'book-result:lookup-flock:lookup-flock:lookup:1')),
+      findsOneWidget,
+    );
+    expect(find.text('Choose the library record above'), findsNothing);
+    // The bound record is not repeated as a library row of its own.
+    expect(
+      find.byKey(const ValueKey(
+          'book-result:library-flock:library-flock:library:0')),
+      findsNothing,
     );
     expect(adapter.statusForeignIds, isEmpty);
   });
@@ -300,7 +352,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Choose a matching library record'),
+      find.text('Choose the library record above'),
       findsOneWidget,
     );
     expect(
@@ -419,6 +471,7 @@ Future<({
   bool unresolvedIdentity = false,
   bool mixedOwnership = false,
   bool ambiguousLookup = false,
+  bool aliasSibling = false,
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
 }) async {
@@ -428,6 +481,7 @@ Future<({
     unresolvedIdentity: unresolvedIdentity,
     mixedOwnership: mixedOwnership,
     ambiguousLookup: ambiguousLookup,
+    aliasSibling: aliasSibling,
     duplicateLibraryRecords: duplicateLibraryRecords,
     blankIdentity: blankIdentity,
   );
@@ -468,6 +522,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.unresolvedIdentity = false,
     this.mixedOwnership = false,
     this.ambiguousLookup = false,
+    this.aliasSibling = false,
     this.duplicateLibraryRecords = false,
     this.blankIdentity = false,
   });
@@ -476,6 +531,10 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   final bool unresolvedIdentity;
   final bool mixedOwnership;
   final bool ambiguousLookup;
+
+  /// Two lookup rows for one title where the first carries the library's own
+  /// foreignBookId and the second is a same-title provider sibling.
+  final bool aliasSibling;
   final bool duplicateLibraryRecords;
   final bool blankIdentity;
   int statusRequests = 0;
@@ -539,7 +598,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 },
               ],
             }
-          : (mismatchedIdentity || ambiguousLookup)
+          : (mismatchedIdentity || ambiguousLookup || aliasSibling)
           ? {
               'titles': [
                 {
@@ -601,12 +660,17 @@ class _BooksSearchAdapter implements HttpClientAdapter {
       body = (mismatchedIdentity ||
               unresolvedIdentity ||
               ambiguousLookup ||
+              aliasSibling ||
               duplicateLibraryRecords ||
               blankIdentity)
           ? [
               {
                 'title': 'Flock',
-                'foreignBookId': blankIdentity ? '' : 'lookup-flock',
+                'foreignBookId': blankIdentity
+                    ? ''
+                    : aliasSibling
+                        ? 'library-flock'
+                        : 'lookup-flock',
                 'year': 2024,
                 'author': {
                   'id': 0,
@@ -614,7 +678,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                   'foreignAuthorId': 'author-flock',
                 },
               },
-              if (ambiguousLookup)
+              if (ambiguousLookup || aliasSibling)
                 {
                   'title': 'Flock',
                   'foreignBookId': 'lookup-flock',

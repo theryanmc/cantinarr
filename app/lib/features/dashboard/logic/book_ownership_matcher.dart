@@ -202,19 +202,28 @@ OwnedTitle? ownedMatchFor(ChaptarrBook result, List<OwnedTitle> digest) {
 }
 
 /// One-to-one lookup-to-library mappings. A mapping is safe only when a lookup
-/// row has exactly one digest candidate and that digest row belongs to exactly
-/// one lookup row. This rejects ambiguity in either direction.
+/// row has exactly one digest candidate and no other lookup row makes an
+/// equally strong claim on that digest row. This rejects ambiguity in either
+/// direction.
+///
+/// Exact and fuzzy claims are counted apart, because they are not the same kind
+/// of statement: an id the library itself files a record under identifies it,
+/// while a same-title sibling only resembles it. A resemblance therefore cannot
+/// cancel an identity — otherwise requesting a book leaves the very row that
+/// created the library record unable to recognise it.
 Map<ChaptarrBook, OwnedTitle> unambiguousOwnedMatches(
   List<ChaptarrBook> lookupResults,
   List<OwnedTitle> digest,
 ) {
   final candidates = <ChaptarrBook, List<OwnedTitle>>{};
-  final lookupCounts = <OwnedTitle, int>{};
+  final exactClaims = <OwnedTitle, int>{};
+  final fuzzyClaims = <OwnedTitle, int>{};
   for (final result in lookupResults) {
     final matches = ownedIdentityCandidatesFor(result, digest);
     candidates[result] = matches;
     for (final match in matches) {
-      lookupCounts[match] = (lookupCounts[match] ?? 0) + 1;
+      final claims = _sameForeignId(result, match) ? exactClaims : fuzzyClaims;
+      claims[match] = (claims[match] ?? 0) + 1;
     }
   }
 
@@ -222,13 +231,88 @@ Map<ChaptarrBook, OwnedTitle> unambiguousOwnedMatches(
   for (final entry in candidates.entries) {
     if (entry.value.length != 1) continue;
     final match = entry.value.single;
-    if (lookupCounts[match] == 1 &&
-        (_sameForeignId(entry.key, match) ||
-            _strongIdentityMatch(entry.key, match))) {
+    if (_sameForeignId(entry.key, match)) {
+      // Two lookup rows carrying the same library id are still ambiguous —
+      // only a fuzzy contender is outranked.
+      if ((exactClaims[match] ?? 0) == 1) resolved[entry.key] = match;
+      continue;
+    }
+    if ((exactClaims[match] ?? 0) == 0 &&
+        (fuzzyClaims[match] ?? 0) == 1 &&
+        _strongIdentityMatch(entry.key, match)) {
       resolved[entry.key] = match;
     }
   }
   return resolved;
+}
+
+/// How a book search's lookup rows line up with the requester's library,
+/// resolved once so every part of the results list agrees.
+class BookSearchIdentity {
+  /// Safe one-to-one lookup-to-library bindings (see [unambiguousOwnedMatches]).
+  final Map<ChaptarrBook, OwnedTitle> matches;
+
+  /// Lookup rows that plausibly are a library record but could not be tied to
+  /// one, valued by the records each might be. These rows must not claim owned
+  /// state or target a library id — but they still address a real metadata
+  /// record, so they stay openable.
+  final Map<ChaptarrBook, List<OwnedTitle>> contested;
+
+  /// Library records to surface as their own result rows.
+  final List<OwnedTitle> libraryRows;
+
+  const BookSearchIdentity({
+    required this.matches,
+    required this.contested,
+    required this.libraryRows,
+  });
+}
+
+/// Resolves [lookupResults] against [digest] for the search [query].
+BookSearchIdentity resolveBookSearchIdentity({
+  required String query,
+  required List<ChaptarrBook> lookupResults,
+  required List<OwnedTitle> digest,
+}) {
+  final matches = unambiguousOwnedMatches(lookupResults, digest);
+  final bound = matches.values.toSet();
+
+  final contested = <ChaptarrBook, List<OwnedTitle>>{};
+  for (final result in lookupResults) {
+    if (matches.containsKey(result)) continue;
+    final candidates = ownedIdentityCandidatesFor(result, digest)
+        .where((owned) => !bound.contains(owned))
+        .toList(growable: false);
+    if (candidates.isNotEmpty) contested[result] = candidates;
+  }
+  final needsChoosing = <OwnedTitle>{
+    for (final candidates in contested.values) ...candidates,
+  };
+
+  // Concrete library records not already represented by a safe one-to-one
+  // lookup mapping: the ones the query names, plus every record an unresolved
+  // row might be. That second group is what makes "choose a matching library
+  // record" a real instruction — an author search never names a title, so the
+  // record the row means would otherwise not be on screen at all.
+  final libraryRows = <OwnedTitle>[];
+  for (final owned in digest) {
+    if (bound.contains(owned)) continue;
+    if (needsChoosing.contains(owned)) {
+      libraryRows.add(owned);
+      continue;
+    }
+    // Only surface books the user actually has or is monitoring — not empty
+    // library shells (all-missing, unmonitored duplicate records).
+    if (!owned.ownership.anyOwned && owned.statusKnown) continue;
+    if (!titleMatchesQuery(query, owned.title)) continue;
+    libraryRows.add(owned);
+  }
+
+  return BookSearchIdentity(
+    matches: matches,
+    contested: contested,
+    libraryRows: libraryRows,
+  );
 }
 
 /// Decides whether the user already owns [result], by matching it against the
@@ -237,33 +321,62 @@ Map<ChaptarrBook, OwnedTitle> unambiguousOwnedMatches(
 BookOwnership? ownershipFor(ChaptarrBook result, List<OwnedTitle> digest) =>
     ownedMatchFor(result, digest)?.ownership;
 
-/// Owned digest titles matching the search [query] (every query token appears in
-/// the title), each kept as its own entry so the user sees and picks among their
-/// distinct records — nothing is merged or deduplicated by title. Only titles
-/// the user actually has/monitors (plus unresolved fail-closed rows) qualify.
-/// A record is omitted only when a strong one-to-one lookup mapping already
-/// represents that exact digest row.
+/// Whether [title] answers the search [query]: every query word appears in the
+/// title, the last one as a prefix.
+///
+/// The trailing word is matched as a prefix because search runs on every
+/// keystroke — the word being typed right now must not disqualify a requester's
+/// own library from their own search.
+///
+/// Both sides are compared under both tokenizations. The series-stripped form
+/// drops everything before the first ": ", which is right for "Series: Title"
+/// but would otherwise throw away the headline of "Headline: Subtitle" — the
+/// very words a requester types first.
+bool titleMatchesQuery(String query, String title) {
+  final queries = _tokenizations(query);
+  final titles = _tokenizations(title);
+  for (final queryTokens in queries) {
+    if (queryTokens.isEmpty) continue;
+    for (final titleTokens in titles) {
+      if (_tokensContain(titleTokens, queryTokens)) return true;
+    }
+  }
+  return false;
+}
+
+/// A string's series-kept and series-stripped token lists (identical, and so
+/// collapsed to one, when the string has no "Prefix: " to strip).
+List<List<String>> _tokenizations(String text) {
+  final kept = normalizeTitleTokens(text, stripSeries: false);
+  final stripped = normalizeTitleTokens(text);
+  if (kept.length == stripped.length) return [kept];
+  return [kept, stripped];
+}
+
+bool _tokensContain(List<String> titleTokens, List<String> queryTokens) {
+  if (titleTokens.isEmpty) return false;
+  for (var i = 0; i < queryTokens.length; i++) {
+    final token = queryTokens[i];
+    final partial = i == queryTokens.length - 1;
+    final present = titleTokens.any(
+      (candidate) => partial ? candidate.startsWith(token) : candidate == token,
+    );
+    if (!present) return false;
+  }
+  return true;
+}
+
+/// Owned digest titles to surface as their own search rows, each kept as its own
+/// entry so the user sees and picks among their distinct records — nothing is
+/// merged or deduplicated by title. See [resolveBookSearchIdentity], which owns
+/// the rule.
 List<OwnedTitle> ownedTitlesForQuery(
   String query,
   List<OwnedTitle> digest,
   List<ChaptarrBook> lookupResults,
-) {
-  final queryTokens = normalizeTitleTokens(query).toSet();
-  if (queryTokens.isEmpty) return const [];
-
-  final alreadyRepresented =
-      unambiguousOwnedMatches(lookupResults, digest).values.toSet();
-  final out = <OwnedTitle>[];
-  for (final owned in digest) {
-    // Only surface books the user actually has or is monitoring — not empty
-    // library shells (all-missing, unmonitored duplicate records).
-    if (!owned.ownership.anyOwned && owned.statusKnown) continue;
-    final titleTokens = normalizeTitleTokens(owned.title).toSet();
-    if (titleTokens.isEmpty) continue;
-    // The query must be contained in the title (a partial-name match).
-    if (!queryTokens.every(titleTokens.contains)) continue;
-    if (alreadyRepresented.contains(owned)) continue;
-    out.add(owned);
-  }
-  return out;
-}
+) =>
+    resolveBookSearchIdentity(
+      query: query,
+      lookupResults: lookupResults,
+      digest: digest,
+    ).libraryRows;

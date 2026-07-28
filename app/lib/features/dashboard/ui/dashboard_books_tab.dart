@@ -226,31 +226,29 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     // requests, and surface owned/monitored books the metadata search missed.
     final digest =
         ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
+    final identity = resolveBookSearchIdentity(
+      query: _searchedTerm,
+      lookupResults: _results,
+      digest: digest,
+    );
     // Concrete library records not already represented by a safe one-to-one
     // lookup mapping. Ambiguous candidates are shown separately here so the
     // requester can choose a real record rather than targeting a fuzzy guess.
-    final injected = digest.isEmpty
-        ? const <OwnedTitle>[]
-        : ownedTitlesForQuery(_searchedTerm, digest, _results);
+    final injected = identity.libraryRows;
     // Mark each lookup result with its ownership and float owned titles to the
     // top, preserving Chaptarr's relevance order within each bucket (don't
     // collapse versions — the user wants to see ones they don't own). Only owned
     // results carry a cover: the owned record's cached /MediaCover, which loads
     // with the API key. Lookup (/MediaCoverProxy) covers are broken server-side
     // in this fork, so we don't attempt them — not-yet-owned rows stay iconic.
-    final safeMatches = unambiguousOwnedMatches(_results, digest);
     final owned = <_ResolvedBookResult>[];
     final rest = <_ResolvedBookResult>[];
     for (var lookupIndex = 0;
         lookupIndex < _results.length;
         lookupIndex++) {
       final book = _results[lookupIndex];
-      final candidates =
-          digest.isEmpty
-              ? const <OwnedTitle>[]
-              : ownedIdentityCandidatesFor(book, digest);
-      final match = safeMatches[book];
-      final identityAmbiguous = candidates.isNotEmpty && match == null;
+      final match = identity.matches[book];
+      final identityAmbiguous = identity.contested.containsKey(book);
       final cover =
           (match != null && match.cover.isNotEmpty) ? match.cover : null;
       final libraryId = match?.foreignBookId.trim() ?? '';
@@ -409,9 +407,14 @@ class _BookResultTile extends StatelessWidget {
     final lookupId = book.foreignBookId?.trim() ?? '';
     final o = ownership;
     final chip = _ownershipChip(o);
-    final canOpen = fid.isNotEmpty && !identityAmbiguous;
+    // Ambiguity is about which library record this row is, not about whether the
+    // requester may read it: the row still addresses a real metadata record, and
+    // closing the tap left a just-requested book with no way to be opened at
+    // all. The row states which record to act on instead; the library rows it
+    // points at are listed above it.
+    final canOpen = fid.isNotEmpty;
     final identityGuidance = identityAmbiguous
-        ? 'Choose a matching library record'
+        ? 'Choose the library record above'
         : fid.isEmpty
             ? 'Ask an admin to check this book’s library record'
             : null;
