@@ -414,7 +414,7 @@ class _BookResultTile extends StatelessWidget {
     // points at are listed above it.
     final canOpen = fid.isNotEmpty;
     final identityGuidance = identityAmbiguous
-        ? 'Choose the library record above'
+        ? 'May be the same as a book listed above'
         : fid.isEmpty
             ? 'Ask an admin to check this book’s library record'
             : null;

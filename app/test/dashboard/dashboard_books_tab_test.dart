@@ -261,7 +261,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Choose the library record above'),
+      find.text('May be the same as a book listed above'),
       findsNWidgets(2),
     );
     final firstAmbiguous = find.byKey(
@@ -291,6 +291,35 @@ void main() {
     );
     expect(screen.foreignId, 'lookup-flock');
     expect(adapter.statusForeignIds, everyElement('lookup-flock'));
+
+    // The page that could not bind to its own library record points at the
+    // record it may duplicate — in requester words, with the record's real
+    // state — before any Request can be tapped.
+    expect(
+      find.text('Your library may already have this book'),
+      findsOneWidget,
+    );
+    final lookalike =
+        find.byKey(const ValueKey('book-lookalike:library-flock'));
+    expect(lookalike, findsOneWidget);
+    expect(
+      find.descendant(
+          of: lookalike, matching: find.text('Audiobook requested')),
+      findsOneWidget,
+    );
+
+    // Tapping it lands on the record whose request state is real.
+    await tester.tap(lookalike);
+    await tester.pumpAndSettle();
+    final opened = tester.widget<RequesterBookDetailScreen>(
+      find.byType(RequesterBookDetailScreen).last,
+    );
+    expect(opened.foreignId, 'library-flock');
+    // A page bound to its own record needs no pointer.
+    expect(
+      find.text('Your library may already have this book'),
+      findsNothing,
+    );
   });
 
   testWidgets('an exact library id outranks a same-title sibling row',
@@ -324,7 +353,7 @@ void main() {
           'book-result:lookup-flock:lookup-flock:lookup:1')),
       findsOneWidget,
     );
-    expect(find.text('Choose the library record above'), findsNothing);
+    expect(find.text('May be the same as a book listed above'), findsNothing);
     // The bound record is not repeated as a library row of its own.
     expect(
       find.byKey(const ValueKey(
@@ -352,7 +381,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Choose the library record above'),
+      find.text('May be the same as a book listed above'),
       findsOneWidget,
     );
     expect(

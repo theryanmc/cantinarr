@@ -965,6 +965,46 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if unresolved {
 		return "", "", ErrBookFormatUnresolved
 	}
+	// One memoized id fetch serves both the alias probe below and the add-time
+	// lookup's first term — the identical query must not run twice per request.
+	var idFetchResults []chaptarr.LookupResult
+	var idFetchErr error
+	idFetched := false
+	idFetch := func() ([]chaptarr.LookupResult, error) {
+		if !idFetched {
+			idFetched = true
+			idFetchResults, idFetchErr = client.LookupBook(r.foreignID)
+		}
+		return idFetchResults, idFetchErr
+	}
+
+	// The library may already track this book under a different id: the
+	// metadata provider keeps alias listings whose id-fetch resolves to the
+	// canonical sibling. When the provider itself declares the requested id an
+	// alias of a record the library already has, the request completes that
+	// record — a requester tapping the duplicate listing means "I want this
+	// book", not "track it twice".
+	attachID := r.foreignID
+	if len(existing) == 0 {
+		// Nothing tracked under this id means every remaining outcome — the
+		// alias attach, or the add — starts from a metadata lookup, and a
+		// request with no title is malformed before any of that: fail it
+		// without spending a network call.
+		if r.title == "" {
+			return "", "", fmt.Errorf("title is required to add a new book")
+		}
+		if canonicalID, ok := lookupCanonicalAlias(idFetch, r.foreignID); ok {
+			aliasTitle, aliasRecords, aliasUnresolved := recordsForForeignID(books, canonicalID)
+			if aliasUnresolved {
+				return "", "", ErrBookFormatUnresolved
+			}
+			if len(aliasRecords) > 0 {
+				attachID = canonicalID
+				existing = aliasRecords
+				title = strings.TrimSpace(aliasTitle)
+			}
+		}
+	}
 	if title == "" {
 		title = r.title
 	}
@@ -1055,8 +1095,11 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
 		}
 		config.includeRequestedFormats(r.bookFormat)
+		// Missing sibling formats are added under the id the library groups this
+		// title by — the attach id — so an alias-fulfilled request never splits
+		// one book across two title groups.
 		match := &chaptarr.LookupResult{
-			ForeignBookID:   r.foreignID,
+			ForeignBookID:   attachID,
 			Title:           title,
 			TitleSlug:       seed.TitleSlug,
 			AuthorName:      author.AuthorName,
@@ -1079,11 +1122,12 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 		return s.finishBookMutation(r, title, lastErr)
 	}
-	if r.title == "" {
-		return "", "", fmt.Errorf("title is required to add a new book")
-	}
-
-	match, lookupErr := lookupBookForAdd(client, r.foreignID, r.title, r.searchTerm)
+	match, lookupErr := lookupBookForAdd(func(term string) ([]chaptarr.LookupResult, error) {
+		if term == r.foreignID {
+			return idFetch()
+		}
+		return client.LookupBook(term)
+	}, r.foreignID, r.title, r.searchTerm)
 	if match == nil {
 		if lookupErr != nil {
 			return "", "", fmt.Errorf("book lookup failed: %w", lookupErr)
@@ -1144,6 +1188,25 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	return s.finishBookMutation(r, title, lastErr)
 }
 
+// lookupCanonicalAlias resolves the provider's alias→canonical link for a
+// foreignBookId, given the id-term fetch. Chaptarr answers an id term with an
+// exact fetch of that record, and fetching an alias id returns its canonical
+// sibling (verified live; see bookLookupTerms). A response of exactly one
+// record filed under a DIFFERENT id is therefore the provider itself declaring
+// the two ids one work. Anything else — a miss, an error, a fuzzy multi-hit —
+// declares nothing, and the caller must treat the ids as distinct.
+func lookupCanonicalAlias(idFetch func() ([]chaptarr.LookupResult, error), foreignID string) (string, bool) {
+	results, err := idFetch()
+	if err != nil || len(results) != 1 {
+		return "", false
+	}
+	canonical := strings.TrimSpace(results[0].ForeignBookID)
+	if canonical == "" || canonical == strings.TrimSpace(foreignID) {
+		return "", false
+	}
+	return canonical, true
+}
+
 // lookupBookForAdd re-finds the metadata record a book request points at, so a
 // brand-new title can be added. Unlike Radarr — which resolves a movie by
 // `term=tmdb:{id}` and therefore cannot miss — Chaptarr's book lookup is a fuzzy
@@ -1155,11 +1218,13 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 //
 // A nil result with a nil error means every term answered and none of them knew
 // this id; a nil result with an error means no term could be asked at all.
-func lookupBookForAdd(client *chaptarr.Client, foreignID, title, searchTerm string) (*chaptarr.LookupResult, error) {
+// [lookup] runs one search term — injected so the caller can reuse an id-term
+// fetch it already made.
+func lookupBookForAdd(lookup func(term string) ([]chaptarr.LookupResult, error), foreignID, title, searchTerm string) (*chaptarr.LookupResult, error) {
 	foreignID = strings.TrimSpace(foreignID)
 	var firstErr error
 	for _, term := range bookLookupTerms(foreignID, title, searchTerm) {
-		results, err := client.LookupBook(term)
+		results, err := lookup(term)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
