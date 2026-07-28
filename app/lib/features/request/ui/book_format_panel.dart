@@ -66,8 +66,11 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   // unrequested format would offer a duplicate request action.
   BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
   bool _loading = true;
-  bool _busy = false;
-  BookRequestFormat? _submitting;
+  /// Formats with a request currently in flight. Kept per format — the eBook
+  /// and Audiobook rows are independent actions, so submitting one must not
+  /// dead-zone the other. Concurrent submissions for one title are safe: the
+  /// server serializes them per canonical book behind its own lock.
+  final Set<BookRequestFormat> _inFlight = {};
   int _activeChecks = 0;
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
@@ -128,7 +131,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       // Another book (or library) knows nothing about what was requested here.
       _submitted.clear();
       _check();
-    } else if (oldWidget.refreshTick != widget.refreshTick && !_busy) {
+    } else if (oldWidget.refreshTick != widget.refreshTick &&
+        _inFlight.isEmpty) {
       _check();
     } else if (oldWidget.ownership != widget.ownership ||
         oldWidget.ownershipStatusKnown != widget.ownershipStatusKnown) {
@@ -183,7 +187,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     _pendingRecheckTimer ??= Timer.periodic(
       const Duration(seconds: 30),
       (_) {
-        if (mounted && !_busy && !_checking) _check();
+        if (mounted && _inFlight.isEmpty && !_checking) _check();
       },
     );
   }
@@ -192,11 +196,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   /// requester: a tap that changed nothing visible would leave them guessing
   /// whether it registered at all.
   Future<void> _request(BookRequestFormat format) async {
-    if (_busy || !_detail.isRequestable(format)) return;
-    setState(() {
-      _busy = true;
-      _submitting = format;
-    });
+    if (_inFlight.contains(format) || !_detail.isRequestable(format)) return;
+    setState(() => _inFlight.add(format));
     try {
       BookRequestSubmission? submission;
       String? failureMessage;
@@ -245,10 +246,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       _announce(outcome);
     } finally {
       if (mounted) {
-        setState(() {
-          _busy = false;
-          _submitting = null;
-        });
+        setState(() => _inFlight.remove(format));
+      } else {
+        _inFlight.remove(format);
       }
     }
   }
@@ -258,9 +258,10 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     // cannot submit the same format against stale pre-request state.
     await _check();
     if (!mounted) return;
-    // Parent ownership/live-record invalidation can change [refreshTick]. Keep
-    // [_busy] set while it runs; didUpdateWidget suppresses a redundant status
-    // check until this accepted refresh has fully completed.
+    // Parent ownership/live-record invalidation can change [refreshTick]. The
+    // submitting format stays in [_inFlight] while it runs; didUpdateWidget
+    // suppresses a redundant status check until this accepted refresh has
+    // fully completed.
     await widget.onRequestCompleted?.call();
   }
 
@@ -364,7 +365,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: _busy || _checking ? null : _check,
+              onPressed: _inFlight.isNotEmpty || _checking ? null : _check,
               icon: const Icon(Icons.refresh_rounded, size: 18),
               label: const Text('Couldn’t check · Retry'),
             ),
@@ -390,13 +391,15 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       state: requestable && !denied
           ? null
           : _formatState(detail, format, !_loading),
-      action: _submitting == format
+      action: _inFlight.contains(format)
           ? const _SubmittingIndicator()
           : requestable
               ? _RequestAction(denied ? 'Request again' : 'Request')
               : null,
       download: download,
-      onTap: requestable && !_busy ? () => _request(format) : null,
+      onTap: requestable && !_inFlight.contains(format)
+          ? () => _request(format)
+          : null,
     );
   }
 }
