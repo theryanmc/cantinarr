@@ -299,6 +299,7 @@ Future<void> _waitForRequest(
 }
 
 void main() {
+  _concurrencyTests();
   group('checkBookStatusDetail', () {
     test('one requested format leaves the other requestable', () async {
       final d = await _service({
@@ -713,14 +714,11 @@ void main() {
     expect(adapter.postCount, 1);
     expect(refreshTick, 0);
     expect(adapter.statusChecks, 2);
-    // The in-flight format says so on its own row, and no row can be tapped.
+    // The in-flight format says so on its own row and cannot double-submit;
+    // the other row stays live — the two formats are independent actions.
     expect(find.text('Requesting…'), findsOneWidget);
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
-    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
-
-    await tester.tap(_row('audiobook'));
-    await tester.pump();
-    expect(adapter.postCount, 1);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
 
     adapter.completeRefresh();
     for (var attempt = 0;
@@ -731,7 +729,10 @@ void main() {
     expect(refreshTick, 1);
     expect(adapter.statusChecks, 2,
         reason: 'the refreshTick rebuild must not supersede the accepted check');
-    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+    // The submitted format itself stays held until the parent refresh lands,
+    // but the other format was never part of this flight.
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
 
     parentRefresh.complete();
     await tester.pumpAndSettle();
@@ -827,3 +828,142 @@ Widget _panel(
     );
 
 Finder _row(String format) => find.byKey(ValueKey('book-format-row:$format'));
+
+/// Holds each POST open per book_format so a test can interleave taps with
+/// in-flight submissions; GETs (status checks) answer immediately.
+class _HeldSubmitAdapter implements HttpClientAdapter {
+  final submissionOrder = <String>[];
+  final _held = <String, Completer<void>>{};
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method != 'POST') {
+      return ResponseBody.fromString(
+        jsonEncode({'status': 'unavailable', 'book_formats': {}}),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    final bytes = <int>[];
+    if (requestStream != null) {
+      await for (final chunk in requestStream) {
+        bytes.addAll(chunk);
+      }
+    }
+    final decoded = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    final format = decoded['book_format'] as String;
+    submissionOrder.add(format);
+    final gate = _held[format] = Completer<void>();
+    await gate.future;
+    return ResponseBody.fromString(
+      jsonEncode({
+        'status': 'requested',
+        'book_formats': {format: 'requested'},
+      }),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  void release(String format) => _held[format]!.complete();
+
+  @override
+  void close({bool force = false}) {}
+}
+
+void _concurrencyTests() {
+  testWidgets(
+      'submitting one format leaves the other row tappable and both requests fly',
+      (tester) async {
+    final adapter = _HeldSubmitAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookFormatPanel(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Fire the eBook request and leave it in flight.
+    await tester.tap(_row('ebook'));
+    for (var attempt = 0;
+        attempt < 50 && adapter.submissionOrder.isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    expect(adapter.submissionOrder, ['ebook']);
+
+    // The audiobook row must still act immediately — a shared busy flag here
+    // used to swallow this tap without any feedback.
+    await tester.tap(_row('audiobook'));
+    for (var attempt = 0;
+        attempt < 50 && adapter.submissionOrder.length < 2;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    expect(adapter.submissionOrder, ['ebook', 'audiobook'],
+        reason: 'the second format must submit while the first is in flight');
+
+    adapter.release('ebook');
+    adapter.release('audiobook');
+    await tester.pumpAndSettle();
+
+    // Both rows settled into their post-request state.
+    expect(
+      find.descendant(of: _row('ebook'), matching: find.text('Requested')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: _row('audiobook'), matching: find.text('Requested')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a second tap on the in-flight format itself is ignored',
+      (tester) async {
+    final adapter = _HeldSubmitAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BookFormatPanel(
+            foreignId: 'fb',
+            title: 'Flock',
+            service: RequestService(backendDio: dio),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(_row('ebook'));
+    for (var attempt = 0;
+        attempt < 50 && adapter.submissionOrder.isEmpty;
+        attempt++) {
+      await tester.pump(const Duration(milliseconds: 1));
+    }
+    await tester.tap(_row('ebook'), warnIfMissed: false);
+    await tester.pump(const Duration(milliseconds: 5));
+    expect(adapter.submissionOrder, ['ebook'],
+        reason: 'the same format must never double-submit');
+
+    adapter.release('ebook');
+    await tester.pumpAndSettle();
+  });
+}

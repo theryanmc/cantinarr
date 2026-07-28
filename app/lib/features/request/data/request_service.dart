@@ -180,10 +180,16 @@ class BookRequestSubmission {
   final Map<BookRequestFormat, RequestStatus> formats;
   final bool isKnown;
 
+  /// A server explanation for an outcome the status alone would misrepresent —
+  /// today, a book parked for an admin because the library couldn't match it.
+  /// Empty when the status speaks for itself.
+  final String message;
+
   const BookRequestSubmission({
     required this.status,
     this.formats = const {},
     this.isKnown = true,
+    this.message = '',
   });
 
   bool succeeded(BookRequestFormat format) {
@@ -578,13 +584,20 @@ class RequestService {
     required String title,
     BookRequestFormat format = BookRequestFormat.both,
     String? instanceId,
+    String? searchTerm,
   }) async {
     try {
+      final term = searchTerm?.trim() ?? '';
       final resp = await _backendDio.post('/api/requests', data: {
         'media_type': 'book',
         'foreign_id': foreignId,
         'title': title,
         'book_format': format.value,
+        // The server has to find this book's metadata record again to add it,
+        // and Chaptarr's lookup is a fuzzy text search — so hand it the term
+        // that already produced this row instead of making it guess from the
+        // title. Absent for notification/deep-link arrivals, which had no search.
+        if (term.isNotEmpty) 'search_term': term,
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
       });
@@ -624,10 +637,12 @@ class RequestService {
           isKnown = false;
         }
       }
+      final rawMessage = data?['message'];
       return BookRequestSubmission(
         status: status,
         formats: formats,
         isKnown: isKnown,
+        message: rawMessage is String ? rawMessage.trim() : '',
       );
     } on DioException catch (e) {
       throw RequestSubmissionException(

@@ -35,7 +35,17 @@ var (
 	ErrChaptarrInstanceForbidden = errors.New("chaptarr instance is not available to you")
 	ErrChaptarrInstanceInvalid   = errors.New("invalid chaptarr instance")
 	ErrBookFormatUnresolved      = errors.New("book format is unsupported or ambiguous")
+	// ErrBookMetadataUnresolved means no Chaptarr metadata record could be found
+	// for the requested foreignBookId, so there is nothing to add a book from.
+	// It is the one add failure that says nothing about the requester, the
+	// instance config, or the book's availability, so it parks the request in the
+	// approval queue instead of discarding it.
+	ErrBookMetadataUnresolved = errors.New("book not found for foreign id")
 )
+
+// bookParkedMessage explains, in requester vocabulary, why a book request that
+// could not be added is sitting in the approval queue instead.
+const bookParkedMessage = "This book couldn't be matched in the library, so it was saved as a request for an admin instead of being added automatically."
 
 // Season scope choices a user (or admin) can attach to a TV request.
 const (
@@ -189,6 +199,12 @@ type CreateRequest struct {
 	// have no TMDB id. Required when media_type == "book"; ignored otherwise.
 	ForeignID  string `json:"foreign_id"`
 	BookFormat string `json:"book_format"`
+	// SearchTerm is the text the requester actually searched to find this book.
+	// Chaptarr's book lookup is a fuzzy text search, so adding a title that isn't
+	// tracked yet means finding its metadata record again — and this term is the
+	// one already proven to return it. Optional: deep links and notification taps
+	// have no search behind them and fall back to title-derived terms.
+	SearchTerm string `json:"search_term,omitempty"`
 	// InstanceID pins book operations to the Chaptarr instance the requester is
 	// viewing. It is optional for backward compatibility; omitted uses the
 	// user's effective grant (or the admin default).
@@ -211,6 +227,11 @@ type CreateResponse struct {
 	// differs from the id the request was made with, so clients can re-address
 	// the book by the id the library will report from now on.
 	CanonicalForeignID string `json:"canonical_foreign_id,omitempty"`
+	// Message explains an outcome the status alone would misrepresent — today,
+	// a book request that had to be parked for an admin because its metadata
+	// record could not be re-found. Clients show it verbatim; empty means the
+	// status speaks for itself.
+	Message string `json:"message,omitempty"`
 }
 
 type StatusResponse struct {
@@ -354,6 +375,7 @@ type resolvedRequest struct {
 	tvdbID           int
 	foreignID        string // Chaptarr foreignBookId (book requests)
 	bookFormat       string
+	searchTerm       string // the requester's own search text (book requests)
 	instanceID       string
 	bookFormats      map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
@@ -589,6 +611,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		tvdbID:     req.TvdbID,
 		foreignID:  req.ForeignID,
 		bookFormat: normalizeBookFormat(req.BookFormat),
+		searchTerm: strings.TrimSpace(req.SearchTerm),
 		instanceID: strings.TrimSpace(req.InstanceID),
 		mediaType:  req.MediaType,
 		title:      req.Title,
@@ -692,6 +715,21 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 
 	status, title, err := s.addToArr(resolved)
 	if err != nil {
+		// A book whose metadata record can't be re-found is the one add failure
+		// that must not end with the request on the floor: the requester wanted
+		// this title, nothing about it is invalid, and an admin who adds the
+		// author in Chaptarr can then approve the parked row and have it work.
+		// Every other failure (no instance, no root folder, ambiguous profiles)
+		// is a configuration answer the requester needs to see, not queue.
+		if resolved.mediaType == "book" && errors.Is(err, ErrBookMetadataUnresolved) {
+			// The lock is already held for books, so park through the unlocked path.
+			parked, parkErr := s.createPendingUnlocked(resolved)
+			if parkErr != nil {
+				return nil, err
+			}
+			parked.Message = bookParkedMessage
+			return parked, nil
+		}
 		return nil, err
 	}
 	resolved.title = title
@@ -778,9 +816,9 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		} else {
 			insertedBookFormat = pendingFormat
 			res, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
-				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm),
 			)
 			if err == nil {
 				requestID, _ := res.LastInsertId()
@@ -1045,30 +1083,18 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("title is required to add a new book")
 	}
 
-	results, err := client.LookupBook(r.title)
-	if err != nil {
-		if len(missing) > 0 {
-			return "", "", fmt.Errorf("book lookup failed: %w", err)
+	match, lookupErr := lookupBookForAdd(client, r.foreignID, r.title, r.searchTerm)
+	if match == nil {
+		if lookupErr != nil {
+			return "", "", fmt.Errorf("book lookup failed: %w", lookupErr)
 		}
-		results = nil
-	}
-	var match *chaptarr.LookupResult
-	for i := range results {
-		if results[i].ForeignBookID == r.foreignID {
-			match = &results[i]
-			break
-		}
-	}
-	if match == nil && len(missing) > 0 {
-		// The foreignBookId belongs to a book already in the library (owned
-		// records carry a library foreignBookId the metadata lookup can't match);
-		// complete the missing format from the existing records instead of adding.
-		lastErr = fmt.Errorf("book not found for foreign id %s", r.foreignID)
+		// No search term produced this foreignBookId, so there is no metadata
+		// record to build an add payload from and no record to monitor. Nothing
+		// was mutated here; the caller parks the request rather than dropping it.
+		lastErr = fmt.Errorf("%w %s", ErrBookMetadataUnresolved, r.foreignID)
 		for _, mediaType := range missing {
 			r.bookFormats[mediaType] = StatusUnavailable
 		}
-	}
-	if match == nil {
 		return s.finishBookMutation(r, title, lastErr)
 	}
 
@@ -1116,6 +1142,102 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 	}
 	return s.finishBookMutation(r, title, lastErr)
+}
+
+// lookupBookForAdd re-finds the metadata record a book request points at, so a
+// brand-new title can be added. Unlike Radarr — which resolves a movie by
+// `term=tmdb:{id}` and therefore cannot miss — Chaptarr's book lookup is a fuzzy
+// text search, so the id a requester is holding has to be recovered by searching
+// again and picking the row back out. Only an exact foreignBookId match counts,
+// which is what makes trying several terms safe: a term that surfaces different
+// books contributes nothing, so widening the search can find the right record
+// but can never select a different one.
+//
+// A nil result with a nil error means every term answered and none of them knew
+// this id; a nil result with an error means no term could be asked at all.
+func lookupBookForAdd(client *chaptarr.Client, foreignID, title, searchTerm string) (*chaptarr.LookupResult, error) {
+	foreignID = strings.TrimSpace(foreignID)
+	var firstErr error
+	for _, term := range bookLookupTerms(foreignID, title, searchTerm) {
+		results, err := client.LookupBook(term)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for i := range results {
+			if strings.TrimSpace(results[i].ForeignBookID) == foreignID {
+				return &results[i], nil
+			}
+		}
+	}
+	return nil, firstErr
+}
+
+// bookLookupTerms is the ordered search-term list lookupBookForAdd tries.
+//
+// The foreignBookId itself comes first: Chaptarr's lookup answers an id term
+// with an exact fetch of that record (verified live against Chaptarr 0.9.720:
+// `term=gr:297977925` returns exactly that book, an unknown id returns empty),
+// which is the same deterministic resolution Radarr gives movies via
+// `term=tmdb:{id}`. One caveat keeps the fallbacks alive: the provider resolves
+// an alias id to its canonical sibling (two works for one title, id-fetching
+// the alias returns the canonical record), and the exact-id gate rightly
+// refuses that substitute — the fuzzy terms below then re-find the alias row
+// the requester actually chose.
+//
+// The requester's own search text is that first fallback, because it is the
+// one query already proven to return the exact row — they were looking at it
+// when they tapped Request. Chaptarr's own UI never faces any of this: its web
+// client posts the whole search row straight back and re-searches nothing.
+// Cantinarr's client keeps only the id and title, so the server must re-find
+// the record here.
+//
+// The title forms are last, for requests with no search behind them (a
+// notification tap, a deep link) on forks whose lookup doesn't answer id
+// terms: the exact title, then its headline, because a long title carrying a
+// subtitle and a parenthetical series suffix routinely defeats a fuzzy text
+// search outright (verified live: the full title above returns zero results
+// while its headline finds the book).
+func bookLookupTerms(foreignID, title, searchTerm string) []string {
+	terms := make([]string, 0, 4)
+	add := func(term string) {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			return
+		}
+		for _, existing := range terms {
+			if strings.EqualFold(existing, term) {
+				return
+			}
+		}
+		terms = append(terms, term)
+	}
+	add(foreignID)
+	add(searchTerm)
+	add(title)
+	add(mainBookTitle(title))
+	return terms
+}
+
+// mainBookTitle reduces a full book title to its headline: trailing
+// parenthetical series/part suffixes dropped, then everything from the subtitle
+// separator onward. "Some Title: A Subtitle (Part 1) (A Series)" becomes
+// "Some Title". It is only ever used as an extra search term, never as identity.
+func mainBookTitle(title string) string {
+	trimmed := strings.TrimSpace(title)
+	for strings.HasSuffix(trimmed, ")") {
+		open := strings.LastIndex(trimmed, "(")
+		if open <= 0 {
+			break
+		}
+		trimmed = strings.TrimSpace(trimmed[:open])
+	}
+	if idx := strings.Index(trimmed, ":"); idx > 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	return trimmed
 }
 
 // bookAddConfig is the complete Chaptarr author configuration required by
@@ -2847,9 +2969,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0) FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0), COALESCE(search_term, '') FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID, &r.searchTerm)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -2988,9 +3110,9 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 				continue
 			}
 			failedRes, insertErr := tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?)`,
-				r.userID, r.foreignID, format, r.instanceID, title, StatusPending,
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?)`,
+				r.userID, r.foreignID, format, r.instanceID, title, StatusPending, sqlNullStr(r.searchTerm),
 			)
 			if insertErr != nil {
 				return nil, fmt.Errorf("retain failed book format: %w", insertErr)
