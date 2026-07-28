@@ -78,7 +78,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 ### Books (Chaptarr)
 - **Per-format everything** -- a title's ebook and audiobook are separate records; the author page groups tracked titles first and gives each format its own accessible tracking control (an empty control adds and searches that format).
 - **Requester book detail** -- search results stay navigable before and after a request, with author, publication metadata, synopsis, genres, and separate eBook/Audiobook request states; admins can continue into the exact live Chaptarr title.
-- **Owned-aware search** -- library titles are injected into lookup results and floated to the top with format-specific Available / Requested summaries; distinct records are never merged.
+- **Owned-aware search** -- library titles are injected into lookup results and floated to the top with format-specific Available / Requested summaries; distinct records are never merged. A lookup row that can't be tied to exactly one library record claims no ownership and targets no library id -- it says which record to act on instead, and every record it could be is listed above it.
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 
 ### Downloads & Tautulli (admin)

@@ -207,6 +207,122 @@ void main() {
     });
   });
 
+  group('titleMatchesQuery', () {
+    const subtitled = '10 Algorithms Every Forward Deployed Engineer Should '
+        'Know: Shortest Paths and Minimum Spanning Trees';
+
+    test('matches the headline of a title whose colon adds a subtitle', () {
+      expect(titleMatchesQuery('10 algorithms every forward', subtitled),
+          isTrue);
+      // The subtitle is still the requester's to search by.
+      expect(titleMatchesQuery('shortest paths', subtitled), isTrue);
+    });
+
+    test('matches the word still being typed as a prefix', () {
+      expect(titleMatchesQuery('10 algorithms every fo', subtitled), isTrue);
+      expect(titleMatchesQuery('10 algorithms every fx', subtitled), isFalse);
+    });
+
+    test('still requires the completed words in full', () {
+      expect(titleMatchesQuery('algo forward', subtitled), isFalse);
+    });
+
+    test('drops a series prefix on either side', () {
+      expect(
+        titleMatchesQuery('Star Wars: Heir to the Empire', 'Heir to the Empire'),
+        isTrue,
+      );
+      expect(
+        titleMatchesQuery('heir', 'Star Wars: Heir to the Empire'),
+        isTrue,
+      );
+    });
+
+    test('a query naming nothing in the title does not match', () {
+      expect(titleMatchesQuery('foundation', subtitled), isFalse);
+      expect(titleMatchesQuery('', subtitled), isFalse);
+    });
+  });
+
+  group('resolveBookSearchIdentity', () {
+    OwnedTitle libraryFlock() => _owned(
+          'Flock',
+          'Kate Stewart',
+          audiobookMonitored: true,
+          foreignBookId: 'library-flock',
+        );
+
+    test('an exact library id outranks a same-title sibling claim', () {
+      final digest = [libraryFlock()];
+      final exact = _result('Flock',
+          author: 'Kate Stewart', foreignBookId: 'library-flock');
+      final sibling =
+          _result('Flock', author: 'Kate Stewart', foreignBookId: 'other-id');
+
+      final identity = resolveBookSearchIdentity(
+        query: 'flock',
+        lookupResults: [exact, sibling],
+        digest: digest,
+      );
+
+      expect(identity.matches[exact], same(digest.single));
+      // The record is spoken for, so the sibling is not left half-claiming it.
+      expect(identity.contested, isEmpty);
+      expect(identity.libraryRows, isEmpty);
+    });
+
+    test('two rows carrying the same library id stay unresolved', () {
+      final digest = [libraryFlock()];
+      final first = _result('Flock',
+          author: 'Kate Stewart', foreignBookId: 'library-flock');
+      final second = _result('Flock',
+          author: 'Kate Stewart', foreignBookId: 'library-flock');
+
+      final identity = resolveBookSearchIdentity(
+        query: 'flock',
+        lookupResults: [first, second],
+        digest: digest,
+      );
+
+      expect(identity.matches, isEmpty);
+      expect(identity.contested.keys, hasLength(2));
+      expect(identity.libraryRows, [same(digest.single)]);
+    });
+
+    test('an author search still surfaces the record a row might be', () {
+      final digest = [libraryFlock()];
+      final identity = resolveBookSearchIdentity(
+        // Names the author, never the title — so only the unresolved rows can
+        // put the library record the guidance points at on screen.
+        query: 'kate stewart',
+        lookupResults: [
+          _result('Flock', author: 'Kate Stewart', foreignBookId: 'lookup-a'),
+          _result('Flock', author: 'Kate Stewart', foreignBookId: 'lookup-b'),
+        ],
+        digest: digest,
+      );
+
+      expect(identity.contested.keys, hasLength(2));
+      expect(identity.libraryRows, [same(digest.single)]);
+    });
+
+    test('an unowned shell a row might be is still offered as a choice', () {
+      // Shells stay out of query results, but a row that cannot be told apart
+      // from one has to be able to point at it.
+      final shell = _owned('Flock', 'Kate Stewart', foreignBookId: 'shell');
+      final identity = resolveBookSearchIdentity(
+        query: 'flock',
+        lookupResults: [
+          _result('Flock', author: 'Kate Stewart', foreignBookId: 'lookup-a'),
+          _result('Flock', author: 'Kate Stewart', foreignBookId: 'lookup-b'),
+        ],
+        digest: [shell],
+      );
+
+      expect(identity.libraryRows, [same(shell)]);
+    });
+  });
+
   group('ownedTitlesForQuery surfaces owned books lookup missed', () {
     final digest = [
       _owned('Heir to the Empire', 'Timothy Zahn', ebookDownloaded: true),
