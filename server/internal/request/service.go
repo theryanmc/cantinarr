@@ -1177,20 +1177,31 @@ func lookupBookForAdd(client *chaptarr.Client, foreignID, title, searchTerm stri
 
 // bookLookupTerms is the ordered search-term list lookupBookForAdd tries.
 //
-// The requester's own search text comes first when it is known, because it is
-// the one term already proven to return this record — the user was looking at a
-// row it produced when they tapped Request. Chaptarr's own UI never has this
-// problem: its web client posts the whole record straight back from the search
-// results, so it re-searches nothing. Cantinarr's client keeps only the id and
-// title, so the server has to find the row again, and replaying the same search
-// is the closest thing to being handed it.
+// The foreignBookId itself comes first: Chaptarr's lookup answers an id term
+// with an exact fetch of that record (verified live against Chaptarr 0.9.720:
+// `term=gr:297977925` returns exactly that book, an unknown id returns empty),
+// which is the same deterministic resolution Radarr gives movies via
+// `term=tmdb:{id}`. One caveat keeps the fallbacks alive: the provider resolves
+// an alias id to its canonical sibling (two works for one title, id-fetching
+// the alias returns the canonical record), and the exact-id gate rightly
+// refuses that substitute — the fuzzy terms below then re-find the alias row
+// the requester actually chose.
 //
-// The rest are fallbacks for requests that carry no search behind them (a
-// notification tap, a deep link) and for titles that defeat a text search: a
-// long title with a subtitle and a parenthetical series suffix routinely ranks
-// other editions first or returns nothing at all.
+// The requester's own search text is that first fallback, because it is the
+// one query already proven to return the exact row — they were looking at it
+// when they tapped Request. Chaptarr's own UI never faces any of this: its web
+// client posts the whole search row straight back and re-searches nothing.
+// Cantinarr's client keeps only the id and title, so the server must re-find
+// the record here.
+//
+// The title forms are last, for requests with no search behind them (a
+// notification tap, a deep link) on forks whose lookup doesn't answer id
+// terms: the exact title, then its headline, because a long title carrying a
+// subtitle and a parenthetical series suffix routinely defeats a fuzzy text
+// search outright (verified live: the full title above returns zero results
+// while its headline finds the book).
 func bookLookupTerms(foreignID, title, searchTerm string) []string {
-	terms := make([]string, 0, 6)
+	terms := make([]string, 0, 4)
 	add := func(term string) {
 		term = strings.TrimSpace(term)
 		if term == "" {
@@ -1203,17 +1214,9 @@ func bookLookupTerms(foreignID, title, searchTerm string) []string {
 		}
 		terms = append(terms, term)
 	}
+	add(foreignID)
 	add(searchTerm)
 	add(title)
-	// Readarr-lineage id-addressed lookups. Chaptarr forks that support them
-	// answer exactly; ones that don't return nothing or unrelated rows, which the
-	// foreignBookId gate discards either way.
-	if foreignID != "" {
-		add("edition:" + foreignID)
-		add("work:" + foreignID)
-		add("readarr:" + foreignID)
-	}
-	// A short, clean title is what a fuzzy provider search actually indexes well.
 	add(mainBookTitle(title))
 	return terms
 }

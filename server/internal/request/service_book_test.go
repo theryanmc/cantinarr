@@ -1975,8 +1975,8 @@ func TestBookRequestRecoversWhenFullTitleLookupMissesTheID(t *testing.T) {
 	if addBody == nil {
 		t.Fatal("AddBook was never called; the request was refused instead of added")
 	}
-	if len(terms) == 0 || terms[0] != fullTitle {
-		t.Fatalf("first lookup term = %#v, want the requester's exact title tried first", terms)
+	if len(terms) < 2 || terms[0] != "fde-1" || terms[1] != fullTitle {
+		t.Fatalf("lookup terms = %#v, want the foreignBookId fetch first, then the exact title", terms)
 	}
 	if got := addBody["mediaType"]; got != "ebook" {
 		t.Fatalf("mediaType = %v, want ebook", got)
@@ -2116,14 +2116,12 @@ func TestBookRequestLookupTransportFailureStaysAnError(t *testing.T) {
 	}
 }
 
-func TestBookLookupTermsTrySearchThenTitleThenIDThenHeadline(t *testing.T) {
-	terms := bookLookupTerms("fde-1", "Ten Algorithms: A Guide (Part 1) (A Series)", "a guide part 1")
+func TestBookLookupTermsTryIDThenSearchThenTitleThenHeadline(t *testing.T) {
+	terms := bookLookupTerms("gr:297977925", "Ten Algorithms: A Guide (Part 1) (A Series)", "a guide part 1")
 	want := []string{
+		"gr:297977925",
 		"a guide part 1",
 		"Ten Algorithms: A Guide (Part 1) (A Series)",
-		"edition:fde-1",
-		"work:fde-1",
-		"readarr:fde-1",
 		"Ten Algorithms",
 	}
 	if len(terms) != len(want) {
@@ -2146,6 +2144,10 @@ func TestBookLookupTermsTrySearchThenTitleThenIDThenHeadline(t *testing.T) {
 	// is to search each distinct string once, not to preserve a fixed shape.
 	if got := bookLookupTerms("", "Ten Algorithms: A Guide", "ten algorithms"); len(got) != 2 {
 		t.Fatalf("terms = %#v, want search term + full title only", got)
+	}
+	// A requester who pasted the id as their search collapses onto the id fetch.
+	if got := bookLookupTerms("gr:1", "A Book", "gr:1"); len(got) != 2 {
+		t.Fatalf("terms = %#v, want id + title only", got)
 	}
 }
 
@@ -2233,7 +2235,138 @@ func TestPendingBookApprovalReplaysTheRequestersSearchTerm(t *testing.T) {
 	if resp.Status != StatusRequested {
 		t.Fatalf("approval status = %s, want requested", resp.Status)
 	}
-	if len(terms) == 0 || terms[0] != "ten algorithms every" {
-		t.Fatalf("approval lookup terms = %#v, want the requester's stored search replayed first", terms)
+	if len(terms) < 2 || terms[0] != "replay-1" || terms[1] != "ten algorithms every" {
+		t.Fatalf("approval lookup terms = %#v, want the id fetch then the requester's stored search", terms)
+	}
+}
+
+// TestBookRequestDeepLinkResolvesByIdFetchAlone encodes the live-verified
+// Chaptarr behavior (0.9.720): lookup answers a foreignBookId term with an
+// exact fetch of that record. A notification tap or deep link carries no search
+// term and its stored title may defeat the fuzzy search entirely — the id fetch
+// is what makes those requests deterministic, Radarr-style.
+func TestBookRequestDeepLinkResolvesByIdFetchAlone(t *testing.T) {
+	var terms []string
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			term := r.URL.Query().Get("term")
+			terms = append(terms, term)
+			if term != "gr:424242" {
+				// Every text search misses, exactly like the field failure.
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[
+				{"title":"An Unsearchable Title: With Subtitle (Part 9) (Series)","titleSlug":"unsearchable","foreignBookId":"gr:424242","author":{"authorName":"A. Writer","foreignAuthorId":"gr:7"},"editions":[{"foreignEditionId":"e1","links":[],"images":[]}]}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":9,"title":"An Unsearchable Title","foreignBookId":"gr:424242","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:424242",
+		Title:      "An Unsearchable Title: With Subtitle (Part 9) (Series)",
+		BookFormat: BookFormatEbook,
+		// No SearchTerm: this arrival had no search behind it.
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested via the id fetch", resp.Status)
+	}
+	if len(terms) == 0 || terms[0] != "gr:424242" {
+		t.Fatalf("lookup terms = %#v, want the id fetch tried first", terms)
+	}
+	if addBody == nil {
+		t.Fatal("AddBook was not called")
+	}
+}
+
+// TestBookRequestAliasIdIsNotSubstitutedByCanonicalSibling encodes the second
+// live-verified behavior: the provider keeps two works for one title and
+// resolves an id fetch of the alias to the CANONICAL sibling. The exact-id gate
+// must refuse that substitute — the requester chose a specific row — and the
+// requester's own search term then re-finds the alias row itself.
+func TestBookRequestAliasIdIsNotSubstitutedByCanonicalSibling(t *testing.T) {
+	var addBody map[string]any
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			switch r.URL.Query().Get("term") {
+			case "gr:297978618":
+				// Id-fetching the alias returns the canonical sibling, as the
+				// live provider does.
+				_, _ = w.Write([]byte(`[
+					{"title":"Part One","titleSlug":"part-one","foreignBookId":"gr:297977925","author":{"authorName":"A. Writer","foreignAuthorId":"gr:7"},"editions":[{"foreignEditionId":"c1","links":[],"images":[]}]}
+				]`))
+			case "ten algorithms":
+				// The requester's own search returns both rows, alias included.
+				_, _ = w.Write([]byte(`[
+					{"title":"Part One","titleSlug":"part-one","foreignBookId":"gr:297977925","author":{"authorName":"A. Writer","foreignAuthorId":"gr:7"},"editions":[{"foreignEditionId":"c1","links":[],"images":[]}]},
+					{"title":"Part One","titleSlug":"part-one-2","foreignBookId":"gr:297978618","author":{"authorName":"A. Writer","foreignAuthorId":"gr:7"},"editions":[{"foreignEditionId":"a1","links":[],"images":[]}]}
+				]`))
+			default:
+				_, _ = w.Write([]byte(`[]`))
+			}
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			if err := json.NewDecoder(r.Body).Decode(&addBody); err != nil {
+				t.Errorf("decode add book body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{"id":13,"title":"Part One","foreignBookId":"gr:297978618","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:297978618",
+		Title:      "Part One",
+		BookFormat: BookFormatEbook,
+		SearchTerm: "ten algorithms",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if addBody == nil {
+		t.Fatal("AddBook was not called")
+	}
+	if got := addBody["foreignBookId"]; got != "gr:297978618" {
+		t.Fatalf("added foreignBookId = %v, want the alias row the requester chose, never the canonical substitute", got)
 	}
 }
