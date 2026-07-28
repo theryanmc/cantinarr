@@ -401,6 +401,40 @@ class _RequesterBookDetailScreenState
     );
   }
 
+  /// Library titles this page's book may duplicate: fuzzy title/author matches
+  /// with some owned format, minus the page's own record. The metadata catalog
+  /// keeps duplicate listings for one work, so a requester can land on the
+  /// listing their library doesn't use — this is the plain "you may already
+  /// have this" pointer that keeps them from requesting the book twice.
+  List<OwnedTitle> _libraryLookalikes(
+    List<OwnedTitle> titles,
+    String title,
+    String author,
+  ) {
+    final probe = ChaptarrBook(
+      id: 0,
+      title: title,
+      author: author.isEmpty
+          ? null
+          : ChaptarrAuthorContext(id: 0, authorName: author),
+    );
+    return ownedMatchesFor(probe, titles)
+        .where((t) =>
+            t.ownership.anyOwned &&
+            t.foreignBookId.trim().isNotEmpty &&
+            t.foreignBookId.trim() != _effectiveForeignId)
+        .toList(growable: false);
+  }
+
+  void _openLookalike(OwnedTitle candidate) {
+    final instanceId = _instanceId;
+    context.push(
+      '/detail/book/${Uri.encodeComponent(candidate.foreignBookId.trim())}'
+      '?title=${Uri.encodeQueryComponent(candidate.title)}'
+      '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
+    );
+  }
+
   Widget _resolved(List<OwnedTitle> titles) {
     OwnedTitle? owned;
     for (final title in titles) {
@@ -446,6 +480,11 @@ class _RequesterBookDetailScreenState
         ? _metadata!.genres
         : (live?.genres ?? const <String>[]);
     final ownership = owned?.ownership;
+    // Only a page that could not bind to its own library record needs the
+    // pointer; a bound page's format panel already tells the whole truth.
+    final lookalikes = owned != null
+        ? const <OwnedTitle>[]
+        : _libraryLookalikes(titles, title, author);
     final auth = ref.watch(authProvider).valueOrNull;
     final instanceId = _instanceId;
     final downloadsEnabled =
@@ -529,6 +568,13 @@ class _RequesterBookDetailScreenState
             ),
           ],
           const SizedBox(height: 24),
+          if (lookalikes.isNotEmpty) ...[
+            _LookalikeNotice(
+              candidates: lookalikes,
+              onOpen: _openLookalike,
+            ),
+            const SizedBox(height: 14),
+          ],
           BookFormatPanel(
             foreignId: _effectiveForeignId,
             title: title,
@@ -674,6 +720,91 @@ class _RequesterBookDetailScreenState
     );
   }
 }
+
+/// A plain "you may already have this book" pointer shown above the format
+/// panel when the library tracks what looks like the same title under another
+/// catalog listing. Each candidate stays its own tappable row — records are
+/// never merged — and opening one lands on the page whose request state is
+/// real, which is the honest way to prevent an accidental duplicate request.
+class _LookalikeNotice extends StatelessWidget {
+  final List<OwnedTitle> candidates;
+  final ValueChanged<OwnedTitle> onOpen;
+
+  const _LookalikeNotice({required this.candidates, required this.onOpen});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppTheme.surface,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        side: const BorderSide(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 12, 16, 10),
+            child: Row(
+              children: [
+                Icon(Icons.library_books_outlined,
+                    size: 18, color: AppTheme.requested),
+                SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Your library may already have this book',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1, color: AppTheme.border),
+          for (final candidate in candidates)
+            ListTile(
+              key: ValueKey(
+                  'book-lookalike:${candidate.foreignBookId.trim()}'),
+              dense: true,
+              title: Text(
+                candidate.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppTheme.textPrimary),
+              ),
+              subtitle: Text(
+                _lookalikeStates(candidate.ownership),
+                style: const TextStyle(
+                  color: AppTheme.requested,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              trailing: const Icon(Icons.chevron_right,
+                  color: AppTheme.textSecondary),
+              onTap: () => onOpen(candidate),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The same per-format state phrases the search results use, so the requester
+/// reads one vocabulary everywhere.
+String _lookalikeStates(BookOwnership o) => [
+      if (o.ebook.downloaded)
+        'eBook available'
+      else if (o.ebook.monitored)
+        'eBook requested',
+      if (o.audiobook.downloaded)
+        'Audiobook available'
+      else if (o.audiobook.monitored)
+        'Audiobook requested',
+    ].join(' · ');
 
 String _bookFileLabel(ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';

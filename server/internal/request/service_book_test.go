@@ -2370,3 +2370,91 @@ func TestBookRequestAliasIdIsNotSubstitutedByCanonicalSibling(t *testing.T) {
 		t.Fatalf("added foreignBookId = %v, want the alias row the requester chose, never the canonical substitute", got)
 	}
 }
+
+// TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary is the sequel
+// to the no-substitute rule above: once the library DOES track the canonical
+// record, a request for its alias id must complete that record, not create a
+// twin. The provider's id fetch is the authority linking the two ids; a
+// requester tapping the duplicate listing means "I want this book", not
+// "track it twice".
+func TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary(t *testing.T) {
+	var monitorBody map[string]any
+	addCalls := 0
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			// The canonical record is already tracked: an unmonitored ebook.
+			_, _ = w.Write([]byte(`[
+				{"id":21,"title":"Part One","foreignBookId":"gr:297977925","mediaType":"ebook","monitored":false,"authorId":7,"author":{"id":7,"authorName":"A. Writer"},"statistics":{"bookFileCount":0}}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			if r.URL.Query().Get("term") == "gr:297978618" {
+				// Id-fetching the alias returns the canonical sibling.
+				_, _ = w.Write([]byte(`[
+					{"title":"Part One","titleSlug":"part-one","foreignBookId":"gr:297977925","author":{"authorName":"A. Writer","foreignAuthorId":"gr:7"},"editions":[{"foreignEditionId":"c1","links":[],"images":[]}]}
+				]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/book/monitor":
+			if err := json.NewDecoder(r.Body).Decode(&monitorBody); err != nil {
+				t.Errorf("decode monitor body: %v", err)
+			}
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/command":
+			_, _ = w.Write([]byte(`{"id":1}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			addCalls++
+			_, _ = w.Write([]byte(`{"id":99,"title":"Part One","foreignBookId":"gr:297978618","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:297978618",
+		Title:      "Part One",
+		BookFormat: BookFormatEbook,
+		SearchTerm: "ten algorithms",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested via the existing record", resp.Status)
+	}
+	if addCalls != 0 {
+		t.Fatalf("AddBook was called %d times; the existing canonical record must be completed, not duplicated", addCalls)
+	}
+	if monitorBody == nil {
+		t.Fatal("the existing canonical record was not monitored")
+	}
+	ids, _ := monitorBody["bookIds"].([]any)
+	if len(ids) != 1 || ids[0] != float64(21) {
+		t.Fatalf("monitored bookIds = %v, want the canonical record 21", monitorBody["bookIds"])
+	}
+	// The client asked with the alias id; the response must re-address it to
+	// the id the library will report from now on, and the history row must
+	// carry the fulfilling record id so status reads survive re-keying.
+	if resp.CanonicalForeignID != "gr:297977925" {
+		t.Fatalf("canonical_foreign_id = %q, want gr:297977925", resp.CanonicalForeignID)
+	}
+	var loggedForeignID string
+	var recordID int
+	if err := svc.db.QueryRow(
+		"SELECT foreign_id, COALESCE(book_record_id, 0) FROM request_log WHERE user_id = ? AND media_type = 'book'",
+		uid,
+	).Scan(&loggedForeignID, &recordID); err != nil {
+		t.Fatal(err)
+	}
+	if loggedForeignID != "gr:297978618" {
+		t.Fatalf("logged foreign_id = %q, want the id the requester used", loggedForeignID)
+	}
+	if recordID != 21 {
+		t.Fatalf("logged book_record_id = %d, want the canonical record 21", recordID)
+	}
+}
