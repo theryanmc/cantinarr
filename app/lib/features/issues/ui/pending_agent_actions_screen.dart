@@ -34,6 +34,7 @@ class _PendingAgentActionsScreenState
   List<AgentAction>? _actions;
   bool _isLoading = true;
   String? _error;
+  bool _batchBusy = false;
   _AgentActionsTab _tab = _AgentActionsTab.awaitingReview;
   int _loadEpoch = 0;
   Timer? _realtimeDebounce;
@@ -106,13 +107,136 @@ class _PendingAgentActionsScreenState
   /// out and any sibling counts update.
   void _onDecided(AgentAction _) => _load();
 
+  /// The proposals currently offering decision controls — the exact set the
+  /// awaiting tab renders as actionable, and therefore the only ids "Approve
+  /// all" may submit.
+  List<AgentAction> get _decidableActions =>
+      (_actions ?? const <AgentAction>[])
+          .where((a) => a.canTakeAction)
+          .toList();
+
+  /// Approve every reviewed proposal in one request. The id list is captured
+  /// before the confirmation dialog, so a proposal that parks while the admin
+  /// is reading it is never approved sight-unseen; the server skips anything
+  /// that recovered or changed in the meantime and reports it per item.
+  Future<void> _approveAll() async {
+    if (_batchBusy || _error != null) return;
+    final targets = _decidableActions;
+    if (targets.length < 2) return;
+    final ids = targets.map((a) => a.id).toList();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: Text(
+          'Approve all ${ids.length} fixes?',
+          style: const TextStyle(color: AppTheme.textPrimary),
+        ),
+        content: Text(
+          'Cantinarr will apply all ${ids.length} fixes awaiting review, one '
+          'at a time, in the connected media services shown on their cards. '
+          'Each fix runs at most once, and a fix whose download already '
+          'recovered or whose state changed is skipped. This cannot be '
+          'undone from Cantinarr.',
+          style: const TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.available,
+              foregroundColor: AppTheme.background,
+            ),
+            child: const Text('Approve all'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    setState(() => _batchBusy = true);
+    try {
+      final results =
+          await ref.read(issuesServiceProvider).approveActionsBatch(ids);
+      if (!mounted) return;
+      _showSnack(_batchSummary(results));
+    } catch (_) {
+      if (!mounted) return;
+      // The server runs the batch to completion even when this response is
+      // lost, so never claim nothing happened; the reload shows the truth.
+      _showSnack('Could not confirm the results. Refresh to see what ran.');
+    } finally {
+      if (mounted) setState(() => _batchBusy = false);
+    }
+    _load();
+  }
+
+  /// One honest line for the whole gesture, in requester-free admin
+  /// vocabulary: applied / skipped / needs attention.
+  String _batchSummary(List<AgentActionBatchResult> results) {
+    final applied = results.where((r) => r.applied).length;
+    final skipped = results.where((r) => r.skipped).length;
+    final attention = results.where((r) => r.needsAttention).length;
+    if (results.isNotEmpty && applied == results.length) {
+      return 'All $applied fixes applied.';
+    }
+    final parts = <String>[
+      if (applied > 0) '$applied applied',
+      if (skipped > 0) '$skipped skipped',
+      if (attention > 0) '$attention need${attention == 1 ? 's' : ''} attention',
+    ];
+    return parts.isEmpty
+        ? 'No fixes were applied.'
+        : 'Approve all: ${parts.join(' · ')}.';
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // A proposal raised or decided elsewhere reloads the queue.
     ref.listen(agentActionsChangedProvider, (_, __) => _scheduleLoad());
 
+    // Offered only while the awaiting tab shows two or more actionable
+    // proposals (a single fix is a single card tap), and kept visible with a
+    // spinner while a batch is running so the affordance doesn't vanish as
+    // live refreshes drain the queue mid-flight.
+    final showApproveAll = _tab == _AgentActionsTab.awaitingReview &&
+        _error == null &&
+        (_batchBusy || _decidableActions.length >= 2);
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Agent fixes')),
+      appBar: AppBar(
+        title: const Text('Agent fixes'),
+        actions: [
+          if (showApproveAll)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: TextButton.icon(
+                onPressed: _batchBusy ? null : _approveAll,
+                icon: _batchBusy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.available),
+                      )
+                    : const Icon(Icons.done_all, size: 18),
+                label: const Text('Approve all'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.available,
+                ),
+              ),
+            ),
+        ],
+      ),
       body: CenteredContent(
         child: Column(
           children: [
@@ -262,7 +386,9 @@ class _PendingAgentActionsScreenState
                   '${action.id}-${action.statusRaw}-${action.canDecide}',
                 ),
                 action: action,
-                decisionsEnabled: _error == null,
+                // A running batch owns the queue: per-card decisions pause so
+                // an admin can't race their own bulk approval.
+                decisionsEnabled: _error == null && !_batchBusy,
                 onDecided: _onDecided,
                 onViewActivity: action.runId != null
                     ? () => context.push('/agent-runs/${action.runId}')

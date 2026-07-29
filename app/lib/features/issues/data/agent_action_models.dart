@@ -773,6 +773,43 @@ class AgentRunDetail {
       );
 }
 
+/// One item's verdict from the approve-batch endpoint: the durable action
+/// status after the attempt (`executed`, `failed`, `outcome_unknown`,
+/// `superseded`, ...) or one of two batch-only verdicts — `skipped` (a
+/// decision or arr-recovery race owned the proposal first; nothing executed)
+/// and `error` (the id could not be decided at all). [detail] carries the
+/// server's reason for anything that did not execute cleanly.
+class AgentActionBatchResult {
+  final int id;
+  final String status;
+  final String detail;
+
+  const AgentActionBatchResult({
+    required this.id,
+    required this.status,
+    this.detail = '',
+  });
+
+  factory AgentActionBatchResult.fromJson(Map<String, dynamic> json) =>
+      AgentActionBatchResult(
+        id: (json['id'] as num?)?.toInt() ?? 0,
+        status: json['status'] as String? ?? '',
+        detail: json['detail'] as String? ?? '',
+      );
+
+  /// The fix ran and completed cleanly.
+  bool get applied => status == 'executed';
+
+  /// Nothing ran and nothing needs an admin: the proposal was owned by a
+  /// concurrent decision, the arr's own recovery, or a superseding change.
+  bool get skipped =>
+      status == 'skipped' || status == 'superseded' || status == 'executing';
+
+  /// Everything else — failed, outcome unknown, undecidable — deserves the
+  /// admin's eye on the queue/history view.
+  bool get needsAttention => !applied && !skipped;
+}
+
 /// Durable activity for one issue. It includes every action status and compact
 /// run summaries, unlike the transient approval queue.
 class IssueAgentActivity {
