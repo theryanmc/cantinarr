@@ -1,10 +1,13 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/config/app_config.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../data/request_settings_service.dart';
 import '../../request/data/request_service.dart';
 import '../../request/logic/pending_approvals_provider.dart';
@@ -471,12 +474,36 @@ class _PendingTile extends StatelessWidget {
     required this.onDeny,
   });
 
+  /// What the artwork slot falls back to. A pending book has no cover to
+  /// resolve, so its rows always land here.
+  IconData get _placeholderIcon => switch (item.mediaType) {
+        'tv' => Icons.live_tv,
+        'book' => Icons.menu_book,
+        _ => Icons.movie,
+      };
+
   @override
   Widget build(BuildContext context) {
     final showScope = item.isTv && item.seasonScope.isNotEmpty;
     final showBookFormat = item.isBook && item.bookFormat.isNotEmpty;
+    final detailRoute = item.detailRoute;
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      onTap: detailRoute == null ? null : () => context.push(detailRoute),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: 45,
+          height: 67,
+          child: CachedImage(
+            url: item.posterPath.isEmpty
+                ? null
+                : AppConfig.tmdbPoster(item.posterPath, width: 185),
+            fit: BoxFit.cover,
+            icon: _placeholderIcon,
+          ),
+        ),
+      ),
       title: Text(
         item.title,
         style: const TextStyle(
