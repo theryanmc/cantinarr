@@ -1916,11 +1916,32 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	if _, err := s.ensureIssueObservation(issue, serviceType, now); err != nil {
 		return arrRecoveryProbe{}, err
 	}
+	// Partition the snapshot exactly as the observation sweep does and pick this
+	// incident's rows by its stored scope key. The preflight and the sweeper must
+	// agree on which queue rows constitute the incident: a season pack is one
+	// download but N per-episode incidents, so matching by shared download id
+	// would hand every sibling episode's row to this one issue. Its signature
+	// could then never equal the sweep's per-episode signature, every unchanged
+	// row read as "live arr signature changed", and each promotion bounced
+	// straight back to tracking with the dispatched run aborted.
+	var scopeKey string
+	if err := s.db.QueryRow(
+		"SELECT scope_key FROM issue_observations WHERE issue_id=?", issue.ID,
+	).Scan(&scopeKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return arrRecoveryProbe{}, err
+	}
+	groups := groupQueueObservations(serviceType, issue.InstanceID, items)
 	var matched []arr.QueueObservation
-	for _, item := range items {
-		if mediaScopeMatches(issueMediaContext(issue), item.Media, issue.MediaType) ||
-			(item.DownloadID != "" && item.DownloadID == issue.DownloadID) {
-			matched = append(matched, item)
+	if group, ok := groups[scopeKey]; ok {
+		matched = group.items
+	} else if issue.Source == SourceUser {
+		for _, candidate := range groups {
+			for _, item := range candidate.items {
+				if mediaScopeMatches(issueMediaContext(issue), item.Media, issue.MediaType) {
+					matched = append(matched, candidate.items...)
+					break
+				}
+			}
 		}
 	}
 	if len(matched) == 0 {
