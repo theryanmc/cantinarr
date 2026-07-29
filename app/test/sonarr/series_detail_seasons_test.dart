@@ -2,154 +2,112 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/network/backend_client.dart';
-import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_series_detail_screen.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Tremors-shaped payload: one 13-episode season, all aired and monitored,
-/// nothing imported yet — plus a Specials season nobody monitors.
+/// American Dad!-shaped payload: season 22 has 13 episodes, 11 of them aired
+/// and on disk, and Sonarr is still waiting on the last two. Sonarr's own
+/// episodeCount stops at 11, which is how the card came to claim "100% •
+/// 11/11 Episodes Available" for a season the episode list shows 13 rows for.
 Map<String, dynamic> _seriesJson() => {
       'id': 7,
-      'title': 'Tremors',
+      'title': 'American Dad!',
       'monitored': true,
-      'status': 'ended',
+      'status': 'continuing',
       'statistics': {
         'seasonCount': 2,
-        'episodeFileCount': 0,
-        'episodeCount': 13,
-        'totalEpisodeCount': 20,
-        'sizeOnDisk': 0,
-        'percentOfEpisodes': 0.0,
+        'episodeFileCount': 19,
+        'episodeCount': 19,
+        'totalEpisodeCount': 21,
+        'sizeOnDisk': 12000000000,
+        'percentOfEpisodes': 100.0,
       },
       'seasons': [
         {
-          'seasonNumber': 0,
-          'monitored': false,
+          'seasonNumber': 21,
+          'monitored': true,
           'statistics': {
-            'episodeFileCount': 0,
-            'episodeCount': 0,
-            'totalEpisodeCount': 7,
-            'sizeOnDisk': 0,
-            'percentOfEpisodes': 0.0,
+            'episodeFileCount': 8,
+            'episodeCount': 8,
+            'totalEpisodeCount': 8,
+            'sizeOnDisk': 5000000000,
+            'percentOfEpisodes': 100.0,
           },
         },
         {
-          'seasonNumber': 1,
+          'seasonNumber': 22,
           'monitored': true,
           'statistics': {
-            'episodeFileCount': 0,
-            'episodeCount': 13,
+            'episodeFileCount': 11,
+            'episodeCount': 11,
             'totalEpisodeCount': 13,
-            'sizeOnDisk': 0,
-            'percentOfEpisodes': 0.0,
+            'sizeOnDisk': 6657000000,
+            'percentOfEpisodes': 100.0,
+            'nextAiring': '2026-09-13T04:00:00Z',
           },
         },
       ],
     };
 
-/// One `queue/details` row per queued episode, as Sonarr returns it.
-Map<String, dynamic> _queueRow(int episode) => {
-      'id': 900 + episode,
-      'seriesId': 7,
-      'title': 'Tremors.S01E$episode.WEBRip',
-      'status': 'completed',
-      'trackedDownloadState': 'importPending',
-      'episode': {
-        'id': 100 + episode,
-        'seasonNumber': 1,
-        'episodeNumber': episode,
-        'hasFile': false,
-      },
-    };
-
 class _SeriesAdapter implements HttpClientAdapter {
-  _SeriesAdapter({this.queue = const [], this.queueFails = false});
-
-  final List<Map<String, dynamic>> queue;
-  final bool queueFails;
-
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? _,
-      Future<void>? __) async {
-    const json = Headers.jsonContentType;
-    if (options.path.endsWith('/queue/details')) {
-      if (queueFails) {
-        return ResponseBody.fromString('{"message":"boom"}', 500, headers: {
-          Headers.contentTypeHeader: [json]
-        });
-      }
-      return ResponseBody.fromString(jsonEncode(queue), 200, headers: {
-        Headers.contentTypeHeader: [json]
-      });
-    }
-    return ResponseBody.fromString(jsonEncode(_seriesJson()), 200, headers: {
-      Headers.contentTypeHeader: [json]
-    });
-  }
+          Future<void>? __) async =>
+      ResponseBody.fromString(
+        jsonEncode(_seriesJson()),
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType]
+        },
+      );
 
   @override
   void close({bool force = false}) {}
 }
 
-Future<void> _pump(WidgetTester tester, _SeriesAdapter adapter) async {
-  // Phone-sized, like the screen this is read on.
-  await tester.binding.setSurfaceSize(const Size(390, 844));
-  addTearDown(() => tester.binding.setSurfaceSize(null));
-
-  final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
-    ..httpClientAdapter = adapter;
-
-  await tester.pumpWidget(ProviderScope(
-    overrides: [backendClientProvider.overrideWithValue(dio)],
-    child: MaterialApp(
-      theme: AppTheme.dark,
-      home: SonarrSeriesDetailScreen(
-        instanceId: 'sonarr-main',
-        series: SonarrSeries.fromJson(_seriesJson()),
-      ),
-    ),
-  ));
-  await tester.pumpAndSettle();
-}
-
-/// The All Seasons roll-up and the season card can carry the same label, so
-/// take the first — they are styled by the same widget either way.
 Color _colorOf(WidgetTester tester, String text) =>
-    tester.widgetList<Text>(find.text(text)).first.style!.color!;
+    tester.widget<Text>(find.text(text)).style!.color!;
 
 void main() {
-  testWidgets('a season waiting on its imports reads Sonarr\'s "0 + 13 / 13"',
+  testWidgets('an airing season counts the episodes it is still waiting on',
       (tester) async {
-    await _pump(
-      tester,
-      _SeriesAdapter(queue: [for (var e = 1; e <= 13; e++) _queueRow(e)]),
+    // Phone-sized, like the screen this shipped wrong on.
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = _SeriesAdapter();
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [backendClientProvider.overrideWithValue(dio)],
+      child: MaterialApp(
+        theme: AppTheme.dark,
+        home: SonarrSeriesDetailScreen(
+          instanceId: 'sonarr-main',
+          series: SonarrSeries.fromJson(_seriesJson()),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Season 22: caught up on everything that has aired, but not complete —
+    // and never "100%", which is what made it look finished.
+    expect(find.text('11/13 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(
+      _colorOf(tester, '11/13 Episodes Available • 2 unaired'),
+      AppTheme.downloading,
     );
+    expect(find.textContaining('11/11'), findsNothing);
+    expect(find.textContaining('100%'), findsNothing);
 
-    // Season 1 and the All Seasons roll-up both carry the "+ 13".
-    expect(find.text('0 + 13 / 13'), findsNWidgets(2));
-    expect(_colorOf(tester, '0 + 13 / 13'), AppTheme.downloading);
-    // Specials: nothing monitored, so Sonarr counts nothing.
-    expect(find.text('0 / 0'), findsOneWidget);
-    expect(find.textContaining('%'), findsNothing);
-  });
-
-  testWidgets('with an empty queue the label is the plain fraction',
-      (tester) async {
-    await _pump(tester, _SeriesAdapter());
-
-    expect(find.text('0 / 13'), findsNWidgets(2));
-    expect(_colorOf(tester, '0 / 13'), AppTheme.error);
-  });
-
-  testWidgets('a queue that fails to load leaves the labels standing',
-      (tester) async {
-    await _pump(tester, _SeriesAdapter(queueFails: true));
-
-    expect(find.text('0 / 13'), findsNWidgets(2));
-    expect(find.textContaining('Failed to load'), findsNothing);
+    // Season 21 is genuinely done, and All Seasons rolls both up.
+    expect(find.text('8/8 Episodes Available'), findsOneWidget);
+    expect(_colorOf(tester, '8/8 Episodes Available'), AppTheme.available);
+    expect(find.text('19/21 Episodes Available • 2 unaired'), findsOneWidget);
   });
 }
