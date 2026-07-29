@@ -6,6 +6,13 @@ import 'issue_models.dart';
 
 const _aiValidationReceiveTimeout = Duration(seconds: 75);
 
+/// Receive timeout for one approve-batch request. The server decides items
+/// sequentially (arr preflights plus one mutation each), so a large wave is
+/// legitimately slower than the default request timeout. The server runs the
+/// batch to completion even if this client gives up waiting, so a timeout
+/// here means "refresh to see what ran", never "nothing happened".
+const _batchApproveReceiveTimeout = Duration(minutes: 3);
+
 /// REST client for the issue-reporting / AI-remediation feature.
 ///
 /// Talks to the Wave-1 contract (snake_case). The server may not be merged
@@ -204,6 +211,24 @@ class IssuesService {
       data: body.isEmpty ? null : body,
     );
     return AgentAction.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Approve an explicit list of reviewed proposals in one request. The server
+  /// decides each id sequentially through the same at-most-once core as
+  /// [approveAction] — one item's conflict never fails the rest — and returns
+  /// a per-item verdict. There is deliberately no "approve everything" form:
+  /// [ids] must be the proposals the admin was actually shown.
+  Future<List<AgentActionBatchResult>> approveActionsBatch(
+      List<int> ids) async {
+    final resp = await _dio.post(
+      '/api/admin/agent-actions/approve-batch',
+      data: {'ids': ids},
+      options: Options(receiveTimeout: _batchApproveReceiveTimeout),
+    );
+    final data = resp.data as Map<String, dynamic>?;
+    return ((data?['results'] as List?) ?? const [])
+        .map((e) => AgentActionBatchResult.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   // ---- Standing auto-approval rules (admin) --------------------------------

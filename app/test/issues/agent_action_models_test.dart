@@ -525,4 +525,38 @@ void main() {
       expect(withOffer.canTakeAction, isFalse);
     });
   });
+
+  group('AgentActionBatchResult', () {
+    test('parses the wire shape and buckets each verdict', () {
+      final executed = AgentActionBatchResult.fromJson(
+          {'id': 7, 'status': 'executed'});
+      expect(executed.id, 7);
+      expect(executed.applied, isTrue);
+      expect(executed.skipped, isFalse);
+      expect(executed.needsAttention, isFalse);
+      expect(executed.detail, '');
+
+      final skipped = AgentActionBatchResult.fromJson({
+        'id': 8,
+        'status': 'skipped',
+        'detail': 'the arr began recovering before dispatch',
+      });
+      expect(skipped.skipped, isTrue);
+      expect(skipped.needsAttention, isFalse);
+      expect(skipped.detail, contains('recovering'));
+
+      // superseded/executing: owned elsewhere, nothing for the admin to do.
+      expect(_r('superseded').skipped, isTrue);
+      expect(_r('executing').skipped, isTrue);
+
+      // failed / outcome_unknown / error / anything novel: surface it.
+      expect(_r('failed').needsAttention, isTrue);
+      expect(_r('outcome_unknown').needsAttention, isTrue);
+      expect(_r('error').needsAttention, isTrue);
+      expect(_r('').needsAttention, isTrue);
+    });
+  });
 }
+
+AgentActionBatchResult _r(String status) =>
+    AgentActionBatchResult.fromJson({'id': 1, 'status': status});
