@@ -292,6 +292,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/ai-remediation'),
             ),
             _SettingsTile(
+              icon: Icons.rule_outlined,
+              title: 'Agent Auto-Approvals',
+              subtitle: 'Standing rules that approve repeat fixes',
+              onTap: () => context.push('/settings/agent-approval-rules'),
+            ),
+            _SettingsTile(
               icon: Icons.explore_outlined,
               title: 'Discovery',
               subtitle: 'What backs the headline rows, and language filtering',

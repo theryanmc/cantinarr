@@ -29,6 +29,7 @@ import '../features/downloads/ui/downloads_history_screen.dart';
 import '../features/downloads/ui/downloads_module_shell.dart';
 import '../features/downloads/ui/downloads_queue_screen.dart';
 import '../features/issues/ui/agent_run_screen.dart';
+import '../features/issues/ui/agent_approval_rules_screen.dart';
 import '../features/issues/ui/ai_remediation_settings_screen.dart';
 import '../features/issues/ui/issue_thread_screen.dart';
 import '../features/issues/ui/issues_list_screen.dart';
@@ -582,6 +583,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 child: AiRemediationSettingsScreen()),
           ),
           GoRoute(
+            path: '/settings/agent-approval-rules',
+            builder: (_, __) => const AppAmbientBackground(
+                child: AgentApprovalRulesScreen()),
+          ),
+          GoRoute(
             path: '/settings/request-settings',
             builder: (_, __) =>
                 const AppAmbientBackground(child: RequestSettingsScreen()),
@@ -689,6 +695,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/change-history',
     '/settings/users',
     '/settings/ai-remediation',
+    '/settings/agent-approval-rules',
     '/settings/request-settings',
     '/settings/devices',
     '/settings/plex',

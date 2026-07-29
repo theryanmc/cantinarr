@@ -150,6 +150,16 @@ class PushService {
         // The circuit breaker turned auto-dispatch off — open the settings the
         // admin uses to re-enable it.
         router.push('/settings/ai-remediation');
+      case 'agent_autoapproval_paused':
+        // A standing auto-approval rule disarmed itself. The triggering issue
+        // holds the evidence; without one, the rules screen shows the paused
+        // rule and its re-arm control.
+        final pausedIssueId = _asInt(data['issue_id']);
+        if (pausedIssueId == null || pausedIssueId <= 0) {
+          router.push('/settings/agent-approval-rules');
+          return;
+        }
+        router.push('/issues/$pausedIssueId');
       case 'request_decision':
       case 'new_movie':
       case 'new_episode':
