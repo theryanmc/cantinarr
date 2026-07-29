@@ -13,7 +13,7 @@ import 'edit_series_screen.dart';
 import 'series_actions.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_season_screen.dart';
-import 'widgets/season_progress.dart';
+import 'widgets/season_availability.dart';
 
 /// Series detail: an "All Seasons" summary plus a per-season list with
 /// availability and monitor toggles. Tapping a season drills into its
@@ -43,7 +43,8 @@ class _SonarrSeriesDetailScreenState
   String? _error;
   final Set<int> _togglingSeasons = {};
 
-  /// The series' queue, bucketed by season: the "+ N" on each card.
+  /// The series' queue, bucketed by season, so a card can say "downloading"
+  /// instead of calling an episode that is already in flight "missing".
   Map<int, List<SonarrQueueItem>> _queueBySeason = const {};
   List<SonarrQueueItem> _queue = const [];
 
@@ -61,7 +62,7 @@ class _SonarrSeriesDetailScreenState
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      // The queue only annotates the labels, so a queue that fails to load
+      // The queue only annotates the cards, so a queue that fails to load
       // leaves the screen intact rather than taking it down.
       final queueFuture = _service
           .getSeriesQueue(_series.id)
@@ -309,7 +310,6 @@ class _SonarrSeriesDetailScreenState
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
                             queue: _queueBySeason[s.seasonNumber] ?? const [],
-                            ended: _series.status == 'ended',
                             busy: _togglingSeasons.contains(s.seasonNumber),
                             onTap: () => _openSeason(s),
                             onLongPress: () => _showSeasonActions(s),
@@ -334,29 +334,26 @@ class _SonarrSeriesDetailScreenState
 String seasonLabel(int seasonNumber) =>
     seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
 
-/// Sonarr's progress label — "11 / 11", or "0 + 13 / 13" with episodes on the
-/// way. See [seasonProgressLabel].
-class _ProgressLine extends StatelessWidget {
+/// "11/13 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
+/// why the denominator is the whole season rather than Sonarr's episodeCount.
+class _AvailabilityLine extends StatelessWidget {
   final SonarrStatistics? stats;
-  final bool monitored;
-  final bool ended;
+  final bool moreToCome;
   final List<SonarrQueueItem> queue;
-
-  const _ProgressLine({
+  const _AvailabilityLine({
     required this.stats,
-    required this.monitored,
-    required this.ended,
+    required this.moreToCome,
     required this.queue,
   });
 
   @override
   Widget build(BuildContext context) {
-    final label = seasonProgressLabel(stats,
-        monitored: monitored, ended: ended, queue: queue);
+    final line =
+        seasonAvailabilityLine(stats, moreToCome: moreToCome, queue: queue);
     return Text(
-      label.text,
+      line.text,
       style: TextStyle(
-        color: label.color,
+        color: line.color,
         fontSize: 13,
         fontWeight: FontWeight.w500,
       ),
@@ -405,10 +402,9 @@ class _AllSeasonsCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _ProgressLine(
+                  _AvailabilityLine(
                     stats: stats,
-                    monitored: series.monitored,
-                    ended: series.status == 'ended',
+                    moreToCome: series.hasUpcomingEpisodes,
                     queue: queue,
                   ),
                 ],
@@ -425,7 +421,6 @@ class _AllSeasonsCard extends StatelessWidget {
 class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
   final List<SonarrQueueItem> queue;
-  final bool ended;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -434,7 +429,6 @@ class _SeasonCard extends StatelessWidget {
   const _SeasonCard({
     required this.season,
     required this.queue,
-    required this.ended,
     required this.busy,
     required this.onTap,
     required this.onLongPress,
@@ -489,10 +483,9 @@ class _SeasonCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _ProgressLine(
+                  _AvailabilityLine(
                     stats: stats,
-                    monitored: season.monitored,
-                    ended: ended,
+                    moreToCome: stats?.nextAiring != null,
                     queue: queue,
                   ),
                 ],

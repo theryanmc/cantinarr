@@ -176,7 +176,7 @@ class SonarrApiService {
   }
 
   /// Everything in the queue for one series, unpaged — the endpoint Sonarr's
-  /// own progress labels count for their "+ N". Prefer it over
+  /// own progress labels count for the "+N" beside a season. Prefer it over
   /// [getQueueDetailed] when only one series matters: that one is paged, so a
   /// busy instance can push this series' downloads off the page entirely.
   Future<List<SonarrQueueItem>> getSeriesQueue(int seriesId) async {
