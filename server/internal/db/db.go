@@ -1079,6 +1079,15 @@ func isCanonicalReleaseFingerprint(value string) bool {
 // label) to one incident per instance/download. Any already-open duplicates are
 // terminalized before the canonical newest row is re-keyed; the normal repair
 // pass above then invalidates their proposals/runs.
+//
+// It must touch only rows born under that legacy scheme. A legacy key and an
+// exact-scope key are both 64-hex sha256, so the key itself cannot discriminate
+// — but every exact-scoped auto issue is created together with its
+// issue_observations row, while the legacy poller never wrote one. Without
+// that guard, a season pack (one download id, N per-episode incidents) reads
+// as N-1 "duplicates" on every boot: this repair dismissed them, the
+// observation sweep recreated them, and the whole detect→promote→investigate→
+// page pipeline replayed after every restart.
 func repairAutoIssueDedupe(db *sql.DB) error {
 	rows, err := db.Query(
 		`SELECT i.id, i.instance_id, i.download_id,
@@ -1087,6 +1096,7 @@ func repairAutoIssueDedupe(db *sql.DB) error {
 		 FROM issues i
 		 WHERE source = 'auto' AND closed_at IS NULL
 		   AND COALESCE(instance_id,'') != '' AND COALESCE(download_id,'') != ''
+		   AND NOT EXISTS (SELECT 1 FROM issue_observations o WHERE o.issue_id = i.id)
 		 ORDER BY hazardous DESC, i.id DESC`,
 	)
 	if err != nil {

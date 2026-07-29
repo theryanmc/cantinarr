@@ -436,7 +436,7 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 				QueueID: item.Media.QueueID, Title: secrets.RedactText(item.Media.Title),
 				TmdbID: item.Media.TmdbID, TvdbID: item.Media.TvdbID,
 				SeasonNumber: item.Media.SeasonNumber, EpisodeNumber: item.Media.EpisodeNumber,
-				AuthorID:     item.Media.AuthorID, BookID: item.Media.BookID,
+				AuthorID: item.Media.AuthorID, BookID: item.Media.BookID,
 			},
 			Signal: arr.QueueSignal{
 				Status: item.Signal.Status, TrackedDownloadStatus: item.Signal.TrackedDownloadStatus,
