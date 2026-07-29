@@ -4,11 +4,13 @@ import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'sonarr_releases_screen.dart';
+import 'sonarr_series_detail_screen.dart';
 
 enum _WantedView { missing, cutoff }
 
@@ -176,6 +178,21 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
     );
   }
 
+  Future<void> _openSeries(SonarrWantedRecord record) async {
+    final series = record.series;
+    final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
+    if (series == null || instanceId == null) return;
+    await Navigator.of(context, rootNavigator: true).push(
+      AmbientPageRoute(
+        builder: (_) =>
+            SonarrSeriesDetailScreen(instanceId: instanceId, series: series),
+      ),
+    );
+    // The detail screen can trigger searches or edit/remove the series;
+    // refresh on return.
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Reload when the active instance changes.
@@ -262,6 +279,7 @@ class _SonarrWantedScreenState extends ConsumerState<SonarrWantedScreen> {
           return _WantedTile(
             record: record,
             showQuality: _view == _WantedView.cutoff,
+            onTap: record.series != null ? () => _openSeries(record) : null,
             onAutomaticSearch: () => _automaticSearch(record),
             onInteractiveSearch: () => _openInteractiveSearch(record),
           );
@@ -282,12 +300,14 @@ String _airDateLabel(DateTime? airDateUtc) {
 class _WantedTile extends StatelessWidget {
   final SonarrWantedRecord record;
   final bool showQuality;
+  final VoidCallback? onTap;
   final VoidCallback onAutomaticSearch;
   final VoidCallback onInteractiveSearch;
 
   const _WantedTile({
     required this.record,
     required this.showQuality,
+    this.onTap,
     required this.onAutomaticSearch,
     required this.onInteractiveSearch,
   });
@@ -304,7 +324,20 @@ class _WantedTile extends StatelessWidget {
     ];
 
     return ListTile(
+      onTap: onTap,
       contentPadding: const EdgeInsets.only(left: 16, right: 4),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: 45,
+          height: 67,
+          child: CachedImage(
+            url: record.series?.posterUrl,
+            fit: BoxFit.cover,
+            icon: Icons.tv,
+          ),
+        ),
+      ),
       title: Text(
         record.seriesTitle ?? 'Unknown series',
         style: const TextStyle(

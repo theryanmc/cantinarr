@@ -907,6 +907,18 @@ List<Map<String, dynamic>> _sonarrCalendar() => [
           '2026-08-03T01:00:00Z', false),
     ];
 
+/// Poster per series id, joined into embedded `series` objects (calendar and
+/// wanted responses fetched with includeSeries carry the full series, images
+/// included) so the arr calendar/wanted screens render artwork.
+final Map<int, String> _seriesPosters = {
+  101: _hotd.poster,
+  102: '/in1R2dDc421JxsoRWaIIAqVI2KE.jpg',
+  106: '/hjJkrLXhWvGHpLeLBDFznpBTY1S.jpg',
+  108: '/uWpG7GqfKGQqX4YMAo3nv5OrglV.jpg',
+  110: '/xsiecCxd8lkcAluw0wWwbW5CwSv.jpg',
+  111: '/70kTz0OmjjZe7zHvIDrq2iKW7PJ.jpg',
+};
+
 Map<String, dynamic> _sonarrCalEntry(int seriesId, String seriesTitle,
         int season, int episode, String epTitle, String airUtc, bool hasFile) =>
     {
@@ -918,8 +930,44 @@ Map<String, dynamic> _sonarrCalEntry(int seriesId, String seriesTitle,
       'airDateUtc': airUtc,
       'hasFile': hasFile,
       'monitored': true,
-      'series': {'title': seriesTitle},
+      'series': {
+        'id': seriesId,
+        'title': seriesTitle,
+        if (_seriesPosters[seriesId] != null)
+          'images': _posterImage(_seriesPosters[seriesId]!),
+      },
     };
+
+/// Sonarr wanted (GET /wanted/missing|cutoff) -> paged episodes with embedded
+/// series. Feeds the Sonarr Wanted screen.
+Map<String, dynamic> _sonarrWanted() => {
+      'page': 1,
+      'pageSize': 50,
+      'totalRecords': 4,
+      'records': [
+        _sonarrCalEntry(101, 'House of the Dragon', 3, 4, 'A Dance of Dragons',
+            '2026-07-06T01:00:00Z', false),
+        _sonarrCalEntry(102, 'The Boys', 5, 2, 'Kill Your Heroes',
+            '2026-07-15T02:00:00Z', false),
+        _sonarrCalEntry(106, "Grey's Anatomy", 21, 15, 'Wishin and Hopin',
+            '2026-07-09T01:00:00Z', false),
+        _sonarrCalEntry(111, 'The Rookie', 7, 9, 'Crossfire',
+            '2026-07-14T01:00:00Z', false),
+      ],
+    };
+
+/// Radarr wanted (GET /wanted/missing|cutoff) -> paged missing movies
+/// (the calendar movies that lack files). Feeds the Radarr Wanted screen.
+Map<String, dynamic> _radarrWanted() {
+  final records =
+      _radarrCalendar().where((m) => m['hasFile'] == false).toList();
+  return {
+    'page': 1,
+    'pageSize': 50,
+    'totalRecords': records.length,
+    'records': records,
+  };
+}
 
 // ─── Downloads (normalized /api/downloads/{id}/queue) ────────────────────────
 
@@ -1201,6 +1249,26 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   if (path.endsWith('/api/v3/calendar')) {
     // The instance id disambiguates movie vs episode calendars.
     return path.contains('/sonarr') ? _sonarrCalendar() : _radarrCalendar();
+  }
+  if (path.endsWith('/api/v3/wanted/missing') ||
+      path.endsWith('/api/v3/wanted/cutoff')) {
+    return path.contains('/sonarr') ? _sonarrWanted() : _radarrWanted();
+  }
+  // By-id lookups so calendar/wanted tap-through lands on a populated detail.
+  if (path.contains('/api/v3/movie/')) {
+    final id = _lastIntSegment(path);
+    if (id != null) {
+      final match = [..._radarrLibrary(), ..._radarrCalendar()]
+          .where((m) => m['id'] == id);
+      if (match.isNotEmpty) return match.first;
+    }
+  }
+  if (path.contains('/api/v3/series/')) {
+    final id = _lastIntSegment(path);
+    if (id != null) {
+      final match = _sonarrLibrary().where((s) => s['id'] == id);
+      if (match.isNotEmpty) return match.first;
+    }
   }
 
   // ── Download client queues (per instance) ──

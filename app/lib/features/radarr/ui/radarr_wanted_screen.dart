@@ -4,10 +4,12 @@ import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
+import 'radarr_movie_detail_screen.dart';
 import 'radarr_releases_screen.dart';
 
 enum _WantedView { missing, cutoff }
@@ -170,6 +172,20 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
     );
   }
 
+  Future<void> _openMovie(RadarrMovie movie) async {
+    final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
+    if (instanceId == null) return;
+    await Navigator.of(context, rootNavigator: true).push(
+      AmbientPageRoute(
+        builder: (_) =>
+            RadarrMovieDetailScreen(instanceId: instanceId, movie: movie),
+      ),
+    );
+    // The detail screen can trigger searches or edit/remove the movie;
+    // refresh on return.
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Reload when the active instance changes.
@@ -256,6 +272,7 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
           return _WantedTile(
             movie: movie,
             showQuality: _view == _WantedView.cutoff,
+            onTap: () => _openMovie(movie),
             onAutomaticSearch: () => _automaticSearch(movie),
             onInteractiveSearch: () => _openInteractiveSearch(movie),
           );
@@ -266,15 +283,18 @@ class _RadarrWantedScreenState extends ConsumerState<RadarrWantedScreen> {
 }
 
 String _releaseLabel(RadarrMovie movie) {
-  final format = DateFormat('MMM d, yyyy');
+  // Release dates are calendar dates; format their components directly —
+  // converting time zones would shift a midnight-UTC date to the prior day.
+  String fmt(DateTime d) =>
+      DateFormat('MMM d, yyyy').format(DateTime(d.year, d.month, d.day));
   if (movie.digitalRelease != null) {
-    return 'Digital ${format.format(movie.digitalRelease!.toLocal())}';
+    return 'Digital ${fmt(movie.digitalRelease!)}';
   }
   if (movie.physicalRelease != null) {
-    return 'Physical ${format.format(movie.physicalRelease!.toLocal())}';
+    return 'Physical ${fmt(movie.physicalRelease!)}';
   }
   if (movie.inCinemas != null) {
-    return 'In cinemas ${format.format(movie.inCinemas!.toLocal())}';
+    return 'In cinemas ${fmt(movie.inCinemas!)}';
   }
   return movie.status ?? 'Unreleased';
 }
@@ -282,12 +302,14 @@ String _releaseLabel(RadarrMovie movie) {
 class _WantedTile extends StatelessWidget {
   final RadarrMovie movie;
   final bool showQuality;
+  final VoidCallback? onTap;
   final VoidCallback onAutomaticSearch;
   final VoidCallback onInteractiveSearch;
 
   const _WantedTile({
     required this.movie,
     required this.showQuality,
+    this.onTap,
     required this.onAutomaticSearch,
     required this.onInteractiveSearch,
   });
@@ -301,7 +323,20 @@ class _WantedTile extends StatelessWidget {
     ];
 
     return ListTile(
+      onTap: onTap,
       contentPadding: const EdgeInsets.only(left: 16, right: 4),
+      leading: ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: SizedBox(
+          width: 45,
+          height: 67,
+          child: CachedImage(
+            url: movie.posterUrl,
+            fit: BoxFit.cover,
+            icon: Icons.movie,
+          ),
+        ),
+      ),
       title: Text(
         movie.year > 0 ? '${movie.title} (${movie.year})' : movie.title,
         style: const TextStyle(

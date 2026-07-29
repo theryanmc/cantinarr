@@ -144,12 +144,19 @@ class SonarrApiService {
     return records?.cast<Map<String, dynamic>>() ?? [];
   }
 
+  /// Fetches calendar episodes for a date window. Pass [includeSeries] when
+  /// the caller needs the embedded series (title, poster, drill-down) rather
+  /// than joining against a separately fetched library.
   Future<List<Map<String, dynamic>>> getCalendar({
     required String start,
     required String end,
+    bool includeSeries = false,
   }) async {
-    final resp = await _dio.get('$_basePath/calendar',
-        queryParameters: {'start': start, 'end': end});
+    final resp = await _dio.get('$_basePath/calendar', queryParameters: {
+      'start': start,
+      'end': end,
+      if (includeSeries) 'includeSeries': true,
+    });
     return (resp.data as List<dynamic>).cast<Map<String, dynamic>>();
   }
 
