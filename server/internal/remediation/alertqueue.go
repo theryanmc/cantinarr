@@ -3,6 +3,7 @@ package remediation
 import (
 	"log"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -168,12 +169,22 @@ func (s *Service) queueActionAlert(issueID int64, now time.Time) {
 	}
 }
 
+// actionAlertMaxDelay bounds how long the approval queue may keep waiting for
+// a wave to stop growing. A batch cause parks its proposals in a trickle (a
+// dozen runs across two workers spread over several minutes), so delivery
+// waits for a full hold-down with no new arrival — but a continuous trickle
+// must not defer the page forever, so the oldest owed alert caps the wait.
+const actionAlertMaxDelay = 15 * time.Minute
+
 // flushActionAlerts advances every owed approval push by one tick: rows whose
 // proposal was decided, superseded, or whose issue closed are dropped
-// unannounced, and whatever has aged past the hold-down is announced together —
+// unannounced, and once the wave has stayed quiet for the hold-down (or the
+// oldest row hits the delivery ceiling) everything owed is announced together —
 // one push carrying a count for a wave, the usual deep-linked push for a single
-// proposal. Unlike issue alerts there is no re-arm rule: a superseded proposal
-// deletes its row here, and a later re-proposal queues a fresh one.
+// proposal. Delivering per-tick instead of per-quiesce chopped one straggling
+// wave into several identical pages. Unlike issue alerts there is no re-arm
+// rule: a superseded proposal deletes its row here, and a later re-proposal
+// queues a fresh one.
 func (s *Service) flushActionAlerts(now time.Time) {
 	if s.notifier == nil {
 		return
@@ -197,11 +208,19 @@ func (s *Service) flushActionAlerts(now time.Time) {
 		return
 	}
 
-	cutoff := now.Add(-issueAlertHoldDown)
-	rows, err := s.db.Query(
-		`SELECT issue_id FROM agent_action_alert_queue WHERE queued_at <= ? ORDER BY issue_id`,
-		cutoff,
-	)
+	var forming, ceiling bool
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM agent_action_alert_queue WHERE queued_at > ?),
+		        EXISTS(SELECT 1 FROM agent_action_alert_queue WHERE queued_at <= ?)`,
+		now.Add(-issueAlertHoldDown), now.Add(-actionAlertMaxDelay),
+	).Scan(&forming, &ceiling); err != nil {
+		log.Printf("remediation: read action alert window: %v", err)
+		return
+	}
+	if forming && !ceiling {
+		return // The wave is still forming; deliver it whole once it goes quiet.
+	}
+	rows, err := s.db.Query(`SELECT issue_id FROM agent_action_alert_queue ORDER BY issue_id`)
 	if err != nil {
 		log.Printf("remediation: read due action alerts: %v", err)
 		return
@@ -224,11 +243,17 @@ func (s *Service) flushActionAlerts(now time.Time) {
 	if len(due) == 0 {
 		return
 	}
-	// Clear before sending, by the same cutoff the read used: a failure after
-	// this point costs one alert, while leaving the rows would re-page every
-	// tick, and a row queued after the SELECT is newer than the cutoff and
-	// survives for the next flush.
-	if _, err := s.db.Exec(`DELETE FROM agent_action_alert_queue WHERE queued_at <= ?`, cutoff); err != nil {
+	// Clear before sending, by the exact ids read: a failure after this point
+	// costs one alert, while leaving the rows would re-page every tick, and a
+	// row queued after the SELECT is untouched and starts its own wave.
+	placeholders := strings.Repeat("?,", len(due))
+	args := make([]any, len(due))
+	for i, id := range due {
+		args[i] = id
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM agent_action_alert_queue WHERE issue_id IN (`+placeholders[:len(placeholders)-1]+`)`, args...,
+	); err != nil {
 		log.Printf("remediation: clear delivered action alerts: %v", err)
 		return
 	}

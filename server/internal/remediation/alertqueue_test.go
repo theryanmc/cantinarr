@@ -1,6 +1,7 @@
 package remediation
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -291,6 +292,65 @@ func TestSingleProposalPushKeepsItsDeepLink(t *testing.T) {
 	}
 	if _, batched := data["count"]; batched {
 		t.Fatalf("single approval push claimed to be a batch: %v", data)
+	}
+}
+
+// A batch cause parks its proposals in a trickle — a dozen runs across two
+// workers spread over several minutes — so delivery must wait for the wave to
+// stop growing. Delivering whatever happened to age past the hold-down on each
+// tick chopped one wave into several identical pages minutes apart.
+func TestStragglingProposalWaveStillPagesOnce(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	base := time.Date(2026, 7, 29, 8, 30, 0, 0, time.UTC)
+	for i, offset := range []time.Duration{0, 2 * time.Minute, 4 * time.Minute} {
+		id := seedProposal(t, svc, "Tremors", fmt.Sprintf("straggler-%d", i))
+		svc.queueActionAlert(id, base.Add(offset))
+	}
+	// The oldest row has aged past the hold-down, but the wave is still
+	// growing — nothing may deliver yet.
+	for _, at := range []time.Time{base.Add(3 * time.Minute), base.Add(5 * time.Minute)} {
+		svc.flushActionAlerts(at)
+		if n := len(actionAlerts(notifier)); n != 0 {
+			t.Fatalf("paged at %v while the wave was still forming: %v", at, notifier.adminEvents)
+		}
+	}
+	// Quiet for a full hold-down after the last arrival: one push, whole wave.
+	svc.flushActionAlerts(base.Add(7 * time.Minute))
+	alerts := actionAlerts(notifier)
+	if len(alerts) != 1 {
+		t.Fatalf("straggling wave paged %d times, want 1: %v", len(alerts), notifier.adminEvents)
+	}
+	if count, _ := alerts[0]["count"].(int); count != 3 {
+		t.Fatalf("coalesced count = %v, want 3", alerts[0]["count"])
+	}
+}
+
+// A continuous trickle of proposals must not defer the page forever: once the
+// oldest owed alert hits the delivery ceiling, everything owed goes out even
+// though the wave never went quiet.
+func TestContinuousProposalTrickleHitsDeliveryCeiling(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	base := time.Date(2026, 7, 29, 8, 30, 0, 0, time.UTC)
+	for i := 0; i < 8; i++ {
+		id := seedProposal(t, svc, "Tremors", fmt.Sprintf("trickle-%d", i))
+		svc.queueActionAlert(id, base.Add(time.Duration(2*i)*time.Minute))
+	}
+	// Newest row is 2 minutes old (inside the hold-down) but the oldest has
+	// waited out the ceiling.
+	svc.flushActionAlerts(base.Add(16 * time.Minute))
+	alerts := actionAlerts(notifier)
+	if len(alerts) != 1 {
+		t.Fatalf("trickle paged %d times, want 1: %v", len(alerts), notifier.adminEvents)
+	}
+	if count, _ := alerts[0]["count"].(int); count != 8 {
+		t.Fatalf("ceiling delivery count = %v, want 8", alerts[0]["count"])
+	}
+	var queued int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM agent_action_alert_queue`).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("ceiling delivery left %d owed alert(s)", queued)
 	}
 }
 

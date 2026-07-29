@@ -3,6 +3,7 @@ package db
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,5 +214,58 @@ func TestSafeReleaseActionJSONFingerprintsFakeRedactionMarkers(t *testing.T) {
 			!strings.Contains(safe, "[REDACTED release sha256:") {
 			t.Fatalf("unsafe release marker survived migration boundary: %s", safe)
 		}
+	}
+}
+
+// A season pack is one download but N exact-scoped incidents, each created
+// together with its issue_observations row. The legacy dedupe repair must not
+// treat those siblings as pre-scope duplicates: it used to dismiss all but the
+// newest on every boot, and the observation sweep then recreated, re-promoted,
+// re-investigated, and re-paged the whole pack after every restart. Legacy and
+// exact-scope dedupe keys are both 64-hex sha256, so the observation row —
+// which the legacy poller never wrote — is the only discriminator.
+func TestDedupeRepairLeavesExactScopedSeasonPackAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cantinarr.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	for episode := 1; episode <= 3; episode++ {
+		scope := sha256.Sum256([]byte(fmt.Sprintf("sonarr-1|tv|tvdb:100|s:1|e:%d", episode)))
+		res, err := database.Exec(
+			`INSERT INTO issues (source, status, media_type, tmdb_id, tvdb_id, season_number,
+			                     episode_number, title, instance_id, download_id, dedupe_key)
+			 VALUES ('auto','observing','tv',0,100,1,?,'Tremors','sonarr-1','pack-1',?)`,
+			episode, hex.EncodeToString(scope[:]),
+		)
+		if err != nil {
+			t.Fatalf("insert pack episode %d: %v", episode, err)
+		}
+		issueID, _ := res.LastInsertId()
+		if _, err := database.Exec(
+			`INSERT INTO issue_observations (issue_id, service_type, scope_key)
+			 VALUES (?, 'sonarr', ?)`, issueID, hex.EncodeToString(scope[:]),
+		); err != nil {
+			t.Fatalf("insert observation %d: %v", episode, err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	database, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer database.Close()
+	var open, keys int
+	if err := database.QueryRow(
+		`SELECT COUNT(*), COUNT(DISTINCT dedupe_key) FROM issues
+		 WHERE download_id = 'pack-1' AND closed_at IS NULL`,
+	).Scan(&open, &keys); err != nil {
+		t.Fatalf("count pack incidents: %v", err)
+	}
+	if open != 3 || keys != 3 {
+		t.Fatalf("boot repair collapsed the pack: open=%d distinct keys=%d, want 3/3", open, keys)
 	}
 }
