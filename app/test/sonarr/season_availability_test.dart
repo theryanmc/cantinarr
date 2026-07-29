@@ -1,6 +1,7 @@
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/sonarr/data/sonarr_models.dart';
 import 'package:cantinarr/features/sonarr/ui/widgets/season_availability.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// The season card counts the whole season, not Sonarr's episodeCount: that one
@@ -25,9 +26,10 @@ List<SonarrQueueItem> _queue(
   int count, {
   required bool aired,
   String state = 'downloading',
+  int from = 0,
 }) =>
     [
-      for (var i = 0; i < count; i++)
+      for (var i = from; i < from + count; i++)
         SonarrQueueItem(
           id: 900 + i,
           episodeId: 100 + i,
@@ -39,6 +41,27 @@ List<SonarrQueueItem> _queue(
         ),
     ];
 
+/// The line as it is read: no-break spaces collapsed back to plain ones.
+String _read(String text) => text.replaceAll(' ', ' ');
+
+/// Lays the line out at [width] and returns what lands on each visual line.
+List<String> _wrapAt(String text, double width) {
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: const TextStyle(fontSize: 13)),
+    textDirection: TextDirection.ltr,
+  )..layout(maxWidth: width);
+
+  final lines = <String>[];
+  var offset = 0;
+  while (offset < text.length) {
+    final range = painter.getLineBoundary(TextPosition(offset: offset));
+    if (range.end <= offset) break;
+    lines.add(_read(text.substring(range.start, range.end)).trim());
+    offset = range.end;
+  }
+  return lines;
+}
+
 void main() {
   group('seasonAvailabilityLine', () {
     test('a caught-up airing season counts the episodes still to come', () {
@@ -47,7 +70,7 @@ void main() {
         moreToCome: true,
       );
 
-      expect(line.text, '11/13 Episodes Available • 2 unaired');
+      expect(_read(line.text), '11/13 Episodes Available • 2 unaired');
       expect(line.text, isNot(contains('100%')));
       // Caught up, but not complete: green is reserved for a full season.
       expect(line.color, AppTheme.downloading);
@@ -59,7 +82,7 @@ void main() {
         moreToCome: false,
       );
 
-      expect(line.text, '13/13 Episodes Available');
+      expect(_read(line.text), '13/13 Episodes Available');
       expect(line.color, AppTheme.available);
     });
 
@@ -69,7 +92,7 @@ void main() {
         moreToCome: true,
       );
 
-      expect(line.text, '9/13 Episodes Available • 2 missing, 2 unaired');
+      expect(_read(line.text), '9/13 Episodes Available • 2 missing, 2 unaired');
       expect(line.color, AppTheme.error);
     });
 
@@ -82,7 +105,7 @@ void main() {
         moreToCome: false,
       );
 
-      expect(line.text, '0/13 Episodes Available • 13 unmonitored');
+      expect(_read(line.text), '0/13 Episodes Available • 13 unmonitored');
       expect(line.color, AppTheme.requested);
     });
 
@@ -94,7 +117,7 @@ void main() {
         moreToCome: false,
       );
 
-      expect(line.text, '9/34 Episodes Available • 25 unmonitored');
+      expect(_read(line.text), '9/34 Episodes Available • 25 unmonitored');
       expect(line.color, AppTheme.requested);
     });
 
@@ -105,14 +128,14 @@ void main() {
         moreToCome: false,
       );
 
-      expect(line.text, '8/8 Episodes Available');
+      expect(_read(line.text), '8/8 Episodes Available');
       expect(line.color, AppTheme.available);
     });
 
     test('an empty or statistics-less season stays neutral', () {
       final line = seasonAvailabilityLine(null, moreToCome: false);
 
-      expect(line.text, '0/0 Episodes Available');
+      expect(_read(line.text), '0/0 Episodes Available');
       expect(line.color, AppTheme.textSecondary);
     });
   });
@@ -127,8 +150,18 @@ void main() {
         queue: _queue(13, aired: true, state: 'importPending'),
       );
 
-      expect(line.text, '0/13 Episodes Available • 13 waiting to import');
+      expect(_read(line.text), '0/13 Episodes Available • 13 waiting to import');
       expect(line.color, AppTheme.downloading);
+    });
+
+    test('an import Sonarr has blocked still counts as waiting', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: _queue(13, aired: true, state: 'importBlocked'),
+      );
+
+      expect(_read(line.text), '0/13 Episodes Available • 13 waiting to import');
     });
 
     test('episodes still transferring read as downloading', () {
@@ -138,22 +171,40 @@ void main() {
         queue: _queue(2, aired: true),
       );
 
-      expect(line.text, '9/13 Episodes Available • 2 missing, 2 downloading');
+      expect(_read(line.text),
+          '9/13 Episodes Available • 2 missing, 2 downloading');
       // Two real holes nothing is working on: still red.
       expect(line.color, AppTheme.error);
     });
 
+    test('a mix names both states rather than hiding the parked ones', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: [
+          ..._queue(1, aired: true),
+          ..._queue(3, aired: true, state: 'importPending', from: 5),
+        ],
+      );
+
+      expect(
+        _read(line.text),
+        '0/13 Episodes Available • 9 missing, 1 downloading, '
+        '3 waiting to import',
+      );
+    });
+
     test('an in-flight unaired episode is counted once, not twice', () {
       // The American Dad! case: both remaining episodes are unaired *and*
-      // already downloading, so "2 unaired, 2 downloading" would be one pair
-      // of episodes counted twice.
+      // already downloaded, so "2 unaired, 2 waiting to import" would be one
+      // pair of episodes counted twice.
       final line = seasonAvailabilityLine(
         _stats(files: 11, obtainable: 11, total: 13),
         moreToCome: true,
-        queue: _queue(2, aired: false),
+        queue: _queue(2, aired: false, state: 'importPending'),
       );
 
-      expect(line.text, '11/13 Episodes Available • 2 downloading');
+      expect(_read(line.text), '11/13 Episodes Available • 2 waiting to import');
       expect(line.color, AppTheme.downloading);
     });
 
@@ -161,11 +212,11 @@ void main() {
       final line = seasonAvailabilityLine(
         _stats(files: 9, obtainable: 11, total: 13),
         moreToCome: true,
-        queue: [..._queue(1, aired: true), ..._queue(1, aired: false)],
+        queue: [..._queue(1, aired: true), ..._queue(1, aired: false, from: 5)],
       );
 
       // 9 on disk + 1 missing + 2 downloading + 1 unaired = 13.
-      expect(line.text,
+      expect(_read(line.text),
           '9/13 Episodes Available • 1 missing, 2 downloading, 1 unaired');
     });
 
@@ -176,7 +227,7 @@ void main() {
         queue: _queue(1, aired: true),
       );
 
-      expect(line.text, '13/13 Episodes Available');
+      expect(_read(line.text), '13/13 Episodes Available');
       expect(line.color, AppTheme.available);
     });
 
@@ -190,7 +241,60 @@ void main() {
         queue: duplicated,
       );
 
-      expect(line.text, '0/13 Episodes Available • 11 missing, 2 downloading');
+      expect(_read(line.text),
+          '0/13 Episodes Available • 11 missing, 2 downloading');
+    });
+
+    test('a re-grab that is moving again outranks its import-pending row', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: [
+          ..._queue(1, aired: true, state: 'importPending'),
+          ..._queue(1, aired: true),
+        ],
+      );
+
+      expect(_read(line.text),
+          '0/13 Episodes Available • 12 missing, 1 downloading');
+    });
+  });
+
+  group('line breaking', () {
+    test('a count never leaves its own words behind', () {
+      // The reported shape: All Seasons for a series with a stuck season and
+      // an unmonitored Specials, which wrapped "…, 7" / "unmonitored".
+      final line = seasonAvailabilityLine(
+        _stats(files: 0, obtainable: 13, total: 20),
+        moreToCome: false,
+        queue: _queue(13, aired: true, state: 'importPending'),
+      );
+
+      for (final width in [120.0, 180.0, 240.0, 300.0]) {
+        final lines = _wrapAt(line.text, width);
+        expect(lines.length, greaterThan(1), reason: 'width $width');
+        for (final visual in lines) {
+          expect(RegExp(r'\d,?$').hasMatch(visual), isFalse,
+              reason: 'a bare count ended a line at width $width: $lines');
+        }
+        expect(lines.any((l) => l.startsWith('waiting')), isFalse,
+            reason: 'at width $width: $lines');
+        expect(lines.any((l) => l.startsWith('unmonitored')), isFalse,
+            reason: 'at width $width: $lines');
+      }
+    });
+
+    test('phrases are stitched with no-break spaces, and only phrases are', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 9, obtainable: 13, total: 13),
+        moreToCome: false,
+        queue: _queue(2, aired: true, state: 'importPending'),
+      );
+
+      // No plain space is ever allowed between a digit and the word it counts.
+      expect(RegExp(r'\d [A-Za-z]').hasMatch(line.text), isFalse);
+      // "9/13 Episodes Available" | "• 2 missing," | "2 waiting to import"
+      expect(line.text.split(' ').length, 3);
     });
   });
 
@@ -224,8 +328,8 @@ void main() {
   group('SonarrSeries.hasUpcomingEpisodes', () {
     SonarrSeason season(int number, {DateTime? nextAiring}) => SonarrSeason(
           seasonNumber: number,
-          statistics: _stats(files: 11, obtainable: 11, total: 13,
-              nextAiring: nextAiring),
+          statistics: _stats(
+              files: 11, obtainable: 11, total: 13, nextAiring: nextAiring),
         );
 
     test('true when any season is still waiting on an episode', () {

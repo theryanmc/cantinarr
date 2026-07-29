@@ -122,8 +122,13 @@ Future<void> _pump(WidgetTester tester, _SeriesAdapter adapter) async {
   await tester.pumpAndSettle();
 }
 
+/// The line binds each phrase with no-break spaces so a narrow card cannot
+/// split a count from its words; finders read it the way a person does.
+Finder _line(String text) => find.byWidgetPredicate(
+    (w) => w is Text && w.data?.replaceAll('\u00A0', ' ') == text);
+
 Color _colorOf(WidgetTester tester, String text) =>
-    tester.widget<Text>(find.text(text)).style!.color!;
+    tester.widget<Text>(_line(text)).style!.color!;
 
 void main() {
   testWidgets('an airing season counts the episodes it is still waiting on',
@@ -132,7 +137,7 @@ void main() {
 
     // Season 22: caught up on everything that has aired, but not complete —
     // and never "100%", which is what made it look finished.
-    expect(find.text('11/13 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(_line('11/13 Episodes Available • 2 unaired'), findsOneWidget);
     expect(
       _colorOf(tester, '11/13 Episodes Available • 2 unaired'),
       AppTheme.downloading,
@@ -141,9 +146,9 @@ void main() {
     expect(find.textContaining('100%'), findsNothing);
 
     // Season 21 is genuinely done, and All Seasons rolls both up.
-    expect(find.text('8/8 Episodes Available'), findsOneWidget);
+    expect(_line('8/8 Episodes Available'), findsOneWidget);
     expect(_colorOf(tester, '8/8 Episodes Available'), AppTheme.available);
-    expect(find.text('19/21 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(_line('19/21 Episodes Available • 2 unaired'), findsOneWidget);
   });
 
   testWidgets('episodes sitting in the queue are not called missing',
@@ -161,10 +166,10 @@ void main() {
 
     // The two remaining episodes are unaired *and* already downloaded, so they
     // are named once — by the state the admin can act on.
-    expect(find.text('11/13 Episodes Available • 2 waiting to import'),
+    expect(_line('11/13 Episodes Available • 2 waiting to import'),
         findsOneWidget);
-    expect(find.textContaining('2 unaired'), findsNothing);
-    expect(find.text('19/21 Episodes Available • 2 waiting to import'),
+    expect(find.textContaining('unaired'), findsNothing);
+    expect(_line('19/21 Episodes Available • 2 waiting to import'),
         findsOneWidget);
   });
 
@@ -172,7 +177,7 @@ void main() {
       (tester) async {
     await _pump(tester, _SeriesAdapter(queueFails: true));
 
-    expect(find.text('11/13 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(_line('11/13 Episodes Available • 2 unaired'), findsOneWidget);
     expect(find.textContaining('Failed to load'), findsNothing);
   });
 }
