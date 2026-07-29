@@ -416,4 +416,113 @@ void main() {
       expect(activity.runs.single.id, 9);
     });
   });
+
+  group('standing-rule fields', () {
+    test('offer and attribution parse from the server shape', () {
+      final action = AgentAction.fromJson({
+        'id': 1,
+        'issue_id': 2,
+        'kind': 'manual_import',
+        'params': {'media_type': 'movie', 'queue_id': 7},
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'auto_approval_offer': {
+          'problem_kind': 'Waiting to import',
+          'action_kind': 'manual_import',
+          'action_facet': '',
+          'label': 'Manual import · Waiting to import',
+          'reactivates_paused_rule': true,
+        },
+      });
+      final offer = action.autoApprovalOffer;
+      expect(offer, isNotNull);
+      expect(offer!.label, 'Manual import · Waiting to import');
+      expect(offer.problemKind, 'Waiting to import');
+      expect(offer.reactivatesPausedRule, isTrue);
+      expect(action.autoApproved, isFalse);
+
+      final decided = AgentAction.fromJson({
+        'id': 3,
+        'issue_id': 2,
+        'kind': 'manual_import',
+        'params': {'media_type': 'movie', 'queue_id': 7},
+        'status': 'executed',
+        'auto_rule_id': 9,
+        'auto_approved': true,
+        'auto_rule_label': 'Manual import · Waiting to import',
+      });
+      expect(decided.autoApproved, isTrue);
+      expect(decided.autoRuleId, 9);
+      expect(decided.autoRuleLabel, 'Manual import · Waiting to import');
+      expect(decided.decidedBy, isNull);
+    });
+
+    test('old servers without the fields parse to null/false', () {
+      final action = AgentAction.fromJson({
+        'id': 1,
+        'issue_id': 2,
+        'kind': 'manual_import',
+        'params': {'media_type': 'movie', 'queue_id': 7},
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+      });
+      expect(action.autoApprovalOffer, isNull);
+      expect(action.autoApproved, isFalse);
+      expect(action.autoRuleId, isNull);
+      expect(action.autoRuleLabel, isNull);
+    });
+
+    test('a malformed or empty offer never becomes an offer object', () {
+      for (final bad in [
+        'not-an-object',
+        <String, dynamic>{},
+        {'label': ''},
+      ]) {
+        final action = AgentAction.fromJson({
+          'id': 1,
+          'issue_id': 2,
+          'kind': 'manual_import',
+          'params': {'media_type': 'movie', 'queue_id': 7},
+          'status': 'proposed',
+          'can_decide': true,
+          'issue_status': 'awaiting_approval',
+          'auto_approval_offer': bad,
+        });
+        expect(action.autoApprovalOffer, isNull, reason: '$bad');
+      }
+    });
+
+    test('the offer never changes the decision gate', () {
+      // Same blocked action with and without an offer: the gate answer is
+      // identical, so display data can never loosen safety.
+      final base = {
+        'id': 1,
+        'issue_id': 2,
+        'kind': 'manual_import',
+        'params': {'media_type': 'movie', 'queue_id': 7},
+        'status': 'proposed',
+        'can_decide': false,
+        'blocked_reason': 'server said no',
+        'issue_status': 'awaiting_approval',
+      };
+      final withOffer = AgentAction.fromJson({
+        ...base,
+        'auto_approval_offer': {
+          'problem_kind': 'Waiting to import',
+          'action_kind': 'manual_import',
+          'action_facet': '',
+          'label': 'Manual import · Waiting to import',
+          'reactivates_paused_rule': false,
+        },
+      });
+      final withoutOffer = AgentAction.fromJson(base);
+      expect(
+        withOffer.decisionBlockedReason,
+        withoutOffer.decisionBlockedReason,
+      );
+      expect(withOffer.canTakeAction, isFalse);
+    });
+  });
 }

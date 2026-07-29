@@ -247,6 +247,35 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       ));
   }
 
+  /// Shows an admin notice when a standing auto-approval rule pauses itself
+  /// after a failed fix. Fixed copy only; the "Review" action opens the
+  /// triggering issue (the evidence) when the event carries one, else the
+  /// rules screen.
+  void _showAutoApprovalPausedSnack(WsEvent event) {
+    final messenger = _scaffoldMessengerKey.currentState;
+    if (messenger == null) return;
+    final issueId = (event.data['issue_id'] as num?)?.toInt();
+    final target = issueId != null && issueId > 0
+        ? '/issues/$issueId'
+        : '/settings/agent-approval-rules';
+    messenger
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppTheme.error,
+        duration: const Duration(seconds: 8),
+        content: const Text(
+          'An auto-approval rule paused itself after a failed fix.',
+          style: TextStyle(color: AppTheme.background),
+        ),
+        action: SnackBarAction(
+          label: 'Review',
+          textColor: AppTheme.background,
+          onPressed: () => ref.read(appRouterProvider).push(target),
+        ),
+      ));
+  }
+
   /// Shows an admin notice (with a "Settings" action) when the remediation
   /// circuit breaker disables auto-dispatch. The event text is server-authored
   /// (a fixed template + structured counts); no untrusted model text is shown.
@@ -294,6 +323,17 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
           ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
       if (!isAdmin) return;
       _showAutodispatchDisabledSnack();
+    });
+
+    // Surface a self-paused auto-approval rule to admins: automation stood
+    // down, so matching fixes are back to manual approval until re-armed.
+    ref.listen(autoApprovalPausedProvider, (_, next) {
+      final event = next.valueOrNull;
+      if (event == null) return;
+      final isAdmin =
+          ref.read(authProvider).valueOrNull?.user?.isAdmin ?? false;
+      if (!isAdmin) return;
+      _showAutoApprovalPausedSnack(event);
     });
 
     // Show blank screen while restoring session to prevent login flash

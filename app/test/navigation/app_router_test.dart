@@ -117,6 +117,7 @@ void main() {
       '/settings/change-history/1',
       '/settings/users',
       '/settings/request-settings',
+      '/settings/agent-approval-rules',
       '/settings/devices',
       '/settings/plex',
       '/settings/instance/new',

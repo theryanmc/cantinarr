@@ -121,3 +121,12 @@ final autodispatchDisabledProvider = StreamProvider.autoDispose<WsEvent>((ref) {
   final events = ref.watch(realtimeEventsProvider);
   return events.where((e) => e.type == 'remediation_autodispatch_disabled');
 });
+
+/// Admin notice that a standing auto-approval rule paused itself after a
+/// failed or unverifiable fix (`agent_autoapproval_paused`). Carries the
+/// server-authored rule fields plus `issue_id` for the evidence deep link;
+/// surfaced as an in-app toast and used by the rules screen to live-refresh.
+final autoApprovalPausedProvider = StreamProvider.autoDispose<WsEvent>((ref) {
+  final events = ref.watch(realtimeEventsProvider);
+  return events.where((e) => e.type == 'agent_autoapproval_paused');
+});

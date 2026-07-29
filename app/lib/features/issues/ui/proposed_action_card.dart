@@ -93,10 +93,10 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     // Every currently supported action mutates a connected service. Do not
     // trust the payload's display-only `risk` string to skip confirmation.
     setState(() => _reviewing = true);
-    final confirmed = await _confirmApproval();
+    final confirmation = await _confirmApproval();
     if (!mounted) return;
     setState(() => _reviewing = false);
-    if (confirmed != true) return;
+    if (confirmation == null) return;
     if (!_action.canTakeAction) {
       _showSnack(
           'This fix changed while you were reviewing it. Refresh first.');
@@ -105,7 +105,10 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     setState(() => _busy = true);
     final service = ref.read(issuesServiceProvider);
     try {
-      final updated = await service.approveAction(_action.id);
+      final updated = await service.approveAction(
+        _action.id,
+        remember: confirmation.remember,
+      );
       if (!mounted) return;
       _adoptDecision(updated);
       _showApprovalOutcome(updated);
@@ -136,9 +139,19 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     }
   }
 
-  Future<bool?> _confirmApproval() => showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
+  /// Confirmation dialog. Returns null on cancel. When the server sent an
+  /// [AutoApprovalOffer], the dialog additionally offers a "keep approving
+  /// this" checkbox — the checkbox copy comes only from the TYPED offer the
+  /// server computed, never from any agent-authored string, preserving this
+  /// widget's no-agent-text-near-controls invariant.
+  Future<_ApprovalConfirmation?> _confirmApproval() {
+    final offer =
+        _action.canTakeAction ? _action.autoApprovalOffer : null;
+    var remember = false;
+    return showDialog<_ApprovalConfirmation>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
           backgroundColor: AppTheme.surface,
           title: const Text(
             'Approve this change?',
@@ -154,15 +167,45 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
               ),
               const SizedBox(height: 16),
               _ActionTarget(action: _action),
+              if (offer != null) ...[
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: remember,
+                  onChanged: (v) =>
+                      setDialogState(() => remember = v ?? false),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  activeColor: AppTheme.accent,
+                  title: const Text(
+                    'Always approve this fix for this problem',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '${offer.label}'
+                    '${offer.reactivatesPausedRule ? ' · re-enables a paused rule' : ''}'
+                    ' — applies to future auto-detected issues and any already '
+                    'waiting; pauses itself if a fix fails.',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
+              onPressed: () => Navigator.of(dialogContext)
+                  .pop(_ApprovalConfirmation(remember: remember)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.available,
                 foregroundColor: AppTheme.background,
@@ -171,7 +214,9 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
             ),
           ],
         ),
-      );
+      ),
+    );
+  }
 
   void _adoptDecision(AgentAction updated) {
     setState(() {
@@ -558,6 +603,15 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
   }
 }
 
+/// The approve dialog's result: null (dialog dismissed) means cancel; a value
+/// means "approve", carrying whether the admin also checked the standing-rule
+/// opt-in.
+class _ApprovalConfirmation {
+  final bool remember;
+
+  const _ApprovalConfirmation({required this.remember});
+}
+
 class _ActionTarget extends StatelessWidget {
   final AgentAction action;
 
@@ -764,21 +818,33 @@ class _ActionCopy {
     return rows;
   }
 
-  /// The frozen footer text + icon + color once a decision is made.
+  /// The frozen footer text + icon + color once a decision is made. A standing
+  /// rule's decision reads "Approved automatically" (with the rule's fixed
+  /// label when the rule still exists) so history never claims a human
+  /// approved what a rule did.
   static (String, IconData, Color) frozenFooter(AgentAction a) {
     final when = a.decidedAt != null ? _relative(a.decidedAt!) : null;
     final by = a.executedAt != null ? _relative(a.executedAt!) : when;
+    final auto = a.autoApproved;
+    final autoLabel = a.autoRuleLabel;
+    final approvedPrefix = auto
+        ? 'Approved automatically${autoLabel != null ? ' · $autoLabel' : ''}'
+        : 'Approved';
     switch (a.status) {
       case AgentActionStatus.executed:
         return (
-          'Approved${by != null ? ' · $by' : ''} · applied',
+          auto
+              ? '$approvedPrefix · applied'
+              : 'Approved${by != null ? ' · $by' : ''} · applied',
           Icons.check_circle,
           AppTheme.available
         );
       case AgentActionStatus.approved:
       case AgentActionStatus.executing:
         return (
-          'Approved${when != null ? ' · $when' : ''} · applying…',
+          auto
+              ? '$approvedPrefix · applying…'
+              : 'Approved${when != null ? ' · $when' : ''} · applying…',
           Icons.check_circle,
           AppTheme.available
         );
@@ -790,7 +856,9 @@ class _ActionCopy {
         );
       case AgentActionStatus.failed:
         return (
-          'Approved, but the fix failed',
+          auto
+              ? 'Approved automatically, but the fix failed'
+              : 'Approved, but the fix failed',
           Icons.error_outline,
           AppTheme.error
         );
@@ -802,7 +870,9 @@ class _ActionCopy {
         );
       case AgentActionStatus.outcomeUnknown:
         return (
-          'Approved, but the outcome could not be confirmed',
+          auto
+              ? 'Approved automatically, but the outcome could not be confirmed'
+              : 'Approved, but the outcome could not be confirmed',
           Icons.help_outline,
           AppTheme.requested
         );

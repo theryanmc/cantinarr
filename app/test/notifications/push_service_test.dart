@@ -373,6 +373,24 @@ void main() {
       });
     }
 
+    test('agent_autoapproval_paused opens the triggering issue', () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'agent_autoapproval_paused',
+        'issue_id': 12,
+      });
+      expect(h.router.pushed, ['/issues/12']);
+    });
+
+    test('agent_autoapproval_paused without an issue opens the rules screen',
+        () async {
+      final h = _Harness();
+      await _emitNativeCall('onNotificationTap', {
+        'type': 'agent_autoapproval_paused',
+      });
+      expect(h.router.pushed, ['/settings/agent-approval-rules']);
+    });
+
     test('a coalesced issue_created alert opens the issue list', () async {
       // A wave of incidents has no single thread to open, so the alert carries
       // a count instead of an issue_id and the list is the honest destination.

@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import 'agent_action_models.dart';
+import 'agent_approval_rule_models.dart';
 import 'issue_models.dart';
 
 const _aiValidationReceiveTimeout = Duration(seconds: 75);
@@ -180,18 +181,57 @@ class IssuesService {
   }
 
   /// Approve a proposed action, optionally replacing its params with an admin
-  /// [override] (a JSON object for the action's kind). Returns the updated
-  /// action (now `executing`/`executed`/`failed`) so the UI can freeze the card
-  /// from the authoritative server state.
+  /// [override] (a JSON object for the action's kind). Passing [remember]
+  /// additionally arms a standing auto-approval rule for this action's
+  /// (problem, fix, facet) triple — only offered when the server sent an
+  /// `auto_approval_offer`. Returns the updated action (now
+  /// `executing`/`executed`/`failed`) so the UI can freeze the card from the
+  /// authoritative server state.
   ///
-  /// The server tolerates an empty body, so when there's no override we send
-  /// none rather than an empty object.
-  Future<AgentAction> approveAction(int id, {Object? override}) async {
+  /// The server tolerates an empty body, so the plain approve still sends none
+  /// rather than an empty object (old-server wire shape unchanged).
+  Future<AgentAction> approveAction(
+    int id, {
+    Object? override,
+    bool remember = false,
+  }) async {
+    final body = <String, dynamic>{
+      if (override != null) 'override': override,
+      if (remember) 'remember': true,
+    };
     final resp = await _dio.post(
       '/api/admin/agent-actions/$id/approve',
-      data: override == null ? null : {'override': override},
+      data: body.isEmpty ? null : body,
     );
     return AgentAction.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  // ---- Standing auto-approval rules (admin) --------------------------------
+
+  /// List every standing auto-approval rule with its status and counters.
+  Future<List<AgentApprovalRule>> listApprovalRules() async {
+    final resp = await _dio.get('/api/admin/agent-approval-rules');
+    final data = resp.data as Map<String, dynamic>?;
+    return ((data?['rules'] as List?) ?? const [])
+        .map((e) => AgentApprovalRule.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Stop a rule from matching (idempotent). Returns the updated rule.
+  Future<AgentApprovalRule> pauseApprovalRule(int id) async {
+    final resp = await _dio.post('/api/admin/agent-approval-rules/$id/pause');
+    return AgentApprovalRule.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Re-arm a paused rule (idempotent). Returns the updated rule.
+  Future<AgentApprovalRule> resumeApprovalRule(int id) async {
+    final resp = await _dio.post('/api/admin/agent-approval-rules/$id/resume');
+    return AgentApprovalRule.fromJson(resp.data as Map<String, dynamic>);
+  }
+
+  /// Remove a rule. Decided-action history keeps its attribution server-side.
+  Future<void> deleteApprovalRule(int id) async {
+    await _dio.delete('/api/admin/agent-approval-rules/$id');
   }
 
   /// Deny a proposed action with an optional [note]. A denial returns the

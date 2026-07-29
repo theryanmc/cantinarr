@@ -95,6 +95,10 @@ class _FakeIssuesService extends IssuesService {
   Object? approveError;
   Object? denyError;
 
+  /// The `remember` value of the last approveAction call, so tests can prove
+  /// the dialog checkbox (and only the checkbox) arms a standing rule.
+  bool? lastRemember;
+
   @override
   Future<AgentAction> denyAction(int id, {String? note}) async {
     final error = denyError;
@@ -104,7 +108,12 @@ class _FakeIssuesService extends IssuesService {
   }
 
   @override
-  Future<AgentAction> approveAction(int id, {Object? override}) async {
+  Future<AgentAction> approveAction(
+    int id, {
+    Object? override,
+    bool remember = false,
+  }) async {
+    lastRemember = remember;
     final error = approveError;
     if (error != null) throw error;
     final base = _proposed();
@@ -515,4 +524,141 @@ void main() {
     expect(find.textContaining('Approved'), findsOneWidget);
     expect(find.textContaining('Rescan triggered.'), findsOneWidget);
   });
+
+  testWidgets('approve dialog has no remember checkbox without a server offer',
+      (tester) async {
+    final service = _FakeIssuesService();
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposed(),
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CheckboxListTile), findsNothing);
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
+    await tester.pump();
+    await tester.pump();
+
+    // The wire contract for the plain path: remember is false.
+    expect(service.lastRemember, isFalse);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('checked remember checkbox reaches the service', (tester) async {
+    final service = _FakeIssuesService();
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposedWithOffer(),
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    // The checkbox and its server-typed label render only because the server
+    // sent an offer; its copy names the exact (fix, problem) pair.
+    expect(find.byType(CheckboxListTile), findsOneWidget);
+    expect(
+      find.text('Always approve this fix for this problem'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Manual import · Waiting to import'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(service.lastRemember, isTrue);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('unchecked remember stays unchecked and reactivation is named',
+      (tester) async {
+    final service = _FakeIssuesService();
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: service,
+      action: _proposedWithOffer(reactivates: true),
+    );
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    // A paused rule's offer says checking the box re-arms it.
+    expect(find.textContaining('re-enables a paused rule'), findsOneWidget);
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(service.lastRemember, isFalse);
+    await _drainSnackBar(tester);
+  });
+
+  testWidgets('rule-approved history reads Approved automatically',
+      (tester) async {
+    final autoDecided = AgentAction.fromJson({
+      'id': 21,
+      'issue_id': 5,
+      'kind': 'manual_import',
+      'params': {'media_type': 'movie', 'queue_id': 7},
+      'status': 'executed',
+      'decided_at': '2026-06-23T10:05:00Z',
+      'executed_at': '2026-06-23T10:05:02Z',
+      'result_text': 'Imported the downloaded files.',
+      'auto_rule_id': 3,
+      'auto_approved': true,
+      'auto_rule_label': 'Manual import · Waiting to import',
+      'instance_id': 'radarr-main',
+      'instance_name': 'Main Movies',
+      'instance_service_type': 'radarr',
+    });
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: autoDecided,
+    );
+
+    // decided_by is null on a rule decision; the footer must attribute the
+    // rule, never imply a human approved it.
+    expect(
+      find.textContaining(
+          'Approved automatically · Manual import · Waiting to import'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+  });
 }
+
+/// A manual-import proposal carrying the server's standing-rule offer.
+AgentAction _proposedWithOffer({bool reactivates = false}) =>
+    AgentAction.fromJson({
+      'id': 20,
+      'issue_id': 5,
+      'run_id': 9,
+      'kind': 'manual_import',
+      'params': {'media_type': 'movie', 'queue_id': 7},
+      'rationale': 'The download finished but Radarr needs a manual import.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Movie',
+      'issue_media_type': 'movie',
+      'instance_id': 'radarr-main',
+      'instance_name': 'Main Movies',
+      'instance_service_type': 'radarr',
+      'auto_approval_offer': {
+        'problem_kind': 'Waiting to import',
+        'action_kind': 'manual_import',
+        'action_facet': '',
+        'label': 'Manual import · Waiting to import',
+        'reactivates_paused_rule': reactivates,
+      },
+    });

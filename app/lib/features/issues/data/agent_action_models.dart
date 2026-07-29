@@ -75,6 +75,44 @@ enum AgentActionStatus {
       );
 }
 
+/// The server's typed invitation to arm a standing auto-approval rule from a
+/// decidable proposal. Every field is SERVER-AUTHORED (doctor problem labels +
+/// fixed action vocabulary) — the client renders it verbatim and never derives
+/// eligibility itself. Absent on old servers and on ineligible proposals.
+class AutoApprovalOffer {
+  final String problemKind;
+  final String actionKind;
+  final String actionFacet;
+
+  /// Fixed display label, e.g. "Manual import · Waiting to import".
+  final String label;
+
+  /// True when checking the box re-arms an existing paused rule instead of
+  /// creating a new one.
+  final bool reactivatesPausedRule;
+
+  const AutoApprovalOffer({
+    required this.problemKind,
+    required this.actionKind,
+    required this.actionFacet,
+    required this.label,
+    required this.reactivatesPausedRule,
+  });
+
+  static AutoApprovalOffer? fromJson(Object? json) {
+    if (json is! Map<String, dynamic>) return null;
+    final label = json['label'] as String? ?? '';
+    if (label.isEmpty) return null;
+    return AutoApprovalOffer(
+      problemKind: json['problem_kind'] as String? ?? '',
+      actionKind: json['action_kind'] as String? ?? '',
+      actionFacet: json['action_facet'] as String? ?? '',
+      label: label,
+      reactivatesPausedRule: json['reactivates_paused_rule'] as bool? ?? false,
+    );
+  }
+}
+
 /// One admin-approvable proposed mutation, as returned by
 /// `GET /api/admin/agent-actions`. The reified [params] are parsed into a
 /// small read-only [AgentActionParams] view for plain-language rendering; the
@@ -146,6 +184,19 @@ class AgentAction {
   final bool canDecide;
   final String blockedReason;
 
+  /// Standing-rule attribution: non-null [autoRuleId] (and [autoApproved])
+  /// mean a rule — not an admin — made this decision; [decidedBy] is null
+  /// then. [autoRuleLabel] is null when that rule was later deleted. All
+  /// absent on old servers, parsed leniently to false/null.
+  final int? autoRuleId;
+  final bool autoApproved;
+  final String? autoRuleLabel;
+
+  /// Present only when the server computed that approving this proposal could
+  /// arm (or re-arm) a standing rule. Display data only: it never loosens or
+  /// tightens the decision gate.
+  final AutoApprovalOffer? autoApprovalOffer;
+
   const AgentAction({
     required this.id,
     required this.issueId,
@@ -175,6 +226,10 @@ class AgentAction {
     required this.instanceServiceType,
     required this.canDecide,
     required this.blockedReason,
+    this.autoRuleId,
+    this.autoApproved = false,
+    this.autoRuleLabel,
+    this.autoApprovalOffer,
   });
 
   factory AgentAction.fromJson(Map<String, dynamic> json) {
@@ -218,6 +273,10 @@ class AgentAction {
       instanceServiceType: json['instance_service_type'] as String? ?? '',
       canDecide: json['can_decide'] as bool? ?? false,
       blockedReason: json['blocked_reason'] as String? ?? '',
+      autoRuleId: (json['auto_rule_id'] as num?)?.toInt(),
+      autoApproved: json['auto_approved'] as bool? ?? false,
+      autoRuleLabel: json['auto_rule_label'] as String?,
+      autoApprovalOffer: AutoApprovalOffer.fromJson(json['auto_approval_offer']),
     );
   }
 
