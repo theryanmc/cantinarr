@@ -829,17 +829,20 @@ List<Map<String, dynamic>> _sonarrLibrary() => [
     ];
 
 /// House of the Dragon with real per-season statistics: S1 10/10, S2 8/8,
-/// S3 3/8 (airing) -> mixed availability the detail + library both read.
+/// S3 airing — 8 episodes ordered, 5 aired, 3 of those on disk, one more in
+/// the queue -> the mixed progress the detail + library both read. Like
+/// Sonarr, an airing season counts fewer episodes (`episodeCount`, aired and
+/// monitored) than it has (`totalEpisodeCount`).
 Map<String, dynamic> _sonarrSeriesHotd() {
-  Map<String, dynamic> seasonStat(int files, int total) => {
+  Map<String, dynamic> seasonStat(int files, int aired, int total) => {
         'seasonCount': 1,
         'episodeFileCount': files,
-        'episodeCount': total,
+        'episodeCount': aired,
         'totalEpisodeCount': total,
         'sizeOnDisk': files * 2600 * 1024 * 1024,
-        'percentOfEpisodes': total == 0 ? 0 : (files / total) * 100,
+        'percentOfEpisodes': aired == 0 ? 0 : (files / aired) * 100,
       };
-  const files = 21, total = 26;
+  const files = 21, aired = 23, total = 26;
   return {
     'id': 101,
     'title': 'House of the Dragon',
@@ -853,15 +856,19 @@ Map<String, dynamic> _sonarrSeriesHotd() {
     'statistics': {
       'seasonCount': 3,
       'episodeFileCount': files,
-      'episodeCount': total,
+      'episodeCount': aired,
       'totalEpisodeCount': total,
       'sizeOnDisk': files * 2600 * 1024 * 1024,
-      'percentOfEpisodes': (files / total) * 100,
+      'percentOfEpisodes': (files / aired) * 100,
     },
     'seasons': [
-      {'seasonNumber': 1, 'monitored': true, 'statistics': seasonStat(10, 10)},
-      {'seasonNumber': 2, 'monitored': true, 'statistics': seasonStat(8, 8)},
-      {'seasonNumber': 3, 'monitored': true, 'statistics': seasonStat(3, 8)},
+      {
+        'seasonNumber': 1,
+        'monitored': true,
+        'statistics': seasonStat(10, 10, 10)
+      },
+      {'seasonNumber': 2, 'monitored': true, 'statistics': seasonStat(8, 8, 8)},
+      {'seasonNumber': 3, 'monitored': true, 'statistics': seasonStat(3, 5, 8)},
     ],
   };
 }
@@ -1246,6 +1253,15 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   if (path.endsWith('/api/v3/queue')) {
     return path.contains('/sonarr') ? _sonarrQueue() : _radarrQueue();
   }
+  // queue/details is unpaged and series-scoped: what the season labels count
+  // for their "+ N".
+  if (path.endsWith('/api/v3/queue/details')) {
+    final seriesId = int.tryParse('${query['seriesId'] ?? ''}');
+    final records = (_sonarrQueue()['records'] as List<dynamic>)
+        .cast<Map<String, dynamic>>();
+    if (seriesId == null) return records;
+    return records.where((r) => r['seriesId'] == seriesId).toList();
+  }
   if (path.endsWith('/api/v3/calendar')) {
     // The instance id disambiguates movie vs episode calendars.
     return path.contains('/sonarr') ? _sonarrCalendar() : _radarrCalendar();
@@ -1303,6 +1319,7 @@ Map<String, dynamic> _sonarrQueue() => {
             'seasonNumber': 3,
             'episodeNumber': 3,
             'title': 'The Red Sowing',
+            'hasFile': false,
           },
         ),
       ],

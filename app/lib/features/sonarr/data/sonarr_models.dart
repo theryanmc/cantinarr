@@ -447,6 +447,12 @@ class SonarrQueueItem {
   final int? seasonNumber;
   final int? episodeNumber;
   final String? episodeTitle;
+
+  /// Whether the queued episode already has a file, i.e. this grab is an
+  /// upgrade rather than a new episode. Sonarr subtracts these from the "+ N"
+  /// on its progress labels for the same reason. Present when the queue was
+  /// fetched with `includeEpisode`.
+  final bool episodeHasFile;
   final String status;
   final String? trackedDownloadState;
   final String? trackedDownloadStatus;
@@ -472,6 +478,7 @@ class SonarrQueueItem {
     this.seasonNumber,
     this.episodeNumber,
     this.episodeTitle,
+    this.episodeHasFile = false,
     this.status = '',
     this.trackedDownloadState,
     this.trackedDownloadStatus,
@@ -516,6 +523,7 @@ class SonarrQueueItem {
           episode?['seasonNumber'] as int? ?? json['seasonNumber'] as int?,
       episodeNumber: episode?['episodeNumber'] as int?,
       episodeTitle: episode?['title'] as String?,
+      episodeHasFile: episode?['hasFile'] as bool? ?? false,
       status: json['status'] as String? ?? '',
       trackedDownloadState: json['trackedDownloadState'] as String?,
       trackedDownloadStatus: json['trackedDownloadStatus'] as String?,
