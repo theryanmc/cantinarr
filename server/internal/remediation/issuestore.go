@@ -263,6 +263,50 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	}
 	superseded, _ := actionRes.RowsAffected()
 
+	// Standing-rule accounting, atomic with the close: judge the rules whose
+	// auto-approved fixes EXECUTED here by how the issue actually ended.
+	// Resolved through the pipeline's own verification counts as success; a
+	// non-resolved pipeline verdict pauses the rule ("as long as issues keep
+	// closing out successfully"). Human dispositions are neutral — mirroring
+	// the circuit-breaker exclusion below — because an admin in the loop is
+	// neither an automation success nor an automation failure. Failed/unknown
+	// auto outcomes are absent from this population: they paused their rule
+	// inline when the outcome was recorded.
+	autoRuleIDs, err := autoRuleIDsForIssueTx(tx, issueID)
+	if err != nil {
+		return false, err
+	}
+	var pausedRules []int64
+	if len(autoRuleIDs) > 0 {
+		switch {
+		case status == IssueResolved &&
+			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded):
+			for _, ruleID := range autoRuleIDs {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE agent_approval_rules
+					 SET resolved_count = resolved_count + 1, last_resolved_at = CURRENT_TIMESTAMP,
+					     updated_at = CURRENT_TIMESTAMP
+					 WHERE id = ?`,
+					ruleID,
+				); err != nil {
+					return false, fmt.Errorf("record rule success: %w", err)
+				}
+			}
+		case resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted:
+			// Neutral: no count, no pause.
+		default:
+			for _, ruleID := range autoRuleIDs {
+				paused, err := pauseRuleForFailureTx(tx, ruleID, issueID, autoRulePausedIssueUnresolved)
+				if err != nil {
+					return false, err
+				}
+				if paused {
+					pausedRules = append(pausedRules, ruleID)
+				}
+			}
+		}
+	}
+
 	// An external observation/admin close can race a running or parked agent.
 	// Terminalize those runs here; an agent-concluded run is finalized by the
 	// Runner immediately after this transaction and must not be mislabeled.
@@ -314,6 +358,9 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// it is neither an autonomous success nor an agent give-up.
 	if resolutionKind != ResolutionAdminDismissed && resolutionKind != ResolutionAdminCompleted {
 		s.noteAutoTerminal(issueID, status)
+	}
+	for _, ruleID := range pausedRules {
+		s.notifyAutoApprovalPaused(ruleID, issueID)
 	}
 	if !opts.silentNotifications {
 		s.notifyIssueResolved(issueID, status)
@@ -393,6 +440,22 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 		return false, fmt.Errorf("supersede give-up proposals: %w", err)
 	}
 	superseded, _ := actionRes.RowsAffected()
+	// A give-up after a rule-approved fix executed is a failure verdict for the
+	// rule: the automation ran and the admin still had to be brought back in.
+	autoRuleIDs, err := autoRuleIDsForIssueTx(tx, issueID)
+	if err != nil {
+		return false, err
+	}
+	var pausedRules []int64
+	for _, autoRuleID := range autoRuleIDs {
+		paused, err := pauseRuleForFailureTx(tx, autoRuleID, issueID, autoRulePausedIssueUnresolved)
+		if err != nil {
+			return false, err
+		}
+		if paused {
+			pausedRules = append(pausedRules, autoRuleID)
+		}
+	}
 	if message != "" {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
@@ -407,6 +470,9 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 	// An unattended auto investigation that needs a human still feeds the
 	// circuit breaker even though the incident remains open.
 	s.noteAutoTerminal(issueID, IssueWontFix)
+	for _, ruleID := range pausedRules {
+		s.notifyAutoApprovalPaused(ruleID, issueID)
+	}
 	if superseded > 0 {
 		s.notifyActionsChanged(issueID, ActionSuperseded)
 	} else {

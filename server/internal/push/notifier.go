@@ -104,6 +104,8 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyIssueCreated(client, data)
 	case CategoryAgentActionPending:
 		n.notifyAgentActionPending(client, data)
+	case CategoryAgentAutoApprovalPaused:
+		n.notifyAgentAutoApprovalPaused(client, data)
 	case CategoryPlexAccessRequest:
 		n.notifyPlexAccessRequested(client, data)
 	}
@@ -225,6 +227,37 @@ func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]inte
 		title = "Fixes need your approval"
 		body = fmt.Sprintf("The assistant proposed fixes for %d problems and needs you to approve them", count)
 		opts.CollapseID = CategoryAgentActionPending
+	}
+	n.sendWithOptions(client, recipients, title, body, out, opts)
+}
+
+// notifyAgentAutoApprovalPaused pushes "a standing auto-approval rule disarmed
+// itself" to opted-in admins (it shares the agent_action_pending preference).
+// This alert exists because auto-approval removes the admin from the loop: when
+// automation stands down after a failure, someone must hear about it even with
+// the app closed. The body is a FIXED template — the rule label embeds a doctor
+// problem string, so like every other agent surface nothing computed reaches
+// the lock screen; issue_id rides along for tap deep-linking to the evidence.
+// Collapsing per rule id means a flapping rule replaces its previous alert
+// instead of stacking.
+func (n *Notifier) notifyAgentAutoApprovalPaused(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryAgentAutoApprovalPaused)
+	if err != nil {
+		n.logger.Error("push: resolve agent_autoapproval_paused recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryAgentAutoApprovalPaused}
+	if v, ok := data["issue_id"]; ok {
+		out["issue_id"] = v
+	}
+	title := "Auto-approval paused"
+	body := "An automatic fix did not complete successfully, so its auto-approval rule was paused"
+	var opts SendOptions
+	if ruleID, ok := intval(data["rule_id"]); ok {
+		opts.CollapseID = fmt.Sprintf("%s:%d", CategoryAgentAutoApprovalPaused, ruleID)
 	}
 	n.sendWithOptions(client, recipients, title, body, out, opts)
 }

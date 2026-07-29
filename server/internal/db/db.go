@@ -311,6 +311,7 @@ CREATE TABLE IF NOT EXISTS issues (
     download_id TEXT,                          -- stable download-client hash (auto); keys dedupe + doctor tools
     arr_queue_id INTEGER,                      -- arr queue row observed for this exact incident (auto)
     detail TEXT NOT NULL DEFAULT '',            -- user free-text reason OR doctor diagnosis summary (UNTRUSTED)
+    problem_kind TEXT,                         -- Import Doctor problem label at the last matching snapshot (server-authored); NULL for user reports so approval rules can never match them
     dedupe_key TEXT,                           -- stable idempotency key (auto); NULL allowed (user reports)
     occurrences INTEGER NOT NULL DEFAULT 1,     -- bumped when a duplicate signal/report attaches
     read INTEGER NOT NULL DEFAULT 0,            -- admin read/unread flag; any non-admin status change re-flags unread, an admin viewing marks read
@@ -529,6 +530,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     status TEXT NOT NULL DEFAULT 'proposed',     -- proposed|executing|executed|denied|failed|superseded|outcome_unknown
     fingerprint TEXT NOT NULL,                   -- sha256(issue|run|tool gate|kind|params) — retry-idempotent, later re-proposals allowed
     decided_by INTEGER REFERENCES users(id),
+    auto_rule_id INTEGER,                        -- non-NULL = approved by that standing agent_approval_rules row (decided_by stays NULL); plain integer, no FK, so audit history survives rule deletion
     decided_at DATETIME,
     deny_reason TEXT,
     executed_at DATETIME,
@@ -538,6 +540,38 @@ CREATE TABLE IF NOT EXISTS agent_actions (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_actions_fingerprint ON agent_actions(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_issue ON agent_actions(issue_id);
+
+-- Admin-authored standing auto-approval rules. One rule pre-approves exactly
+-- one (Import Doctor problem label, action kind, per-kind safety facet) triple
+-- for AUTO-detected issues only; user reports never carry a problem_kind so
+-- they can never match. Rules never widen: the facet keeps
+-- manual_import(force) and each remediate_queue sub-action as separate
+-- opt-ins. A rule pauses itself on the first failed or unverifiable
+-- auto-approved outcome and on any non-resolved pipeline verdict of an issue
+-- it acted on; re-arming is an explicit admin action. The key gets a
+-- standalone unique index (not an inline constraint) so a later scope column
+-- (media_type/instance) is a cheap index swap instead of a table rebuild.
+CREATE TABLE IF NOT EXISTS agent_approval_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    problem_kind TEXT NOT NULL,                  -- arr.Diagnosis.Problem label, persisted verbatim (rule key)
+    action_kind TEXT NOT NULL,                   -- grab_release|remediate_queue|manual_import|trigger_search|rescan
+    action_facet TEXT NOT NULL DEFAULT '',       -- manual_import: ''|'force'; remediate_queue: its action; else ''
+    status TEXT NOT NULL DEFAULT 'active',       -- active | paused
+    paused_reason TEXT,                          -- server-authored; NULL while active
+    paused_at DATETIME,
+    created_by INTEGER REFERENCES users(id),
+    seed_action_id INTEGER REFERENCES agent_actions(id) ON DELETE SET NULL,
+    approved_count INTEGER NOT NULL DEFAULT 0,   -- auto-approvals made by this rule
+    resolved_count INTEGER NOT NULL DEFAULT 0,   -- issues it acted on that closed resolved
+    last_approved_at DATETIME,
+    last_resolved_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_approval_rules_key
+    ON agent_approval_rules(problem_kind, action_kind, action_facet);
+CREATE INDEX IF NOT EXISTS idx_agent_approval_rules_status
+    ON agent_approval_rules(status);
 
 -- Durable ledger for supported settings mutations Cantinarr performs in an
 -- external application through the AI/MCP settings tools.
@@ -732,6 +766,14 @@ func Open(dbPath string) (*sql.DB, error) {
 		// issue until these Chaptarr record ids are stored with it.
 		{alter: "ALTER TABLE issues ADD COLUMN author_id INTEGER"},
 		{alter: "ALTER TABLE issues ADD COLUMN book_id INTEGER"},
+		// Rule-scoped auto-approval: the Import Doctor problem label persisted on
+		// auto-detected issues (user reports stay NULL so standing approval rules
+		// can never match them), and the standing-rule attribution on
+		// auto-approved actions (decided_by stays NULL for a rule decision). No
+		// backfill: pre-existing issues keep NULL and simply never match, which
+		// fails toward human review.
+		{alter: "ALTER TABLE issues ADD COLUMN problem_kind TEXT"},
+		{alter: "ALTER TABLE agent_actions ADD COLUMN auto_rule_id INTEGER"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -801,6 +843,23 @@ func Open(dbPath string) (*sql.DB, error) {
 		     result_text = COALESCE(result_text, 'Superseded because the issue was already closed; no fix was executed.')
 		 WHERE status = 'proposed'
 		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
+		// Ordering is load-bearing: this runs BEFORE the executing→outcome_unknown
+		// flip below, so `status = 'executing'` still identifies exactly the
+		// crash-interrupted executions. In the live paths a failed/unknown outcome
+		// commits atomically with its rule pause, so an `executing` row at boot is
+		// precisely an outcome whose pause could not have been written yet — this
+		// can never re-pause a rule an admin already resumed. No notification
+		// fires here (the db package has no notifier); the issue itself goes
+		// needs_admin + unread via the repair below and the rules screen shows
+		// the paused state.
+		`UPDATE agent_approval_rules
+		 SET status = 'paused',
+		     paused_reason = 'Cantinarr restarted while an auto-approved fix was executing; verify the arr state before re-arming this rule.',
+		     paused_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 WHERE status = 'active' AND id IN (
+		   SELECT auto_rule_id FROM agent_actions
+		   WHERE status = 'executing' AND auto_rule_id IS NOT NULL
+		 )`,
 		`UPDATE agent_actions
 		 SET status = 'outcome_unknown',
 		     result_text = COALESCE(result_text, 'Cantinarr restarted while this action was executing; verify the arr state manually. It will not be retried.')

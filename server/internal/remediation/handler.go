@@ -266,7 +266,9 @@ func (h *Handler) GetIssueActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 // ApproveAction handles POST /api/admin/agent-actions/{id}/approve
-// (PermissionRemediationManage). Body {override?} optionally edits the params.
+// (PermissionRemediationManage). Body {override?, remember?}: override
+// optionally edits the params; remember additionally arms a standing
+// auto-approval rule for this action's (problem, fix, facet) triple.
 func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
@@ -283,12 +285,77 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	action, err := h.service.ApproveAction(claims.UserID, id, body.Override)
+	var action *AgentAction
+	if body.Remember {
+		action, err = h.service.ApproveActionRemembering(claims.UserID, id, body.Override)
+	} else {
+		action, err = h.service.ApproveAction(claims.UserID, id, body.Override)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, action)
+}
+
+// ListApprovalRules handles GET /api/admin/agent-approval-rules
+// (PermissionRemediationManage): every standing auto-approval rule with its
+// status, counters, and fixed display label.
+func (h *Handler) ListApprovalRules(w http.ResponseWriter, r *http.Request) {
+	rules, err := h.service.ListApprovalRules()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ListApprovalRulesResponse{Rules: rules})
+}
+
+// PauseApprovalRule handles POST /api/admin/agent-approval-rules/{id}/pause
+// (PermissionRemediationManage). Idempotent; returns the updated rule.
+func (h *Handler) PauseApprovalRule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid rule id"})
+		return
+	}
+	rule, err := h.service.PauseApprovalRule(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rule)
+}
+
+// ResumeApprovalRule handles POST /api/admin/agent-approval-rules/{id}/resume
+// (PermissionRemediationManage). Idempotent; returns the updated rule.
+func (h *Handler) ResumeApprovalRule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid rule id"})
+		return
+	}
+	rule, err := h.service.ResumeApprovalRule(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rule)
+}
+
+// DeleteApprovalRule handles DELETE /api/admin/agent-approval-rules/{id}
+// (PermissionRemediationManage). History keeps its attribution via
+// agent_actions.auto_rule_id.
+func (h *Handler) DeleteApprovalRule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid rule id"})
+		return
+	}
+	if err := h.service.DeleteApprovalRule(id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // DenyAction handles POST /api/admin/agent-actions/{id}/deny

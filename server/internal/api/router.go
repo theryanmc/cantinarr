@@ -248,6 +248,15 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/approve", remediationHandler.ApproveAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/deny", remediationHandler.DenyAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-runs/{id}", remediationHandler.GetRun)
+
+			// Standing auto-approval rules: admin-authored (problem, fix,
+			// facet) pairs the sweep may approve without paging. Armed only
+			// from an explicit "remember" on a reviewed approval; paused
+			// automatically on the first failed outcome.
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-approval-rules", remediationHandler.ListApprovalRules)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-approval-rules/{id}/pause", remediationHandler.PauseApprovalRule)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-approval-rules/{id}/resume", remediationHandler.ResumeApprovalRule)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Delete("/agent-approval-rules/{id}", remediationHandler.DeleteApprovalRule)
 		})
 
 		// Config route (authenticated)

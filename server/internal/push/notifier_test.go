@@ -793,3 +793,54 @@ func TestNotifyNewContentNoRecipientsIsNoop(t *testing.T) {
 		// expected: nothing sent
 	}
 }
+
+// A paused standing rule pages admins with a fixed template, deep-links the
+// evidence issue, collapses per rule, and — by design — is gated by the same
+// preference column as agent_action_pending.
+func TestNotifyAdminsAutoApprovalPausedFixedTemplateAndSharedPref(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin1: default prefs (on). admin2: opted out of agent_action_pending,
+	// which must also silence pause alerts (shared column). user3: never paged
+	// (admin-scoped category).
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, agent_action_pending) VALUES (2, 0)")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'user3', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("agent_autoapproval_paused", map[string]interface{}{
+		"rule_id":       5,
+		"issue_id":      7,
+		"label":         "Manual import · Waiting to import",
+		"paused_reason": "An auto-approved fix failed to execute.",
+	})
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("user_ids = %v, want only the opted-in admin", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Auto-approval paused" {
+		t.Errorf("title = %v", notif["title"])
+	}
+	if notif["body"] != "An automatic fix did not complete successfully, so its auto-approval rule was paused" {
+		t.Errorf("body = %v, want the fixed template", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if got, ok := data["issue_id"]; !ok || fmt.Sprint(got) != "7" {
+		t.Errorf("issue_id = %v, want 7 for the deep link", got)
+	}
+	if _, ok := data["label"]; ok {
+		t.Errorf("rule label leaked into the push payload: %v", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "agent_autoapproval_paused:5" {
+		t.Errorf("collapse_id = %v, want per-rule collapse", opts["collapse_id"])
+	}
+}

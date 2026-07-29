@@ -232,6 +232,59 @@ type AgentAction struct {
 	InstanceServiceType string `json:"instance_service_type"`
 	CanDecide           bool   `json:"can_decide"`
 	BlockedReason       string `json:"blocked_reason,omitempty"`
+
+	// Standing-rule attribution and offer. AutoRuleID/AutoApproved mark a
+	// decision made by an agent_approval_rules row (decided_by is null then);
+	// AutoRuleLabel is nil when that rule was later deleted. AutoApprovalOffer
+	// is present only on a decidable proposal that could seed (or reactivate) a
+	// rule — the server computes eligibility so clients never derive it.
+	AutoRuleID        *int64             `json:"auto_rule_id"`
+	AutoApproved      bool               `json:"auto_approved"`
+	AutoRuleLabel     *string            `json:"auto_rule_label"`
+	AutoApprovalOffer *AutoApprovalOffer `json:"auto_approval_offer,omitempty"`
+
+	// Joined issue fields used only to compute the offer; not on the wire.
+	IssueSource      string `json:"-"`
+	IssueProblemKind string `json:"-"`
+}
+
+// AutoApprovalOffer invites the approving admin to arm a standing rule for
+// this action's (problem, fix, facet) triple. Label is fixed server-authored
+// copy; ReactivatesPausedRule tells the client the checkbox re-arms an
+// existing paused rule rather than creating a new one.
+type AutoApprovalOffer struct {
+	ProblemKind           string `json:"problem_kind"`
+	ActionKind            string `json:"action_kind"`
+	ActionFacet           string `json:"action_facet"`
+	Label                 string `json:"label"`
+	ReactivatesPausedRule bool   `json:"reactivates_paused_rule"`
+}
+
+// AgentApprovalRule is one standing auto-approval rule as returned to the
+// admin rules surface.
+type AgentApprovalRule struct {
+	ID             int64      `json:"id"`
+	ProblemKind    string     `json:"problem_kind"`
+	ActionKind     string     `json:"action_kind"`
+	ActionFacet    string     `json:"action_facet"`
+	Label          string     `json:"label"`
+	Status         string     `json:"status"` // active | paused
+	PausedReason   *string    `json:"paused_reason"`
+	PausedAt       *time.Time `json:"paused_at"`
+	CreatedBy      *int64     `json:"created_by"`
+	CreatedByName  *string    `json:"created_by_name"`
+	SeedActionID   *int64     `json:"seed_action_id"`
+	ApprovedCount  int64      `json:"approved_count"`
+	ResolvedCount  int64      `json:"resolved_count"`
+	LastApprovedAt *time.Time `json:"last_approved_at"`
+	LastResolvedAt *time.Time `json:"last_resolved_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// ListApprovalRulesResponse is the GET /api/admin/agent-approval-rules result.
+type ListApprovalRulesResponse struct {
+	Rules []AgentApprovalRule `json:"rules"`
 }
 
 // MarshalJSON is the wire boundary for action params. Release GUIDs are opaque
@@ -337,9 +390,12 @@ type ListActionsResponse struct {
 }
 
 // ActionDecision is the POST .../approve body: an optional params override an
-// admin may supply to edit the proposal before it executes.
+// admin may supply to edit the proposal before it executes, and an optional
+// remember flag that arms a standing auto-approval rule for this action's
+// (problem, fix, facet) triple before approving.
 type ActionDecision struct {
 	Override *json.RawMessage `json:"override"`
+	Remember bool             `json:"remember"`
 }
 
 // ActionDenyRequest is the POST .../deny body.
