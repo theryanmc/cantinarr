@@ -198,6 +198,142 @@ func TestPromotionWaveCoalescesIntoOneAlert(t *testing.T) {
 	}
 }
 
+// actionAlerts is the admin approval pushes among the notifier's events.
+func actionAlerts(notifier *fakeNotifier) []map[string]interface{} {
+	var alerts []map[string]interface{}
+	for i, event := range notifier.adminEvents {
+		if event == "agent_action_pending" {
+			alerts = append(alerts, notifier.adminData[i])
+		}
+	}
+	return alerts
+}
+
+// deliverActionAlerts flushes the approval-alert queue far enough past `at`
+// that an alert queued at `at` has served its hold-down.
+func deliverActionAlerts(svc *Service, at time.Time) {
+	svc.flushActionAlerts(at.Add(issueAlertHoldDown))
+}
+
+// seedProposal inserts an awaiting-approval issue holding one live proposed
+// action — the durable state the runner leaves behind when it parks a fix.
+func seedProposal(t *testing.T, svc *Service, title, fingerprint string) int64 {
+	t.Helper()
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title)
+		 VALUES (?, ?, 'tv', 42, ?)`, SourceAuto, IssueAwaitingApproval, title,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, status, fingerprint)
+		 VALUES (?, ?, '{}', 'r', ?, ?)`,
+		issueID, string(ActionTriggerSearch), ActionProposed, fingerprint,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return issueID
+}
+
+// A batch cause dispatches a batch of runs, and each parks its own proposal —
+// one stuck season pack is 13 parked fixes inside the same minute. Everything
+// clearing the hold-down together is one approval push carrying a count.
+func TestProposalWaveCoalescesIntoOneApprovalPush(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	base := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		id := seedProposal(t, svc, "Tremors", string(rune('a'+i)))
+		svc.queueActionAlert(id, base)
+	}
+	// Inside the hold-down nothing has been earned yet.
+	svc.flushActionAlerts(base.Add(time.Minute))
+	if n := len(actionAlerts(notifier)); n != 0 {
+		t.Fatalf("paged inside the hold-down: %v", notifier.adminEvents)
+	}
+	deliverActionAlerts(svc, base)
+	alerts := actionAlerts(notifier)
+	if len(alerts) != 1 {
+		t.Fatalf("wave paged %d times, want 1: %v", len(alerts), notifier.adminEvents)
+	}
+	data := alerts[0]
+	if count, _ := data["count"].(int); count != 3 {
+		t.Fatalf("coalesced count = %v, want 3", data["count"])
+	}
+	if data["issue_id"] != nil {
+		t.Fatalf("coalesced approval push deep-linked one incident: %v", data)
+	}
+	deliverActionAlerts(svc, base.Add(time.Hour))
+	if n := len(actionAlerts(notifier)); n != 1 {
+		t.Fatalf("alert re-sent after delivery: %v", notifier.adminEvents)
+	}
+}
+
+// A single proposal keeps the pre-batching contract: the push deep-links its
+// issue and claims no count.
+func TestSingleProposalPushKeepsItsDeepLink(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	base := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	id := seedProposal(t, svc, "Tremors", "solo")
+	svc.queueActionAlert(id, base)
+	deliverActionAlerts(svc, base)
+	alerts := actionAlerts(notifier)
+	if len(alerts) != 1 {
+		t.Fatalf("events=%v", notifier.adminEvents)
+	}
+	data := alerts[0]
+	if got, _ := data["issue_id"].(int64); got != id {
+		t.Fatalf("single approval push issue_id = %v, want %d", data["issue_id"], id)
+	}
+	if _, batched := data["count"]; batched {
+		t.Fatalf("single approval push claimed to be a batch: %v", data)
+	}
+}
+
+// A proposal decided or superseded inside the hold-down, or whose issue closed,
+// no longer stands for anything an admin must approve — the owed push is
+// dropped unannounced instead of paging about work that is already done.
+func TestProposalSettledInsideHoldDownNeverPages(t *testing.T) {
+	svc, notifier, _ := setupTestService(t)
+	base := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	decided := seedProposal(t, svc, "Tremors", "decided")
+	superseded := seedProposal(t, svc, "Tremors", "superseded")
+	closed := seedProposal(t, svc, "Tremors", "closed")
+	for _, id := range []int64{decided, superseded, closed} {
+		svc.queueActionAlert(id, base)
+	}
+	if _, err := svc.db.Exec(
+		`UPDATE agent_actions SET status=? WHERE issue_id=?`, ActionExecuted, decided,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(
+		`UPDATE agent_actions SET status=? WHERE issue_id=?`, ActionSuperseded, superseded,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.Exec(
+		`UPDATE issues SET status=?, closed_at=? WHERE id=?`, IssueResolved, base.Add(time.Minute), closed,
+	); err != nil {
+		t.Fatal(err)
+	}
+	deliverActionAlerts(svc, base)
+	if n := len(actionAlerts(notifier)); n != 0 {
+		t.Fatalf("settled proposals paged: %v", notifier.adminEvents)
+	}
+	var queued int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM agent_action_alert_queue`).Scan(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 {
+		t.Fatalf("settled proposals left %d owed alert(s)", queued)
+	}
+}
+
 // An incident the agent (or the arr) settles inside the hold-down never needed
 // an admin at all, so the owed alert is dropped rather than delivered late.
 func TestIssueClosedInsideHoldDownNeverPages(t *testing.T) {

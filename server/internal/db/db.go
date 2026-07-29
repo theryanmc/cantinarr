@@ -371,6 +371,18 @@ CREATE TABLE IF NOT EXISTS issue_alert_queue (
 CREATE INDEX IF NOT EXISTS idx_issue_alert_queue_queued_at
     ON issue_alert_queue(queued_at);
 
+-- Admin pushes owed for proposals awaiting approval, held briefly so a batch of
+-- simultaneous proposals (13 episodes of one stuck season pack, dispatched
+-- together) pages once with a count instead of once per incident. A proposal
+-- decided or superseded inside the window is dropped unannounced — the admin
+-- was already acting, or there is nothing left to approve.
+CREATE TABLE IF NOT EXISTS agent_action_alert_queue (
+    issue_id INTEGER PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+    queued_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_action_alert_queue_queued_at
+    ON agent_action_alert_queue(queued_at);
+
 CREATE TABLE IF NOT EXISTS issue_observation_downloads (
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     download_id TEXT NOT NULL,

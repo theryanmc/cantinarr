@@ -1698,6 +1698,7 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 		go func() {
 			a.sweepObservedInstances()
 			a.svc.flushIssueAlerts(time.Now().UTC())
+			a.svc.flushActionAlerts(time.Now().UTC())
 			ticker := time.NewTicker(observationSweepPeriod)
 			defer ticker.Stop()
 			for {
@@ -1710,6 +1711,7 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 					// incidents in and out of tracking, so a hold-down is
 					// always measured against fresh state.
 					a.svc.flushIssueAlerts(time.Now().UTC())
+					a.svc.flushActionAlerts(time.Now().UTC())
 				}
 			}
 		}()

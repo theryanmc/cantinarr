@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -410,6 +411,71 @@ func TestNotifyAdminsKeepsSingleIssueAlertUncollapsed(t *testing.T) {
 	opts, _ := body["options"].(map[string]any)
 	if _, ok := opts["collapse_id"]; ok {
 		t.Errorf("single issue alert collapsed: %v", opts["collapse_id"])
+	}
+}
+
+// A wave of parked proposals pages once with the plural approval copy and a
+// collapse id so a later summary replaces rather than stacks; no issue_id rides
+// along because no single thread represents the batch (the app's approval queue
+// is the destination either way).
+func TestNotifyAdminsCoalescesAnApprovalWave(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("agent_action_pending", map[string]interface{}{
+		"count":         13,
+		"pending_count": 13,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Fixes need your approval" {
+		t.Errorf("title = %v, want plural approval copy", notif["title"])
+	}
+	if notif["body"] != "The assistant proposed fixes for 13 problems and needs you to approve them" {
+		t.Errorf("body = %v, want a counted summary", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if _, ok := data["issue_id"]; ok {
+		t.Errorf("coalesced approval push deep-linked a single incident: %v", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "agent_action_pending" {
+		t.Errorf("collapse_id = %v, want agent_action_pending", opts["collapse_id"])
+	}
+}
+
+// A single proposal keeps the original copy, its deep link, and no collapse id.
+func TestNotifyAdminsKeepsSingleApprovalPushUncollapsed(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("agent_action_pending", map[string]interface{}{"issue_id": 7})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "A fix needs your approval" {
+		t.Errorf("title = %v, want singular approval copy", notif["title"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if got, ok := data["issue_id"]; !ok || fmt.Sprint(got) != "7" {
+		t.Errorf("single approval push issue_id = %v, want 7", got)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if _, ok := opts["collapse_id"]; ok {
+		t.Errorf("single approval push collapsed: %v", opts["collapse_id"])
 	}
 }
 
