@@ -13,7 +13,7 @@ import 'edit_series_screen.dart';
 import 'series_actions.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_season_screen.dart';
-import 'widgets/season_availability.dart';
+import 'widgets/season_progress.dart';
 
 /// Series detail: an "All Seasons" summary plus a per-season list with
 /// availability and monitor toggles. Tapping a season drills into its
@@ -43,6 +43,10 @@ class _SonarrSeriesDetailScreenState
   String? _error;
   final Set<int> _togglingSeasons = {};
 
+  /// The series' queue, bucketed by season: the "+ N" on each card.
+  Map<int, List<SonarrQueueItem>> _queueBySeason = const {};
+  List<SonarrQueueItem> _queue = const [];
+
   @override
   void initState() {
     super.initState();
@@ -57,10 +61,18 @@ class _SonarrSeriesDetailScreenState
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
+      // The queue only annotates the labels, so a queue that fails to load
+      // leaves the screen intact rather than taking it down.
+      final queueFuture = _service
+          .getSeriesQueue(_series.id)
+          .catchError((_) => const <SonarrQueueItem>[]);
       final series = await _service.getSeriesById(_series.id);
+      final queue = await queueFuture;
       if (!mounted) return;
       setState(() {
         _series = series;
+        _queue = queue;
+        _queueBySeason = _bySeason(queue);
         _isLoading = false;
         _error = null;
       });
@@ -71,6 +83,17 @@ class _SonarrSeriesDetailScreenState
         _error = 'Failed to load series: $e';
       });
     }
+  }
+
+  static Map<int, List<SonarrQueueItem>> _bySeason(
+      List<SonarrQueueItem> queue) {
+    final out = <int, List<SonarrQueueItem>>{};
+    for (final item in queue) {
+      final season = item.seasonNumber;
+      if (season == null) continue;
+      out.putIfAbsent(season, () => []).add(item);
+    }
+    return out;
   }
 
   Future<void> _toggleSeasonMonitored(SonarrSeason season) async {
@@ -278,10 +301,15 @@ class _SonarrSeriesDetailScreenState
                     children: [
                       if (_error != null)
                         ErrorBanner(message: _error!, onRetry: _load),
-                      _AllSeasonsCard(series: _series, onTap: _openAllSeasons),
+                      _AllSeasonsCard(
+                          series: _series,
+                          queue: _queue,
+                          onTap: _openAllSeasons),
                       const SizedBox(height: 4),
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
+                            queue: _queueBySeason[s.seasonNumber] ?? const [],
+                            ended: _series.status == 'ended',
                             busy: _togglingSeasons.contains(s.seasonNumber),
                             onTap: () => _openSeason(s),
                             onLongPress: () => _showSeasonActions(s),
@@ -306,20 +334,29 @@ class _SonarrSeriesDetailScreenState
 String seasonLabel(int seasonNumber) =>
     seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
 
-/// "11/13 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
-/// why the denominator is the whole season rather than Sonarr's episodeCount.
-class _AvailabilityLine extends StatelessWidget {
+/// Sonarr's progress label — "11 / 11", or "0 + 13 / 13" with episodes on the
+/// way. See [seasonProgressLabel].
+class _ProgressLine extends StatelessWidget {
   final SonarrStatistics? stats;
-  final bool moreToCome;
-  const _AvailabilityLine({required this.stats, required this.moreToCome});
+  final bool monitored;
+  final bool ended;
+  final List<SonarrQueueItem> queue;
+
+  const _ProgressLine({
+    required this.stats,
+    required this.monitored,
+    required this.ended,
+    required this.queue,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final line = seasonAvailabilityLine(stats, moreToCome: moreToCome);
+    final label = seasonProgressLabel(stats,
+        monitored: monitored, ended: ended, queue: queue);
     return Text(
-      line.text,
+      label.text,
       style: TextStyle(
-        color: line.color,
+        color: label.color,
         fontSize: 13,
         fontWeight: FontWeight.w500,
       ),
@@ -329,8 +366,13 @@ class _AvailabilityLine extends StatelessWidget {
 
 class _AllSeasonsCard extends StatelessWidget {
   final SonarrSeries series;
+  final List<SonarrQueueItem> queue;
   final VoidCallback onTap;
-  const _AllSeasonsCard({required this.series, required this.onTap});
+  const _AllSeasonsCard({
+    required this.series,
+    required this.queue,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -363,8 +405,12 @@ class _AllSeasonsCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _AvailabilityLine(
-                      stats: stats, moreToCome: series.hasUpcomingEpisodes),
+                  _ProgressLine(
+                    stats: stats,
+                    monitored: series.monitored,
+                    ended: series.status == 'ended',
+                    queue: queue,
+                  ),
                 ],
               ),
             ),
@@ -378,6 +424,8 @@ class _AllSeasonsCard extends StatelessWidget {
 
 class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
+  final List<SonarrQueueItem> queue;
+  final bool ended;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -385,6 +433,8 @@ class _SeasonCard extends StatelessWidget {
 
   const _SeasonCard({
     required this.season,
+    required this.queue,
+    required this.ended,
     required this.busy,
     required this.onTap,
     required this.onLongPress,
@@ -439,8 +489,12 @@ class _SeasonCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _AvailabilityLine(
-                      stats: stats, moreToCome: stats?.nextAiring != null),
+                  _ProgressLine(
+                    stats: stats,
+                    monitored: season.monitored,
+                    ended: ended,
+                    queue: queue,
+                  ),
                 ],
               ),
             ),

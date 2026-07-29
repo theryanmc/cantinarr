@@ -130,12 +130,6 @@ class SonarrSeries {
     }
     return (files: files, total: total);
   }
-
-  /// True when any season is still waiting on an episode to air. The
-  /// series-level statistics carry no `nextAiring`, so the seasons answer for
-  /// the whole series (see [SonarrStatistics.nextAiring]).
-  bool get hasUpcomingEpisodes =>
-      seasons.any((s) => s.statistics?.nextAiring != null);
 }
 
 /// A Sonarr tag (id + label), used by the Edit Series tag picker.
@@ -174,21 +168,10 @@ class SonarrImage {
 class SonarrStatistics {
   final int seasonCount;
   final int episodeFileCount;
-
-  /// Sonarr's "obtainable now" count: episodes that have aired *and* are
-  /// monitored, plus anything already on disk. Unaired and unmonitored
-  /// episodes are missing from it, so it is a denominator for "am I caught
-  /// up?", never for "how big is this season?" — use [totalEpisodeCount].
   final int episodeCount;
   final int totalEpisodeCount;
   final int sizeOnDisk;
   final double percentOfEpisodes;
-
-  /// When the next episode Sonarr is still waiting on airs (monitored, unaired,
-  /// no file). Seasons carry it; the series-level statistics do not. It is what
-  /// separates a season with episodes still to come from one whose remaining
-  /// episodes nobody is monitoring.
-  final DateTime? nextAiring;
 
   const SonarrStatistics({
     this.seasonCount = 0,
@@ -197,7 +180,6 @@ class SonarrStatistics {
     this.totalEpisodeCount = 0,
     this.sizeOnDisk = 0,
     this.percentOfEpisodes = 0,
-    this.nextAiring,
   });
 
   factory SonarrStatistics.fromJson(Map<String, dynamic> json) =>
@@ -208,7 +190,6 @@ class SonarrStatistics {
         totalEpisodeCount: json['totalEpisodeCount'] as int? ?? 0,
         sizeOnDisk: json['sizeOnDisk'] as int? ?? 0,
         percentOfEpisodes: (json['percentOfEpisodes'] as num?)?.toDouble() ?? 0,
-        nextAiring: DateTime.tryParse(json['nextAiring'] as String? ?? ''),
       );
 
   String get sizeFormatted {
@@ -466,6 +447,12 @@ class SonarrQueueItem {
   final int? seasonNumber;
   final int? episodeNumber;
   final String? episodeTitle;
+
+  /// Whether the queued episode already has a file, i.e. this grab is an
+  /// upgrade rather than a new episode. Sonarr subtracts these from the "+ N"
+  /// on its progress labels for the same reason. Present when the queue was
+  /// fetched with `includeEpisode`.
+  final bool episodeHasFile;
   final String status;
   final String? trackedDownloadState;
   final String? trackedDownloadStatus;
@@ -491,6 +478,7 @@ class SonarrQueueItem {
     this.seasonNumber,
     this.episodeNumber,
     this.episodeTitle,
+    this.episodeHasFile = false,
     this.status = '',
     this.trackedDownloadState,
     this.trackedDownloadStatus,
@@ -535,6 +523,7 @@ class SonarrQueueItem {
           episode?['seasonNumber'] as int? ?? json['seasonNumber'] as int?,
       episodeNumber: episode?['episodeNumber'] as int?,
       episodeTitle: episode?['title'] as String?,
+      episodeHasFile: episode?['hasFile'] as bool? ?? false,
       status: json['status'] as String? ?? '',
       trackedDownloadState: json['trackedDownloadState'] as String?,
       trackedDownloadStatus: json['trackedDownloadStatus'] as String?,
