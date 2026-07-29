@@ -15,8 +15,15 @@ const remediationSettingsKey = "remediation_settings"
 
 // Remediation modes control whether the agent may only investigate or may also
 // record a proposal for an administrator to approve. There is deliberately no
-// auto-execution mode: every current action is consequential and always crosses
-// the human approval gate.
+// GLOBAL auto-execution mode: every action is consequential and, by default,
+// always crosses the human approval gate. The one narrow exception is
+// rule-scoped auto-approval (agent_approval_rules + sweepAutoApprovals): after
+// approving a specific (problem kind, fix kind, facet) pair by hand, an admin
+// may opt that exact pair in for future auto-detected issues. That preserves
+// this invariant's spirit — the default stays human-gated, the opt-in is
+// admin-authored and per-pair rather than a mode, and any failed or
+// unverifiable auto-approved outcome (or a non-resolved pipeline verdict of an
+// issue the rule acted on) pauses the rule and returns the admin to the loop.
 const (
 	ModeInvestigateOnly = "investigate_only"
 	ModeSupervised      = "supervised"

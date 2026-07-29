@@ -70,7 +70,10 @@ type QueueObservation struct {
 type Diagnosis struct {
 	// Severity is one of: ok, info, warning, error.
 	Severity string
-	// Problem is a short label for the detected condition.
+	// Problem is a short label for the detected condition. Labels are persisted
+	// verbatim as issues.problem_kind and as agent_approval_rules rule keys, so
+	// renaming one silently orphans any standing auto-approval rule keyed on it
+	// (the rule stops matching and those fixes fall back to manual approval).
 	Problem string
 	// Transparency is a user-facing sentence explaining what happened.
 	Transparency string

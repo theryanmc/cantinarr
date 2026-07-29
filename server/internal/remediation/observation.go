@@ -735,18 +735,20 @@ func (s *Service) createAutoObservation(serviceType, instanceID string, group ob
 	if title == "" {
 		title = item.Diagnosis.Problem
 	}
+	// problem_kind is stored unredacted: doctor labels are server-authored code
+	// constants, and standing approval rules key on the exact bytes.
 	res, err := s.db.Exec(
 		`INSERT INTO issues
 		 (source, status, media_type, tmdb_id, tvdb_id, title, season_number,
 		  episode_number, author_id, book_id, instance_id, download_id, arr_queue_id, detail,
-		  dedupe_key, read, created_at, updated_at)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
+		  problem_kind, dedupe_key, read, created_at, updated_at)
+		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
 		 WHERE NOT EXISTS (SELECT 1 FROM issues WHERE dedupe_key = ? AND closed_at IS NULL)`,
 		SourceAuto, issueStatus, mediaType, tmdbID, sqlNullInt(item.Media.TvdbID), secrets.RedactText(title),
 		item.Media.SeasonNumber, item.Media.EpisodeNumber,
 		sqlNullInt(item.Media.AuthorID), sqlNullInt(item.Media.BookID), instanceID,
 		sqlNullStr(item.DownloadID), sqlNullInt(item.Media.QueueID), secrets.RedactText(item.Diagnosis.Transparency),
-		group.scopeKey, now, now, group.scopeKey,
+		sqlNullStr(item.Diagnosis.Problem), group.scopeKey, now, now, group.scopeKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create observed issue: %w", err)
@@ -834,12 +836,14 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 		 author_id = CASE WHEN source = ? AND ? > 0 THEN ? ELSE author_id END,
 		 book_id = CASE WHEN source = ? AND ? > 0 THEN ? ELSE book_id END,
 		 detail = CASE WHEN source = ? AND ? != '' THEN ? ELSE detail END,
+		 problem_kind = CASE WHEN source = ? AND ? != '' THEN ? ELSE problem_kind END,
 		 updated_at = ? WHERE id = ? AND closed_at IS NULL`,
 		sqlNullStr(item.DownloadID), sqlNullInt(item.Media.QueueID), SourceAuto, item.Media.Title, item.Media.Title,
 		SourceAuto, item.Media.TmdbID, item.Media.TmdbID, SourceAuto, item.Media.TvdbID, item.Media.TvdbID,
 		SourceAuto, item.Media.SeasonNumber, SourceAuto, item.Media.EpisodeNumber,
 		SourceAuto, item.Media.AuthorID, item.Media.AuthorID, SourceAuto, item.Media.BookID, item.Media.BookID, SourceAuto,
-		secrets.RedactText(item.Diagnosis.Transparency), secrets.RedactText(item.Diagnosis.Transparency), now, record.issue.ID,
+		secrets.RedactText(item.Diagnosis.Transparency), secrets.RedactText(item.Diagnosis.Transparency),
+		SourceAuto, item.Diagnosis.Problem, item.Diagnosis.Problem, now, record.issue.ID,
 	); err != nil {
 		return err
 	}
@@ -1697,6 +1701,12 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 		}()
 		go func() {
 			a.sweepObservedInstances()
+			// Standing-rule approvals run strictly before the alert flushes: a
+			// proposal a rule approves this tick leaves 'proposed', so
+			// flushActionAlerts drops its owed push instead of paging for work
+			// no admin needs to do (the hold-down guarantees the push could not
+			// have been delivered yet).
+			a.svc.sweepAutoApprovals(time.Now().UTC())
 			a.svc.flushIssueAlerts(time.Now().UTC())
 			a.svc.flushActionAlerts(time.Now().UTC())
 			ticker := time.NewTicker(observationSweepPeriod)
@@ -1709,7 +1719,9 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 					a.sweepObservedInstances()
 					// Owed admin pushes advance on the same clock that moves
 					// incidents in and out of tracking, so a hold-down is
-					// always measured against fresh state.
+					// always measured against fresh state. Rule approvals stay
+					// ahead of the flushes for the same reason as at boot.
+					a.svc.sweepAutoApprovals(time.Now().UTC())
 					a.svc.flushIssueAlerts(time.Now().UTC())
 					a.svc.flushActionAlerts(time.Now().UTC())
 				}
@@ -2208,8 +2220,20 @@ func (s *Service) failExecutingRecoveryPreflight(act *AgentAction, cause error) 
 	); err != nil {
 		return err
 	}
+	// A rule-approved claim that dies on the safety read still dragged the
+	// admin back in (needs_admin), so the rule's clean track record is over.
+	pausedRule := false
+	if act.AutoRuleID != nil {
+		pausedRule, err = pauseRuleForFailureTx(tx, *act.AutoRuleID, act.IssueID, autoRulePausedPreflightFailed)
+		if err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	if pausedRule {
+		s.notifyAutoApprovalPaused(*act.AutoRuleID, act.IssueID)
 	}
 	s.notifyActionsChanged(act.IssueID, ActionFailed)
 	return nil

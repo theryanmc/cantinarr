@@ -269,3 +269,90 @@ func TestDedupeRepairLeavesExactScopedSeasonPackAlone(t *testing.T) {
 		t.Fatalf("boot repair collapsed the pack: open=%d distinct keys=%d, want 3/3", open, keys)
 	}
 }
+
+// A restart that interrupts a rule-approved execution must pause exactly that
+// rule at boot — before the executing action is repaired to outcome_unknown —
+// and must not touch rules whose auto actions already reached a terminal
+// status (their pause committed with the outcome in the live path, so a rule
+// seen active alongside a terminal action was deliberately resumed).
+func TestOpenRepairsPauseRuleForInterruptedAutoExecution(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cantinarr.db")
+	database, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustInsertRule := func(problem string) int64 {
+		res, err := database.Exec(
+			`INSERT INTO agent_approval_rules (problem_kind, action_kind, action_facet, status)
+			 VALUES (?, 'manual_import', '', 'active')`, problem,
+		)
+		if err != nil {
+			t.Fatalf("insert rule: %v", err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	interruptedRule := mustInsertRule("Waiting to import")
+	settledRule := mustInsertRule("Matched by ID — needs manual import")
+
+	issue, err := database.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, problem_kind)
+		 VALUES ('auto','needs_admin','movie',42,'stuck','Waiting to import')`,
+	)
+	if err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	issueID, _ := issue.LastInsertId()
+	if _, err := database.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, status, fingerprint, auto_rule_id)
+		 VALUES (?, 'manual_import', '{"media_type":"movie","queue_id":7}', 'executing', 'auto-interrupted', ?)`,
+		issueID, interruptedRule,
+	); err != nil {
+		t.Fatalf("insert interrupted auto action: %v", err)
+	}
+	// A terminal (failed) auto action whose rule is active again: an admin
+	// resumed it after the live-path pause. Boot must leave it alone.
+	if _, err := database.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, status, fingerprint, auto_rule_id)
+		 VALUES (?, 'manual_import', '{"media_type":"movie","queue_id":8}', 'failed', 'auto-settled', ?)`,
+		issueID, settledRule,
+	); err != nil {
+		t.Fatalf("insert settled auto action: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	database, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer database.Close()
+
+	var status, reason string
+	if err := database.QueryRow(
+		"SELECT status, COALESCE(paused_reason,'') FROM agent_approval_rules WHERE id = ?", interruptedRule,
+	).Scan(&status, &reason); err != nil {
+		t.Fatalf("load interrupted rule: %v", err)
+	}
+	if status != "paused" || !strings.Contains(reason, "restarted while an auto-approved fix was executing") {
+		t.Fatalf("interrupted rule = %s (%q), want paused with the restart reason", status, reason)
+	}
+	var actionStatus string
+	if err := database.QueryRow(
+		"SELECT status FROM agent_actions WHERE fingerprint = 'auto-interrupted'",
+	).Scan(&actionStatus); err != nil {
+		t.Fatalf("load interrupted action: %v", err)
+	}
+	if actionStatus != "outcome_unknown" {
+		t.Fatalf("interrupted action = %s, want outcome_unknown", actionStatus)
+	}
+	if err := database.QueryRow(
+		"SELECT status FROM agent_approval_rules WHERE id = ?", settledRule,
+	).Scan(&status); err != nil {
+		t.Fatalf("load settled rule: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("settled rule = %s, want still active (boot must not re-pause a resumed rule)", status)
+	}
+}

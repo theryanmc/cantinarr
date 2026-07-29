@@ -43,6 +43,35 @@ var ErrActionDecisionConflict = errors.New("action decision conflict")
 // at needs_admin and never resumes the model before a human verifies remote
 // state. No outcome ever returns to proposed, preserving at-most-once dispatch.
 func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessage) (*AgentAction, error) {
+	return s.approveAction(approvalActor{adminID: adminID, override: override}, actionID)
+}
+
+// autoApproveAction is the standing-rule entry (sweepAutoApprovals). It never
+// carries an override: a rule replays exactly the canonical proposal shape the
+// admin pattern-approved. Preflight/CAS conflicts surface as
+// ErrActionDecisionConflict and the sweep skips silently — the observer or a
+// human already owns the proposal.
+func (s *Service) autoApproveAction(ruleID, actionID int64) (*AgentAction, error) {
+	return s.approveAction(approvalActor{ruleID: ruleID}, actionID)
+}
+
+// approvalActor identifies who claims a proposed action: a human admin
+// (adminID > 0, may carry an override) or a standing auto-approval rule
+// (ruleID > 0, never an override). Exactly one is set; the CAS below records
+// the other column as NULL so attribution is always unambiguous.
+type approvalActor struct {
+	adminID  int64
+	ruleID   int64
+	override *json.RawMessage
+}
+
+func (a approvalActor) auto() bool { return a.ruleID > 0 }
+
+// approveAction is the shared decision core behind ApproveAction and
+// autoApproveAction: one CAS claim, both arr-recovery preflights, the single
+// executor dispatch, and outcome recording — so an auto-approval can never
+// take a shortcut a human approval would not.
+func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentAction, error) {
 	act, err := s.loadActionForDecision(actionID)
 	if err != nil {
 		return nil, err
@@ -59,7 +88,7 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		if act.ResultText != nil && *act.ResultText != "" {
 			result = *act.ResultText
 		}
-		if err := s.markActionOutcomeUnknown(act, result); err == nil {
+		if _, err := s.markActionOutcomeUnknown(act, result, false); err == nil {
 			s.notifyActionsChanged(act.IssueID, ActionOutcomeUnknown)
 		}
 		return s.GetAction(actionID)
@@ -88,8 +117,8 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 	if verr != nil {
 		return nil, fmt.Errorf("stored proposal is no longer valid: %w", verr)
 	}
-	if override != nil && len(*override) > 0 && string(*override) != "null" {
-		canonical, verr := validateActionParams(ActionKind(act.Kind), *override)
+	if actor.override != nil && len(*actor.override) > 0 && string(*actor.override) != "null" {
+		canonical, verr := validateActionParams(ActionKind(act.Kind), *actor.override)
 		if verr != nil {
 			return nil, fmt.Errorf("invalid override: %w", verr)
 		}
@@ -99,18 +128,19 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		return nil, fmt.Errorf("proposal no longer matches its issue: %w", err)
 	}
 
-	// Atomically persist the exact admin-approved params and claim the execution.
+	// Atomically persist the exact approved params and claim the execution.
 	// The original proposal params remain immutable for audit.
 	cas, err := s.db.Exec(
 		`UPDATE agent_actions
-		 SET approved_params = ?, status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP
+		 SET approved_params = ?, status = ?, decided_by = ?, auto_rule_id = ?, decided_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ?
 		   AND EXISTS (
 		     SELECT 1 FROM issues i JOIN agent_runs r ON r.id = agent_actions.run_id
 		     WHERE i.id = agent_actions.issue_id AND i.closed_at IS NULL
 		       AND i.status = ? AND r.status = 'waiting_approval'
 		   )`,
-		string(paramsToRun), ActionExecuting, adminID, actionID, ActionProposed, IssueAwaitingApproval,
+		string(paramsToRun), ActionExecuting, sqlNullInt64(actor.adminID), sqlNullInt64(actor.ruleID),
+		actionID, ActionProposed, IssueAwaitingApproval,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("claim action for execution: %w", err)
@@ -120,6 +150,13 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		// and return the authoritative state; never execute.
 		s.supersedeInvalidAction(actionID)
 		return s.GetAction(actionID)
+	}
+	if actor.auto() {
+		// Downstream failure handlers pause the rule via act.AutoRuleID; the
+		// usage counter is best-effort and never affects matching.
+		rid := actor.ruleID
+		act.AutoRuleID = &rid
+		s.noteRuleApproved(actor.ruleID)
 	}
 
 	// Close the only local TOCTOU gap: recovery may have started after the first
@@ -155,6 +192,13 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun)
 	resultText = secrets.RedactText(resultText)
 
+	// The resume transcript must attribute the decision truthfully: the model
+	// plans its follow-up differently when a standing rule, not a human,
+	// approved the dispatch.
+	decidedPrefix := "Admin approved"
+	if actor.auto() {
+		decidedPrefix = "Auto-approved by a standing admin rule"
+	}
 	resumeText := ""
 	finalStatus := ActionExecuted
 	finalResult := resultText
@@ -167,20 +211,20 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 			// Never call that a clean failure or offer an automatic whole-action retry.
 			finalStatus = ActionOutcomeUnknown
 			finalResult = "Partially executed; verify the arr state: " + execErrText
-			resumeText = "Admin approved, but only part of the fix completed. Verify the current arr state before proposing anything else: " + execErrText
+			resumeText = decidedPrefix + ", but only part of the fix completed. Verify the current arr state before proposing anything else: " + execErrText
 		} else if errors.As(execErr, &notStarted) && notStarted.MutationNotStarted() {
 			// Live scope/candidate validation is read-only and happens before the
 			// helper can dispatch a mutation. This is a definitive safe failure,
 			// unlike a transport error after dispatch.
 			finalStatus = ActionFailed
 			finalResult = "Not executed: " + execErrText
-			resumeText = "Admin approved, but the fix was not executed because its live preconditions failed: " + execErrText
+			resumeText = decidedPrefix + ", but the fix was not executed because its live preconditions failed: " + execErrText
 		} else {
 			// A transport error after a mutating request cannot prove the arr rejected
 			// it. Be conservative: require verification and never retry automatically.
 			finalStatus = ActionOutcomeUnknown
 			finalResult = "Execution could not be confirmed; verify the arr state: " + execErrText
-			resumeText = "Admin approved, but Cantinarr could not confirm whether the arr accepted the fix. Verify current state before proposing anything else: " + execErrText
+			resumeText = decidedPrefix + ", but Cantinarr could not confirm whether the arr accepted the fix. Verify current state before proposing anything else: " + execErrText
 		}
 	} else {
 		resumeText = "Approved and executed: " + resultText
@@ -189,32 +233,34 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 		// An unknown/partial outcome is a hard human-verification boundary. If we
 		// resumed the model here it could propose a second mutation based on stale
 		// state while the first may already have changed the arr.
-		if err := s.markActionOutcomeUnknown(act, finalResult); err != nil {
+		pausedRule, err := s.markActionOutcomeUnknown(act, finalResult, true)
+		if err != nil {
 			return nil, fmt.Errorf("record unknown action outcome: %w", err)
+		}
+		if pausedRule {
+			s.notifyAutoApprovalPaused(*act.AutoRuleID, act.IssueID)
 		}
 		s.notifyActionsChanged(act.IssueID, ActionOutcomeUnknown)
 		return s.GetAction(actionID)
 	}
-	finalizeRes, finalizeErr := s.db.Exec(
-		"UPDATE agent_actions SET status = ?, executed_at = CURRENT_TIMESTAMP, result_text = ? WHERE id = ? AND status = ?",
-		finalStatus, finalResult, actionID, ActionExecuting,
-	)
-	finalized := finalizeErr == nil
-	if finalized {
-		if n, _ := finalizeRes.RowsAffected(); n != 1 {
-			finalized = false
-		}
-	}
+	finalized, pausedRule, finalizeErr := s.finalizeActionOutcome(act, finalStatus, finalResult)
 	if !finalized {
 		// Remote state may already have changed. Do not feed an unpersisted claim
 		// back to the model or pretend it failed cleanly; stop at needs_admin.
 		log.Printf("remediation: could not finalize action %d as %s: %v", actionID, finalStatus, finalizeErr)
 		unknownText := "The approved action may have changed the arr, but Cantinarr could not persist its final outcome. Verify the arr state manually; it will not be retried."
-		if err := s.markActionOutcomeUnknown(act, unknownText); err != nil {
+		pausedUnknown, err := s.markActionOutcomeUnknown(act, unknownText, true)
+		if err != nil {
 			return nil, fmt.Errorf("approved action may have run, but its outcome could not be persisted: %w", err)
+		}
+		if pausedUnknown {
+			s.notifyAutoApprovalPaused(*act.AutoRuleID, act.IssueID)
 		}
 		s.notifyActionsChanged(act.IssueID, ActionOutcomeUnknown)
 		return s.GetAction(actionID)
+	}
+	if pausedRule {
+		s.notifyAutoApprovalPaused(*act.AutoRuleID, act.IssueID)
 	}
 
 	// Feed the outcome back into the run transcript (keyed to the proposal's
@@ -234,11 +280,19 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 	return s.GetAction(actionID)
 }
 
-func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string) error {
+// markActionOutcomeUnknown records the human-verification boundary. When
+// pauseAutoRule is set and the action was auto-approved, the standing rule is
+// paused in the SAME transaction, so a bad outcome can never become durable
+// with its rule still armed. Repair callers (the durable-outcome retry path
+// and recoverDecisionHandoffs) pass false: they re-record outcomes that
+// already went through this path once, and pausing again could disarm a rule
+// an admin explicitly resumed since. Returns whether THIS call paused the rule
+// so the caller notifies exactly once, after commit.
+func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string, pauseAutoRule bool) (bool, error) {
 	result = secrets.RedactText(result)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(
@@ -247,10 +301,10 @@ func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string) erro
 		ActionOutcomeUnknown, result, act.ID, ActionExecuting, ActionOutcomeUnknown,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		return fmt.Errorf("action execution claim changed unexpectedly")
+		return false, fmt.Errorf("action execution claim changed unexpectedly")
 	}
 	if _, err := tx.Exec(
 		`UPDATE issues SET status = ?, read = 0, active_run_id = NULL,
@@ -258,7 +312,7 @@ func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string) erro
 		 WHERE id = ? AND closed_at IS NULL`,
 		IssueNeedsAdmin, result, act.IssueID,
 	); err != nil {
-		return err
+		return false, err
 	}
 	if act.RunID != nil {
 		if _, err := tx.Exec(
@@ -267,10 +321,53 @@ func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string) erro
 			 WHERE id = ? AND status IN (?, ?, ?, ?)`,
 			*act.RunID, runStatusWaitingApproval, runStatusWaitingUser, runStatusRunning, runStatusResumePending,
 		); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return tx.Commit()
+	pausedRule := false
+	if pauseAutoRule && act.AutoRuleID != nil {
+		pausedRule, err = pauseRuleForFailureTx(tx, *act.AutoRuleID, act.IssueID, autoRulePausedUnverifiedOutcome)
+		if err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return pausedRule, nil
+}
+
+// finalizeActionOutcome commits an executed/failed terminal outcome and,
+// atomically in the same transaction, disarms the standing rule when a
+// rule-approved execution ended failed. finalized=false means the executing
+// claim changed underneath us and nothing was written (the caller falls back
+// to the outcome-unknown boundary).
+func (s *Service) finalizeActionOutcome(act *AgentAction, finalStatus, finalResult string) (finalized, pausedRule bool, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(
+		"UPDATE agent_actions SET status = ?, executed_at = CURRENT_TIMESTAMP, result_text = ? WHERE id = ? AND status = ?",
+		finalStatus, finalResult, act.ID, ActionExecuting,
+	)
+	if err != nil {
+		return false, false, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, false, nil
+	}
+	if act.AutoRuleID != nil && finalStatus == ActionFailed {
+		pausedRule, err = pauseRuleForFailureTx(tx, *act.AutoRuleID, act.IssueID, autoRulePausedExecutionFailed)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, false, err
+	}
+	return true, pausedRule, nil
 }
 
 func (s *Service) stopUnresumableDecision(act *AgentAction, reason string) error {
@@ -467,7 +564,7 @@ func (s *Service) recoverDecisionHandoffs() {
 			if result == "" {
 				result = "The approved action's remote outcome is unknown. Verify the arr state manually; it will not be retried."
 			}
-			if err := s.markActionOutcomeUnknown(act, result); err != nil {
+			if _, err := s.markActionOutcomeUnknown(act, result, false); err != nil {
 				log.Printf("remediation: repair unknown action %d: %v", repair.actionID, err)
 				continue
 			}
@@ -477,7 +574,7 @@ func (s *Service) recoverDecisionHandoffs() {
 
 	rows, err := s.db.Query(
 		`SELECT a.id, a.issue_id, a.run_id, COALESCE(a.tool_use_id,''), a.status,
-		        COALESCE(a.deny_reason,''), COALESCE(a.result_text,'')
+		        COALESCE(a.deny_reason,''), COALESCE(a.result_text,''), COALESCE(a.auto_rule_id, 0)
 		 FROM agent_actions a
 		 JOIN issues i ON i.id = a.issue_id
 		 JOIN agent_runs r ON r.id = a.run_id
@@ -500,23 +597,30 @@ func (s *Service) recoverDecisionHandoffs() {
 		actionID, issueID, runID int64
 		toolUseID, status        string
 		denyReason, resultText   string
+		autoRuleID               int64
 	}
 	var pending []handoff
 	for rows.Next() {
 		var h handoff
-		if rows.Scan(&h.actionID, &h.issueID, &h.runID, &h.toolUseID, &h.status, &h.denyReason, &h.resultText) == nil {
+		if rows.Scan(&h.actionID, &h.issueID, &h.runID, &h.toolUseID, &h.status, &h.denyReason, &h.resultText, &h.autoRuleID) == nil {
 			pending = append(pending, h)
 		}
 	}
 	rows.Close()
 	for _, h := range pending {
+		// Reconstructed transcripts keep the live path's attribution: a rule
+		// decision must never read as a human's in the model's context.
+		decidedPrefix := "Admin approved"
+		if h.autoRuleID > 0 {
+			decidedPrefix = "Auto-approved by a standing admin rule"
+		}
 		outcome := "Admin denied"
 		switch h.status {
 		case ActionExecuted:
 			outcome = "Approved and executed: " + h.resultText
 		case ActionFailed:
 			detail := strings.TrimPrefix(h.resultText, "Execution failed: ")
-			outcome = "Admin approved, but the fix failed to execute: " + detail
+			outcome = decidedPrefix + ", but the fix failed to execute: " + detail
 		case ActionDenied:
 			if h.denyReason != "" {
 				outcome += ": " + h.denyReason
@@ -690,6 +794,7 @@ func (s *Service) loadActionForDecision(actionID int64) (*AgentAction, error) {
 	row := s.db.QueryRow(
 		`SELECT a.id, a.issue_id, a.run_id, a.tool_use_id, a.kind, a.params,
 		        a.approved_params, a.rationale, a.risk, a.status, i.status, i.closed_at,
+		        a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 		        EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id WHERE a.id = ?`,
 		actionID,
@@ -701,9 +806,11 @@ func (s *Service) loadActionForDecision(actionID int64) (*AgentAction, error) {
 		params         string
 		approvedParams sql.NullString
 		closedAt       sql.NullTime
+		autoRuleID     sql.NullInt64
 	)
 	if err := row.Scan(&act.ID, &act.IssueID, &runID, &toolUseID, &act.Kind, &params,
-		&approvedParams, &act.Rationale, &act.Risk, &act.Status, &act.IssueStatus, &closedAt, &act.GateValid); err != nil {
+		&approvedParams, &act.Rationale, &act.Risk, &act.Status, &act.IssueStatus, &closedAt,
+		&autoRuleID, &act.IssueSource, &act.IssueProblemKind, &act.GateValid); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("action not found")
 		}
@@ -712,6 +819,11 @@ func (s *Service) loadActionForDecision(actionID int64) (*AgentAction, error) {
 	if runID.Valid {
 		v := runID.Int64
 		act.RunID = &v
+	}
+	if autoRuleID.Valid {
+		v := autoRuleID.Int64
+		act.AutoRuleID = &v
+		act.AutoApproved = true
 	}
 	act.ToolUseID = toolUseID.String
 	act.Params = json.RawMessage(params)
@@ -748,6 +860,7 @@ func (s *Service) listActions(status string) ([]AgentAction, error) {
 	                 a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 	                 i.title, i.media_type, i.category, i.status, i.closed_at,
 	                 COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
+	                 a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 	                 EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 	          FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 	          LEFT JOIN service_instances si ON si.id = i.instance_id`
@@ -779,7 +892,11 @@ func (s *Service) listActions(status string) ([]AgentAction, error) {
 		}
 		out = append(out, *act)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.decorateActionsAutoApproval(out)
+	return out, nil
 }
 
 // GetIssueActivity returns every action and run linked to one issue, including
@@ -793,6 +910,7 @@ func (s *Service) GetIssueActivity(issueID int64) (*IssueActivity, error) {
 	                 a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 	                 i.title, i.media_type, i.category, i.status, i.closed_at,
 	                 COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
+	                 a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 	                 EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 	          FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 	          LEFT JOIN service_instances si ON si.id = i.instance_id
@@ -813,6 +931,7 @@ func (s *Service) GetIssueActivity(issueID int64) (*IssueActivity, error) {
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	s.decorateActionsAutoApproval(actions)
 
 	runRows, err := s.db.Query(
 		`SELECT id, issue_id, trigger, status, model, step_count,
@@ -857,6 +976,7 @@ func (s *Service) GetAction(actionID int64) (*AgentAction, error) {
 		        a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 		        i.title, i.media_type, i.category, i.status, i.closed_at,
 		        COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
+		        a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 		        EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
 		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 		 LEFT JOIN service_instances si ON si.id = i.instance_id
@@ -870,7 +990,9 @@ func (s *Service) GetAction(actionID int64) (*AgentAction, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load action: %w", err)
 	}
-	return act, nil
+	acts := []AgentAction{*act}
+	s.decorateActionsAutoApproval(acts)
+	return &acts[0], nil
 }
 
 // PendingActionCount counts proposals awaiting a decision (the approval badge).
@@ -901,14 +1023,21 @@ func scanAction(row rowScanner) (*AgentAction, error) {
 		resultText     sql.NullString
 		category       sql.NullString
 		issueClosedAt  sql.NullTime
+		autoRuleID     sql.NullInt64
 	)
 	if err := row.Scan(
 		&act.ID, &act.IssueID, &runID, &act.Kind, &params, &approvedParams, &act.Rationale, &act.Risk, &act.Status,
 		&decidedBy, &decidedAt, &denyReason, &executedAt, &resultText, &act.CreatedAt,
 		&act.IssueTitle, &act.IssueMediaType, &category, &act.IssueStatus, &issueClosedAt,
-		&act.InstanceID, &act.InstanceName, &act.InstanceServiceType, &act.GateValid,
+		&act.InstanceID, &act.InstanceName, &act.InstanceServiceType,
+		&autoRuleID, &act.IssueSource, &act.IssueProblemKind, &act.GateValid,
 	); err != nil {
 		return nil, err
+	}
+	if autoRuleID.Valid {
+		v := autoRuleID.Int64
+		act.AutoRuleID = &v
+		act.AutoApproved = true
 	}
 	act.Params = json.RawMessage(params)
 	if approvedParams.Valid {

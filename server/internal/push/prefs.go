@@ -39,6 +39,13 @@ const (
 	// CategoryAgentActionPending notifies admins that the AI agent proposed a fix
 	// awaiting their approval. Admin-scoped, on by default.
 	CategoryAgentActionPending = "agent_action_pending"
+	// CategoryAgentAutoApprovalPaused tells admins a standing auto-approval
+	// rule disarmed itself after a failed or unverifiable outcome. It
+	// deliberately SHARES the agent_action_pending preference column: both are
+	// "the agent-fix pipeline needs your decision" alerts, and a schema-free
+	// mapping keeps notification_prefs (and its full-row PUT contract)
+	// untouched.
+	CategoryAgentAutoApprovalPaused = "agent_autoapproval_paused"
 	// CategoryPlexAccessRequest notifies admins that a user shared their Plex
 	// email and is waiting for a server invite. Admin-scoped, on by default.
 	CategoryPlexAccessRequest = "plex_access_request"
@@ -76,8 +83,10 @@ var categoryColumn = map[string]struct {
 	CategoryNewBook:            {"new_book", defaultPrefs.NewBook},
 	CategoryIssueCreated:       {"issue_created", defaultPrefs.IssueCreated},
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
-	CategoryPlexAccessRequest:  {"plex_access_request", defaultPrefs.PlexAccessRequest},
-	CategoryPlexInviteSent:     {"plex_invite_sent", defaultPrefs.PlexInviteSent},
+	// Shares the agent_action_pending column by design (see the category const).
+	CategoryAgentAutoApprovalPaused: {"agent_action_pending", defaultPrefs.AgentActionPending},
+	CategoryPlexAccessRequest:       {"plex_access_request", defaultPrefs.PlexAccessRequest},
+	CategoryPlexInviteSent:          {"plex_invite_sent", defaultPrefs.PlexInviteSent},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -160,9 +169,11 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		col.column, def,
 	)
 	// Admin-scoped categories: only admins act on pending requests, issues,
-	// agent-action approvals, or Plex access requests.
+	// agent-action approvals, paused auto-approval rules, or Plex access
+	// requests.
 	if category == CategoryRequestPending || category == CategoryIssueCreated ||
-		category == CategoryAgentActionPending || category == CategoryPlexAccessRequest {
+		category == CategoryAgentActionPending || category == CategoryAgentAutoApprovalPaused ||
+		category == CategoryPlexAccessRequest {
 		query += " AND u.role = 'admin'"
 	}
 	return s.queryUserIDs(query)
