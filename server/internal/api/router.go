@@ -246,6 +246,7 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-actions", remediationHandler.ListActions)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-actions/{id}", remediationHandler.GetAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/approve", remediationHandler.ApproveAction)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/approve-batch", remediationHandler.BatchApproveActions)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-actions/{id}/deny", remediationHandler.DenyAction)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-runs/{id}", remediationHandler.GetRun)
 

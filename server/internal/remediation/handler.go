@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -296,6 +297,34 @@ func (h *Handler) ApproveAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, action)
+}
+
+// BatchApproveActions handles POST /api/admin/agent-actions/approve-batch
+// (PermissionRemediationManage). Body {ids}: the explicit proposals the admin
+// reviewed. Items are decided sequentially by the same core as single
+// approve, and the response is HTTP 200 with a per-item verdict — one
+// recovering download must not fail the admin's whole gesture.
+func (h *Handler) BatchApproveActions(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body BatchApproveRequest
+	if err := decodeJSON(w, r, &body, false); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(body.IDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ids is required"})
+		return
+	}
+	if len(body.IDs) > batchApproveMaxIDs {
+		writeJSON(w, http.StatusBadRequest,
+			map[string]string{"error": fmt.Sprintf("at most %d ids per request", batchApproveMaxIDs)})
+		return
+	}
+	writeJSON(w, http.StatusOK, BatchApproveResponse{Results: h.service.ApproveActions(claims.UserID, body.IDs)})
 }
 
 // ListApprovalRules handles GET /api/admin/agent-approval-rules
