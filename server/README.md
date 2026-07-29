@@ -234,6 +234,11 @@ GET    /api/admin/agent-actions/{id}       # admin: reconcile one durable action
 POST   /api/admin/agent-actions/{id}/approve   # admin: claims and dispatches the stored proposal once;
                                            #   body {override?, remember?} — remember additionally arms a
                                            #   standing auto-approval rule for this (problem, fix, facet)
+POST   /api/admin/agent-actions/approve-batch  # admin: approve an explicit list of reviewed proposals;
+                                           #   body {ids} (≤100), decided sequentially by the single-
+                                           #   approve core; 200 with per-item verdicts (durable action
+                                           #   status, or skipped/error with a reason) — one conflict
+                                           #   never fails the rest
 POST   /api/admin/agent-actions/{id}/deny      # admin: denial resumes the investigation
 GET    /api/admin/agent-runs/{id}          # admin: full audit trail of one agent run
 GET    /api/admin/agent-approval-rules     # admin: standing auto-approval rules with status + counters
