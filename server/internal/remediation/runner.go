@@ -942,7 +942,10 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		return false, err
 	}
 	if issueStatus == IssueAwaitingApproval {
-		r.svc.notifyPendingActionForIssue(issueID)
+		// Queued, not pushed: a wave of simultaneous proposals (one stuck season
+		// pack = 13 parked fixes) must page once with a count, and a proposal an
+		// admin decides within the hold-down needs no page at all.
+		r.svc.queueActionAlert(issueID, time.Now().UTC())
 	} else if issueStatus == IssueAwaitingUser && r.svc.notifier != nil {
 		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
 	}

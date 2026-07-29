@@ -7,7 +7,10 @@ import (
 )
 
 // issueAlertHoldDown is how long an issue must stay out of passive tracking
-// before the admin push it earned is actually sent.
+// before the admin push it earned is actually sent. The approval-alert queue
+// reuses the same window: it exists to gather a simultaneous wave of proposals
+// into one page, and to swallow a proposal that is decided or superseded
+// moments after it parks.
 //
 // Promotion is an edge, not a verdict. An incident crosses the observation
 // window, leaves tracking, and the very next complete queue snapshot can hand
@@ -147,4 +150,96 @@ func (s *Service) flushIssueAlerts(now time.Time) {
 		}
 		s.notifyIssueBatch(source, len(batch))
 	}
+}
+
+// queueActionAlert records that issueID parked a proposal and owes its admins
+// an approval push once the hold-down lapses. Idempotent — the issue id is the
+// primary key, so a resume that parks a follow-up proposal while one is already
+// owed cannot double-page.
+func (s *Service) queueActionAlert(issueID int64, now time.Time) {
+	if s.notifier == nil {
+		return // Nothing can deliver it; do not accumulate rows.
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO agent_action_alert_queue (issue_id, queued_at) VALUES (?, ?)
+		 ON CONFLICT(issue_id) DO NOTHING`, issueID, now,
+	); err != nil {
+		log.Printf("remediation: queue action alert %d: %v", issueID, err)
+	}
+}
+
+// flushActionAlerts advances every owed approval push by one tick: rows whose
+// proposal was decided, superseded, or whose issue closed are dropped
+// unannounced, and whatever has aged past the hold-down is announced together —
+// one push carrying a count for a wave, the usual deep-linked push for a single
+// proposal. Unlike issue alerts there is no re-arm rule: a superseded proposal
+// deletes its row here, and a later re-proposal queues a fresh one.
+func (s *Service) flushActionAlerts(now time.Time) {
+	if s.notifier == nil {
+		return
+	}
+	// The queue is empty on almost every tick; one cheap read guards the writes
+	// and keeps a closed database quiet during shutdown.
+	var pending bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM agent_action_alert_queue)`).Scan(&pending); err != nil || !pending {
+		return
+	}
+	if _, err := s.db.Exec(
+		`DELETE FROM agent_action_alert_queue WHERE issue_id IN (
+		   SELECT q.issue_id FROM agent_action_alert_queue q
+		   LEFT JOIN issues i ON i.id = q.issue_id
+		   WHERE i.id IS NULL OR i.closed_at IS NOT NULL
+		      OR NOT EXISTS (SELECT 1 FROM agent_actions a
+		                     WHERE a.issue_id = q.issue_id AND a.status = ?))`,
+		ActionProposed,
+	); err != nil {
+		log.Printf("remediation: drop stale action alerts: %v", err)
+		return
+	}
+
+	cutoff := now.Add(-issueAlertHoldDown)
+	rows, err := s.db.Query(
+		`SELECT issue_id FROM agent_action_alert_queue WHERE queued_at <= ? ORDER BY issue_id`,
+		cutoff,
+	)
+	if err != nil {
+		log.Printf("remediation: read due action alerts: %v", err)
+		return
+	}
+	var due []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			log.Printf("remediation: scan due action alert: %v", err)
+			return
+		}
+		due = append(due, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("remediation: iterate due action alerts: %v", err)
+		return
+	}
+	if len(due) == 0 {
+		return
+	}
+	// Clear before sending, by the same cutoff the read used: a failure after
+	// this point costs one alert, while leaving the rows would re-page every
+	// tick, and a row queued after the SELECT is newer than the cutoff and
+	// survives for the next flush.
+	if _, err := s.db.Exec(`DELETE FROM agent_action_alert_queue WHERE queued_at <= ?`, cutoff); err != nil {
+		log.Printf("remediation: clear delivered action alerts: %v", err)
+		return
+	}
+
+	if len(due) == 1 {
+		s.notifyPendingActionForIssue(due[0])
+		return
+	}
+	data := map[string]interface{}{"count": len(due)}
+	if count, err := s.PendingActionCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.notifier.NotifyAdmins("agent_action_pending", data)
 }

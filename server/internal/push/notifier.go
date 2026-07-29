@@ -196,8 +196,11 @@ func issueAlertText(source string, count int) (title, body string) {
 // notifyAgentActionPending pushes "the AI proposed a fix, approve it" to opted-in
 // admins. The body is a FIXED template — the agent's rationale and any release
 // name are UNTRUSTED and never placed on the lock screen; issue_id rides along
-// for tap deep-linking. Like issue-created pushes, this queue does not overwrite
-// the global app-icon badge owned by pending request approvals.
+// for tap deep-linking. A coalesced wave carries a server-computed count
+// instead: the plural template plus a collapse id so a later summary replaces
+// the previous one, and no issue_id (the app's approval queue is the
+// destination either way). Like issue-created pushes, this queue does not
+// overwrite the global app-icon badge owned by pending request approvals.
 func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]interface{}) {
 	recipients, err := n.prefs.usersOptedInto(CategoryAgentActionPending)
 	if err != nil {
@@ -211,7 +214,19 @@ func (n *Notifier) notifyAgentActionPending(client *Client, data map[string]inte
 	if v, ok := data["issue_id"]; ok {
 		out["issue_id"] = v
 	}
-	n.sendWithOptions(client, recipients, "A fix needs your approval", "The assistant proposed a fix for a problem and needs you to approve it", out, SendOptions{})
+	count, ok := intval(data["count"])
+	if !ok || count < 1 {
+		count = 1
+	}
+	title := "A fix needs your approval"
+	body := "The assistant proposed a fix for a problem and needs you to approve it"
+	var opts SendOptions
+	if count > 1 {
+		title = "Fixes need your approval"
+		body = fmt.Sprintf("The assistant proposed fixes for %d problems and needs you to approve them", count)
+		opts.CollapseID = CategoryAgentActionPending
+	}
+	n.sendWithOptions(client, recipients, title, body, out, opts)
 }
 
 // notifyPlexAccessRequested pushes "a user shared their Plex email" to
