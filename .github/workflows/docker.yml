@@ -36,6 +36,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: the web bundle's build number is a commit count.
+          fetch-depth: 0
+
+      - name: Derive web build number
+        id: app_build
+        # Counts commits that touched app/, so Settings → About names the
+        # bundle a deployment is running. Tied to app/ rather than the run
+        # number so a rebuild of the same commit reports the same build and
+        # server-only changes keep the cached Flutter layer.
+        run: |
+          echo "number=$(git rev-list --count HEAD -- app)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
@@ -69,6 +81,7 @@ jobs:
           context: .
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: linux/amd64
           load: true
           push: false
@@ -85,6 +98,25 @@ jobs:
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
 
+      - name: Verify the served web bundle carries the build number
+        # End-to-end proof of the chain behind Settings → About: build arg →
+        # `flutter build web --build-number` → version.json → embedded in the
+        # binary → served. Dropping the arg from any build silently reverts
+        # every deployment to pubspec's placeholder build 1.
+        run: |
+          docker run --rm -d --name cantinarr-version-smoke \
+            -p 8585:8585 cantinarr-root-smoke:${{ github.sha }}
+          served=""
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8585/version.json >/tmp/version.json \
+              && { served=1; break; }
+            sleep 1
+          done
+          [ -n "$served" ] || docker logs cantinarr-version-smoke
+          docker rm -f cantinarr-version-smoke
+          cat /tmp/version.json
+          grep -q '"build_number":"${{ steps.app_build.outputs.number }}"' /tmp/version.json
+
       - name: Build arm64 published image for smoke test
         if: startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch
         uses: docker/build-push-action@v6
@@ -92,6 +124,7 @@ jobs:
           context: .
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: linux/arm64
           load: true
           push: false
@@ -139,6 +172,7 @@ jobs:
           context: .
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
           platforms: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.multi-arch) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}

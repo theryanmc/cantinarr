@@ -1,12 +1,18 @@
 # Stage 1: Build Flutter web
 FROM --platform=$BUILDPLATFORM ghcr.io/cirruslabs/flutter:stable AS flutter-builder
 ARG CANTINARR_E2E_WEB_SEMANTICS=false
+# Build number for the web bundle, shown in Settings → About. Without it the
+# bundle reports pubspec's placeholder (`+1`) and every self-hosted deployment
+# claims to be build 1. CI passes the count of commits that have touched app/
+# (see docker.yml); local builds leave it unset and keep the placeholder.
+ARG APP_BUILD_NUMBER=
 WORKDIR /app
 COPY app/pubspec.yaml ./
 RUN flutter pub get
 COPY app/ .
 RUN flutter build web --release \
-    --dart-define=CANTINARR_E2E_WEB_SEMANTICS=${CANTINARR_E2E_WEB_SEMANTICS}
+    --dart-define=CANTINARR_E2E_WEB_SEMANTICS=${CANTINARR_E2E_WEB_SEMANTICS} \
+    ${APP_BUILD_NUMBER:+--build-number=${APP_BUILD_NUMBER}}
 
 # Codex app-server is the supported boundary for ChatGPT subscription auth.
 # Pin and verify the standalone musl binary for reproducible multi-arch images.

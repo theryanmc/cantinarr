@@ -6,6 +6,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/sonarr_api_service.dart';
 import '../data/sonarr_models.dart';
 import 'import_doctor_sheet.dart';
@@ -102,10 +103,8 @@ class _SonarrQueueScreenState extends ConsumerState<SonarrQueueScreen> {
   void _showDoctor(SonarrQueueItem item) {
     final instanceId = ref.read(instanceProvider).activeSonarrInstance?.id;
     if (instanceId == null) return;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    showAppSheet<void>(
+      context,
       builder: (_) => ImportDoctorSheet(
         instanceId: instanceId,
         item: item,

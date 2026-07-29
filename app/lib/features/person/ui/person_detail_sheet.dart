@@ -15,10 +15,14 @@ void showPersonDetailSheet(
   required String personName,
   String? profilePath,
 }) {
+  // Not `showAppSheet`: this body is a [DraggableScrollableSheet], which
+  // resizes itself as the user drags, so it — not the theme — has to own the
+  // card and the handle. Hence the transparent background and no themed handle.
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
+    showDragHandle: false,
     builder: (_) => _PersonDetailSheet(
       personId: personId,
       personName: personName,
@@ -76,10 +80,15 @@ class _PersonDetailSheetState extends ConsumerState<_PersonDetailSheet> {
       minChildSize: 0.4,
       maxChildSize: 0.95,
       expand: false,
+      // Fills the themed sheet's shape exactly (same surface and corner
+      // radius), so the outline the theme draws traces this card rather than
+      // floating around a transparent one.
       builder: (context, scrollController) => Container(
         decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          color: AppTheme.surfaceRaised,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppTheme.radiusXl),
+          ),
         ),
         child: Stack(
           children: [

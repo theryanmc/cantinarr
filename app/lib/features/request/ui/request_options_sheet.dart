@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/request_service.dart';
 
 /// The user's picks from [RequestOptionsSheet]. Null fields mean "use the
@@ -35,32 +36,17 @@ class _RequestOptionsSheetState extends State<RequestOptionsSheet> {
   @override
   Widget build(BuildContext context) {
     final o = widget.options;
-    return Container(
-      padding: EdgeInsets.only(
-        left: 24,
-        right: 24,
-        top: 16,
-        bottom: 24 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return AppSheet(
+      padding: const EdgeInsets.fromLTRB(
+        AppTheme.spaceXl,
+        0,
+        AppTheme.spaceXl,
+        AppTheme.spaceXl,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.textSecondary,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
           const Text(
             'Request options',
             style: TextStyle(

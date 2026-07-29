@@ -555,6 +555,11 @@ abstract final class AppTheme {
           ),
         ),
       ),
+      // The single owner of a bottom sheet's card: surface, hairline border,
+      // rounded top edge and the one drag handle. Sheet bodies paint none of
+      // it themselves (see `showAppSheet`) — when both did, the themed card
+      // outlined an empty band 48px above the body's own card, each with its
+      // own handle.
       bottomSheetTheme: const BottomSheetThemeData(
         backgroundColor: surfaceRaised,
         modalBackgroundColor: surfaceRaised,
@@ -564,6 +569,8 @@ abstract final class AppTheme {
         showDragHandle: true,
         dragHandleColor: borderStrong,
         dragHandleSize: Size(40, 4),
+        // Keeps content and ink splashes inside the rounded top corners.
+        clipBehavior: Clip.antiAlias,
         constraints: BoxConstraints(maxWidth: 640),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(radiusXl)),
