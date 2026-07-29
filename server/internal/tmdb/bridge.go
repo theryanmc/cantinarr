@@ -28,6 +28,17 @@ type BridgeResult struct {
 	IMDBID string
 }
 
+// TMDB exposes the lazily-configured TMDB client for callers that already hold
+// a bridge and need metadata beyond id resolution (artwork, titles). TMDB is
+// configured at runtime, so this resolves per call and returns nil while it is
+// unconfigured — callers degrade rather than fail.
+func (b *Bridge) TMDB() *Client {
+	if b == nil || b.clients == nil {
+		return nil
+	}
+	return b.clients.TMDB()
+}
+
 func (b *Bridge) ResolveTVDBID(tmdbID int) (*BridgeResult, error) {
 	// 1. Check cache first
 	var tvdbID sql.NullInt64

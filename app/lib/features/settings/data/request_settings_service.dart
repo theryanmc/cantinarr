@@ -145,9 +145,18 @@ class PendingRequestItem {
   final String username;
   final int tmdbId;
   final int tvdbId;
+
+  /// The Chaptarr identity a book row is addressed by; empty for movies/TV.
+  final String foreignId;
   final String mediaType;
   final String title;
+
+  /// TMDB artwork path, best-effort: empty means the server resolved none for
+  /// this load (or the row is a book, which carries no cover), not that the
+  /// title has no artwork.
+  final String posterPath;
   final String bookFormat;
+  final String instanceId;
   final String instanceName;
   final int requesterCount;
   final String seasonScope;
@@ -160,9 +169,12 @@ class PendingRequestItem {
     required this.username,
     required this.tmdbId,
     required this.tvdbId,
+    required this.foreignId,
     required this.mediaType,
     required this.title,
+    required this.posterPath,
     required this.bookFormat,
+    required this.instanceId,
     required this.instanceName,
     required this.requesterCount,
     required this.seasonScope,
@@ -172,6 +184,27 @@ class PendingRequestItem {
 
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
+
+  /// Route to the content this request is for, or null when the row can't
+  /// address one (a legacy book row stored without its foreign id, a movie row
+  /// with no TMDB id). Books pin the library the request named — an approval can
+  /// outlive the admin switching their drawer to another Chaptarr instance.
+  String? get detailRoute {
+    if (isBook) {
+      final id = foreignId.trim();
+      if (id.isEmpty) return null;
+      final query = <String>[
+        if (title.trim().isNotEmpty)
+          'title=${Uri.encodeQueryComponent(title.trim())}',
+        if (instanceId.trim().isNotEmpty)
+          'instance_id=${Uri.encodeQueryComponent(instanceId.trim())}',
+      ];
+      final suffix = query.isEmpty ? '' : '?${query.join('&')}';
+      return '/detail/book/${Uri.encodeComponent(id)}$suffix';
+    }
+    if (tmdbId <= 0) return null;
+    return '/detail/${isTv ? 'tv' : 'movie'}/$tmdbId';
+  }
   String get mediaLabel => switch (mediaType) {
         'tv' => 'TV',
         'book' => 'Book',
@@ -193,9 +226,12 @@ class PendingRequestItem {
         username: json['username'] as String? ?? '',
         tmdbId: json['tmdb_id'] as int? ?? 0,
         tvdbId: json['tvdb_id'] as int? ?? 0,
+        foreignId: json['foreign_id'] as String? ?? '',
         mediaType: json['media_type'] as String? ?? 'movie',
         title: json['title'] as String? ?? '',
+        posterPath: json['poster_path'] as String? ?? '',
         bookFormat: json['book_format'] as String? ?? 'both',
+        instanceId: json['instance_id'] as String? ?? '',
         instanceName: json['instance_name'] as String? ?? '',
         requesterCount: _positiveRequesterCount(json['requester_count']),
         seasonScope: json['season_scope'] as String? ?? '',

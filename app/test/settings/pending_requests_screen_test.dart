@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/storage/preferences.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/request/data/request_service.dart'
     hide RequestOptions;
@@ -16,6 +17,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -34,6 +36,147 @@ void main() {
       item('', 2).requestedByLabel,
       'Requested by a user and 1 other',
     );
+  });
+
+  test('queue rows address the content they were filed for', () {
+    PendingRequestItem item(Map<String, dynamic> json) =>
+        PendingRequestItem.fromJson(json);
+
+    expect(
+      item({'media_type': 'movie', 'tmdb_id': 603}).detailRoute,
+      '/detail/movie/603',
+    );
+    expect(
+      item({'media_type': 'tv', 'tmdb_id': 94997}).detailRoute,
+      '/detail/tv/94997',
+    );
+
+    // Books are addressed by their Chaptarr identity, and the row's own library
+    // rides along: an approval can outlive the admin switching drawers.
+    final book = item({
+      'media_type': 'book',
+      'foreign_id': 'edition/OL123',
+      'title': 'Flock',
+      'instance_id': 'chaptarr-1',
+    }).detailRoute;
+    expect(book, isNotNull);
+    expect(book, startsWith('/detail/book/edition%2FOL123?'));
+    final query = Uri.parse(book!).queryParameters;
+    expect(query['title'], 'Flock');
+    expect(query['instance_id'], 'chaptarr-1');
+
+    // Nothing to open: a legacy book row with no stored identity, and a row
+    // whose TMDB id never made it in.
+    expect(item({'media_type': 'book', 'title': 'Flock'}).detailRoute, isNull);
+    expect(item({'media_type': 'movie', 'tmdb_id': 0}).detailRoute, isNull);
+  });
+
+  testWidgets('an approval row shows its artwork and opens the title',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 4,
+        'user_id': 11,
+        'username': 'josie',
+        'media_type': 'tv',
+        'tmdb_id': 94997,
+        'title': 'House of the Dragon',
+        'poster_path': '/hotd.jpg',
+        'season_scope': 'latest',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    String? pushedLocation;
+    final router = GoRouter(
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const PendingRequestsScreen()),
+        GoRoute(
+          path: '/detail/:type/:id',
+          builder: (_, state) {
+            pushedLocation = state.uri.toString();
+            return const Scaffold(body: SizedBox());
+          },
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The server sends a bare TMDB path; the row composes a thumbnail-width URL.
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, 'https://image.tmdb.org/t/p/w185/hotd.jpg');
+
+    await tester.tap(find.text('House of the Dragon'));
+    await tester.pumpAndSettle();
+    expect(pushedLocation, '/detail/tv/94997');
+  });
+
+  testWidgets('a book row keeps its placeholder and stays inert without an id',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 5,
+        'user_id': 12,
+        'username': 'reader',
+        'media_type': 'book',
+        'title': 'Flock',
+        'book_format': 'ebook',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // A pending book has no cover to resolve, and without a foreign id there is
+    // nothing to open — the row must not offer a dead tap.
+    final image = tester.widget<CachedImage>(find.byType(CachedImage));
+    expect(image.url, isNull);
+    expect(image.icon, Icons.menu_book);
+    expect(tester.widget<ListTile>(find.byType(ListTile).first).onTap, isNull);
   });
 
   testWidgets(

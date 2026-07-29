@@ -80,10 +80,16 @@ type Service struct {
 	notifier Notifier
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
-	libraryCache    *cache.Cache
-	decisionLocks   [64]sync.Mutex
-	bookLocks       [64]sync.Mutex
-	projectionLocks [32]sync.Mutex
+	libraryCache *cache.Cache
+	// posterCache holds approval-queue artwork paths keyed by media type + TMDB
+	// id, so re-opening the queue doesn't re-ask TMDB for every row.
+	posterCache *cache.Cache
+	// posterLookupOverride substitutes the queue's metadata client in tests.
+	// Production leaves it nil and resolves TMDB through the bridge.
+	posterLookupOverride posterLookup
+	decisionLocks        [64]sync.Mutex
+	bookLocks            [64]sync.Mutex
+	projectionLocks      [32]sync.Mutex
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -93,6 +99,7 @@ func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, no
 		bridge:       bridge,
 		notifier:     notifier,
 		libraryCache: cache.New(),
+		posterCache:  cache.New(),
 	}
 }
 
@@ -279,13 +286,19 @@ type RequestLog struct {
 
 // PendingRequest is one row of the admin approval queue.
 type PendingRequest struct {
-	ID               int64     `json:"id"`
-	UserID           int64     `json:"user_id"`
-	Username         string    `json:"username"`
-	TmdbID           int       `json:"tmdb_id"`
-	TvdbID           int       `json:"tvdb_id"`
-	MediaType        string    `json:"media_type"`
-	Title            string    `json:"title"`
+	ID       int64  `json:"id"`
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	TmdbID   int    `json:"tmdb_id"`
+	TvdbID   int    `json:"tvdb_id"`
+	// ForeignID is the Chaptarr identity a book row is addressed by; movie and
+	// TV rows are addressed by TmdbID and leave it empty.
+	ForeignID string `json:"foreign_id,omitempty"`
+	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	// PosterPath is a TMDB artwork path (never a full URL), best-effort: empty
+	// means this load resolved none, not that the title has none. See poster.go.
+	PosterPath       string    `json:"poster_path,omitempty"`
 	BookFormat       string    `json:"book_format"`
 	InstanceID       string    `json:"instance_id,omitempty"`
 	InstanceName     string    `json:"instance_name,omitempty"`
@@ -3001,8 +3014,19 @@ func concreteBookFormat(formats map[string]string) string {
 }
 
 func (s *Service) ListPending() ([]PendingRequest, error) {
+	out, err := s.scanPending()
+	if err != nil {
+		return nil, err
+	}
+	// Artwork resolution reaches the network, so it runs only once the rows and
+	// their connection are released.
+	s.attachPosterPaths(out)
+	return out, nil
+}
+
+func (s *Service) scanPending() ([]PendingRequest, error) {
 	rows, err := s.db.Query(
-		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
+		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), COALESCE(r.foreign_id, ''), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
 		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
 		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
 		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at
@@ -3020,7 +3044,7 @@ func (s *Service) ListPending() ([]PendingRequest, error) {
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
 		p.BookFormat = normalizeBookFormat(p.BookFormat)

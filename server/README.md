@@ -198,7 +198,8 @@ GET    /api/requests/book-status           # user: per-format live state by fore
 GET    /api/requests/book-library          # user: owned/monitored digest; optional instance_id (brief cache)
 GET    /api/requests/book-recent           # user: newest book-file imports; optional instance_id, limit (cached)
 GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress
-GET    /api/admin/requests                 # admin: pending approval queue
+GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
+                                           #   foreign_id and a best-effort TMDB poster_path (movie/tv)
 POST   /api/admin/requests/{id}/approve    # admin: approve (executes the stored request once)
 POST   /api/admin/requests/{id}/deny       # admin: deny with optional reason
 GET|PUT /api/admin/request-settings        # admin: global policy (require_approval,

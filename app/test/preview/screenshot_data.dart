@@ -1157,6 +1157,9 @@ List<Map<String, dynamic>> _pendingRequests() => [
         'tvdb_id': 371572,
         'media_type': 'tv',
         'title': 'House of the Dragon',
+        // Artwork the server resolves per row; reuse the title's own poster so
+        // the queue and the detail page it opens agree.
+        'poster_path': _tvById(94997).poster,
         'book_format': 'both',
         'season_scope': 'latest',
         'quality_profile_id': 1,
@@ -1170,6 +1173,7 @@ List<Map<String, dynamic>> _pendingRequests() => [
         'tvdb_id': 0,
         'media_type': 'movie',
         'title': 'Deep Water',
+        'poster_path': _movieById(1127384).poster,
         'book_format': 'both',
         'season_scope': '',
         'quality_profile_id': 1,
@@ -1183,6 +1187,7 @@ List<Map<String, dynamic>> _pendingRequests() => [
         'tvdb_id': 0,
         'media_type': 'movie',
         'title': 'Michael',
+        'poster_path': _movieById(936075).poster,
         'book_format': 'both',
         'season_scope': '',
         'quality_profile_id': 1,
