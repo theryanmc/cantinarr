@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/action_sheet.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../navigation/ambient_page_route.dart';
@@ -335,10 +336,8 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   }
 
   Future<void> _openEpisode(SonarrEpisode episode) async {
-    final changed = await showModalBottomSheet<bool>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    final changed = await showAppSheet<bool>(
+      context,
       builder: (_) => EpisodeDetailSheet(
         instanceId: widget.instanceId,
         series: widget.series,

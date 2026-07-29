@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../data/chaptarr_api_service.dart';
@@ -23,10 +24,8 @@ Future<bool?> showChaptarrBookDetailSheet(
   required List<ChaptarrBook> records,
   String? bookTitle,
 }) {
-  return showModalBottomSheet<bool>(
-    context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
+  return showAppSheet<bool>(
+    context,
     builder: (_) => _ChaptarrBookDetailSheet(
       instanceId: instanceId,
       records: records,
@@ -195,103 +194,80 @@ class _ChaptarrBookDetailSheetState
     final hasUnknownFormat =
         _records.any((record) => record.format == BookFormat.unknown);
 
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.85),
-        decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppTheme.textSecondary,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                title,
+    return AppSheet(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.bold),
+          ),
+          if (_primary.author?.authorName.isNotEmpty ?? false) ...[
+            const SizedBox(height: 4),
+            Text(_primary.author!.authorName,
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold),
-              ),
-              if (_primary.author?.authorName.isNotEmpty ?? false) ...[
-                const SizedBox(height: 4),
-                Text(_primary.author!.authorName,
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 14)),
-              ],
-              const SizedBox(height: 6),
-              if (release != null)
-                Text(DateFormat('MMMM d, yyyy').format(release),
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 13)),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  if (hasUnknownFormat)
-                    const StatusPill(
-                      text: 'Book format: Needs attention',
-                      color: AppTheme.requested,
-                    ),
-                  if (knownRecords.isEmpty && !hasUnknownFormat)
-                    StatusPill(text: status.label, color: status.color),
-                  if (knownRecords.isNotEmpty)
-                    ...[BookFormat.ebook, BookFormat.audiobook]
-                        .where((format) => knownRecords
-                            .any((record) => record.format == format))
-                        .map((format) {
-                      final formatStatus =
-                          bookFormatStatusLine(knownRecords, format);
-                      return StatusPill(
-                        text:
-                            '${chaptarrFormatLabel(format)}: ${formatStatus.text}',
-                        color: formatStatus.color,
-                      );
-                    }),
-                ],
-              ),
-              if (_primary.displayOverview case final overview?) ...[
-                const SizedBox(height: 14),
-                Text(overview,
-                    style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 14,
-                        height: 1.4)),
-              ],
-              const SizedBox(height: 16),
-              const Text('History',
-                  style: TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              _buildHistory(),
-              const SizedBox(height: 16),
-              ChaptarrSearchActions(
-                onFindAutomatically: _automaticSearch,
-                onChooseDownload: _interactiveSearch,
-              ),
+                    color: AppTheme.textSecondary, fontSize: 14)),
+          ],
+          const SizedBox(height: 6),
+          if (release != null)
+            Text(DateFormat('MMMM d, yyyy').format(release),
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 13)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (hasUnknownFormat)
+                const StatusPill(
+                  text: 'Book format: Needs attention',
+                  color: AppTheme.requested,
+                ),
+              if (knownRecords.isEmpty && !hasUnknownFormat)
+                StatusPill(text: status.label, color: status.color),
+              if (knownRecords.isNotEmpty)
+                ...[BookFormat.ebook, BookFormat.audiobook]
+                    .where((format) => knownRecords
+                        .any((record) => record.format == format))
+                    .map((format) {
+                  final formatStatus =
+                      bookFormatStatusLine(knownRecords, format);
+                  return StatusPill(
+                    text:
+                        '${chaptarrFormatLabel(format)}: ${formatStatus.text}',
+                    color: formatStatus.color,
+                  );
+                }),
             ],
           ),
-        ),
+          if (_primary.displayOverview case final overview?) ...[
+            const SizedBox(height: 14),
+            Text(overview,
+                style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 14,
+                    height: 1.4)),
+          ],
+          const SizedBox(height: 16),
+          const Text('History',
+              style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          _buildHistory(),
+          const SizedBox(height: 16),
+          ChaptarrSearchActions(
+            onFindAutomatically: _automaticSearch,
+            onChooseDownload: _interactiveSearch,
+          ),
+        ],
       ),
     );
   }

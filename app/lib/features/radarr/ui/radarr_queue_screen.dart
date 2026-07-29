@@ -6,6 +6,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/radarr_api_service.dart';
 import '../data/radarr_models.dart';
 import 'radarr_import_doctor_sheet.dart';
@@ -102,10 +103,8 @@ class _RadarrQueueScreenState extends ConsumerState<RadarrQueueScreen> {
   void _showDoctor(RadarrQueueItem item) {
     final instanceId = ref.read(instanceProvider).activeRadarrInstance?.id;
     if (instanceId == null) return;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    showAppSheet<void>(
+      context,
       builder: (_) => RadarrImportDoctorSheet(
         instanceId: instanceId,
         item: item,

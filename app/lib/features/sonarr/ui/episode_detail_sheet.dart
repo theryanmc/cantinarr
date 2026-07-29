@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
@@ -69,10 +70,8 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
   }
 
   void _openDoctor() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    showAppSheet<void>(
+      context,
       builder: (_) => ImportDoctorSheet(
         instanceId: widget.instanceId,
         item: widget.queueItem!,
@@ -116,158 +115,135 @@ class _EpisodeDetailSheetState extends ConsumerState<EpisodeDetailSheet> {
     final airDate = e.airDateUtc?.toLocal() ??
         (e.airDate != null ? DateTime.tryParse(e.airDate!) : null);
 
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.85),
-        decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppTheme.textSecondary,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                e.title ?? 'Episode ${e.episodeNumber}',
+    return AppSheet(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            e.title ?? 'Episode ${e.episodeNumber}',
+            style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 6),
+          if (airDate != null)
+            Text(DateFormat('MMMM d, yyyy').format(airDate),
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold),
+                    color: AppTheme.textSecondary, fontSize: 13)),
+          Text('${seasonText(e.seasonNumber)} • Episode ${e.episodeNumber}',
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 13)),
+          const SizedBox(height: 12),
+          StatusPill(text: status.label, color: status.color),
+          if (e.overview != null && e.overview!.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              e.overview!,
+              style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 14,
+                  height: 1.4),
+            ),
+          ],
+          if (downloadsEnabled && e.hasFile && e.episodeFileId > 0) ...[
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: MediaDownloadButton(
+                instanceId: widget.instanceId,
+                fileId: e.episodeFileId,
+                label: 'Download episode',
+                outlined: true,
+                reportedPath: e.episodeFile?.path,
               ),
-              const SizedBox(height: 6),
-              if (airDate != null)
-                Text(DateFormat('MMMM d, yyyy').format(airDate),
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 13)),
-              Text('${seasonText(e.seasonNumber)} • Episode ${e.episodeNumber}',
-                  style: const TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 13)),
-              const SizedBox(height: 12),
-              StatusPill(text: status.label, color: status.color),
-              if (e.overview != null && e.overview!.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                Text(
-                  e.overview!,
-                  style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 14,
-                      height: 1.4),
-                ),
-              ],
-              if (downloadsEnabled && e.hasFile && e.episodeFileId > 0) ...[
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: MediaDownloadButton(
-                    instanceId: widget.instanceId,
-                    fileId: e.episodeFileId,
-                    label: 'Download episode',
-                    outlined: true,
-                    reportedPath: e.episodeFile?.path,
-                  ),
-                ),
-              ],
-              if (widget.queueItem != null) ...[
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: QueueItemCard(
-                    item: widget.queueItem!,
-                    primaryTitle: widget.queueItem!.title,
-                    onShowIssues:
-                        widget.queueItem!.hasIssues ? _openDoctor : null,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              const Text('History',
-                  style: TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              _buildHistory(),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        widget.onAutomaticSearch();
-                      },
-                      icon: const Icon(Icons.search,
-                          size: 18, color: AppTheme.available),
-                      label: const Text('Automatic',
-                          style: TextStyle(color: AppTheme.textPrimary)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: AppTheme.border),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        widget.onInteractiveSearch();
-                      },
-                      icon: const Icon(Icons.person_outline,
-                          size: 18, color: AppTheme.available),
-                      label: const Text('Interactive',
-                          style: TextStyle(color: AppTheme.textPrimary)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: AppTheme.border),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
-                ],
+            ),
+          ],
+          if (widget.queueItem != null) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: QueueItemCard(
+                item: widget.queueItem!,
+                primaryTitle: widget.queueItem!.title,
+                onShowIssues:
+                    widget.queueItem!.hasIssues ? _openDoctor : null,
               ),
-              if (_canReport) ...[
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: ReportProblemButton(
-                    scope: ReportScope.episode(
-                      instanceId: widget.instanceId,
-                      tmdbId: widget.series.tmdbId ?? 0,
-                      tvdbId: widget.series.tvdbId,
-                      seasonNumber: e.seasonNumber,
-                      episodeNumber: e.episodeNumber,
-                      title: widget.series.title,
-                    ),
-                    // The sheet refreshes the season list by popping true.
-                    onSubmitted: () {
-                      if (mounted) Navigator.of(context).pop(true);
-                    },
+            ),
+          ],
+          const SizedBox(height: 16),
+          const Text('History',
+              style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          _buildHistory(),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    widget.onAutomaticSearch();
+                  },
+                  icon: const Icon(Icons.search,
+                      size: 18, color: AppTheme.available),
+                  label: const Text('Automatic',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppTheme.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
                 ),
-              ],
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    widget.onInteractiveSearch();
+                  },
+                  icon: const Icon(Icons.person_outline,
+                      size: 18, color: AppTheme.available),
+                  label: const Text('Interactive',
+                      style: TextStyle(color: AppTheme.textPrimary)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: AppTheme.border),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
             ],
           ),
-        ),
+          if (_canReport) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: ReportProblemButton(
+                scope: ReportScope.episode(
+                  instanceId: widget.instanceId,
+                  tmdbId: widget.series.tmdbId ?? 0,
+                  tvdbId: widget.series.tvdbId,
+                  seasonNumber: e.seasonNumber,
+                  episodeNumber: e.episodeNumber,
+                  title: widget.series.title,
+                ),
+                // The sheet refreshes the season list by popping true.
+                onSubmitted: () {
+                  if (mounted) Navigator.of(context).pop(true);
+                },
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

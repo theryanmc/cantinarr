@@ -8,6 +8,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -310,25 +311,21 @@ class _RequesterBookDetailScreenState
     if (formats.length == 1) {
       format = formats.first == BookFormat.audiobook ? 'audiobook' : 'ebook';
     } else if (formats.length > 1) {
-      final picked = await showModalBottomSheet<BookFormat>(
-        context: context,
-        backgroundColor: AppTheme.surface,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        builder: (sheetContext) => SafeArea(
+      final picked = await showAppSheet<BookFormat>(
+        context,
+        builder: (sheetContext) => AppSheet(
+          padding: EdgeInsets.zero,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               const Padding(
-                padding: EdgeInsets.fromLTRB(24, 18, 24, 6),
+                padding: EdgeInsets.fromLTRB(24, 0, 24, 6),
                 child: Text('Which format is the problem with?'),
               ),
               ListTile(
                 leading: const Icon(Icons.menu_book_outlined),
                 title: const Text('eBook'),
-                onTap: () =>
-                    Navigator.of(sheetContext).pop(BookFormat.ebook),
+                onTap: () => Navigator.of(sheetContext).pop(BookFormat.ebook),
               ),
               ListTile(
                 leading: const Icon(Icons.headphones_outlined),

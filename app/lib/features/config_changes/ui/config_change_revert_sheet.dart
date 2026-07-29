@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/config_change_models.dart';
 import 'config_change_visuals.dart';
 
@@ -12,128 +13,94 @@ Future<bool> showConfigChangeRevertConfirmation(
   BuildContext context,
   ConfigChange change,
 ) async {
-  final confirmed = await showModalBottomSheet<bool>(
-    context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
-    builder: (sheetContext) => Align(
-      alignment: Alignment.bottomCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640),
-        child: Material(
-          color: AppTheme.surfaceRaised,
-          borderRadius: const BorderRadius.vertical(
-            top: Radius.circular(AppTheme.radiusXLarge),
+  final confirmed = await showAppSheet<bool>(
+    context,
+    builder: (sheetContext) => AppSheet(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            change.canRestore
+                ? 'Restore previous settings?'
+                : 'Restore unavailable',
+            style: Theme.of(sheetContext).textTheme.titleLarge,
           ),
-          clipBehavior: Clip.antiAlias,
-          child: SafeArea(
-            top: false,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                12,
-                20,
-                20 + MediaQuery.viewInsetsOf(sheetContext).bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: AppTheme.textMuted,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    change.canRestore
-                        ? 'Restore previous settings?'
-                        : 'Restore unavailable',
-                    style: Theme.of(sheetContext).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    change.canRestore
-                        ? 'Cantinarr will restore only the settings recorded below. '
-                            'The restore will be added to change history.'
-                        : _unavailableReason(change),
-                    style: const TextStyle(
-                      color: AppTheme.textSecondary,
-                      fontSize: 14,
-                      height: 1.4,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surfaceVariant,
-                      borderRadius:
-                          BorderRadius.circular(AppTheme.radiusMedium),
-                      border: Border.all(color: AppTheme.border),
-                    ),
-                    child: ConfigChangeTarget(
-                      change: change,
-                      showInstanceId: true,
-                    ),
-                  ),
-                  if (change.changes.isNotEmpty) ...[
-                    const SizedBox(height: 18),
-                    const Text(
-                      'Settings to restore',
-                      style: TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    for (final field in change.changes)
-                      _ReverseDiffRow(field: field),
-                  ],
-                  const SizedBox(height: 20),
-                  if (change.canRestore)
-                    LayoutBuilder(builder: (context, constraints) {
-                      final narrow = constraints.maxWidth < 390;
-                      final cancel = OutlinedButton(
-                        onPressed: () => Navigator.of(sheetContext).pop(false),
-                        child: const Text('Cancel'),
-                      );
-                      final restore = ElevatedButton.icon(
-                        onPressed: () => Navigator.of(sheetContext).pop(true),
-                        icon: const Icon(Icons.restore_rounded, size: 18),
-                        label: const Text('Restore previous settings'),
-                      );
-                      if (narrow) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [restore, const SizedBox(height: 8), cancel],
-                        );
-                      }
-                      return Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [cancel, const SizedBox(width: 10), restore],
-                      );
-                    })
-                  else
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: ElevatedButton(
-                        onPressed: () => Navigator.of(sheetContext).pop(false),
-                        child: const Text('Done'),
-                      ),
-                    ),
-                ],
-              ),
+          const SizedBox(height: 8),
+          Text(
+            change.canRestore
+                ? 'Cantinarr will restore only the settings recorded below. '
+                    'The restore will be added to change history.'
+                : _unavailableReason(change),
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 14,
+              height: 1.4,
             ),
           ),
-        ),
+          const SizedBox(height: 16),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceVariant,
+              borderRadius:
+                  BorderRadius.circular(AppTheme.radiusMedium),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: ConfigChangeTarget(
+              change: change,
+              showInstanceId: true,
+            ),
+          ),
+          if (change.changes.isNotEmpty) ...[
+            const SizedBox(height: 18),
+            const Text(
+              'Settings to restore',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (final field in change.changes)
+              _ReverseDiffRow(field: field),
+          ],
+          const SizedBox(height: 20),
+          if (change.canRestore)
+            LayoutBuilder(builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 390;
+              final cancel = OutlinedButton(
+                onPressed: () => Navigator.of(sheetContext).pop(false),
+                child: const Text('Cancel'),
+              );
+              final restore = ElevatedButton.icon(
+                onPressed: () => Navigator.of(sheetContext).pop(true),
+                icon: const Icon(Icons.restore_rounded, size: 18),
+                label: const Text('Restore previous settings'),
+              );
+              if (narrow) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [restore, const SizedBox(height: 8), cancel],
+                );
+              }
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [cancel, const SizedBox(width: 10), restore],
+              );
+            })
+          else
+            Align(
+              alignment: Alignment.centerRight,
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(sheetContext).pop(false),
+                child: const Text('Done'),
+              ),
+            ),
+        ],
       ),
     ),
   );

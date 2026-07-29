@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/request_service.dart';
 
 /// A bottom sheet showing detailed request status in human-friendly language.
@@ -22,26 +23,16 @@ class RequestStatusSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return AppSheet(
+      padding: const EdgeInsets.fromLTRB(
+        AppTheme.spaceXl,
+        AppTheme.spaceSm,
+        AppTheme.spaceXl,
+        AppTheme.spaceXl,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppTheme.textSecondary,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 24),
-
           // Status icon
           _StatusIcon(status: status),
           const SizedBox(height: 16),
@@ -75,8 +66,6 @@ class RequestStatusSheet extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
           ],
-
-          const SizedBox(height: 24),
         ],
       ),
     );

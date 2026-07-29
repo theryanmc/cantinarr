@@ -89,6 +89,11 @@ flutter run
 
 `make` builds the full stack (Flutter web → embedded in the Go binary).
 
+Published images stamp the web bundle with a build number that **Settings > About**
+reports. Building the image yourself, pass your own with
+`docker build --build-arg APP_BUILD_NUMBER=<n> .`; leave it out and About falls back
+to `pubspec.yaml`'s placeholder.
+
 ## Repository Structure
 
 ```

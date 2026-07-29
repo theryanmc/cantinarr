@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 
@@ -140,10 +141,8 @@ Future<void> showReportProblemSheet(
   required ReportScope scope,
   VoidCallback? onSubmitted,
 }) async {
-  final submitted = await showModalBottomSheet<bool>(
-    context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
+  final submitted = await showAppSheet<bool>(
+    context,
     builder: (_) => ReportProblemSheet(scope: scope),
   );
   if (submitted == true) {
@@ -253,32 +252,17 @@ class _ReportProblemSheetState extends ConsumerState<ReportProblemSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.only(
-        left: 24,
-        right: 24,
-        top: 16,
-        bottom: 24 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    return AppSheet(
+      padding: const EdgeInsets.fromLTRB(
+        AppTheme.spaceXl,
+        0,
+        AppTheme.spaceXl,
+        AppTheme.spaceXl,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.textSecondary,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
           const Text(
             'Report a problem',
             style: TextStyle(

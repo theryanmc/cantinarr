@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../data/media_download_models.dart';
 import '../data/media_download_service.dart';
 import '../logic/media_coverage_provider.dart';
@@ -199,45 +199,31 @@ class MediaDownloadChoiceButton extends ConsumerWidget {
     BuildContext context,
     List<MediaDownloadChoice> available,
   ) {
-    return showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => Material(
-        color: AppTheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        clipBehavior: Clip.antiAlias,
-        child: SafeArea(
-          top: false,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.75,
-            ),
-            child: ListView(
-              shrinkWrap: true,
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
-              children: [
-                Text(sheetTitle,
-                    style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 10),
-                for (final choice in available)
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                    title: Text(choice.label),
-                    subtitle: choice.subtitle == null
-                        ? null
-                        : Text(choice.subtitle!),
-                    trailing: MediaDownloadButton(
-                      instanceId: instanceId,
-                      fileId: choice.fileId,
-                      label: 'Download ${choice.label}',
-                      iconOnly: true,
-                      reportedPath: choice.reportedPath,
-                    ),
-                  ),
-              ],
-            ),
-          ),
+    return showAppSheet<void>(
+      context,
+      builder: (_) => AppSheet(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(sheetTitle, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 10),
+            for (final choice in available)
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                title: Text(choice.label),
+                subtitle:
+                    choice.subtitle == null ? null : Text(choice.subtitle!),
+                trailing: MediaDownloadButton(
+                  instanceId: instanceId,
+                  fileId: choice.fileId,
+                  label: 'Download ${choice.label}',
+                  iconOnly: true,
+                  reportedPath: choice.reportedPath,
+                ),
+              ),
+          ],
         ),
       ),
     );

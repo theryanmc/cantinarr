@@ -2,14 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../logic/app_version_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import 'about_sheet.dart';
@@ -23,16 +24,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  String _appVersion = '';
-
   @override
   void initState() {
     super.initState();
-    PackageInfo.fromPlatform().then((info) {
-      final build = info.buildNumber;
-      setState(() => _appVersion =
-          build.isNotEmpty ? '${info.version} ($build)' : info.version);
-    });
     // Learn whether the account has a password so the Account tile reflects
     // it, and re-derive the setup checklist so its tile subtitle is current.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -52,6 +46,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
+    final appVersion = ref.watch(appVersionProvider).valueOrNull;
     final aiAvailable =
         aiSettings?.effective.available ?? connection?.services.ai ?? false;
 
@@ -412,10 +407,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _SettingsTile(
             icon: Icons.info_outline,
             title: 'Cantinarr',
-            subtitle: 'Version $_appVersion',
-            onTap: () => showModalBottomSheet(
-              context: context,
-              backgroundColor: Colors.transparent,
+            subtitle: appVersion?.label ?? '',
+            onTap: () => showAppSheet(
+              context,
               builder: (_) => const AboutSheet(),
             ),
           ),

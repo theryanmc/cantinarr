@@ -9,6 +9,7 @@ import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
@@ -516,10 +517,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     int? qualityProfileId;
     if (options != null && options.hasChoices) {
       if (!mounted) return;
-      final result = await showModalBottomSheet<RequestOptionsResult>(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
+      final result = await showAppSheet<RequestOptionsResult>(
+        context,
         builder: (_) => RequestOptionsSheet(options: options),
       );
       if (result == null) return; // cancelled
@@ -737,20 +736,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       MediaDetailState state, String title, int? tvdbId, String instanceId) {
     // Real seasons only (drop a season 0 / specials placeholder when empty).
     final seasons = state.seasons.where((s) => s.seasonNumber > 0).toList();
-    return showModalBottomSheet<ReportScope>(
-      context: context,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    return showAppSheet<ReportScope>(
+      context,
       builder: (sheetContext) {
-        return SafeArea(
+        return AppSheet(
+          padding: EdgeInsets.zero,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Padding(
-                padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
                   "What's the problem with?",
                   style: TextStyle(
@@ -773,29 +769,20 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                   ),
                 ),
               ),
-              if (seasons.isNotEmpty)
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      for (final s in seasons)
-                        ListTile(
-                          leading: const Icon(Icons.video_library_outlined,
-                              color: AppTheme.textSecondary),
-                          title: Text('Season ${s.seasonNumber}',
-                              style:
-                                  const TextStyle(color: AppTheme.textPrimary)),
-                          onTap: () => Navigator.of(sheetContext).pop(
-                            ReportScope.series(
-                              instanceId: instanceId,
-                              tmdbId: widget.id,
-                              tvdbId: tvdbId,
-                              seasonNumber: s.seasonNumber,
-                              title: title,
-                            ),
-                          ),
-                        ),
-                    ],
+              for (final s in seasons)
+                ListTile(
+                  leading: const Icon(Icons.video_library_outlined,
+                      color: AppTheme.textSecondary),
+                  title: Text('Season ${s.seasonNumber}',
+                      style: const TextStyle(color: AppTheme.textPrimary)),
+                  onTap: () => Navigator.of(sheetContext).pop(
+                    ReportScope.series(
+                      instanceId: instanceId,
+                      tmdbId: widget.id,
+                      tvdbId: tvdbId,
+                      seasonNumber: s.seasonNumber,
+                      title: title,
+                    ),
                   ),
                 ),
               const SizedBox(height: 8),
@@ -825,9 +812,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   void _showStatusSheet(
       BuildContext context, String title, RequestStatus status) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
+    showAppSheet(
+      context,
       builder: (_) => RequestStatusSheet(
         title: title,
         status: status,

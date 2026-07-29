@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../../../core/widgets/status_pill.dart';
@@ -114,10 +115,8 @@ class _RadarrMovieDetailScreenState
   void _openDoctor() {
     final item = _queueItem;
     if (item == null) return;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    showAppSheet<void>(
+      context,
       builder: (_) => RadarrImportDoctorSheet(
         instanceId: widget.instanceId,
         item: item,
