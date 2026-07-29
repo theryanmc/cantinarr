@@ -325,6 +325,48 @@ class SonarrEpisode {
       airDateUtc != null && airDateUtc!.isBefore(DateTime.now().toUtc());
 }
 
+/// One episode on the Sonarr calendar. Carries the embedded series (fetched
+/// with includeSeries=true) for its title, poster and drill-down navigation.
+class SonarrCalendarEntry {
+  final int id;
+  final int seriesId;
+  final int seasonNumber;
+  final int episodeNumber;
+  final String? title;
+  final DateTime? airDateUtc;
+  final bool hasFile;
+  final SonarrSeries? series;
+
+  const SonarrCalendarEntry({
+    required this.id,
+    this.seriesId = 0,
+    this.seasonNumber = 0,
+    this.episodeNumber = 0,
+    this.title,
+    this.airDateUtc,
+    this.hasFile = false,
+    this.series,
+  });
+
+  factory SonarrCalendarEntry.fromJson(Map<String, dynamic> json) =>
+      SonarrCalendarEntry(
+        id: json['id'] as int? ?? 0,
+        seriesId: json['seriesId'] as int? ?? 0,
+        seasonNumber: json['seasonNumber'] as int? ?? 0,
+        episodeNumber: json['episodeNumber'] as int? ?? 0,
+        title: json['title'] as String?,
+        airDateUtc: DateTime.tryParse(json['airDateUtc'] as String? ?? ''),
+        hasFile: json['hasFile'] as bool? ?? false,
+        series: json['series'] != null
+            ? SonarrSeries.fromJson(json['series'] as Map<String, dynamic>)
+            : null,
+      );
+
+  /// e.g. "S01E05".
+  String get seasonEpisodeLabel => 'S${seasonNumber.toString().padLeft(2, '0')}'
+      'E${episodeNumber.toString().padLeft(2, '0')}';
+}
+
 class SonarrQualityProfile {
   final int id;
   final String name;
@@ -599,6 +641,10 @@ class SonarrWantedRecord {
   final bool monitored;
   final String? seriesTitle;
 
+  /// Full embedded series (fetched with includeSeries=true); carries the
+  /// poster and everything the series detail screen needs.
+  final SonarrSeries? series;
+
   /// Current file quality; only present on cutoff-unmet records fetched
   /// with includeEpisodeFile.
   final String? quality;
@@ -612,23 +658,26 @@ class SonarrWantedRecord {
     this.airDateUtc,
     this.monitored = true,
     this.seriesTitle,
+    this.series,
     this.quality,
   });
 
-  factory SonarrWantedRecord.fromJson(Map<String, dynamic> json) =>
-      SonarrWantedRecord(
-        id: json['id'] as int? ?? 0,
-        seriesId: json['seriesId'] as int? ?? 0,
-        seasonNumber: json['seasonNumber'] as int? ?? 0,
-        episodeNumber: json['episodeNumber'] as int? ?? 0,
-        title: json['title'] as String?,
-        airDateUtc: DateTime.tryParse(json['airDateUtc'] as String? ?? ''),
-        monitored: json['monitored'] as bool? ?? true,
-        seriesTitle:
-            (json['series'] as Map<String, dynamic>?)?['title'] as String?,
-        quality: (json['episodeFile'] as Map<String, dynamic>?)?['quality']
-            ?['quality']?['name'] as String?,
-      );
+  factory SonarrWantedRecord.fromJson(Map<String, dynamic> json) {
+    final seriesJson = json['series'] as Map<String, dynamic>?;
+    return SonarrWantedRecord(
+      id: json['id'] as int? ?? 0,
+      seriesId: json['seriesId'] as int? ?? 0,
+      seasonNumber: json['seasonNumber'] as int? ?? 0,
+      episodeNumber: json['episodeNumber'] as int? ?? 0,
+      title: json['title'] as String?,
+      airDateUtc: DateTime.tryParse(json['airDateUtc'] as String? ?? ''),
+      monitored: json['monitored'] as bool? ?? true,
+      seriesTitle: seriesJson?['title'] as String?,
+      series: seriesJson != null ? SonarrSeries.fromJson(seriesJson) : null,
+      quality: (json['episodeFile'] as Map<String, dynamic>?)?['quality']
+          ?['quality']?['name'] as String?,
+    );
+  }
 
   /// e.g. "S01E05".
   String get seasonEpisodeLabel => 'S${seasonNumber.toString().padLeft(2, '0')}'
