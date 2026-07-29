@@ -13,6 +13,7 @@ import 'edit_series_screen.dart';
 import 'series_actions.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_season_screen.dart';
+import 'widgets/season_availability.dart';
 
 /// Series detail: an "All Seasons" summary plus a per-season list with
 /// availability and monitor toggles. Tapping a season drills into its
@@ -305,24 +306,20 @@ class _SonarrSeriesDetailScreenState
 String seasonLabel(int seasonNumber) =>
     seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
 
-/// "X/Y Episodes Available" with a colour: green at 100%, amber/red otherwise.
+/// "11/13 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
+/// why the denominator is the whole season rather than Sonarr's episodeCount.
 class _AvailabilityLine extends StatelessWidget {
   final SonarrStatistics? stats;
-  const _AvailabilityLine({required this.stats});
+  final bool moreToCome;
+  const _AvailabilityLine({required this.stats, required this.moreToCome});
 
   @override
   Widget build(BuildContext context) {
-    final s = stats;
-    if (s == null || s.episodeCount == 0) {
-      return const Text('0% • 0/0 Episodes Available',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13));
-    }
-    final pct = (s.episodeFileCount / s.episodeCount * 100).round();
-    final complete = s.episodeFileCount >= s.episodeCount;
+    final line = seasonAvailabilityLine(stats, moreToCome: moreToCome);
     return Text(
-      '$pct% • ${s.episodeFileCount}/${s.episodeCount} Episodes Available',
+      line.text,
       style: TextStyle(
-        color: complete ? AppTheme.available : AppTheme.error,
+        color: line.color,
         fontSize: 13,
         fontWeight: FontWeight.w500,
       ),
@@ -366,7 +363,8 @@ class _AllSeasonsCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _AvailabilityLine(stats: stats),
+                  _AvailabilityLine(
+                      stats: stats, moreToCome: series.hasUpcomingEpisodes),
                 ],
               ),
             ),
@@ -441,7 +439,8 @@ class _SeasonCard extends StatelessWidget {
                             color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                   const SizedBox(height: 6),
-                  _AvailabilityLine(stats: stats),
+                  _AvailabilityLine(
+                      stats: stats, moreToCome: stats?.nextAiring != null),
                 ],
               ),
             ),
