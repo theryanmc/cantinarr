@@ -52,12 +52,14 @@ type setupFacts struct {
 }
 
 // discoveryDescription explains the discovery-rows step in terms of what is
-// true right now. A configured Trakt key that no row actually uses is the one
-// state worth calling out: connecting Trakt adds its lists and calendar, but
-// the headline row keeps its old source until someone changes it here.
+// true right now. Rows that are running on Trakt because the credential
+// appeared — not because anyone picked it — are the state worth calling out:
+// the server changed what the headline row shows, and this step is the only
+// place an admin would find that out. Once a decision exists the plain copy is
+// right; the admin chose, and the checklist does not second-guess which.
 func discoveryDescription(f setupFacts) string {
-	if f.Trakt && f.DiscoverySource != serversettings.DiscoverySourceTraktTrending {
-		return "Trakt is connected, but the headline rows still use TMDB. Pick the feed that backs them — and whether to hide non-English titles."
+	if !f.DiscoveryChosen && f.Trakt && f.DiscoverySource == serversettings.DiscoverySourceTraktTrending {
+		return "Trakt is connected, so the headline rows already use it. Confirm the feed here — and whether to hide non-English titles."
 	}
 	return "Pick which feed backs the headline rows on Movies and TV, and whether to hide non-English titles."
 }

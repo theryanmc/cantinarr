@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/status_pill.dart';
 import '../data/discovery_settings_service.dart';
 
 /// Admin screen for choosing which feed backs the headline discovery rows and
@@ -135,12 +136,26 @@ class _DiscoverySettingsScreenState
           selected ? Icons.radio_button_checked : Icons.radio_button_off,
           color: selectable ? AppTheme.accent : AppTheme.textSecondary,
         ),
-        title: Text(
-          source.label,
-          style: TextStyle(
-            color: selectable ? AppTheme.textPrimary : AppTheme.textSecondary,
-            fontWeight: FontWeight.w500,
-          ),
+        title: Row(
+          children: [
+            Flexible(
+              child: Text(
+                source.label,
+                style: TextStyle(
+                  color:
+                      selectable ? AppTheme.textPrimary : AppTheme.textSecondary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            if (source.recommended) ...[
+              const SizedBox(width: 8),
+              StatusPill(
+                text: 'Recommended',
+                color: selectable ? AppTheme.accent : AppTheme.textSecondary,
+              ),
+            ],
+          ],
         ),
         subtitle: Text(
           selectable

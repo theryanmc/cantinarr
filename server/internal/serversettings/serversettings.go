@@ -29,9 +29,34 @@ const (
 	// DiscoverySourceTMDBPopular is TMDB's all-time popularity ranking.
 	DiscoverySourceTMDBPopular = "tmdb_popular"
 
-	// DefaultDiscoverySource backs the rows when an admin has not chosen one.
+	// DefaultDiscoverySource backs the rows when an admin has not chosen one
+	// and Trakt is unavailable. See DefaultSourceFor.
 	DefaultDiscoverySource = DiscoverySourceTMDBTrending
 )
+
+// DefaultDiscoveryEnglishOnly is the language filter a server ships with until
+// an admin decides otherwise. On by default because the rows are a shelf, not a
+// catalogue: an untranslated title a household cannot watch costs one of twenty
+// slots, and the cost of the default being wrong is asymmetric — an admin who
+// wants everything flips one switch, while an admin who never opens the screen
+// would otherwise never learn the filter exists. Search and detail lookups are
+// never filtered either way.
+const DefaultDiscoveryEnglishOnly = true
+
+// DefaultSourceFor returns the feed that backs the headline rows when no admin
+// has chosen one. Trakt wins whenever it is configured: adding the credential
+// is itself the statement that Trakt should be used, and its trending feed is
+// ranked by what people are watching right now rather than by TMDB engagement.
+// This is derived rather than written on credential save, so removing the Trakt
+// key silently reverts the rows instead of stranding them on a source that can
+// no longer answer — and so auto-adoption never masquerades as an admin's
+// decision (see DiscoveryChosen).
+func DefaultSourceFor(traktConfigured bool) string {
+	if traktConfigured {
+		return DiscoverySourceTraktTrending
+	}
+	return DefaultDiscoverySource
+}
 
 // DiscoverySources lists every valid source, in the order the admin UI offers
 // them.
@@ -51,31 +76,60 @@ type Settings struct {
 	ManagementURL string `json:"management_url"`
 
 	// DiscoverySource picks which feed backs the headline discovery rows.
-	// Empty is read back as DefaultDiscoverySource.
+	// Empty means no admin has decided, and doubles as the marker for that:
+	// it is read back as DefaultSourceFor, and it is what DiscoveryChosen and
+	// the English-only default key on.
 	DiscoverySource string `json:"discovery_source"`
 
 	// DiscoveryEnglishOnly drops titles whose original language is not English
 	// from the discovery rows. Search and detail lookups are never filtered —
-	// a title you went looking for is always findable.
+	// a title you went looking for is always findable. A false here only means
+	// "off" once a discovery decision exists; until then reads serve
+	// DefaultDiscoveryEnglishOnly, because a bool cannot carry "unset".
 	DiscoveryEnglishOnly bool `json:"discovery_english_only"`
 }
 
 // Service reads and writes the server settings blob.
 type Service struct {
 	db *sql.DB
+	// traktConfigured reports whether Trakt can answer right now. It is a
+	// callback rather than a stored flag because credentials change under us,
+	// and the default source has to follow them without a restart.
+	traktConfigured func() bool
 }
 
 // NewService returns a settings service backed by the given database.
-func NewService(db *sql.DB) *Service {
-	return &Service{db: db}
+// traktConfigured decides the default row source; a nil probe reads as "no
+// Trakt", which keeps a caller that has no credential registry working.
+func NewService(db *sql.DB, traktConfigured func() bool) *Service {
+	return &Service{db: db, traktConfigured: traktConfigured}
 }
 
 // Get returns the stored settings, or the defaults when none are saved.
 func (s *Service) Get() Settings {
-	out := s.raw()
+	return s.normalized(s.raw())
+}
+
+// normalized fills in the read-side defaults. Both discovery fields default
+// together, keyed on the one marker for "no admin has decided" — an empty
+// stored source. SetDiscovery is the only writer of either field and always
+// writes both, so the marker cannot go stale; a future setter that writes one
+// discovery field must write the other too.
+func (s *Service) normalized(in Settings) Settings {
+	out := in
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
-	out.DiscoverySource = normalizeDiscoverySource(out.DiscoverySource)
+	if !discoveryDecided(out) {
+		out.DiscoverySource = DefaultSourceFor(s.traktAvailable())
+		out.DiscoveryEnglishOnly = DefaultDiscoveryEnglishOnly
+		return out
+	}
+	out.DiscoverySource = normalizeDiscoverySource(out.DiscoverySource, s.traktAvailable())
 	return out
+}
+
+// traktAvailable answers the probe, tolerating a service built without one.
+func (s *Service) traktAvailable() bool {
+	return s.traktConfigured != nil && s.traktConfigured()
 }
 
 // raw reads the stored blob without filling defaults in, so callers that need
@@ -91,14 +145,22 @@ func (s *Service) raw() Settings {
 }
 
 // DiscoveryChosen reports whether an admin has ever saved a discovery
-// preference. Get normalizes an empty source onto the default, which makes an
-// untouched install indistinguishable from a deliberate "TMDB trending" — but
-// the setup checklist needs exactly that distinction: every discovery answer is
-// valid, so the checklist item asks "have you decided", not "did you pick the
-// one we like". Any save flips this, which is what keeps the item from nagging
-// an admin who is happy with the defaults.
+// preference. Get normalizes an empty source onto a default, which makes an
+// untouched install indistinguishable from a deliberate pick of the same feed —
+// but the setup checklist needs exactly that distinction: every discovery
+// answer is valid, so the checklist item asks "have you decided", not "did you
+// pick the one we like". Any save flips this, which is what keeps the item from
+// nagging an admin who is happy with the defaults. Adopting Trakt because its
+// credential appeared is not a decision and deliberately does not flip it.
 func (s *Service) DiscoveryChosen() bool {
-	return strings.TrimSpace(s.raw().DiscoverySource) != ""
+	return discoveryDecided(s.raw())
+}
+
+// discoveryDecided reports whether the raw blob carries an admin's discovery
+// decision. Only ever call this on a raw read: a normalized blob always has a
+// source, so it would answer true for every server.
+func discoveryDecided(in Settings) bool {
+	return strings.TrimSpace(in.DiscoverySource) != ""
 }
 
 // SetManagementURL stores the management-portal URL, leaving every other
@@ -117,19 +179,20 @@ func (s *Service) SetManagementURL(raw string) (Settings, error) {
 
 // SetDiscovery stores the discovery preferences, leaving every other
 // preference untouched. The stored source is always concrete, so saving any
-// choice — including the default the screen loaded with — records a decision.
+// choice — including the default the screen loaded with — records a decision,
+// and the English-only value stored alongside it becomes authoritative.
 func (s *Service) SetDiscovery(source string, englishOnly bool) (Settings, error) {
 	if err := validateDiscoverySource(source); err != nil {
 		return Settings{}, err
 	}
 	next := s.raw()
-	next.DiscoverySource = normalizeDiscoverySource(source)
+	next.DiscoverySource = normalizeDiscoverySource(source, s.traktAvailable())
 	next.DiscoveryEnglishOnly = englishOnly
 	return s.save(next)
 }
 
 // save persists the blob verbatim and hands back the normalized view, so
-// storage keeps "never set" while every caller still sees a usable source.
+// storage keeps "never set" while every caller still sees usable values.
 func (s *Service) save(in Settings) (Settings, error) {
 	data, err := json.Marshal(in)
 	if err != nil {
@@ -138,20 +201,21 @@ func (s *Service) save(in Settings) (Settings, error) {
 	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", settingsKey, string(data)); err != nil {
 		return Settings{}, fmt.Errorf("save server settings: %w", err)
 	}
-	out := in
-	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
-	out.DiscoverySource = normalizeDiscoverySource(out.DiscoverySource)
-	return out, nil
+	return s.normalized(in), nil
 }
 
 // normalizeDiscoverySource maps empty or unrecognized stored values onto the
-// default, so a hand-edited or downgraded database still serves a working row.
-func normalizeDiscoverySource(raw string) string {
+// current default, so a hand-edited or downgraded database still serves a
+// working row. A recognized source is returned untouched even when it cannot
+// answer — a stored Trakt choice with the credential removed stays visible in
+// the admin UI as the admin's own choice rather than silently becoming TMDB;
+// the feed itself falls back per request.
+func normalizeDiscoverySource(raw string, traktConfigured bool) string {
 	switch strings.TrimSpace(raw) {
 	case DiscoverySourceTMDBTrending, DiscoverySourceTraktTrending, DiscoverySourceTMDBPopular:
 		return strings.TrimSpace(raw)
 	default:
-		return DefaultDiscoverySource
+		return DefaultSourceFor(traktConfigured)
 	}
 }
 

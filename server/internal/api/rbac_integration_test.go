@@ -469,7 +469,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	webhookHandler := webhooks.NewHandler(store, instanceRegistry, hub, requestService, nil)
 	discoverCache := cache.New()
 	t.Cleanup(discoverCache.Close)
-	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database))
+	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database, func() bool { return registry.Trakt() != nil }))
 
 	cfg := &config.Config{
 		PublicURL:          "http://cantinarr.test",
@@ -502,7 +502,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		plexHandler,
 		plexService,
 		update.NewChecker("dev", true),
-		serversettings.NewService(database),
+		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 	)
 	return &rbacRouterHarness{
 		router:            router,

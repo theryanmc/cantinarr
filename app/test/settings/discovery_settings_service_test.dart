@@ -21,6 +21,12 @@ void main() {
         expect(source.label, isNot(source.value));
         expect(source.description, isNotEmpty);
       }
+      // Exactly one option is tagged as the upgrade, and it is the one the
+      // server also adopts by default once its credential exists.
+      expect(
+        settings.sources.where((s) => s.recommended).map((s) => s.value),
+        ['trakt_trending'],
+      );
     });
 
     test('shows a source this build does not know rather than dropping it', () {
@@ -31,6 +37,8 @@ void main() {
       expect(settings.sources.map((s) => s.value),
           ['tmdb_trending', 'from_a_newer_build']);
       expect(settings.sources.last.label, 'from_a_newer_build');
+      expect(settings.sources.last.recommended, isFalse,
+          reason: 'this build cannot vouch for a source it has no copy for');
     });
 
     test('defaults missing fields', () {

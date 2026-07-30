@@ -6,10 +6,19 @@ class DiscoverySource {
   final String label;
   final String description;
 
+  /// Whether the picker should mark this as the option we suggest. Trakt's
+  /// feed is ranked by what people are watching right now rather than by
+  /// metadata engagement, so it is the upgrade — and the server already
+  /// defaults to it once a Trakt client ID exists. The tag says out loud what
+  /// the default is doing quietly, and stays on the locked Trakt row as the
+  /// reason to go configure the credential.
+  final bool recommended;
+
   const DiscoverySource({
     required this.value,
     required this.label,
     required this.description,
+    this.recommended = false,
   });
 
   /// Trakt is optional, so it can be listed but unselectable.
@@ -28,6 +37,7 @@ const _sourceCopy = <String, DiscoverySource>{
     value: 'trakt_trending',
     label: 'Trending now (Trakt)',
     description: 'Ranked by how many people are watching right now.',
+    recommended: true,
   ),
   'tmdb_popular': DiscoverySource(
     value: 'tmdb_popular',

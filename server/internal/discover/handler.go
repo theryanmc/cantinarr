@@ -46,7 +46,7 @@ func NewHandler(creds *credentials.Registry, c *cache.Cache, prefs DiscoveryPref
 // when no settings service is wired in.
 func (h *Handler) discoveryPrefs() (source string, englishOnly bool) {
 	if h.prefs == nil {
-		return serversettings.DefaultDiscoverySource, false
+		return serversettings.DefaultSourceFor(h.creds.Trakt() != nil), serversettings.DefaultDiscoveryEnglishOnly
 	}
 	current := h.prefs.Get()
 	return current.DiscoverySource, current.DiscoveryEnglishOnly

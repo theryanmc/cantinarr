@@ -259,7 +259,9 @@ func main() {
 
 	// Server settings: the admin-configured management-portal URL the update
 	// banner links to, plus the discovery preferences the rows read per request.
-	serverSettings := serversettings.NewService(database)
+	// The Trakt probe is read per call, so adding or removing that credential
+	// moves the default row source without a restart.
+	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })
 
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
