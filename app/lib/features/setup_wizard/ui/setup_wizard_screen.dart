@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/status_pill.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/data/setup_status_service.dart';
 import '../../settings/logic/setup_status_provider.dart';
@@ -171,14 +172,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           title: 'Essentials',
           remaining: essentials.where((i) => !i.configured).length,
         ),
-        ...essentials.map(_buildItem),
+        ...essentials.map((i) => _buildItem(i, urgent: status.isUrgent(i))),
         if (optional.isNotEmpty) ...[
           const SizedBox(height: 8),
           _SectionHeader(
             title: 'Nice to have',
             remaining: optional.where((i) => !i.configured).length,
           ),
-          ...optional.map(_buildItem),
+          ...optional.map((i) => _buildItem(i, urgent: status.isUrgent(i))),
         ],
         const SizedBox(height: 8),
         const Divider(color: AppTheme.border),
@@ -201,20 +202,35 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
   }
 
-  Widget _buildItem(SetupItem item) {
+  /// One checklist row. The weight goes to what is unfinished: a done row dims
+  /// to a receipt, while an outstanding one keeps full-strength copy and ends
+  /// in a labelled "Set up" chip rather than the same chevron every navigable
+  /// row in the app carries. A chevron only says "this goes somewhere"; the
+  /// admin came here to find what still wants doing, and that has to be
+  /// markable by scanning the edge of the list instead of reading twelve
+  /// descriptions. [urgent] is reserved for rows the server cannot work
+  /// without — see [SetupStatus.isUrgent].
+  Widget _buildItem(SetupItem item, {required bool urgent}) {
     final route = _routeFor(item.key);
+    final actionColor = urgent ? AppTheme.danger : AppTheme.accent;
     return ListTile(
       leading: Icon(_iconFor(item.key),
-          color: item.configured ? AppTheme.available : AppTheme.textSecondary),
+          color: item.configured ? AppTheme.available : actionColor),
       title: Text(item.title,
-          style: const TextStyle(
-              color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
+          style: TextStyle(
+              color: item.configured
+                  ? AppTheme.textSecondary
+                  : AppTheme.textPrimary,
+              fontWeight: FontWeight.w500)),
       subtitle: Text(item.description,
           style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+      // An unconfigured row with nowhere to go (push is a server env var, and
+      // unknown keys come from newer servers) gets no chip: there is no action
+      // here to offer. Its full-strength title still reads as outstanding.
       trailing: item.configured
           ? const Icon(Icons.check_circle, color: AppTheme.available, size: 20)
           : route != null
-              ? const Icon(Icons.chevron_right, color: AppTheme.textSecondary)
+              ? StatusPill(text: 'Set up', color: actionColor)
               : null,
       onTap: route != null ? () => _openItem(route) : null,
     );
