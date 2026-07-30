@@ -344,11 +344,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Hidden (not tappable) until the search field takes focus.
+    // Hidden (not tappable) until the search field takes focus — and even
+    // then only after a pause: focus alone must not surface it.
     expect(find.text('Ask AI').hitTestable(), findsNothing);
 
     await tester.tap(find.byType(TextField).first);
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 1200));
     await tester.pump(const Duration(milliseconds: 150));
     expect(find.text('Ask AI').hitTestable(), findsOneWidget);
 
@@ -367,11 +372,16 @@ void main() {
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsOneWidget);
 
-    // Deleting to zero characters flicks AI mode back off entirely, and the
-    // still-focused bar offers the pill again.
+    // Deleting to zero characters flicks AI mode back off entirely. The
+    // edit also reset the pause detector, so no pill yet...
     await tester.enterText(find.byType(TextField).first, '');
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // ...until the user hesitates again on the still-focused bar.
+    await tester.pump(const Duration(milliseconds: 1200));
     await tester.pump(const Duration(milliseconds: 150));
     expect(find.text('Ask AI').hitTestable(), findsOneWidget);
 
