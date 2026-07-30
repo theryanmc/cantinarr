@@ -97,6 +97,7 @@ class CantinarrSearchBar extends StatelessWidget {
               controller: controller,
               focusNode: focusNode,
               keyboardType: TextInputType.text,
+              autocorrect: false,
               onChanged: onChanged,
               onSubmitted: submitAction == null ? null : (_) => submitAction(),
               onTapOutside: (_) => focusNode.unfocus(),
