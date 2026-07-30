@@ -167,7 +167,7 @@ func NewRouter(
 
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings))
 
 			// Update availability + the admin-configured management-portal URL that
 			// backs the "update available" banner. GET returns both; PUT sets the

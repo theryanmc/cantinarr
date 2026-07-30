@@ -72,21 +72,42 @@ func NewService(db *sql.DB) *Service {
 
 // Get returns the stored settings, or the defaults when none are saved.
 func (s *Service) Get() Settings {
-	var out Settings
-	var v string
-	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", settingsKey).Scan(&v); err == nil && v != "" {
-		_ = json.Unmarshal([]byte(v), &out)
-	}
+	out := s.raw()
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
 	out.DiscoverySource = normalizeDiscoverySource(out.DiscoverySource)
 	return out
 }
 
+// raw reads the stored blob without filling defaults in, so callers that need
+// to tell "never set" from "set to the value that happens to be the default"
+// can. Get normalizes on top of this; DiscoveryChosen does not.
+func (s *Service) raw() Settings {
+	var out Settings
+	var v string
+	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", settingsKey).Scan(&v); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &out)
+	}
+	return out
+}
+
+// DiscoveryChosen reports whether an admin has ever saved a discovery
+// preference. Get normalizes an empty source onto the default, which makes an
+// untouched install indistinguishable from a deliberate "TMDB trending" — but
+// the setup checklist needs exactly that distinction: every discovery answer is
+// valid, so the checklist item asks "have you decided", not "did you pick the
+// one we like". Any save flips this, which is what keeps the item from nagging
+// an admin who is happy with the defaults.
+func (s *Service) DiscoveryChosen() bool {
+	return strings.TrimSpace(s.raw().DiscoverySource) != ""
+}
+
 // SetManagementURL stores the management-portal URL, leaving every other
 // preference untouched. Each setter reads-modifies-writes the one blob so a
-// caller that only knows about its own field cannot wipe the rest.
+// caller that only knows about its own field cannot wipe the rest. The
+// read side is raw on purpose: writing back a normalized blob would stamp a
+// discovery source nobody chose and falsely satisfy DiscoveryChosen.
 func (s *Service) SetManagementURL(raw string) (Settings, error) {
-	next := s.Get()
+	next := s.raw()
 	next.ManagementURL = strings.TrimSpace(raw)
 	if err := validateURL(next.ManagementURL); err != nil {
 		return Settings{}, err
@@ -95,17 +116,20 @@ func (s *Service) SetManagementURL(raw string) (Settings, error) {
 }
 
 // SetDiscovery stores the discovery preferences, leaving every other
-// preference untouched.
+// preference untouched. The stored source is always concrete, so saving any
+// choice — including the default the screen loaded with — records a decision.
 func (s *Service) SetDiscovery(source string, englishOnly bool) (Settings, error) {
 	if err := validateDiscoverySource(source); err != nil {
 		return Settings{}, err
 	}
-	next := s.Get()
+	next := s.raw()
 	next.DiscoverySource = normalizeDiscoverySource(source)
 	next.DiscoveryEnglishOnly = englishOnly
 	return s.save(next)
 }
 
+// save persists the blob verbatim and hands back the normalized view, so
+// storage keeps "never set" while every caller still sees a usable source.
 func (s *Service) save(in Settings) (Settings, error) {
 	data, err := json.Marshal(in)
 	if err != nil {
@@ -114,7 +138,10 @@ func (s *Service) save(in Settings) (Settings, error) {
 	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", settingsKey, string(data)); err != nil {
 		return Settings{}, fmt.Errorf("save server settings: %w", err)
 	}
-	return in, nil
+	out := in
+	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
+	out.DiscoverySource = normalizeDiscoverySource(out.DiscoverySource)
+	return out, nil
 }
 
 // normalizeDiscoverySource maps empty or unrecognized stored values onto the

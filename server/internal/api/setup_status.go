@@ -9,6 +9,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/plex"
+	"github.com/windoze95/cantinarr-server/internal/serversettings"
 )
 
 // setupItem is one entry in the admin setup checklist. The list is DERIVED
@@ -26,8 +27,8 @@ type setupItem struct {
 	Optional bool `json:"optional"`
 }
 
-// setupFacts are the booleans the checklist derives from, gathered by the
-// handler and kept separate so the item list itself is a pure function.
+// setupFacts is the configuration state the checklist derives from, gathered by
+// the handler and kept separate so the item list itself is a pure function.
 type setupFacts struct {
 	HasRadarr         bool
 	HasSonarr         bool
@@ -40,6 +41,25 @@ type setupFacts struct {
 	AI                bool
 	Push              bool
 	PlexInvites       bool
+	// DiscoveryChosen is whether an admin has ever saved a discovery
+	// preference. Unlike the rest of the checklist there is no "correct"
+	// answer to grade against — every source and either language setting is
+	// valid — so the item asks whether the decision was made at all.
+	DiscoveryChosen bool
+	// DiscoverySource is the feed currently backing the headline rows, used
+	// only to describe the state back to the admin.
+	DiscoverySource string
+}
+
+// discoveryDescription explains the discovery-rows step in terms of what is
+// true right now. A configured Trakt key that no row actually uses is the one
+// state worth calling out: connecting Trakt adds its lists and calendar, but
+// the headline row keeps its old source until someone changes it here.
+func discoveryDescription(f setupFacts) string {
+	if f.Trakt && f.DiscoverySource != serversettings.DiscoverySourceTraktTrending {
+		return "Trakt is connected, but the headline rows still use TMDB. Pick the feed that backs them — and whether to hide non-English titles."
+	}
+	return "Pick which feed backs the headline rows on Movies and TV, and whether to hide non-English titles."
 }
 
 // buildSetupItems maps configuration facts to the ordered checklist:
@@ -107,6 +127,13 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "discovery_prefs",
+			Title:       "Discovery rows",
+			Description: discoveryDescription(f),
+			Configured:  f.DiscoveryChosen,
+			Optional:    true,
+		},
+		{
 			Key:         "books",
 			Title:       "Books (Chaptarr)",
 			Description: "Let users request ebooks and audiobooks; access is granted per user.",
@@ -125,7 +152,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 
 // setupStatusHandler answers the admin setup checklist: which features are
 // configured right now. Everything is re-derived per request.
-func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service) http.HandlerFunc {
+func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service, serverSettings *serversettings.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var facts setupFacts
 		if instances, err := store.ListAll(); err == nil {
@@ -155,6 +182,10 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 		}
 		facts.Push = cfg.PushGatewayURL != ""
 		facts.PlexInvites = plexService.Status().Configured
+		if serverSettings != nil {
+			facts.DiscoveryChosen = serverSettings.DiscoveryChosen()
+			facts.DiscoverySource = serverSettings.Get().DiscoverySource
+		}
 
 		items := buildSetupItems(facts)
 		configured := 0

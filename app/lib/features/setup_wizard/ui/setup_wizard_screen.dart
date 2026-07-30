@@ -45,6 +45,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'trakt':
       case 'ai':
         return '/settings/credentials';
+      case 'discovery_prefs':
+        return '/settings/discovery';
       case 'plex_invites':
         return '/settings/plex';
       default:
@@ -62,6 +64,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.search;
       case 'trakt':
         return Icons.trending_up;
+      case 'discovery_prefs':
+        return Icons.view_carousel_outlined;
       case 'download_client':
         return Icons.download_outlined;
       case 'media_downloads':
