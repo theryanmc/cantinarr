@@ -11,9 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// American Dad!-shaped payload: season 22 has 13 episodes, 11 of them aired
-/// and on disk, and Sonarr is still waiting on the last two. Sonarr's own
-/// episodeCount stops at 11, which is how the card came to claim "100% •
-/// 11/11 Episodes Available" for a season the episode list shows 13 rows for.
+/// and on disk, and Sonarr is still waiting on the last two. The fraction is
+/// Sonarr's own episodeCount — 11/11, the season is caught up on what was
+/// asked — but the two unaired episodes must be named in the suffix, or the
+/// card claims "100% • 11/11 Episodes Available" for a season the episode
+/// list shows 13 rows for.
 Map<String, dynamic> _seriesJson() => {
       'id': 7,
       'title': 'American Dad!',
@@ -135,20 +137,21 @@ void main() {
       (tester) async {
     await _pump(tester, _SeriesAdapter());
 
-    // Season 22: caught up on everything that has aired, but not complete —
-    // and never "100%", which is what made it look finished.
-    expect(_line('11/13 Episodes Available • 2 unaired'), findsOneWidget);
+    // Season 22: caught up on everything that was asked for, but the two
+    // unaired episodes are named — a bare "11/11" (or "100%") is what made
+    // the season look finished.
+    expect(_line('11/11 Episodes Available • 2 unaired'), findsOneWidget);
     expect(
-      _colorOf(tester, '11/13 Episodes Available • 2 unaired'),
+      _colorOf(tester, '11/11 Episodes Available • 2 unaired'),
       AppTheme.downloading,
     );
-    expect(find.textContaining('11/11'), findsNothing);
+    expect(_line('11/11 Episodes Available'), findsNothing);
     expect(find.textContaining('100%'), findsNothing);
 
     // Season 21 is genuinely done, and All Seasons rolls both up.
     expect(_line('8/8 Episodes Available'), findsOneWidget);
     expect(_colorOf(tester, '8/8 Episodes Available'), AppTheme.available);
-    expect(_line('19/21 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(_line('19/19 Episodes Available • 2 unaired'), findsOneWidget);
   });
 
   testWidgets('episodes sitting in the queue are not called missing',
@@ -166,10 +169,10 @@ void main() {
 
     // The two remaining episodes are unaired *and* already downloaded, so they
     // are named once — by the state the admin can act on.
-    expect(_line('11/13 Episodes Available • 2 waiting to import'),
+    expect(_line('11/11 Episodes Available • 2 waiting to import'),
         findsOneWidget);
     expect(find.textContaining('unaired'), findsNothing);
-    expect(_line('19/21 Episodes Available • 2 waiting to import'),
+    expect(_line('19/19 Episodes Available • 2 waiting to import'),
         findsOneWidget);
   });
 
@@ -177,7 +180,7 @@ void main() {
       (tester) async {
     await _pump(tester, _SeriesAdapter(queueFails: true));
 
-    expect(_line('11/13 Episodes Available • 2 unaired'), findsOneWidget);
+    expect(_line('11/11 Episodes Available • 2 unaired'), findsOneWidget);
     expect(find.textContaining('Failed to load'), findsNothing);
   });
 }
