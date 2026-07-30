@@ -237,6 +237,14 @@ class _AppShellState extends ConsumerState<AppShell>
     _dismissKeyboard();
   }
 
+  /// Explicit entry into AI mode from the search bar's "Ask AI" pill.
+  void _enterAiMode() {
+    ref.read(shellSearchProvider.notifier).enterAiMode();
+    // The pill sits in a TextFieldTapRegion so tapping it doesn't blur the
+    // field; re-assert focus anyway so typing can continue immediately.
+    _searchFocusNode.requestFocus();
+  }
+
   /// Submit top-bar input through the full-screen assistant route.
   void _submitSearchBarToAi() {
     final text = _searchController.text.trim();
@@ -416,7 +424,7 @@ class _AppShellState extends ConsumerState<AppShell>
           controller: _searchController,
           focusNode: _searchFocusNode,
           hintText: isAiReady
-              ? 'Edit your question or press send...'
+              ? 'Ask the AI anything...'
               : (hasAi
                   ? 'Search or ask AI...'
                   : 'Search by title or person...'),
@@ -612,9 +620,11 @@ class _AppShellState extends ConsumerState<AppShell>
                                             .withValues(alpha: 0.5),
                                       ),
                                       const SizedBox(height: 8),
-                                      const Text(
-                                        'Press send to ask AI',
-                                        style: TextStyle(
+                                      Text(
+                                        searchState.isSearching
+                                            ? 'Press send to ask AI'
+                                            : 'Type a question, then press send',
+                                        style: const TextStyle(
                                           color: AppTheme.textSecondary,
                                           fontSize: 14,
                                         ),
@@ -656,6 +666,60 @@ class _AppShellState extends ConsumerState<AppShell>
                               onLoadMore: searchNotifier.loadMoreSearch,
                               libraryStatus: libraryStatus,
                               onResultTap: _dismissKeyboard,
+                            ),
+                          ),
+                        ),
+                      // Floating "Ask AI" pill: the explicit door into AI
+                      // mode while the field is focused. Typing something
+                      // question-shaped remains the implicit path; the pill
+                      // is for prompts the heuristic would read as a title.
+                      if (showGlobalSearch && hasAi && !isAiReady)
+                        Positioned(
+                          top: 6,
+                          left: 0,
+                          right: 0,
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: desktop ? 880 : double.infinity,
+                              ),
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                    right: desktop ? 24 : 12,
+                                  ),
+                                  child: ListenableBuilder(
+                                    listenable: _searchFocusNode,
+                                    builder: (context, child) {
+                                      final visible =
+                                          _searchFocusNode.hasFocus;
+                                      final duration = reduceMotion
+                                          ? Duration.zero
+                                          : AppTheme.motionFast;
+                                      return IgnorePointer(
+                                        ignoring: !visible,
+                                        child: AnimatedSlide(
+                                          offset: visible
+                                              ? Offset.zero
+                                              : const Offset(0, -0.4),
+                                          duration: duration,
+                                          curve: Curves.easeOutCubic,
+                                          child: AnimatedOpacity(
+                                            opacity: visible ? 1 : 0,
+                                            duration: duration,
+                                            child: child,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: TextFieldTapRegion(
+                                      child:
+                                          _AskAiPill(onTap: _enterAiMode),
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -1443,6 +1507,73 @@ class _CountPill extends StatelessWidget {
           color: AppTheme.onAccent,
           fontSize: 12,
           fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// Floating capsule under the focused search bar offering the explicit
+/// switch into AI mode (typing something question-shaped is the implicit
+/// one).
+class _AskAiPill extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _AskAiPill({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      identifier: 'search-ask-ai',
+      button: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+          child: Ink(
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceRaised,
+              borderRadius: BorderRadius.circular(AppTheme.radiusPill),
+              border: Border.all(
+                color: AppTheme.signal.withValues(alpha: 0.45),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+                BoxShadow(
+                  color: AppTheme.signal.withValues(alpha: 0.18),
+                  blurRadius: 14,
+                ),
+              ],
+            ),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 14,
+                    color: AppTheme.signal,
+                  ),
+                  SizedBox(width: 6),
+                  Text(
+                    'Ask AI',
+                    style: TextStyle(
+                      color: AppTheme.signal,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

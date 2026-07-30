@@ -109,6 +109,11 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   Timer? _searchDebounce;
   int _searchGeneration = 0;
 
+  /// True from an explicit [enterAiMode] (the "Ask AI" pill) until the next
+  /// [exitAiMode]. Unlike the typed-question heuristic, it pins aiReady
+  /// through any edit — deletions and rewrites included.
+  bool _manualAiMode = false;
+
   ShellSearchNotifier(this._api, {this.aiAvailable = false})
       : super(const ShellSearchState());
 
@@ -123,17 +128,19 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         normalized.startsWith(previousNormalized);
     _searchDebounce?.cancel();
     final generation = ++_searchGeneration;
-    final mode =
-        continuingAiReadyInput || (aiAvailable && isAiPromptQuery(trimmed))
-            ? SearchMode.aiReady
-            : SearchMode.search;
+    final mode = _manualAiMode ||
+            continuingAiReadyInput ||
+            (aiAvailable && isAiPromptQuery(trimmed))
+        ? SearchMode.aiReady
+        : SearchMode.search;
 
     if (trimmed.isEmpty) {
       state = state.copyWith(
         searchQuery: '',
         searchResults: [],
         isLoadingSearch: false,
-        searchMode: SearchMode.search,
+        searchMode:
+            _manualAiMode ? SearchMode.aiReady : SearchMode.search,
       );
       _searchLoader.reset();
       return;
@@ -165,7 +172,8 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         page: _searchLoader.page,
       );
 
-      if (generation != _searchGeneration ||
+      if (!mounted ||
+          generation != _searchGeneration ||
           state.searchQuery != query ||
           state.searchMode != mode) {
         return;
@@ -185,7 +193,8 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       }
       _searchLoader.endLoading(page.totalPages);
     } catch (e) {
-      if (generation != _searchGeneration ||
+      if (!mounted ||
+          generation != _searchGeneration ||
           state.searchQuery != query ||
           state.searchMode != mode) {
         return;
@@ -198,8 +207,38 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
     }
   }
 
+  /// Explicitly enter AI mode (the search bar's "Ask AI" pill).
+  ///
+  /// Sticky, unlike the typed-question heuristic: the mode survives every
+  /// subsequent edit until send or clear calls [exitAiMode]. Already-typed
+  /// text is kept, and a fetch that was scheduled under normal search is
+  /// re-run so the results backing the aiReady overlay still arrive.
+  void enterAiMode() {
+    if (!aiAvailable || state.searchMode == SearchMode.aiReady) return;
+    _manualAiMode = true;
+    _searchDebounce?.cancel();
+    final generation = ++_searchGeneration;
+    final query = state.searchQuery;
+    final needsFetch = query.trim().isNotEmpty &&
+        (state.isLoadingSearch || state.searchResults.isEmpty);
+    state = state.copyWith(
+      searchMode: SearchMode.aiReady,
+      isLoadingSearch: needsFetch,
+    );
+    if (needsFetch) {
+      // The query is already settled (the user is switching modes, not
+      // typing), so skip the debounce.
+      _executeSearch(
+        query: query,
+        generation: generation,
+        mode: SearchMode.aiReady,
+      );
+    }
+  }
+
   /// Exit the AI-ready hand-off and return to normal search.
   void exitAiMode() {
+    _manualAiMode = false;
     _searchDebounce?.cancel();
     _searchGeneration++;
     state = state.copyWith(
@@ -229,7 +268,8 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         query: query,
         page: _searchLoader.page,
       );
-      if (generation != _searchGeneration ||
+      if (!mounted ||
+          generation != _searchGeneration ||
           state.searchQuery != query ||
           state.searchMode != mode) {
         return;
@@ -240,7 +280,8 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
       );
       _searchLoader.endLoading(page.totalPages);
     } catch (_) {
-      if (generation != _searchGeneration ||
+      if (!mounted ||
+          generation != _searchGeneration ||
           state.searchQuery != query ||
           state.searchMode != mode) {
         return;
