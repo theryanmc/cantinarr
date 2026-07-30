@@ -25,6 +25,11 @@ bool isAiPromptQuery(String query) {
   if (normalized.isEmpty) return false;
   if (normalized.endsWith('?')) return true;
 
+  // Deliberately absent because they collide with real titles: bare
+  // 'looking for ' (Looking for Alaska), 'in the mood' without the I'm
+  // (In the Mood for Love), bare 'what to ' (What to Expect When You're
+  // Expecting), 'what happens' (What Happens in Vegas), and bare
+  // 'best '/'top ' (Best in Show, Top Gun).
   const commandPrefixes = [
     'tell me ',
     'recommend ',
@@ -35,10 +40,46 @@ bool isAiPromptQuery(String query) {
     'give me ',
     'i want ',
     'i need ',
+    'i feel like ',
+    "i'm in the mood",
+    'im in the mood',
     'im looking for ',
     "i'm looking for ",
+    'need something ',
     'movies like ',
     'shows like ',
+    'films like ',
+    'series like ',
+    'books like ',
+    'authors like ',
+    'anime like ',
+    'documentaries like ',
+    'something like ',
+    'more like ',
+    'similar to ',
+    'anything with ',
+    'something with ',
+    'something to watch',
+    'what to watch',
+    'what to read',
+    'where to watch',
+    'where to stream',
+    'compare ',
+    'explain ',
+    'summarize ',
+    'summarise ',
+    'top 10 ',
+    'top ten ',
+    'any good ',
+    'any recommendations',
+    'any suggestions',
+    'name a ',
+    'name some ',
+    'pick a ',
+    'pick something ',
+    'list all ',
+    'list every ',
+    'surprise me',
   ];
 
   if (commandPrefixes.any(normalized.startsWith)) return true;
@@ -58,6 +99,7 @@ bool isAiPromptQuery(String query) {
       r'^how\s+(do|does|did|can|could|would|should|is|are|was|were|many|much|long|old|good)\b',
     ),
     RegExp(r'^which\s+'),
+    RegExp(r'^(is|are)\s+there\b'),
     RegExp(r'^(can|could|would|should|do|does|did)\s+(you|i|we)\b'),
     RegExp(
       r'^(is|are|was|were)\s+.+\b(available|streaming|worth|good|downloaded|missing|requested|on)\b',
