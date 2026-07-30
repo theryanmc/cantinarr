@@ -304,6 +304,76 @@ void main() {
     expect(find.text('What should I watch tonight?'), findsNothing);
   });
 
+  testWidgets('Ask AI pill shows on focus and enters sticky AI mode',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_authenticatedAiState),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Hidden (not tappable) until the search field takes focus.
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsOneWidget);
+
+    // The shimmer repeats while aiReady, so bounded pumps only from here.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    // AI mode engaged with an empty field, and the field kept focus.
+    expect(find.text('Type a question, then press send'), findsOneWidget);
+    final field = tester.widget<TextField>(find.byType(TextField).first);
+    expect(field.focusNode!.hasFocus, isTrue);
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // A title-like edit doesn't knock the explicit choice back to search.
+    await tester.enterText(find.byType(TextField).first, 'Severance');
+    await tester.pump();
+    expect(find.text('Press send to ask AI'), findsOneWidget);
+
+    // Clear exits AI mode (and cancels the debounced fetch).
+    await tester.tap(find.byIcon(Icons.close));
+    await tester.pump();
+    expect(find.text('Press send to ask AI'), findsNothing);
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('non-admin drawer hides instance app modules', (tester) async {
     final semantics = tester.ensureSemantics();
     tester.view.physicalSize = const Size(390, 844);
