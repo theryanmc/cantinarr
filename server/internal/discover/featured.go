@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -75,6 +76,22 @@ func (h *Handler) featured(w http.ResponseWriter, mediaType string) {
 	switch source {
 	case serversettings.DiscoverySourceTraktTrending:
 		results, err = h.traktFeatured(mediaType, englishOnly)
+		if err != nil {
+			// A third-party API that is simply down is not the admin's
+			// configuration problem, and the row it backs is the landing
+			// screen — so an outage falls back exactly like a missing
+			// credential does rather than erroring the row. The payload names
+			// TMDB as the source, which is how the row retitles itself and
+			// how anyone looking can tell the fallback happened without
+			// reading logs.
+			//
+			// Cached under the Trakt key on purpose: a sustained outage then
+			// costs one upstream attempt per TTL instead of one per request,
+			// and recovery is picked up on the next miss.
+			log.Printf("discover: trakt featured %s failed, serving TMDB weekly trending instead: %v", mediaType, err)
+			source = serversettings.DiscoverySourceTMDBTrending
+			results, err = h.tmdbFeatured(fmt.Sprintf("/trending/%s/week", mediaType), englishOnly)
+		}
 	case serversettings.DiscoverySourceTMDBPopular:
 		results, err = h.tmdbFeatured(fmt.Sprintf("/%s/popular", mediaType), englishOnly)
 	default:
