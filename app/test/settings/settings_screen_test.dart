@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -11,6 +10,7 @@ import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/settings_screen.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -143,6 +143,31 @@ void main() {
       isFalse,
     );
   });
+
+  testWidgets('About section links to GitHub but hides Donate in store builds',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('GitHub'));
+    expect(find.text('GitHub'), findsOneWidget);
+
+    // The About section is the end of the list; scroll out the remainder so
+    // a Donate tile below the fold could not hide from the finder.
+    for (var i = 0; i < 3; i++) {
+      await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Donate'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
+  testWidgets('Donate appears outside the iOS/Android store binaries',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('Donate'));
+    expect(find.text('Donate'), findsOneWidget);
+    expect(find.text('Support Cantinarr on GitHub Sponsors'), findsOneWidget);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   group('Setup Checklist tile', _setupChecklistTileTests);
 }
