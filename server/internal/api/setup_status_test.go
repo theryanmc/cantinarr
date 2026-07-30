@@ -112,24 +112,51 @@ func TestDiscoveryItemIsSatisfiedByAnyChoice(t *testing.T) {
 	}
 }
 
-// TestDiscoveryDescriptionCallsOutAnUnusedTrakt covers the nudge itself: a
-// Trakt key that no headline row uses is the state worth naming, and it is the
-// only state that should mention Trakt.
-func TestDiscoveryDescriptionCallsOutAnUnusedTrakt(t *testing.T) {
-	unused := discoveryDescription(setupFacts{
+// TestDiscoveryDescriptionAnnouncesAdoptedTrakt covers the nudge itself. The
+// server switches the rows to Trakt on its own the moment the credential
+// exists; this step is where an admin finds that out, so it must say so — and
+// only while the choice is still the server's, never as a comment on a decision
+// the admin already made.
+func TestDiscoveryDescriptionAnnouncesAdoptedTrakt(t *testing.T) {
+	adopted := discoveryDescription(setupFacts{
 		Trakt:           true,
-		DiscoverySource: serversettings.DiscoverySourceTMDBTrending,
+		DiscoverySource: serversettings.DiscoverySourceTraktTrending,
 	})
-	if !strings.Contains(unused, "Trakt is connected") {
-		t.Errorf("description = %q, want it to name the unused Trakt connection", unused)
+	if !strings.Contains(adopted, "Trakt is connected") {
+		t.Errorf("description = %q, want it to name the adopted Trakt feed", adopted)
 	}
 
 	for name, facts := range map[string]setupFacts{
-		"trakt in use": {Trakt: true, DiscoverySource: serversettings.DiscoverySourceTraktTrending},
-		"no trakt":     {DiscoverySource: serversettings.DiscoverySourceTMDBTrending},
+		"admin already decided": {
+			Trakt:           true,
+			DiscoveryChosen: true,
+			DiscoverySource: serversettings.DiscoverySourceTraktTrending,
+		},
+		"admin chose TMDB over a connected Trakt": {
+			Trakt:           true,
+			DiscoveryChosen: true,
+			DiscoverySource: serversettings.DiscoverySourceTMDBTrending,
+		},
+		"no trakt": {DiscoverySource: serversettings.DiscoverySourceTMDBTrending},
 	} {
 		if got := discoveryDescription(facts); strings.Contains(got, "Trakt is connected") {
 			t.Errorf("%s: description = %q, want no Trakt nudge", name, got)
+		}
+	}
+}
+
+// TestAdoptedTraktLeavesTheStepUnfinished pins the seam between the two halves
+// of this feature: the server picking Trakt for you is a convenience, not an
+// answer, so the checklist item stays open until an admin actually saves.
+func TestAdoptedTraktLeavesTheStepUnfinished(t *testing.T) {
+	items := buildSetupItems(setupFacts{
+		Trakt:           true,
+		DiscoveryChosen: false,
+		DiscoverySource: serversettings.DiscoverySourceTraktTrending,
+	})
+	for _, item := range items {
+		if item.Key == "discovery_prefs" && item.Configured {
+			t.Error("discovery_prefs configured by an auto-adopted Trakt source, want it still open")
 		}
 	}
 }
