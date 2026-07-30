@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/storage/preferences.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/attention_menu_visibility_switch.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_settings_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
@@ -142,15 +143,99 @@ void main() {
       isFalse,
     );
   });
+
+  group('Setup Checklist tile', _setupChecklistTileTests);
+}
+
+/// The colour of the count in "X of Y features configured". That digit is the
+/// only state the Setup Checklist tile carries, so its colour is the contract.
+Color? _setupCountColor(WidgetTester tester) {
+  final text = tester.widget<Text>(find.textContaining('features configured'));
+  final span = text.textSpan! as TextSpan;
+  return (span.children!.first as TextSpan).style?.color;
+}
+
+Map<String, dynamic> _setupPayload(List<(String, bool)> items) => {
+      'items': [
+        for (final (key, configured) in items)
+          {
+            'key': key,
+            'title': key,
+            'description': 'about $key',
+            'configured': configured,
+            'optional': key != 'radarr' && key != 'sonarr' && key != 'tmdb',
+          },
+      ],
+      'configured': items.where((i) => i.$2).length,
+      'total': items.length,
+    };
+
+void _setupChecklistTileTests() {
+  testWidgets('reds the count when the server has no library at all',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+      setupStatus: _setupPayload([
+        ('radarr', false),
+        ('sonarr', false),
+        ('tmdb', true),
+      ]),
+    );
+    await _dragSettingsUntilFound(
+        tester, find.textContaining('features configured'));
+
+    expect(find.textContaining('1 of 3 features configured'), findsOneWidget);
+    expect(_setupCountColor(tester), AppTheme.danger);
+  });
+
+  testWidgets('ambers the count for a working but unfinished server',
+      (tester) async {
+    // A movies-only server: Sonarr is an unconfigured essential and that is a
+    // legitimate deployment, so this must not read as broken.
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+      setupStatus: _setupPayload([
+        ('radarr', true),
+        ('sonarr', false),
+        ('tmdb', true),
+      ]),
+    );
+    await _dragSettingsUntilFound(
+        tester, find.textContaining('features configured'));
+
+    expect(_setupCountColor(tester), AppTheme.warning);
+  });
+
+  testWidgets('greens the count once nothing is left', (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+      setupStatus: _setupPayload([
+        ('radarr', true),
+        ('sonarr', true),
+        ('tmdb', true),
+      ]),
+    );
+    await _dragSettingsUntilFound(
+        tester, find.textContaining('features configured'));
+
+    expect(_setupCountColor(tester), AppTheme.available);
+  });
 }
 
 Future<ProviderContainer> _pumpSettings(
   WidgetTester tester,
   AiSettings settings, {
   bool isAdmin = false,
+  Map<String, dynamic>? setupStatus,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-  dio.httpClientAdapter = _SettingsAdapter();
+  dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
   final container = ProviderContainer(
     overrides: [
       authProvider.overrideWith(() => _FakeAuthNotifier(isAdmin: isAdmin)),
@@ -205,6 +290,12 @@ class _FakeAuthNotifier extends AuthNotifier {
 }
 
 class _SettingsAdapter implements HttpClientAdapter {
+  _SettingsAdapter({Map<String, dynamic>? setupStatus})
+      : setupStatus = setupStatus ??
+            const {'items': <dynamic>[], 'configured': 0, 'total': 0};
+
+  final Map<String, dynamic> setupStatus;
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -212,11 +303,7 @@ class _SettingsAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final body = switch (options.uri.path) {
-      '/api/admin/setup-status' => {
-          'items': const [],
-          'configured': 0,
-          'total': 0,
-        },
+      '/api/admin/setup-status' => setupStatus,
       '/api/admin/update-status' => {
           'update': const <String, dynamic>{},
           'management_url': '',

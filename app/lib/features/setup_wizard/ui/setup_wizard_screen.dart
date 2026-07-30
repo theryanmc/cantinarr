@@ -167,11 +167,17 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             ],
           ),
         ),
-        const _SectionHeader(title: 'Essentials'),
+        _SectionHeader(
+          title: 'Essentials',
+          remaining: essentials.where((i) => !i.configured).length,
+        ),
         ...essentials.map(_buildItem),
         if (optional.isNotEmpty) ...[
           const SizedBox(height: 8),
-          const _SectionHeader(title: 'Nice to have'),
+          _SectionHeader(
+            title: 'Nice to have',
+            remaining: optional.where((i) => !i.configured).length,
+          ),
           ...optional.map(_buildItem),
         ],
         const SizedBox(height: 8),
@@ -215,22 +221,45 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 }
 
-/// Small uppercase accent header, matching the settings screen sections.
+/// Small uppercase accent header, matching the settings screen sections, with
+/// the section's own outstanding count. The header is the only place the state
+/// is legible before scanning rows, and a finished section should read as
+/// finished rather than look identical to an empty one.
 class _SectionHeader extends StatelessWidget {
   final String title;
-  const _SectionHeader({required this.title});
+
+  /// How many items in this section are still unconfigured.
+  final int remaining;
+
+  const _SectionHeader({required this.title, required this.remaining});
 
   @override
   Widget build(BuildContext context) {
+    const base = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 1.2,
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Text(
-        title.toUpperCase(),
-        style: const TextStyle(
-          color: AppTheme.accent,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.2,
+      child: Text.rich(
+        TextSpan(
+          style: base.copyWith(color: AppTheme.accent),
+          children: [
+            TextSpan(text: title.toUpperCase()),
+            TextSpan(
+              // The dot sticks to the title and the count sticks to its word,
+              // so a header forced to wrap breaks in the middle rather than
+              // leaving a bare "1" hanging on the next line.
+              text: remaining > 0
+                  ? '\u00A0\u00B7 $remaining\u00A0LEFT'
+                  : '\u00A0\u00B7 DONE',
+              style: base.copyWith(
+                color:
+                    remaining > 0 ? AppTheme.textSecondary : AppTheme.available,
+              ),
+            ),
+          ],
         ),
       ),
     );
