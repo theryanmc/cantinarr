@@ -38,6 +38,53 @@ func tmdbListPage(prefix string, n int, languages ...string) string {
 		strings.Join(entries, ","))
 }
 
+// TestFeaturedFallsBackWhenTraktIsDown covers the outage case: the credential
+// is present and valid-looking, so nothing upstream of here can tell that
+// Trakt has stopped answering. The landing screen must not go with it.
+func TestFeaturedFallsBackWhenTraktIsDown(t *testing.T) {
+	e := newEnv(t, true)
+	e.prefs.set(serversettings.DiscoverySourceTraktTrending, false)
+	e.upstream.setRespond(func(req *http.Request) (int, string) {
+		if strings.HasPrefix(req.URL.Path, "/shows/") {
+			return http.StatusInternalServerError, `{"error":"trakt is having a day"}`
+		}
+		return http.StatusOK, tmdbListPage("show", 25, "en")
+	})
+
+	source, results := decodeFeatured(t, e.doOK(t, "/discover/tv/featured"))
+	// The envelope names the feed that actually answered, which is what makes
+	// the client retitle the row instead of lying about where this came from.
+	if source != serversettings.DiscoverySourceTMDBTrending {
+		t.Errorf("source = %q, want the fallback %q", source, serversettings.DiscoverySourceTMDBTrending)
+	}
+	if len(results) != featuredLimit {
+		t.Errorf("results = %d, want a full row of %d", len(results), featuredLimit)
+	}
+	if got := e.upstream.hit(t, 1).path; got != "/3/trending/tv/week" {
+		t.Errorf("second upstream path = %q, want TMDB weekly trending", got)
+	}
+}
+
+// TestFeaturedOutageFallbackIsCachedAgainstTheChosenSource keeps a Trakt
+// outage from turning every request into another failed upstream call.
+func TestFeaturedOutageFallbackIsCachedAgainstTheChosenSource(t *testing.T) {
+	e := newEnv(t, true)
+	e.prefs.set(serversettings.DiscoverySourceTraktTrending, false)
+	e.upstream.setRespond(func(req *http.Request) (int, string) {
+		if strings.HasPrefix(req.URL.Path, "/shows/") {
+			return http.StatusInternalServerError, `{"error":"trakt is having a day"}`
+		}
+		return http.StatusOK, tmdbListPage("show", 25, "en")
+	})
+
+	e.doOK(t, "/discover/tv/featured")
+	first := e.upstream.hitCount()
+	e.doOK(t, "/discover/tv/featured")
+	if got := e.upstream.hitCount(); got != first {
+		t.Errorf("upstream calls = %d after a second request, want the fallback served from cache at %d", got, first)
+	}
+}
+
 // TestFeaturedTVDefaultsToTMDBWeeklyTrending pins the fix for the headline row:
 // with no admin choice stored it reads TMDB's weekly trending feed, not the
 // lifetime popularity ranking that fills up with decade-old catalogue shows.
