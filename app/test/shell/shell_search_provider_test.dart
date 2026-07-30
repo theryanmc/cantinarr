@@ -71,23 +71,34 @@ void main() {
       expect(notifier.state.searchMode, SearchMode.search);
     });
 
-    test('enters with an empty query and sticks through any edit', () {
+    test('enters with an empty query and sticks through non-empty edits', () {
       final notifier = makeNotifier();
 
       notifier.enterAiMode();
       expect(notifier.state.searchMode, SearchMode.aiReady);
 
       // Title-like text would flip the heuristic back to normal search; the
-      // explicit choice must survive it — rewrites, deletions, and an
-      // emptied field included.
+      // explicit choice must survive it — rewrites and deletions included.
       notifier.updateSearch('Severance');
       expect(notifier.state.searchMode, SearchMode.aiReady);
 
       notifier.updateSearch('Sev');
       expect(notifier.state.searchMode, SearchMode.aiReady);
+    });
+
+    test('emptying the field turns AI mode fully off', () {
+      final notifier = makeNotifier();
+
+      notifier.enterAiMode();
+      notifier.updateSearch('Severance');
+      expect(notifier.state.searchMode, SearchMode.aiReady);
 
       notifier.updateSearch('');
-      expect(notifier.state.searchMode, SearchMode.aiReady);
+      expect(notifier.state.searchMode, SearchMode.search);
+
+      // The explicit choice is gone too: a title stays a title.
+      notifier.updateSearch('Severance');
+      expect(notifier.state.searchMode, SearchMode.search);
     });
 
     test('keeps already-typed text and its pending fetch alive', () {

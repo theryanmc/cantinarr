@@ -200,11 +200,25 @@ class CantinarrSearchBar extends StatelessWidget {
     }
 
     if (hasSend) {
-      return IconButton(
-        tooltip: 'Send',
-        icon: Icon(Icons.send_rounded,
-            color: AppTheme.textSecondary.withValues(alpha: 0.5)),
-        onPressed: null,
+      // AI mode with nothing typed: keep the row shape of the filled state,
+      // but the close affordance exits the mode — without it, an empty field
+      // has no visible way out.
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Exit AI mode',
+            icon: const Icon(Icons.close,
+                size: 20, color: AppTheme.textSecondary),
+            onPressed: () => onClear?.call(),
+          ),
+          IconButton(
+            tooltip: 'Send',
+            icon: Icon(Icons.send_rounded,
+                color: AppTheme.textSecondary.withValues(alpha: 0.5)),
+            onPressed: null,
+          ),
+        ],
       );
     }
 
