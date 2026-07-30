@@ -418,6 +418,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               mode: LaunchMode.externalApplication,
             ),
           ),
+          _SettingsTile(
+            icon: Icons.how_to_vote_outlined,
+            title: 'Request a feature',
+            subtitle: 'Vote on the roadmap — no account needed',
+            onTap: () => launchUrl(
+              Uri.parse(_roadmapUrl),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
           if (_donateVisible)
             _SettingsTile(
               icon: Icons.favorite_outline,
@@ -677,6 +686,7 @@ String _aiAccessSubtitle(AiSettings? settings) {
 }
 
 const _githubUrl = 'https://github.com/windoze95/cantinarr';
+const _roadmapUrl = 'https://cantinarr.com/roadmap/';
 const _donateUrl = 'https://github.com/sponsors/windoze95';
 
 /// Apple and Google both treat links to external payment for the developer as

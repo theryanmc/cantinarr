@@ -2,7 +2,7 @@
 
 **Your media server just learned to run itself.**
 
-**[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)**
+**[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
 Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
@@ -248,6 +248,8 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 ## Contributing
 
 Contributions are welcome! Please open an issue to discuss your idea before submitting a PR. `AGENTS.md` is the operating manual for contributors and AI agents -- branch protocol, verification commands, and the documentation standard live there.
+
+Not a developer? Request features and vote on what ships next at [cantinarr.com/roadmap](https://cantinarr.com/roadmap/) -- no account needed.
 
 ## Support
 
