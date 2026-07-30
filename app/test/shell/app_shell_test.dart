@@ -304,7 +304,8 @@ void main() {
     expect(find.text('What should I watch tonight?'), findsNothing);
   });
 
-  testWidgets('Ask AI pill shows on focus and enters sticky AI mode',
+  testWidgets(
+      'Ask AI pill surfaces on typed pause and never lingers on an empty field',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -366,6 +367,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 150));
     expect(find.text('Ask AI').hitTestable(), findsOneWidget);
 
+    // The clear X wipes the query in place (no onChanged fires): the pill
+    // must vanish with it, not linger over the emptied field.
+    await tester.tap(find.byIcon(Icons.close_rounded));
+    await tester.pump();
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // And an empty field never re-offers it, no matter how long the wait.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // Fresh typing re-arms the pause detector.
+    await tester.enterText(find.byType(TextField).first, 'Severance');
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsOneWidget);
+
     // The shimmer repeats while aiReady, so bounded pumps only from here.
     await tester.tap(find.text('Ask AI'));
     await tester.pump();
@@ -381,28 +399,14 @@ void main() {
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsOneWidget);
 
-    // Deleting to zero characters flicks AI mode back off entirely. The
-    // edit also reset the pause detector, so no pill yet...
+    // Deleting to zero characters flicks AI mode back off — and the
+    // emptied field stays pill-free until the user types again.
     await tester.enterText(find.byType(TextField).first, '');
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsNothing);
-    await tester.pump(const Duration(milliseconds: 150));
-    expect(find.text('Ask AI').hitTestable(), findsNothing);
-
-    // ...until the user pauses again after that edit.
     await tester.pump(const Duration(milliseconds: 1200));
     await tester.pump(const Duration(milliseconds: 150));
-    expect(find.text('Ask AI').hitTestable(), findsOneWidget);
-
-    // Entering empty shows the open-ended prompt, and the empty AI state
-    // has its own way out.
-    await tester.tap(find.text('Ask AI'));
-    await tester.pump();
-    expect(find.text('Type anything, then press send'), findsOneWidget);
-
-    await tester.tap(find.byTooltip('Exit AI mode'));
-    await tester.pump();
-    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
     await tester.pumpAndSettle();
   });
 
