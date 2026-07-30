@@ -80,6 +80,16 @@ class _AppShellState extends ConsumerState<AppShell>
   // Shimmer sweep rotation for aiReady state
   late final AnimationController _shimmerRotationAnim;
 
+  /// Idle gate for the Ask AI pill: true only once the user has typed and
+  /// then paused. Focus alone never sets it, so the pill reads as a
+  /// response to hesitation mid-entry, never a pop-up racing the keyboard.
+  bool _searchIdle = false;
+  Timer? _askAiIdleTimer;
+
+  /// Longer than a between-words typing pause, short enough to feel like a
+  /// response to hesitation.
+  static const _askAiPillIdleDelay = Duration(milliseconds: 1200);
+
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
@@ -133,6 +143,26 @@ class _AppShellState extends ConsumerState<AppShell>
   void _onSearchFocusChanged() {
     // About to search: make sure the chips aren't serving a stale snapshot.
     if (_searchFocusNode.hasFocus) _refreshLibraries();
+    // Losing focus ends any pending pause; a later refocus never resurfaces
+    // the pill on its own — only typing does.
+    if (!_searchFocusNode.hasFocus) _cancelAskAiIdle();
+  }
+
+  void _cancelAskAiIdle() {
+    _askAiIdleTimer?.cancel();
+    if (_searchIdle) setState(() => _searchIdle = false);
+  }
+
+  /// Re-arms the pause detector behind the Ask AI pill. Runs on every
+  /// keystroke — and only there: the pill appears [_askAiPillIdleDelay]
+  /// after the user stops typing, never from focus alone.
+  void _resetAskAiIdle() {
+    _cancelAskAiIdle();
+    if (!_searchFocusNode.hasFocus) return;
+    _askAiIdleTimer = Timer(_askAiPillIdleDelay, () {
+      if (!mounted) return;
+      setState(() => _searchIdle = true);
+    });
   }
 
   void _initLibraries() {
@@ -331,6 +361,7 @@ class _AppShellState extends ConsumerState<AppShell>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _libraryRefreshDebounce?.cancel();
+    _askAiIdleTimer?.cancel();
     _searchBarAnim.dispose();
     _shimmerRotationAnim.dispose();
     _disposeLibraries();
@@ -431,7 +462,10 @@ class _AppShellState extends ConsumerState<AppShell>
           aiEnabled: hasAi,
           onSubmitted: _submitSearchBar,
           onSend: isAiReady ? _submitSearchBarToAi : null,
-          onChanged: (q) => searchNotifier.updateSearch(q),
+          onChanged: (q) {
+            _resetAskAiIdle();
+            searchNotifier.updateSearch(q);
+          },
           onClear:
               isAiReady ? _exitAiMode : () => searchNotifier.updateSearch(''),
         ),
@@ -670,9 +704,13 @@ class _AppShellState extends ConsumerState<AppShell>
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
-                      // mode while the field is focused. Typing something
-                      // question-shaped remains the implicit path; the pill
-                      // is for prompts the heuristic would read as a title.
+                      // mode. It appears only after the user types and then
+                      // pauses — focus alone never surfaces it, and further
+                      // typing hides it — so it reads as a suggestion on
+                      // hesitation, not chrome racing the keyboard. Typing
+                      // something question-shaped remains the implicit path;
+                      // the pill is for prompts the heuristic would read as
+                      // a title.
                       if (showGlobalSearch && hasAi && !isAiReady)
                         Positioned(
                           top: 6,
@@ -693,7 +731,8 @@ class _AppShellState extends ConsumerState<AppShell>
                                     listenable: _searchFocusNode,
                                     builder: (context, child) {
                                       final visible =
-                                          _searchFocusNode.hasFocus;
+                                          _searchFocusNode.hasFocus &&
+                                              _searchIdle;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;

@@ -344,11 +344,25 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Hidden (not tappable) until the search field takes focus.
+    // Hidden while unfocused, on focus, and even after a long focused
+    // pause: only typing arms the pill.
     expect(find.text('Ask AI').hitTestable(), findsNothing);
 
     await tester.tap(find.byType(TextField).first);
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // Typing, then stopping, surfaces it — never while keys are coming.
+    await tester.enterText(find.byType(TextField).first, 'Severance');
+    await tester.pump();
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 1200));
     await tester.pump(const Duration(milliseconds: 150));
     expect(find.text('Ask AI').hitTestable(), findsOneWidget);
 
@@ -356,26 +370,32 @@ void main() {
     await tester.tap(find.text('Ask AI'));
     await tester.pump();
 
-    // AI mode engaged with an empty field, and the field kept focus.
-    expect(find.text('Type anything, then press send'), findsOneWidget);
+    // AI mode engaged keeping the typed text, and the field kept focus.
+    expect(find.text('Press send to ask AI'), findsOneWidget);
     final field = tester.widget<TextField>(find.byType(TextField).first);
     expect(field.focusNode!.hasFocus, isTrue);
     expect(find.text('Ask AI').hitTestable(), findsNothing);
 
     // A title-like edit doesn't knock the explicit choice back to search.
-    await tester.enterText(find.byType(TextField).first, 'Severance');
+    await tester.enterText(find.byType(TextField).first, 'Sev');
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsOneWidget);
 
-    // Deleting to zero characters flicks AI mode back off entirely, and the
-    // still-focused bar offers the pill again.
+    // Deleting to zero characters flicks AI mode back off entirely. The
+    // edit also reset the pause detector, so no pill yet...
     await tester.enterText(find.byType(TextField).first, '');
     await tester.pump();
     expect(find.text('Press send to ask AI'), findsNothing);
     await tester.pump(const Duration(milliseconds: 150));
+    expect(find.text('Ask AI').hitTestable(), findsNothing);
+
+    // ...until the user pauses again after that edit.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
     expect(find.text('Ask AI').hitTestable(), findsOneWidget);
 
-    // Re-enter with the pill; the empty AI state now has its own way out.
+    // Entering empty shows the open-ended prompt, and the empty AI state
+    // has its own way out.
     await tester.tap(find.text('Ask AI'));
     await tester.pump();
     expect(find.text('Type anything, then press send'), findsOneWidget);
