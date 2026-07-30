@@ -162,7 +162,7 @@ PUT    /api/admin/plex/settings            # server, shared libraries, auto-invi
 ```
 GET    /api/admin/setup-status             # live-derived checklist of configured/unconfigured features
 ```
-Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically. Completed-media downloads are an optional item and count as configured once deployment roots are present and at least one Radarr, Sonarr, or Chaptarr instance has an effective media path mapping.
+Re-derived from actual configuration on every request (never stored), so the app's setup wizard is resumable and can't go stale. New features surface themselves by adding an item here; clients render unknown keys generically. Completed-media downloads are an optional item and count as configured once deployment roots are present and at least one Radarr, Sonarr, or Chaptarr instance has an effective media path mapping. The optional `discovery_prefs` item follows `trakt` and points at [Discovery settings](#discovery-settings-admin); it grades whether an admin has saved a discovery choice rather than which one, and its description names a configured Trakt key that no headline row is using yet -- connecting Trakt adds its lists and calendar, but the headline row keeps its source until someone changes it.
 
 ### Update status (admin)
 ```
@@ -179,6 +179,8 @@ PUT    /api/admin/discovery-settings       # set the row source ({ source, engli
 Decides what backs the headline row on the Movies and TV tabs. `source` is one of `tmdb_trending` (TMDB's weekly trending feed, the default), `trakt_trending` (Trakt trending, ranked by who is watching right now), or `tmdb_popular` (TMDB's lifetime popularity ranking). TMDB's popularity value is a lifetime score, so `tmdb_popular` fills with long-running catalogue shows and nightly talk shows -- the trending feeds are short-window and self-correcting, which is why one of them is the default. `trakt_configured` reports whether the Trakt source can be selected at all; picking it without a Trakt client ID falls back to `tmdb_trending` rather than blanking the row.
 
 `english_only` drops titles whose original language is not English from the discovery and recommendation feeds. It never applies to search or to detail lookups -- a title you went looking for stays findable -- and a title the metadata source did not classify is kept rather than hidden.
+
+A `PUT` here is also what satisfies the `discovery_prefs` step of the [setup checklist](#setup-status-admin). Every source and either `english_only` value is a legitimate answer, so that step grades whether the admin has saved a choice at all -- not which choice. Until then the stored `discovery_source` is empty and reads fall back to the default, which is how "never decided" stays distinguishable from a deliberate `tmdb_trending`.
 
 ### AI configuration history (admin)
 ```

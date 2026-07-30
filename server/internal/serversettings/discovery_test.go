@@ -90,6 +90,42 @@ func TestSetDiscoveryAcceptsEmptyAsTheDefault(t *testing.T) {
 	}
 }
 
+// TestDiscoveryChosenTracksARealDecision covers what the setup checklist keys
+// on. Every discovery answer is valid, so the checklist item can only ask
+// whether the admin decided — which means "chosen" has to survive the fact that
+// the default and a deliberate pick of the default look identical through Get.
+func TestDiscoveryChosenTracksARealDecision(t *testing.T) {
+	s := newTestService(t)
+	if s.DiscoveryChosen() {
+		t.Error("DiscoveryChosen = true on a fresh server, want false")
+	}
+
+	// Saving the value the screen already loaded is still a decision, so an
+	// admin who is happy with the defaults can finish the step in one tap.
+	if _, err := s.SetDiscovery(DefaultDiscoverySource, false); err != nil {
+		t.Fatalf("SetDiscovery: %v", err)
+	}
+	if !s.DiscoveryChosen() {
+		t.Error("DiscoveryChosen = false after saving the default, want true")
+	}
+}
+
+// TestManagementURLWriteIsNotADiscoveryDecision is the regression guard for the
+// read-modify-write: a setter that round-trips the normalized blob would stamp
+// a discovery source nobody picked and silently tick the checklist item off.
+func TestManagementURLWriteIsNotADiscoveryDecision(t *testing.T) {
+	s := newTestService(t)
+	if _, err := s.SetManagementURL("http://tower.local/Docker"); err != nil {
+		t.Fatalf("SetManagementURL: %v", err)
+	}
+	if s.DiscoveryChosen() {
+		t.Error("DiscoveryChosen = true after a management-URL write, want false")
+	}
+	if got := s.Get().DiscoverySource; got != DefaultDiscoverySource {
+		t.Errorf("DiscoverySource = %q, want reads to still serve %q", got, DefaultDiscoverySource)
+	}
+}
+
 // TestGetNormalizesAnUnrecognizedStoredSource keeps a hand-edited or
 // downgraded database serving a working row rather than an empty one.
 func TestGetNormalizesAnUnrecognizedStoredSource(t *testing.T) {
