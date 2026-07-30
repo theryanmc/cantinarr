@@ -10,6 +10,25 @@ void main() {
       expect(isAiPromptQuery('recommend sci-fi movies'), true);
       expect(isAiPromptQuery('find me shows like Severance'), true);
       expect(isAiPromptQuery('is The Matrix worth watching'), true);
+      expect(isAiPromptQuery('films like Dune'), true);
+      expect(isAiPromptQuery('something like Severance'), true);
+      expect(isAiPromptQuery('similar to The Matrix'), true);
+      expect(isAiPromptQuery('anything with Tom Hanks'), true);
+      expect(isAiPromptQuery('books like The Martian'), true);
+      expect(isAiPromptQuery('what to watch tonight'), true);
+      expect(isAiPromptQuery('what to read after Project Hail Mary'), true);
+      expect(isAiPromptQuery('where to watch Dune'), true);
+      expect(isAiPromptQuery('compare the Dune adaptations'), true);
+      expect(isAiPromptQuery('explain the ending of Tenet'), true);
+      expect(isAiPromptQuery('top 10 heist movies'), true);
+      expect(isAiPromptQuery('any good thrillers from the 90s'), true);
+      expect(isAiPromptQuery("i'm in the mood for something scary"), true);
+      expect(isAiPromptQuery('i feel like watching a comedy'), true);
+      expect(isAiPromptQuery('name a movie where the dog lives'), true);
+      expect(isAiPromptQuery('pick something for movie night'), true);
+      expect(isAiPromptQuery('list all my unwatched movies'), true);
+      expect(isAiPromptQuery('is there a sequel to Tremors'), true);
+      expect(isAiPromptQuery('surprise me'), true);
     });
 
     test('keeps title-like searches in normal search', () {
@@ -18,6 +37,20 @@ void main() {
       expect(isAiPromptQuery('What We Do in the Shadows'), false);
       expect(isAiPromptQuery('How I Met Your Mother'), false);
       expect(isAiPromptQuery('Who Framed Roger Rabbit'), false);
+      // Each of these pins a phrasing the trigger list deliberately leaves
+      // out — a broader rule would eat the real title.
+      expect(isAiPromptQuery('In the Mood for Love'), false);
+      expect(isAiPromptQuery('Looking for Alaska'), false);
+      expect(isAiPromptQuery('What Happens in Vegas'), false);
+      expect(isAiPromptQuery("What to Expect When You're Expecting"), false);
+      expect(isAiPromptQuery('Best in Show'), false);
+      expect(isAiPromptQuery('Top Gun'), false);
+      expect(isAiPromptQuery('Need for Speed'), false);
+      expect(isAiPromptQuery("Something's Gotta Give"), false);
+      expect(isAiPromptQuery('Explained'), false);
+      expect(isAiPromptQuery('Do the Right Thing'), false);
+      expect(isAiPromptQuery('Where the Crawdads Sing'), false);
+      expect(isAiPromptQuery('Anything Else'), false);
     });
   });
 
