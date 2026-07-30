@@ -105,6 +105,7 @@ class LibraryCommandHeader extends StatelessWidget {
                       builder: (context, _) => TextField(
                         controller: searchController,
                         onChanged: onSearch,
+                        autocorrect: false,
                         textInputAction: TextInputAction.search,
                         decoration: InputDecoration(
                           hintText: searchHint,

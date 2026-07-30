@@ -170,6 +170,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
           padding: const EdgeInsets.all(12),
           child: TextField(
             controller: _controller,
+            autocorrect: false,
             textInputAction: TextInputAction.search,
             onChanged: (_) => _onChanged(),
             onSubmitted: (_) {
