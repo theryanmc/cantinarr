@@ -227,6 +227,12 @@ func main() {
 	credHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)
 	aiHandler.SetSharedAIHealthIssueSink(remediationService)
+	if pushNotifier != nil {
+		// Push cannot report its own failure through push, so a run of failed
+		// sends raises an admin issue instead — visible in the app whether or
+		// not a notification ever arrives.
+		pushNotifier.SetDeliveryHealthSink(remediationService)
+	}
 	credHandler.SetSharedAIValidator(aiHandler.ValidateSharedAISettings, aiHandler.SharedAISettingsValidated)
 	remediationHandler.SetSharedModelOverrideValidator(aiHandler.ValidateSharedAIModelOverride)
 	aiHandler.StartSharedAIHealthMonitor(ctx)

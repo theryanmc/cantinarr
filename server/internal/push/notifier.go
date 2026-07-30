@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,40 @@ type Notifier struct {
 	db     *sql.DB
 	prefs  *PrefsStore
 	logger *slog.Logger
+
+	healthMu         sync.Mutex
+	consecutiveFails int
+	healthSink       DeliveryHealthSink
+}
+
+// deliveryFailureThreshold is how many sends must fail back to back before the
+// gateway is called out. One failure is a blip — a timeout, a restarting
+// gateway — and the notification it lost is already gone whatever we do. Two
+// in a row is an outage, which is the thing worth an admin's attention.
+const deliveryFailureThreshold = 2
+
+// DeliveryHealthSink turns push-delivery transitions into one deduplicated
+// admin issue. The remediation service implements it.
+//
+// Push is the one dependency that cannot report its own failure through the
+// usual channel: an alert nobody receives is indistinguishable from an alert
+// nobody needed to send. An issue is the right surface precisely because it
+// works when push does not — it is visible in the app's Issues list without
+// any notification being delivered. The push it does raise is a bonus that
+// arrives once the gateway recovers, telling an admin that alerts were lost.
+type DeliveryHealthSink interface {
+	RecordPushDeliveryHealth(healthy bool, detail string) error
+}
+
+// SetDeliveryHealthSink wires the admin issue surface after both services
+// exist. Without it the Notifier still counts failures and logs them.
+func (n *Notifier) SetDeliveryHealthSink(sink DeliveryHealthSink) {
+	if n == nil {
+		return
+	}
+	n.healthMu.Lock()
+	defer n.healthMu.Unlock()
+	n.healthSink = sink
 }
 
 // NewNotifier builds a push notifier over the push Manager. A nil manager (or
@@ -507,10 +542,54 @@ func (n *Notifier) sendWithOptions(client *Client, userIDs []int64, title, body 
 		resp, err := client.SendWithOptions(ctx, userIDs, title, body, data, opts)
 		if err != nil {
 			n.logger.Error("push: send notification", "err", err, "title", title)
+			n.recordDeliveryFailure(err)
 			return
 		}
+		n.recordDeliverySuccess()
 		pruneDeadTokens(n.db, n.logger, resp)
 	}()
+}
+
+// recordDeliveryFailure counts a failed send and, once the run is long enough
+// to mean the gateway rather than the moment, opens or refreshes the admin
+// issue. It keeps reporting past the threshold so the issue's occurrence count
+// tracks how many notifications the outage actually swallowed.
+func (n *Notifier) recordDeliveryFailure(cause error) {
+	n.healthMu.Lock()
+	n.consecutiveFails++
+	failures := n.consecutiveFails
+	sink := n.healthSink
+	n.healthMu.Unlock()
+
+	if sink == nil || failures < deliveryFailureThreshold {
+		return
+	}
+	detail := fmt.Sprintf(
+		"%d push notifications in a row failed to reach the gateway. The most recent error was: %v",
+		failures, cause)
+	if err := sink.RecordPushDeliveryHealth(false, detail); err != nil {
+		n.logger.Error("push: record delivery health failure", "err", err)
+	}
+}
+
+// recordDeliverySuccess clears the run and resolves any open issue. The sink is
+// called on every success rather than only on a transition: the counter is
+// in-memory and the issue is durable, so a restart mid-outage would otherwise
+// strand an issue that nothing could ever close. The sink returns immediately
+// when no issue is open, which is one indexed lookup on a path that runs per
+// notification, not per poll.
+func (n *Notifier) recordDeliverySuccess() {
+	n.healthMu.Lock()
+	n.consecutiveFails = 0
+	sink := n.healthSink
+	n.healthMu.Unlock()
+
+	if sink == nil {
+		return
+	}
+	if err := sink.RecordPushDeliveryHealth(true, ""); err != nil {
+		n.logger.Error("push: record delivery health recovery", "err", err)
+	}
 }
 
 // pruneDeadTokens deletes the local push_tokens row for every result the
