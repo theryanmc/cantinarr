@@ -10,6 +10,7 @@ import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
@@ -248,14 +249,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (user?.isAdmin == true) ...[
             const SizedBox(height: 16),
             const _SectionHeader(title: 'Admin'),
-            _SettingsTile(
-              icon: Icons.checklist_outlined,
-              title: 'Setup Checklist',
-              subtitle: setupStatus == null
-                  ? 'See which features are configured'
-                  : '${setupStatus.configured} of ${setupStatus.total} features configured',
-              onTap: () => context.push('/setup'),
-            ),
+            _setupChecklistTile(context, setupStatus),
             _SettingsTile(
               icon: Icons.key_outlined,
               title: 'Providers & Credentials',
@@ -695,10 +689,51 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+/// The Setup Checklist tile. The count carries the state, because this tile is
+/// the only trace of the checklist once an admin mutes the drawer reminder:
+/// amber while anything is unconfigured, red when the server is missing
+/// something it cannot work without, green once everything is done. Colouring
+/// the number in place rather than hanging another badge off the row keeps a
+/// screen of near-identical tiles readable.
+Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
+  void open() => context.push('/setup');
+  if (status == null) {
+    return _SettingsTile(
+      icon: Icons.checklist_outlined,
+      title: 'Setup Checklist',
+      subtitle: 'See which features are configured',
+      onTap: open,
+    );
+  }
+  final tail = ' of ${status.total} features configured';
+  final countColor = status.missingCoreCapability
+      ? AppTheme.danger
+      : status.remaining > 0
+          ? AppTheme.warning
+          : AppTheme.available;
+  return _SettingsTile(
+    icon: Icons.checklist_outlined,
+    title: 'Setup Checklist',
+    subtitle: '${status.configured}$tail',
+    subtitleSpans: [
+      TextSpan(
+        text: '${status.configured}',
+        style: TextStyle(color: countColor, fontWeight: FontWeight.w700),
+      ),
+      TextSpan(text: tail),
+    ],
+    onTap: open,
+  );
+}
+
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
+
+  /// Rendered instead of [subtitle] when the copy needs more than one colour.
+  /// [subtitle] stays the plain-text equivalent of the same sentence.
+  final List<InlineSpan>? subtitleSpans;
   final VoidCallback? onTap;
   final Widget? trailing;
 
@@ -706,6 +741,7 @@ class _SettingsTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.subtitleSpans,
     this.onTap,
     this.trailing,
   });
@@ -739,13 +775,23 @@ class _SettingsTile extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          subtitle: Text(
-            subtitle,
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 13,
-            ),
-          ),
+          subtitle: subtitleSpans == null
+              ? Text(
+                  subtitle,
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 13,
+                  ),
+                )
+              : Text.rich(
+                  TextSpan(
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 13,
+                    ),
+                    children: subtitleSpans,
+                  ),
+                ),
           trailing: trailing ??
               (onTap != null
                   ? const Icon(

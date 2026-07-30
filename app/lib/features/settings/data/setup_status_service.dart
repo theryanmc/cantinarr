@@ -43,6 +43,24 @@ class SetupStatus {
 
   int get remaining => total - configured;
 
+  /// The checklist keys that give a request somewhere to go. Chaptarr is one of
+  /// them on purpose: a books-only server is a real deployment, and calling it
+  /// broken because it has no Radarr would be wrong.
+  static const _libraryKeys = {'radarr', 'sonarr', 'books'};
+
+  bool _isConfigured(String key) =>
+      items.any((i) => i.key == key && i.configured);
+
+  /// Whether the server is missing something it cannot work without: metadata,
+  /// or any library at all. Deliberately not "an essential row is empty" — a
+  /// movies-only server never connects Sonarr and is perfectly functional, so
+  /// this asks what the server can actually do rather than which rows are
+  /// ticked. An empty list (a failed load) is never called broken.
+  bool get missingCoreCapability =>
+      items.isNotEmpty &&
+      (!_isConfigured('tmdb') ||
+          !items.any((i) => _libraryKeys.contains(i.key) && i.configured));
+
   factory SetupStatus.fromJson(Map<String, dynamic> json) {
     final items = (json['items'] as List? ?? [])
         .map((e) => SetupItem.fromJson(e as Map<String, dynamic>))
