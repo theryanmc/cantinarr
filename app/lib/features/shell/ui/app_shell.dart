@@ -80,9 +80,9 @@ class _AppShellState extends ConsumerState<AppShell>
   // Shimmer sweep rotation for aiReady state
   late final AnimationController _shimmerRotationAnim;
 
-  /// Idle gate for the Ask AI pill: true only once the user has paused in
-  /// the focused field, so the pill reads as a suggestion, never a pop-up
-  /// racing the keyboard.
+  /// Idle gate for the Ask AI pill: true only once the user has typed and
+  /// then paused. Focus alone never sets it, so the pill reads as a
+  /// response to hesitation mid-entry, never a pop-up racing the keyboard.
   bool _searchIdle = false;
   Timer? _askAiIdleTimer;
 
@@ -143,15 +143,21 @@ class _AppShellState extends ConsumerState<AppShell>
   void _onSearchFocusChanged() {
     // About to search: make sure the chips aren't serving a stale snapshot.
     if (_searchFocusNode.hasFocus) _refreshLibraries();
-    _resetAskAiIdle();
+    // Losing focus ends any pending pause; a later refocus never resurfaces
+    // the pill on its own — only typing does.
+    if (!_searchFocusNode.hasFocus) _cancelAskAiIdle();
   }
 
-  /// (Re)arms the pause detector behind the Ask AI pill. Runs on focus
-  /// changes and every keystroke: the pill only appears [_askAiPillIdleDelay]
-  /// after the user last typed (or focused without typing).
-  void _resetAskAiIdle() {
+  void _cancelAskAiIdle() {
     _askAiIdleTimer?.cancel();
     if (_searchIdle) setState(() => _searchIdle = false);
+  }
+
+  /// Re-arms the pause detector behind the Ask AI pill. Runs on every
+  /// keystroke — and only there: the pill appears [_askAiPillIdleDelay]
+  /// after the user stops typing, never from focus alone.
+  void _resetAskAiIdle() {
+    _cancelAskAiIdle();
     if (!_searchFocusNode.hasFocus) return;
     _askAiIdleTimer = Timer(_askAiPillIdleDelay, () {
       if (!mounted) return;
@@ -698,12 +704,13 @@ class _AppShellState extends ConsumerState<AppShell>
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
-                      // mode. It waits for a pause — focus alone doesn't
-                      // show it, and typing hides it — so it reads as a
-                      // suggestion when the user hesitates, not chrome that
-                      // races the keyboard. Typing something question-shaped
-                      // remains the implicit path; the pill is for prompts
-                      // the heuristic would read as a title.
+                      // mode. It appears only after the user types and then
+                      // pauses — focus alone never surfaces it, and further
+                      // typing hides it — so it reads as a suggestion on
+                      // hesitation, not chrome racing the keyboard. Typing
+                      // something question-shaped remains the implicit path;
+                      // the pill is for prompts the heuristic would read as
+                      // a title.
                       if (showGlobalSearch && hasAi && !isAiReady)
                         Positioned(
                           top: 6,
