@@ -20,6 +20,7 @@ import '../../../core/widgets/shimmer_border.dart';
 import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
+import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
@@ -167,7 +168,8 @@ class _AppShellState extends ConsumerState<AppShell>
     _sonarrNotifier = null;
   }
 
-  /// Re-pulls the search-chip library snapshot (see [_buildLibraryStatus]),
+  /// Re-pulls the search-chip library snapshot (see
+  /// [buildSearchLibraryStatus]),
   /// which is otherwise loaded once per session and would drift whenever the
   /// libraries change without this app's involvement. Passive triggers are
   /// throttled by [_libraryRefreshThrottle]; [force] callers (websocket pings,
@@ -259,69 +261,6 @@ class _AppShellState extends ConsumerState<AppShell>
     }
 
     _dismissKeyboard();
-  }
-
-  /// Availability chips for search results, in the requester's vocabulary
-  /// (Available / Partially Available / Requested) so they agree with what the
-  /// detail page will say — never library-manager jargon (Complete / Missing /
-  /// Unmonitored). A title that's in the library but has nothing on disk and
-  /// isn't being fetched gets no chip: to a requester it's simply not
-  /// available yet, same as a title that isn't in the library at all.
-  Map<int, LibraryStatus> _buildLibraryStatus(List<MediaItem> searchResults) {
-    final map = <int, LibraryStatus>{};
-
-    const available = LibraryStatus(
-      label: 'Available',
-      color: AppTheme.available,
-    );
-    const partial = LibraryStatus(
-      label: 'Partially Available',
-      color: AppTheme.requested,
-    );
-    const requested = LibraryStatus(
-      label: 'Requested',
-      color: AppTheme.requested,
-    );
-
-    // Radarr: match by TMDB ID
-    final movies = _radarrNotifier?.state.movies ?? [];
-    for (final movie in movies) {
-      final tmdbId = movie.tmdbId;
-      if (tmdbId == null) continue;
-      if (movie.hasFile) {
-        map[tmdbId] = available;
-      } else if (movie.monitored) {
-        map[tmdbId] = requested;
-      }
-    }
-
-    // Sonarr: match by title (Sonarr model lacks TMDB IDs)
-    final seriesList = _sonarrNotifier?.state.series ?? [];
-    if (seriesList.isNotEmpty) {
-      final titleMap = {
-        for (final s in seriesList) s.title.toLowerCase(): s,
-      };
-      for (final item in searchResults) {
-        if (item.mediaType == MediaType.tv && !map.containsKey(item.id)) {
-          final match = titleMap[item.title.toLowerCase()];
-          if (match == null) continue;
-          // episodeTotals, not percentComplete: percentComplete only counts
-          // monitored episodes, so a series with one downloaded season and
-          // the rest unmonitored would read "Available" while most of it is
-          // missing.
-          final (:files, :total) = match.episodeTotals;
-          if (total > 0 && files >= total) {
-            map[item.id] = available;
-          } else if (files > 0) {
-            map[item.id] = partial;
-          } else if (match.monitored) {
-            map[item.id] = requested;
-          }
-        }
-      }
-    }
-
-    return map;
   }
 
   /// Module owning [path], or null for paths outside the module shells.
@@ -437,8 +376,12 @@ class _AppShellState extends ConsumerState<AppShell>
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
-        ? _buildLibraryStatus(searchState.searchResults)
-        : const <int, LibraryStatus>{};
+        ? buildSearchLibraryStatus(
+            searchResults: searchState.searchResults,
+            movies: _radarrNotifier?.state.movies ?? const [],
+            series: _sonarrNotifier?.state.series ?? const [],
+          )
+        : const <(MediaType, int), LibraryStatus>{};
 
     final mobile = AppBreakpoints.isMobile(context);
     final desktop = AppBreakpoints.isDesktop(context);

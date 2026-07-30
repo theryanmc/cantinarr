@@ -7,13 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../person/ui/person_detail_sheet.dart';
 import '../data/tmdb_models.dart';
-
-/// Library presence indicator for search results.
-class LibraryStatus {
-  final String label;
-  final Color color;
-  const LibraryStatus({required this.label, required this.color});
-}
+import '../logic/search_library_status.dart';
 
 /// List view of search results with poster thumbnails and metadata.
 class SearchResultsView extends StatelessWidget {
@@ -22,7 +16,10 @@ class SearchResultsView extends StatelessWidget {
   final String query;
   final void Function(MediaItem)? onLoadMore;
   final VoidCallback? onResultTap;
-  final Map<int, LibraryStatus> libraryStatus;
+
+  /// Availability chips keyed by (media type, TMDB id) — see
+  /// [buildSearchLibraryStatus] for why a bare id is not identity.
+  final Map<(MediaType, int), LibraryStatus> libraryStatus;
 
   const SearchResultsView({
     super.key,
@@ -82,7 +79,7 @@ class SearchResultsView extends StatelessWidget {
           final item = results[index];
           final tile = _SearchResultTile(
             item: item,
-            status: libraryStatus[item.id],
+            status: libraryStatus[(item.mediaType, item.id)],
             onTap: onResultTap,
           );
           final triggerIndex = results.length > 5 ? results.length - 5 : 0;

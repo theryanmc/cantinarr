@@ -611,7 +611,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         final match = matchSonarrSeries(
           series,
           tvdbId: _detailNotifier.state.tvDetail?.externalIds?.tvdbId,
+          tmdbId: widget.id,
           title: _detailNotifier.state.title,
+          year: tmdbPremiereYear(_detailNotifier.state.tvDetail?.firstAirDate),
         );
         var episodes = const <SonarrEpisode>[];
         if (downloadsEnabled && match != null && match.id > 0) {
