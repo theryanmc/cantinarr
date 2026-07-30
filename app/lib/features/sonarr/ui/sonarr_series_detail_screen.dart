@@ -334,8 +334,9 @@ class _SonarrSeriesDetailScreenState
 String seasonLabel(int seasonNumber) =>
     seasonNumber == 0 ? 'Specials' : 'Season $seasonNumber';
 
-/// "11/13 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
-/// why the denominator is the whole season rather than Sonarr's episodeCount.
+/// "11/11 Episodes Available • 2 unaired" — see [seasonAvailabilityLine] for
+/// why the fraction is Sonarr's monitored-and-aired episodeCount while the
+/// suffix still accounts for the whole season.
 class _AvailabilityLine extends StatelessWidget {
   final SonarrStatistics? stats;
   final bool moreToCome;

@@ -4,10 +4,12 @@ import 'package:cantinarr/features/sonarr/ui/widgets/season_availability.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The season card counts the whole season, not Sonarr's episodeCount: that one
-/// hides unaired and unmonitored episodes, so a season that is merely caught up
-/// used to claim "100% • 11/11 Episodes Available" one tap away from a list of
-/// 13 episodes.
+/// The season card's fraction is Sonarr's own files/episodeCount — monitored
+/// and aired plus anything downloaded — so unaired and unmonitored episodes
+/// are not graded against the season. They still may not vanish: the suffix
+/// accounts for the whole season, so a merely caught-up season reads
+/// "11/11 … • 2 unaired" rather than a bare "11/11" one tap away from a list
+/// of 13 episodes.
 SonarrStatistics _stats({
   int files = 0,
   int obtainable = 0,
@@ -70,7 +72,7 @@ void main() {
         moreToCome: true,
       );
 
-      expect(_read(line.text), '11/13 Episodes Available • 2 unaired');
+      expect(_read(line.text), '11/11 Episodes Available • 2 unaired');
       expect(line.text, isNot(contains('100%')));
       // Caught up, but not complete: green is reserved for a full season.
       expect(line.color, AppTheme.downloading);
@@ -92,7 +94,7 @@ void main() {
         moreToCome: true,
       );
 
-      expect(_read(line.text), '9/13 Episodes Available • 2 missing, 2 unaired');
+      expect(_read(line.text), '9/11 Episodes Available • 2 missing, 2 unaired');
       expect(line.color, AppTheme.error);
     });
 
@@ -105,19 +107,21 @@ void main() {
         moreToCome: false,
       );
 
-      expect(_read(line.text), '0/13 Episodes Available • 13 unmonitored');
+      expect(_read(line.text), '0/0 Episodes Available • 13 unmonitored');
       expect(line.color, AppTheme.requested);
     });
 
     test('a series whose unmonitored seasons dwarf the downloaded one', () {
       // Series-level statistics for the episode_totals_test scenario: one
-      // downloaded season, three unmonitored ones. percentOfEpisodes says 100%.
+      // downloaded season, three unmonitored ones. The fraction reads complete
+      // on purpose — the suffix carries the other 25, and the colour stays
+      // amber rather than green.
       final line = seasonAvailabilityLine(
         _stats(files: 9, obtainable: 9, total: 34),
         moreToCome: false,
       );
 
-      expect(_read(line.text), '9/34 Episodes Available • 25 unmonitored');
+      expect(_read(line.text), '9/9 Episodes Available • 25 unmonitored');
       expect(line.color, AppTheme.requested);
     });
 
@@ -125,6 +129,16 @@ void main() {
         () {
       final line = seasonAvailabilityLine(
         _stats(files: 8, obtainable: 8),
+        moreToCome: false,
+      );
+
+      expect(_read(line.text), '8/8 Episodes Available');
+      expect(line.color, AppTheme.available);
+    });
+
+    test('falls back to the file count when episodeCount is absent', () {
+      final line = seasonAvailabilityLine(
+        _stats(files: 8),
         moreToCome: false,
       );
 
@@ -204,7 +218,7 @@ void main() {
         queue: _queue(2, aired: false, state: 'importPending'),
       );
 
-      expect(_read(line.text), '11/13 Episodes Available • 2 waiting to import');
+      expect(_read(line.text), '11/11 Episodes Available • 2 waiting to import');
       expect(line.color, AppTheme.downloading);
     });
 
@@ -217,7 +231,7 @@ void main() {
 
       // 9 on disk + 1 missing + 2 downloading + 1 unaired = 13.
       expect(_read(line.text),
-          '9/13 Episodes Available • 1 missing, 2 downloading, 1 unaired');
+          '9/11 Episodes Available • 1 missing, 2 downloading, 1 unaired');
     });
 
     test('a queued upgrade for a season already on disk stays complete', () {

@@ -13,24 +13,27 @@ typedef SeasonAvailability = ({String text, Color color});
 /// beneath it reads like two separate facts.
 const String _nbsp = ' ';
 
-/// Builds "11/13 Episodes Available • 2 unaired" for one season — or, from the
+/// Builds "11/11 Episodes Available • 2 unaired" for one season — or, from the
 /// series-level statistics, for the whole series.
 ///
-/// The denominator is every episode Sonarr knows about, not its `episodeCount`:
-/// that one drops unaired and unmonitored episodes, so a 13-episode season with
-/// two still to come reads "100% • 11/11 Episodes Available" and looks finished
-/// next to an episode list that has 13 rows. Sonarr can get away with the same
-/// denominator because it renders the queue in the label too ("11 + 2 / 11") —
-/// so this line takes [queue], the season's slice of `queue/details`, and does
-/// the same accounting in words.
+/// The fraction is Sonarr's own: files on disk over `episodeCount`, the
+/// episodes that are monitored and have aired plus anything already
+/// downloaded. Unaired and unmonitored episodes stay out of both numbers — the
+/// season is graded on what the admin asked for, the same denominator as the
+/// library tile — but they are not allowed to vanish either: the suffix keeps
+/// accounting for the whole season, from [queue] (the season's slice of
+/// `queue/details`) and the statistics, so a caught-up season that is still
+/// airing reads "… • 2 unaired" instead of a bare "11/11" one tap away from an
+/// episode list with 13 rows, and a season nobody monitors reads
+/// "0/0 … • 13 unmonitored" rather than looking empty by accident.
 ///
-/// The suffix splits the remainder into buckets that add back up to the
-/// denominator, using the episode list's own vocabulary: episodes that aired
-/// and are wanted but absent are "missing", episodes still transferring are
-/// "downloading", ones that have finished and are waiting on — or stuck at —
-/// the import step are "waiting to import", and what is left is "unaired" while
-/// the season still has an air date pending ([moreToCome]) or "unmonitored"
-/// when it does not.
+/// The suffix splits everything the fraction leaves out into buckets that,
+/// together with the files on disk, add back up to the whole season, using the
+/// episode list's own vocabulary: episodes that aired and are wanted but
+/// absent are "missing", episodes still transferring are "downloading", ones
+/// that have finished and are waiting on — or stuck at — the import step are
+/// "waiting to import", and what is left is "unaired" while the season still
+/// has an air date pending ([moreToCome]) or "unmonitored" when it does not.
 ///
 /// Colour follows the library tile's grammar: green only once every episode is
 /// on disk, red for a gap nothing is working on, amber for a gap nobody
@@ -41,10 +44,11 @@ SeasonAvailability seasonAvailabilityLine(
   List<SonarrQueueItem> queue = const [],
 }) {
   final files = stats?.episodeFileCount ?? 0;
-  final obtainable = stats?.episodeCount ?? 0;
-  // Older payloads (and Sonarr's series-level stats before v3) can omit
-  // totalEpisodeCount; fall back to the obtainable count rather than dividing
-  // by a zero the season plainly is not.
+  // Sonarr's episodeCount already counts every episode with a file; clamping
+  // keeps a degenerate payload (a file count without an episodeCount) from
+  // reading "8/0". totalEpisodeCount can likewise be absent on older payloads —
+  // fall back rather than inventing a remainder the season does not have.
+  final obtainable = math.max(stats?.episodeCount ?? 0, files);
   final total = math.max(stats?.totalEpisodeCount ?? 0, obtainable);
   if (total == 0) {
     return (
@@ -102,7 +106,7 @@ SeasonAvailability seasonAvailabilityLine(
   ];
 
   return (
-    text: '${_phrase('$files/$total Episodes Available')}'
+    text: '${_phrase('$files/$obtainable Episodes Available')}'
         '${parts.isEmpty ? '' : ' •$_nbsp${parts.join(', ')}'}',
     color: files >= total
         ? AppTheme.available
