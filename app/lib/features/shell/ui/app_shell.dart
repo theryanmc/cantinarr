@@ -623,7 +623,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       Text(
                                         searchState.isSearching
                                             ? 'Press send to ask AI'
-                                            : 'Type a question, then press send',
+                                            : 'Type anything, then press send',
                                         style: const TextStyle(
                                           color: AppTheme.textSecondary,
                                           fontSize: 14,

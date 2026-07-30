@@ -109,9 +109,10 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   Timer? _searchDebounce;
   int _searchGeneration = 0;
 
-  /// True from an explicit [enterAiMode] (the "Ask AI" pill) until the next
-  /// [exitAiMode]. Unlike the typed-question heuristic, it pins aiReady
-  /// through any edit — deletions and rewrites included.
+  /// True from an explicit [enterAiMode] (the "Ask AI" pill) until
+  /// [exitAiMode] or the field emptying. Unlike the typed-question
+  /// heuristic, it pins aiReady through non-empty edits — deletions and
+  /// rewrites included; reaching zero characters turns AI mode off.
   bool _manualAiMode = false;
 
   ShellSearchNotifier(this._api, {this.aiAvailable = false})
@@ -135,12 +136,12 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
         : SearchMode.search;
 
     if (trimmed.isEmpty) {
+      _manualAiMode = false;
       state = state.copyWith(
         searchQuery: '',
         searchResults: [],
         isLoadingSearch: false,
-        searchMode:
-            _manualAiMode ? SearchMode.aiReady : SearchMode.search,
+        searchMode: SearchMode.search,
       );
       _searchLoader.reset();
       return;
@@ -210,9 +211,10 @@ class ShellSearchNotifier extends StateNotifier<ShellSearchState> {
   /// Explicitly enter AI mode (the search bar's "Ask AI" pill).
   ///
   /// Sticky, unlike the typed-question heuristic: the mode survives every
-  /// subsequent edit until send or clear calls [exitAiMode]. Already-typed
-  /// text is kept, and a fetch that was scheduled under normal search is
-  /// re-run so the results backing the aiReady overlay still arrive.
+  /// non-empty edit until send or clear calls [exitAiMode], or the field
+  /// empties. Already-typed text is kept, and a fetch that was scheduled
+  /// under normal search is re-run so the results backing the aiReady
+  /// overlay still arrive.
   void enterAiMode() {
     if (!aiAvailable || state.searchMode == SearchMode.aiReady) return;
     _manualAiMode = true;

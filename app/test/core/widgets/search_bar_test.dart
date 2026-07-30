@@ -55,4 +55,29 @@ void main() {
 
     expect(sendCount, 1);
   });
+
+  testWidgets('empty send-mode field still offers a way out', (tester) async {
+    final controller = TextEditingController();
+    final focusNode = FocusNode();
+    var cleared = 0;
+
+    addTearDown(controller.dispose);
+    addTearDown(focusNode.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CantinarrSearchBar(
+            controller: controller,
+            focusNode: focusNode,
+            onSend: () {},
+            onClear: () => cleared++,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Exit AI mode'));
+    expect(cleared, 1);
+  });
 }
