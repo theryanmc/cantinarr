@@ -249,6 +249,10 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 
 Contributions are welcome! Please open an issue to discuss your idea before submitting a PR. `AGENTS.md` is the operating manual for contributors and AI agents -- branch protocol, verification commands, and the documentation standard live there.
 
+## Support
+
+If Cantinarr is useful to you, you can support its development through [GitHub Sponsors](https://github.com/sponsors/windoze95).
+
 ## License
 
 AGPL-3.0 — See [LICENSE](LICENSE) for details.

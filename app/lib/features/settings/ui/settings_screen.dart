@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
@@ -407,6 +409,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               builder: (_) => const AboutSheet(),
             ),
           ),
+          _SettingsTile(
+            icon: Icons.code,
+            title: 'GitHub',
+            subtitle: 'Source code, issues, and releases',
+            onTap: () => launchUrl(
+              Uri.parse(_githubUrl),
+              mode: LaunchMode.externalApplication,
+            ),
+          ),
+          if (_donateVisible)
+            _SettingsTile(
+              icon: Icons.favorite_outline,
+              title: 'Donate',
+              subtitle: 'Support Cantinarr on GitHub Sponsors',
+              onTap: () => launchUrl(
+                Uri.parse(_donateUrl),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
 
           const SizedBox(height: 32),
         ],
@@ -654,6 +675,18 @@ String _aiAccessSubtitle(AiSettings? settings) {
   }
   return 'Add a personal provider';
 }
+
+const _githubUrl = 'https://github.com/windoze95/cantinarr';
+const _donateUrl = 'https://github.com/sponsors/windoze95';
+
+/// Apple and Google both treat links to external payment for the developer as
+/// grounds for store rejection, so the Donate tile ships only on the web
+/// bundle (the self-hosted surface) and desktop builds — never in the
+/// iOS/Android store binaries. The GitHub tile is fine everywhere.
+bool get _donateVisible =>
+    kIsWeb ||
+    (defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.android);
 
 class _SectionHeader extends StatelessWidget {
   final String title;
