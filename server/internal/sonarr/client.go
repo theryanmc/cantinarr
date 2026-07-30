@@ -220,7 +220,11 @@ func (c *Client) LookupByTVDB(tvdbID int) (*LookupResult, error) {
 	return &results[0], nil
 }
 
-func (c *Client) LookupByTitle(title string) (*LookupResult, error) {
+// LookupByTitle returns Sonarr's metadata search results for a text term, in
+// relevance order. Text search is fuzzy and same-titled series are distinct
+// records (a reboot vs the original), so callers must verify identity (year,
+// ids) against the result they pick — never act on the ordering alone.
+func (c *Client) LookupByTitle(title string) ([]LookupResult, error) {
 	resp, err := c.doRequest("GET", "/api/v3/series/lookup?term="+url.QueryEscape(title))
 	if err != nil {
 		return nil, fmt.Errorf("sonarr title lookup: %w", err)
@@ -234,7 +238,7 @@ func (c *Client) LookupByTitle(title string) (*LookupResult, error) {
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no results found for title %q", title)
 	}
-	return &results[0], nil
+	return results, nil
 }
 
 func (c *Client) GetSeries(id int) (*Series, error) {

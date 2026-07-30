@@ -20,9 +20,15 @@ type Client struct {
 }
 
 func NewClient(accessToken string) *Client {
+	return NewClientWithBaseURL(accessToken, "https://api.themoviedb.org/3")
+}
+
+// NewClientWithBaseURL is NewClient with the API root overridden — for tests
+// that point the client at a local fake server.
+func NewClientWithBaseURL(accessToken, baseURL string) *Client {
 	return &Client{
 		accessToken: accessToken,
-		baseURL:     "https://api.themoviedb.org/3",
+		baseURL:     baseURL,
 		httpClient: &http.Client{
 			Timeout:       10 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },

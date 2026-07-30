@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1799,11 +1800,27 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		if r.title == "" {
 			return "", "", fmt.Errorf("series lookup failed: could not resolve a TVDB ID for tmdb %d and no title was provided", r.tmdbID)
 		}
-		lookup, err = sonarrClient.LookupByTitle(r.title)
+		lookup, err = s.lookupSeriesByTitleIdentity(sonarrClient, r.tmdbID, r.title)
 		if err != nil {
-			return "", "", fmt.Errorf("series lookup failed: %w", err)
+			return "", "", err
 		}
-		tvdbID = lookup.TvdbID
+		if lookup.TvdbID != tvdbID {
+			// The text search resolved an id the bridge couldn't. That id may
+			// name a series the library already tracks (TMDB just has no TVDB
+			// mapping for it), so honor the existing-series flows instead of
+			// an add Sonarr would reject as a duplicate.
+			tvdbID = lookup.TvdbID
+			if existing, exErr := sonarrClient.GetSeriesByTVDB(tvdbID); exErr == nil && existing != nil {
+				r.tvdbID = tvdbID
+				if len(r.seasonNumbers) > 0 {
+					if err := s.monitorAndSearchSeasons(sonarrClient, existing, r.seasonNumbers); err != nil {
+						return "", "", err
+					}
+					return StatusRequested, existing.Title, nil
+				}
+				return s.requestExistingSeries(sonarrClient, existing, r)
+			}
+		}
 	}
 	// Persist the resolved TVDB id so an approved title-only request stores it.
 	r.tvdbID = tvdbID
@@ -1856,6 +1873,64 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("add series failed: %w", err)
 	}
 	return StatusRequested, lookup.Title, nil
+}
+
+// lookupSeriesByTitleIdentity resolves a series through Sonarr's text search
+// when no TVDB id could be bridged, verifying identity instead of trusting
+// relevance order: same-titled series are distinct records — the 2018
+// "Tremors" reboot pilot and the 2003 "Tremors" series share a title — and
+// blindly taking the first result would fulfil the request with the wrong
+// one. The premiere year of the TMDB record the requester actually chose is
+// the discriminator; ±1 absorbs TMDB and TVDB dating the same premiere
+// differently without reaching the years-apart gap that means a different
+// show. When TMDB can't supply a year at all (no client configured, fetch
+// failed), the first result is accepted as before — a TMDB-less deployment
+// keeps a working request path rather than a dead one.
+func (s *Service) lookupSeriesByTitleIdentity(client *sonarr.Client, tmdbID int, title string) (*sonarr.LookupResult, error) {
+	candidates, err := client.LookupByTitle(title)
+	if err != nil {
+		return nil, fmt.Errorf("series lookup failed: %w", err)
+	}
+	year := s.tmdbTVYear(tmdbID)
+	if year == 0 {
+		return &candidates[0], nil
+	}
+	for i := range candidates {
+		c := &candidates[i]
+		if c.Year == 0 {
+			continue
+		}
+		if diff := c.Year - year; diff >= -1 && diff <= 1 {
+			return c, nil
+		}
+	}
+	closest := &candidates[0]
+	return nil, fmt.Errorf(
+		"series lookup could not verify a match for %q: the requested series premiered in %d, but the closest result is %q (%d) — a same-titled but different series is never substituted",
+		title, year, closest.Title, closest.Year,
+	)
+}
+
+// tmdbTVYear returns the premiere year TMDB records for a series, or 0 when
+// no TMDB client is configured or the lookup fails. Callers treat 0 as "no
+// year truth available", never as a year.
+func (s *Service) tmdbTVYear(tmdbID int) int {
+	if s.bridge == nil {
+		return 0
+	}
+	client := s.bridge.TMDB()
+	if client == nil {
+		return 0
+	}
+	details, err := client.GetTVDetails(tmdbID)
+	if err != nil || details == nil || len(details.FirstAir) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(details.FirstAir[:4])
+	if err != nil {
+		return 0
+	}
+	return year
 }
 
 // monitorAndSearchSeasons additively monitors the chosen seasons on an existing
