@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/widgets/status_pill.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/setup_wizard/ui/setup_wizard_screen.dart';
 import 'package:dio/dio.dart';
@@ -52,6 +53,101 @@ void main() {
     final done = tester.widget<Text>(find.text('ESSENTIALS$_nb· DONE'));
     final suffix = (done.textSpan! as TextSpan).children!.last as TextSpan;
     expect(suffix.style?.color, AppTheme.available);
+  });
+
+  group('row emphasis', _rowEmphasisTests);
+}
+
+/// The pill on a row, by the row's title.
+StatusPill _pillOn(WidgetTester tester, String title) => tester.widget<StatusPill>(
+      find.descendant(
+        of: find.ancestor(
+            of: find.text(title), matching: find.byType(ListTile)),
+        matching: find.byType(StatusPill),
+      ),
+    );
+
+Finder _rowTitle(String title) => find.descendant(
+      of: find.ancestor(of: find.text(title), matching: find.byType(ListTile)),
+      matching: find.text(title),
+    );
+
+void _rowEmphasisTests() {
+  testWidgets('an outstanding row offers the action, a done row recedes',
+      (tester) async {
+    await _pumpWizard(tester, [
+      ('radarr', true, false),
+      ('sonarr', false, false),
+      ('tmdb', true, false),
+    ]);
+
+    // Only the unfinished row carries a chip, so the count of things left to
+    // do is readable down the edge of the list.
+    expect(find.widgetWithText(StatusPill, 'Set up'), findsOneWidget);
+    expect(_pillOn(tester, 'sonarr').text, 'Set up');
+
+    // The finished row keeps its checkmark and gives up the emphasis.
+    expect(
+      find.descendant(
+        of: find.ancestor(
+            of: find.text('radarr'), matching: find.byType(ListTile)),
+        matching: find.byIcon(Icons.check_circle),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.widget<Text>(_rowTitle('radarr')).style?.color,
+        AppTheme.textSecondary);
+    expect(tester.widget<Text>(_rowTitle('sonarr')).style?.color,
+        AppTheme.textPrimary);
+
+    // The chevron is gone entirely: it said "this goes somewhere", which every
+    // navigable row in the app says, and never said "you still owe this".
+    expect(find.byIcon(Icons.chevron_right), findsNothing);
+  });
+
+  testWidgets('only a row the server cannot work without raises its voice',
+      (tester) async {
+    await _pumpWizard(tester, [
+      ('radarr', true, false),
+      ('sonarr', false, false),
+      ('tmdb', true, false),
+      ('trakt', false, true),
+    ]);
+
+    // A movies-only server: Sonarr is unfinished but nothing is broken, so it
+    // reads the same as any other outstanding row.
+    expect(_pillOn(tester, 'sonarr').color, AppTheme.accent);
+    expect(_pillOn(tester, 'trakt').color, AppTheme.accent);
+  });
+
+  testWidgets('a server with no library at all shows the alarm', (tester) async {
+    await _pumpWizard(tester, [
+      ('radarr', false, false),
+      ('sonarr', false, false),
+      ('tmdb', false, false),
+      ('trakt', false, true),
+    ]);
+
+    for (final key in ['radarr', 'sonarr', 'tmdb']) {
+      expect(_pillOn(tester, key).color, AppTheme.danger,
+          reason: '$key is what stands between this server and working');
+    }
+    // Nice-to-haves never join in, however empty the server is.
+    expect(_pillOn(tester, 'trakt').color, AppTheme.accent);
+  });
+
+  testWidgets('a row with nowhere to go offers no action', (tester) async {
+    await _pumpWizard(tester, [
+      ('tmdb', true, false),
+      ('radarr', true, false),
+      ('push', false, true),
+    ]);
+
+    // push is a server env var: it is unfinished, and there is no screen to
+    // send the admin to, so promising a tap would be a lie.
+    expect(find.widgetWithText(StatusPill, 'Set up'), findsNothing);
+    expect(tester.widget<Text>(_rowTitle('push')).style?.color,
+        AppTheme.textPrimary);
   });
 }
 

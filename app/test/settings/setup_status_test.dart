@@ -69,4 +69,75 @@ void main() {
       expect(SetupStatus.fromJson(const {}).missingCoreCapability, isFalse);
     });
   });
+
+  group('isUrgent', () {
+    SetupItem itemNamed(SetupStatus status, String key) =>
+        status.items.firstWhere((i) => i.key == key);
+
+    test('an empty arr is not urgent once some library exists', () {
+      final status = _status([
+        _item('radarr', true, optional: false),
+        _item('sonarr', false, optional: false),
+        _item('tmdb', true, optional: false),
+      ]);
+
+      // The movies-only server again: the row is unfinished, but nothing is
+      // broken, and the Settings tile calls this server merely unfinished too.
+      expect(status.isUrgent(itemNamed(status, 'sonarr')), isFalse);
+      expect(status.missingCoreCapability, isFalse);
+    });
+
+    test('every empty arr is urgent while there is no library at all', () {
+      final status = _status([
+        _item('radarr', false, optional: false),
+        _item('sonarr', false, optional: false),
+        _item('tmdb', true, optional: false),
+      ]);
+
+      expect(status.isUrgent(itemNamed(status, 'radarr')), isTrue);
+      expect(status.isUrgent(itemNamed(status, 'sonarr')), isTrue);
+    });
+
+    test('metadata is urgent on its own', () {
+      final status = _status([
+        _item('radarr', true, optional: false),
+        _item('tmdb', false, optional: false),
+      ]);
+
+      expect(status.isUrgent(itemNamed(status, 'tmdb')), isTrue);
+    });
+
+    test('an optional row is never urgent, library or not', () {
+      final status = _status([
+        _item('radarr', false, optional: false),
+        _item('sonarr', false, optional: false),
+        _item('tmdb', false, optional: false),
+        _item('books', false),
+        _item('trakt', false),
+      ]);
+
+      // Chaptarr can satisfy the library capability, but a books module nobody
+      // asked for is not what is wrong with this server.
+      expect(status.isUrgent(itemNamed(status, 'books')), isFalse);
+      expect(status.isUrgent(itemNamed(status, 'trakt')), isFalse);
+    });
+
+    test('a configured row is never urgent', () {
+      final status = _status([
+        _item('tmdb', true, optional: false),
+        _item('radarr', true, optional: false),
+      ]);
+
+      expect(status.isUrgent(itemNamed(status, 'tmdb')), isFalse);
+      expect(status.isUrgent(itemNamed(status, 'radarr')), isFalse);
+    });
+
+    test('an essential this build has never heard of is urgent', () {
+      // A newer server can add essentials. Without a capability rule to check
+      // them against, an empty one is taken at its word.
+      final status = _status([_item('from_a_newer_build', false, optional: false)]);
+
+      expect(status.isUrgent(itemNamed(status, 'from_a_newer_build')), isTrue);
+    });
+  });
 }

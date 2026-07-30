@@ -51,15 +51,32 @@ class SetupStatus {
   bool _isConfigured(String key) =>
       items.any((i) => i.key == key && i.configured);
 
+  bool get _hasAnyLibrary =>
+      items.any((i) => _libraryKeys.contains(i.key) && i.configured);
+
   /// Whether the server is missing something it cannot work without: metadata,
   /// or any library at all. Deliberately not "an essential row is empty" — a
   /// movies-only server never connects Sonarr and is perfectly functional, so
   /// this asks what the server can actually do rather than which rows are
   /// ticked. An empty list (a failed load) is never called broken.
   bool get missingCoreCapability =>
-      items.isNotEmpty &&
-      (!_isConfigured('tmdb') ||
-          !items.any((i) => _libraryKeys.contains(i.key) && i.configured));
+      items.isNotEmpty && (!_isConfigured('tmdb') || !_hasAnyLibrary);
+
+  /// Whether this row is what stands between the server and working at all,
+  /// which is what earns a row the alarm treatment instead of the ordinary
+  /// "you haven't got to this yet" one.
+  ///
+  /// Radarr and Sonarr are each individually essential, so an empty one is
+  /// only urgent while there is no library at all — otherwise a movies-only
+  /// server would wear a permanent alarm on Sonarr while the Settings tile
+  /// called the same server merely unfinished, and the two surfaces would
+  /// contradict each other. Any other unconfigured essential is urgent on its
+  /// own; optional rows never are, however much we'd like them tried.
+  bool isUrgent(SetupItem item) {
+    if (item.optional || item.configured) return false;
+    if (_libraryKeys.contains(item.key)) return !_hasAnyLibrary;
+    return true;
+  }
 
   factory SetupStatus.fromJson(Map<String, dynamic> json) {
     final items = (json['items'] as List? ?? [])
