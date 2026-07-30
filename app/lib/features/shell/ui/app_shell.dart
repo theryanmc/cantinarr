@@ -83,6 +83,8 @@ class _AppShellState extends ConsumerState<AppShell>
   /// Idle gate for the Ask AI pill: true only once the user has typed and
   /// then paused. Focus alone never sets it, so the pill reads as a
   /// response to hesitation mid-entry, never a pop-up racing the keyboard.
+  /// Never trust this flag alone: the clear X empties the field without
+  /// firing onChanged, so pill visibility must also require non-empty text.
   bool _searchIdle = false;
   Timer? _askAiIdleTimer;
 
@@ -155,10 +157,12 @@ class _AppShellState extends ConsumerState<AppShell>
 
   /// Re-arms the pause detector behind the Ask AI pill. Runs on every
   /// keystroke — and only there: the pill appears [_askAiPillIdleDelay]
-  /// after the user stops typing, never from focus alone.
+  /// after the user stops typing, never from focus alone. An emptied field
+  /// never arms it: nothing typed means nothing to hand the AI.
   void _resetAskAiIdle() {
     _cancelAskAiIdle();
     if (!_searchFocusNode.hasFocus) return;
+    if (_searchController.text.trim().isEmpty) return;
     _askAiIdleTimer = Timer(_askAiPillIdleDelay, () {
       if (!mounted) return;
       setState(() => _searchIdle = true);
@@ -728,11 +732,21 @@ class _AppShellState extends ConsumerState<AppShell>
                                     right: desktop ? 24 : 12,
                                   ),
                                   child: ListenableBuilder(
-                                    listenable: _searchFocusNode,
+                                    // The controller matters too: the clear
+                                    // X empties the text without firing
+                                    // onChanged, and the pill must drop the
+                                    // same instant.
+                                    listenable: Listenable.merge([
+                                      _searchFocusNode,
+                                      _searchController,
+                                    ]),
                                     builder: (context, child) {
                                       final visible =
                                           _searchFocusNode.hasFocus &&
-                                              _searchIdle;
+                                              _searchIdle &&
+                                              _searchController.text
+                                                  .trim()
+                                                  .isNotEmpty;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;
