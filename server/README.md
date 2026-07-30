@@ -28,7 +28,7 @@ A single Go binary that bridges your arr stack, serves the web UI, and keeps API
 - **One-tap requests with an approval queue** -- Users browse and tap request; the server handles ID bridging, arr lookups, quality profiles, and root folders. Admins can require approval globally or per user, and per user allow season-level choice, quality choice, and per-service default quality profiles.
 - **Books via Chaptarr** -- A Readarr-API (v1) books module with per-format (ebook/audiobook) monitoring, requesting, and library awareness. Chaptarr access is granted per user by an admin.
 - **Completed-media downloads** -- Opt-in delivery of ebook, audiobook, movie, and episode files from read-only library mounts. Deployment roots form the outer filesystem allowlist; per-instance path mappings translate each arr namespace into that boundary. The server accepts only live arr file IDs and streams through short-lived file-scoped links with HEAD and Range support.
-- **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then title+year search. Results cached in SQLite for 30 days.
+- **Automatic ID bridging** -- Transparently translates TMDB IDs to TVDB IDs for Sonarr. Falls back to Trakt cross-references, then a premiere-year-verified title search (a same-titled series years apart is never substituted). Results cached in SQLite for 30 days.
 - **Availability computed live** -- Request status is derived from the arrs' real episode/file state (never from a stale snapshot or monitored-only stats), refreshed by queue polling and instant arr webhooks.
 - **Connect link auth, passwordless by default** -- Admins generate connect links; redeeming one starts a permanent device session (an opaque refresh token validated against the DB -- never expires, never rotates, independent of the JWT secret) that mints 15-minute access JWTs. Sessions end only by device revocation or user deletion. Passwords and passkeys (WebAuthn, incl. native iOS/Android/Windows) are admin-gated per user.
 - **AI assistant + remediation agent** -- Interactive chat resolves a personal Anthropic/OpenAI/Gemini key or OpenAI (OAuth) link first; that personal choice works without an included-access grant and need not match the server provider. An admin-funded provider is available only to users granted included access. A selected personal provider fails closed instead of silently consuming the shared account. The autonomous investigation agent is server-owned, always uses the admin shared API key or shared OpenAI OAuth connection without consulting user grants, may use a separately tested remediation model designation, and proposes fixes an admin approves.
@@ -416,7 +416,7 @@ User taps "Request" on Breaking Bad (TMDB 1396)
 3. GET api.trakt.tv/search/tmdb/1396?type=show -> extract TVDB from Trakt IDs
   |  or (last resort)
   v
-4. Sonarr title+year search as fallback
+4. Sonarr title search as fallback (premiere year must match TMDB's, ±1)
   |
   v
 GET sonarr/api/v3/series/lookup?term=tvdb:81189  (exact match)

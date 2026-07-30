@@ -219,7 +219,7 @@ Request: "Add The Last of Us" (TMDB ID 100088)
 5. Add to Sonarr with the user's effective quality profile + root folder
 ```
 
-If TMDB doesn't have a TVDB mapping (rare), the bridge falls back to Trakt's cross-reference database, then to a title+year search as a last resort.
+If TMDB doesn't have a TVDB mapping (rare), the bridge falls back to Trakt's cross-reference database, then to a Sonarr title search as a last resort -- accepted only when the candidate's premiere year matches TMDB's (±1), because same-titled series (a reboot vs the original) are distinct records and a request fails rather than fulfilling the wrong one.
 
 Movies don't need bridging -- Radarr natively supports TMDB IDs. Books are keyed by Chaptarr/Readarr `foreignBookId` directly.
 

@@ -5,7 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/windoze95/cantinarr-server/internal/tmdb"
+	"github.com/windoze95/cantinarr-server/internal/trakt"
 )
 
 // fakeSonarrTV simulates the Sonarr endpoints the TV request/status flows
@@ -462,4 +466,171 @@ func TestGetTVStatusUnresolvable(t *testing.T) {
 			t.Errorf("status = %+v err=%v, want unavailable", st, err)
 		}
 	})
+}
+
+// bridgeClients satisfies tmdb.ServiceClients for tests: a real TMDB client
+// pointed at a fake server, and no Trakt (the bridge skips its fallback).
+type bridgeClients struct{ client *tmdb.Client }
+
+func (b bridgeClients) TMDB() *tmdb.Client   { return b.client }
+func (b bridgeClients) Trakt() *trakt.Client { return nil }
+
+// installTitleFallbackBridge wires a real tmdb.Bridge over a fake TMDB whose
+// external_ids carry no TVDB mapping — the bridge must fail to resolve, which
+// is exactly the shape of a TMDB-only record like an unaired reboot pilot —
+// while the TV details endpoint still answers with the premiere date the
+// identity gate verifies against.
+func installTitleFallbackBridge(t *testing.T, s *Service, firstAirDate string) {
+	t.Helper()
+	tmdbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/external_ids"):
+			_, _ = w.Write([]byte(`{"tvdb_id": null, "imdb_id": null}`))
+		case strings.HasPrefix(r.URL.Path, "/tv/"):
+			_, _ = w.Write([]byte(`{"id": 1, "name": "Lookup Show", "first_air_date": "` + firstAirDate + `"}`))
+		default:
+			t.Errorf("unexpected tmdb request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(tmdbSrv.Close)
+	s.bridge = tmdb.NewBridge(bridgeClients{tmdb.NewClientWithBaseURL("test-key", tmdbSrv.URL)}, s.db)
+}
+
+// TestCreateTVRequestTitleFallbackRejectsWrongYear pins the identity gate on
+// the title fallback: TMDB knows no TVDB id for the 2018 "Tremors" reboot
+// pilot, Sonarr's text search answers with the 2003 series of the same name,
+// and the years-apart mismatch must fail the request instead of monitoring
+// the wrong show. Nothing may be added and nothing logged.
+func TestCreateTVRequestTitleFallbackRejectsWrongYear(t *testing.T) {
+	f := &fakeSonarrTV{
+		lookupJSON: `[{"title":"Tremors","tvdbId":71262,"year":2003,"seasons":[{"seasonNumber":1}]}]`,
+	}
+	srv := newFakeSonarrServer(t, f)
+	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTitleFallbackBridge(t, s, "2018-03-19")
+
+	_, err := s.CreateMediaRequest(uid, &CreateRequest{
+		TmdbID:    75977,
+		MediaType: "tv",
+		Title:     "Tremors",
+	})
+	if err == nil {
+		t.Fatal("CreateMediaRequest succeeded, want identity mismatch error")
+	}
+	if !strings.Contains(err.Error(), "2018") || !strings.Contains(err.Error(), "2003") {
+		t.Errorf("error = %v, want both premiere years named", err)
+	}
+	if f.addBody != nil {
+		t.Errorf("AddSeries was called with %v, want no add", f.addBody)
+	}
+	var n int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE tmdb_id = 75977").Scan(&n); err != nil {
+		t.Fatalf("count request_log: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("request_log rows = %d, want 0", n)
+	}
+}
+
+// TestCreateTVRequestTitleFallbackVerifiedByYear covers the legitimate
+// fallback: TMDB has no TVDB mapping yet, the text search finds the series,
+// and a premiere year within ±1 (TVDB and TMDB routinely date the same
+// premiere differently) accepts it. The add and the log row must carry the
+// looked-up TVDB id.
+func TestCreateTVRequestTitleFallbackVerifiedByYear(t *testing.T) {
+	for name, firstAir := range map[string]string{
+		"exact year":  "2022-09-21",
+		"dating skew": "2021-12-31",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeSonarrTV{
+				lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`,
+			}
+			srv := newFakeSonarrServer(t, f)
+			s, uid := newHistoryTestService(t, "", srv.URL, "")
+			installTitleFallbackBridge(t, s, firstAir)
+
+			resp, err := s.CreateMediaRequest(uid, &CreateRequest{
+				TmdbID:    83867,
+				MediaType: "tv",
+				Title:     "Andor",
+			})
+			if err != nil {
+				t.Fatalf("CreateMediaRequest: %v", err)
+			}
+			if resp.Status != StatusRequested || resp.Title != "Andor" {
+				t.Fatalf("response = %+v, want requested/Andor", resp)
+			}
+			if f.addBody == nil || f.addBody["tvdbId"] != float64(121361) {
+				t.Fatalf("add body = %v, want tvdbId 121361", f.addBody)
+			}
+			var tvdb int
+			if err := s.db.QueryRow("SELECT tvdb_id FROM request_log WHERE tmdb_id = 83867").Scan(&tvdb); err != nil {
+				t.Fatalf("read request_log: %v", err)
+			}
+			if tvdb != 121361 {
+				t.Errorf("logged tvdb_id = %d, want 121361", tvdb)
+			}
+		})
+	}
+}
+
+// TestCreateTVRequestTitleFallbackFindsExistingSeries: the verified lookup id
+// may name a series the library already tracks even though the bridge had no
+// mapping (it was added directly in Sonarr). The request must flow through
+// the existing-series path — here a fully-downloaded series reads available —
+// never an add Sonarr would reject as a duplicate.
+func TestCreateTVRequestTitleFallbackFindsExistingSeries(t *testing.T) {
+	f := &fakeSonarrTV{
+		libraryJSON: `[{"id":42,"title":"Andor","tvdbId":121361,"year":2022,"monitored":true,"seasons":[
+			{"seasonNumber":1,"monitored":true,"statistics":{"episodeFileCount":12,"episodeCount":12,"totalEpisodeCount":12}}]}]`,
+		lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`,
+	}
+	srv := newFakeSonarrServer(t, f)
+	s, uid := newHistoryTestService(t, "", srv.URL, "")
+	installTitleFallbackBridge(t, s, "2022-09-21")
+
+	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
+		TmdbID:    83867,
+		MediaType: "tv",
+		Title:     "Andor",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusAvailable || resp.Title != "Andor" {
+		t.Fatalf("response = %+v, want available/Andor (existing series)", resp)
+	}
+	if f.addBody != nil {
+		t.Errorf("AddSeries was called with %v, want the existing series honored", f.addBody)
+	}
+}
+
+// TestCreateTVRequestTitleFallbackWithoutYearTruth pins the availability
+// choice: with no bridge there is no TMDB year to verify against, and the
+// first lookup result is accepted exactly as before, so TMDB-less
+// deployments keep a working title request path.
+func TestCreateTVRequestTitleFallbackWithoutYearTruth(t *testing.T) {
+	f := &fakeSonarrTV{
+		lookupJSON: `[{"title":"Andor","tvdbId":121361,"year":2022,"seasons":[{"seasonNumber":1}]}]`,
+	}
+	srv := newFakeSonarrServer(t, f)
+	s, uid := newHistoryTestService(t, "", srv.URL, "") // bridge stays nil
+
+	resp, err := s.CreateMediaRequest(uid, &CreateRequest{
+		TmdbID:    83867,
+		MediaType: "tv",
+		Title:     "andor",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested", resp.Status)
+	}
+	if f.addBody == nil || f.addBody["tvdbId"] != float64(121361) {
+		t.Fatalf("add body = %v, want tvdbId 121361", f.addBody)
+	}
 }
