@@ -49,7 +49,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Discovery & search
 - **TMDB + Trakt rows** -- trending, popular movies/TV, top rated, upcoming; all proxied through the backend so keys stay server-side (poster/backdrop images load straight from the TMDB CDN).
-- **Module-global search bar** -- debounced multi-search from every primary library/discovery surface. Secondary work screens hide it to avoid stacking global search above local filters. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library and kept fresh via WebSocket pings.
+- **Module-global search bar** -- debounced multi-search from every primary library/discovery surface. Secondary work screens hide it to avoid stacking global search above local filters. Results carry **requester-vocabulary availability chips** (Available / Partially Available / Requested -- never arr jargon), matched against the user's default library by TMDB id (title + premiere year as the fallback, so same-titled shows never borrow each other's state) and kept fresh via WebSocket pings.
 - **Search-to-AI hand-off** -- a query that looks like a question (or returns nothing) lights up an AI affordance; sending it opens the dedicated assistant with the prompt already in flight.
 
 ### Discover

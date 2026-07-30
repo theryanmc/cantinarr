@@ -34,14 +34,24 @@ RadarrMovie? matchRadarrMovie(List<RadarrMovie> movies, int tmdbId) {
 /// when it isn't in the Sonarr library yet.
 ///
 /// Matches on the TVDB id (Sonarr's natural key) when the discovery side
-/// supplies one; when it doesn't, falls back to a case-insensitive title match.
-/// A known [tvdbId] with no hit is treated as "not in the library" rather than
-/// falling through to a title match, which avoids linking two distinct shows
-/// that happen to share a title.
+/// supplies one. A known [tvdbId] with no hit is treated as "not in the
+/// library" rather than falling through to weaker keys, which avoids linking
+/// two distinct shows that happen to share a title.
+///
+/// Without a TVDB id (TMDB has no mapping — unaired pilots, brand-new shows),
+/// the [tmdbId] Sonarr v4 stamps on each series is the next-strongest key.
+/// Last comes a case-insensitive title match gated on premiere [year] (±1 for
+/// TMDB-vs-TVDB dating skew): a bare title is never identity, because
+/// same-named shows are distinct records — the 2018 "Tremors" reboot pilot
+/// must not deep link into the 2003 "Tremors" series just because the
+/// library owns the latter. No year on either side means no match rather
+/// than a guess.
 SonarrSeries? matchSonarrSeries(
   List<SonarrSeries> series, {
   int? tvdbId,
+  int? tmdbId,
   String? title,
+  int? year,
 }) {
   if (tvdbId != null) {
     for (final s in series) {
@@ -49,10 +59,20 @@ SonarrSeries? matchSonarrSeries(
     }
     return null;
   }
-  if (title != null && title.isNotEmpty) {
+  if (tmdbId != null) {
+    for (final s in series) {
+      if (s.tmdbId == tmdbId) return s;
+    }
+  }
+  if (title != null && title.isNotEmpty && year != null) {
     final lower = title.toLowerCase();
     for (final s in series) {
-      if (s.title.toLowerCase() == lower) return s;
+      final seriesYear = s.year ?? 0;
+      if (seriesYear > 0 &&
+          (seriesYear - year).abs() <= 1 &&
+          s.title.toLowerCase() == lower) {
+        return s;
+      }
     }
   }
   return null;
