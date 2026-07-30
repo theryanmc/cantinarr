@@ -247,9 +247,12 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 
 ## Contributing
 
-Contributions are welcome! Please open an issue to discuss your idea before submitting a PR. `AGENTS.md` is the operating manual for contributors and AI agents -- branch protocol, verification commands, and the documentation standard live there.
+Cantinarr development happens directly by the maintainer, so external pull requests are closed automatically. The two ways to shape the project:
 
-Not a developer? Request features and vote on what ships next at [cantinarr.com/roadmap](https://cantinarr.com/roadmap/) -- no account needed.
+- **Bugs and technical issues** -- open one on the [issue tracker](https://github.com/windoze95/cantinarr/issues).
+- **Feature requests** -- post and vote at [cantinarr.com/roadmap](https://cantinarr.com/roadmap/), no account needed.
+
+`AGENTS.md` is the operating manual for the maintainer's own workflow (branch protocol, verification commands, documentation standard).
 
 ## Support
 
