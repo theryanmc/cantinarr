@@ -75,6 +75,30 @@ platform :ios do
     # processing to finish before verification closes the race.
     ENV["DELIVER_SKIP_WAIT_FOR_SCREENSHOT_PROCESSING"] = "false"
 
+    # Waiting is not enough: ASC also surfaces source_file_checksum lazily, so
+    # deliver's checksum sweep still declares the largest files (the discover
+    # shots, on every sync run) "missing" and re-uploads them into duplicates.
+    # The sweep is belt-and-braces on top of the delete-all + full upload this
+    # lane already does, and genuinely failed uploads still retry via the
+    # FAILED-state check, so neutralize only the checksum-driven re-upload.
+    has_verify = Deliver::UploadScreenshots.method_defined?(:verify_local_screenshots_are_uploaded) ||
+                 Deliver::UploadScreenshots.private_method_defined?(:verify_local_screenshots_are_uploaded)
+    already_patched = Deliver::UploadScreenshots.method_defined?(:cantinarr_orig_verify_screenshots) ||
+                      Deliver::UploadScreenshots.private_method_defined?(:cantinarr_orig_verify_screenshots)
+    if has_verify && !already_patched
+      Deliver::UploadScreenshots.class_eval do
+        alias_method :cantinarr_orig_verify_screenshots, :verify_local_screenshots_are_uploaded
+        def verify_local_screenshots_are_uploaded(iterator, screenshots_per_language)
+          unless cantinarr_orig_verify_screenshots(iterator, screenshots_per_language)
+            FastlaneCore::UI.important("ASC has not surfaced every screenshot checksum yet; skipping deliver's re-upload sweep (it duplicates screenshots).")
+          end
+          true
+        end
+      end
+    elsif !has_verify
+      UI.important("deliver no longer defines verify_local_screenshots_are_uploaded; checksum-sweep patch inactive - watch for duplicate screenshots.")
+    end
+
     # The ASC API intermittently returns empty bodies that spaceship surfaces
     # as "No data". Everything deliver does here is an idempotent PATCH/upload,
     # so retrying the whole call is safe.
