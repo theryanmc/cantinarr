@@ -25,6 +25,8 @@ dependencies:
 
   # Image loading
   cached_network_image: ^3.4.1
+  # Direct dep for ImageRenderMethodForWeb (not re-exported by the main lib).
+  cached_network_image_platform_interface: ^4.1.1
   flutter_cache_manager: ^3.4.1
 
   # Storage

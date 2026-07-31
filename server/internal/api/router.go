@@ -362,6 +362,10 @@ func NewRouter(
 			r.Get("/trakt/calendar", discoverHandler.TraktCalendar)
 			r.Get("/trakt/anticipated", discoverHandler.TraktAnticipated)
 			r.Get("/trakt/recommendations", discoverHandler.TraktRecommendations)
+			// Trakt artwork relay: walter*.trakt.tv sends no CORS headers, so
+			// the web client fetches Trakt posters through this same-origin
+			// path instead of the CDN. Host-allowlisted in the handler.
+			r.Get("/trakt/images/{host}/*", discoverHandler.TraktImage)
 		})
 
 		// AI routes (authenticated)

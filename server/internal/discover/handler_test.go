@@ -180,6 +180,7 @@ func newEnv(t *testing.T, configured bool) *env {
 	router.Get("/media/movie/{id}", handler.MovieDetail)
 	router.Get("/media/tv/{id}", handler.TVDetail)
 	router.Get("/trakt/trending", handler.TraktTrending)
+	router.Get("/trakt/images/{host}/*", handler.TraktImage)
 
 	upstream := &fakeUpstream{respond: echoUpstream}
 	previous := http.DefaultTransport
