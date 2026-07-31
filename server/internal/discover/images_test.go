@@ -14,7 +14,9 @@ func TestTraktImageRelaysAllowedHosts(t *testing.T) {
 	e := newEnv(t, true)
 	e.upstream.setRespond(func(*http.Request) (int, string) { return http.StatusOK, "IMAGEBYTES" })
 
-	for i, host := range []string{"walter.trakt.tv", "walter-r2.trakt.tv"} {
+	// media.trakt.tv is what Trakt serves today; the walter hosts are what it
+	// served before July 2026 — the relay must follow their CDN migrations.
+	for i, host := range []string{"media.trakt.tv", "walter.trakt.tv", "walter-r2.trakt.tv"} {
 		path := fmt.Sprintf("/trakt/images/%s/images/movies/000/337/posters/thumb/faaa819377.jpg.webp?width=300", host)
 		rec := e.do(t, path)
 		if rec.Code != http.StatusOK {
@@ -53,10 +55,21 @@ func TestTraktImageRejectsNonAllowlistedTargets(t *testing.T) {
 	e := newEnv(t, true)
 
 	requests := []string{
-		// Hosts that are real but not artwork CDNs, and one attacker-shaped.
-		"/trakt/images/api.trakt.tv/images/a.jpg",
+		// Hosts outside *.trakt.tv, including lookalikes: a domain merely
+		// ending in the letters, a trakt.tv prefix on an attacker's domain,
+		// and the bare apex.
 		"/trakt/images/image.tmdb.org/images/a.jpg",
 		"/trakt/images/evil.example.com/images/a.jpg",
+		"/trakt/images/notrakt.tv/images/a.jpg",
+		"/trakt/images/media.trakt.tv.evil.com/images/a.jpg",
+		"/trakt/images/trakt.tv/images/a.jpg",
+		// The suffix check rejects a host whose real origin is the attacker's
+		// ("media.trakt.tv" as userinfo), and the charset rejects '@' even
+		// when the suffix looks right, so the built URL can never carry
+		// userinfo, a port, or an odd label.
+		"/trakt/images/media.trakt.tv@evil.com/images/a.jpg",
+		"/trakt/images/evil.com@media.trakt.tv/images/a.jpg",
+		"/trakt/images/MEDIA.TRAKT.TV/images/a.jpg",
 		// Paths outside images/, traversal in both raw and encoded forms,
 		// and characters walter filenames never contain.
 		"/trakt/images/walter-r2.trakt.tv/posters/a.jpg",

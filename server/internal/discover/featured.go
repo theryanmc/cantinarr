@@ -300,8 +300,9 @@ func (m *traktMedia) releaseDate(raw string) string {
 }
 
 // traktImageURL returns the first image as an absolute URL. Trakt serves these
-// host-relative ("walter-r2.trakt.tv/images/..."), and they are public CDN
-// assets like TMDB's — not an arr origin the client must avoid.
+// host-relative ("media.trakt.tv/images/...", walter-r2 before July 2026), and
+// they are public CDN assets — though unlike TMDB's they send no CORS headers,
+// which is why the web client loads them through the /api/trakt/images relay.
 func traktImageURL(images []string) string {
 	for _, raw := range images {
 		trimmed := strings.TrimSpace(raw)

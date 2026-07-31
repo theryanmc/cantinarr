@@ -268,7 +268,7 @@ GET /api/trakt/images/{host}/*                       # Trakt artwork relay for t
 ```
 TMDB and Trakt are proxied server-side -- client devices never hold those keys. `/featured` serves whichever feed the admin selected (see [Discovery settings](#discovery-settings-admin)), normalized to the TMDB page shape plus a `source` field so one client parser handles every source and the row can name what it is showing. The discovery and recommendation feeds also honor the admin's `english_only` preference; search and detail lookups never do.
 
-Trakt's artwork CDN (`walter*.trakt.tv`) is public but sends no CORS headers, so a browser-rendered client cannot fetch it directly the way it can TMDB's CDN. `/api/trakt/images/{host}/*` relays exactly those hosts (allowlisted, `images/…` paths only, no query passthrough) so the web app loads Trakt posters same-origin; native clients keep hitting the CDN directly.
+Trakt's artwork CDN (`media.trakt.tv` today; `walter*.trakt.tv` before July 2026 -- Trakt migrates these hosts) is public but sends no CORS headers, so a browser-rendered client cannot fetch it directly the way it can TMDB's CDN. `/api/trakt/images/{host}/*` relays any `*.trakt.tv` host (strictly validated, `images/…` paths only, no query passthrough) so the web app loads Trakt posters same-origin and a CDN migration on Trakt's side cannot blank them again; native clients keep hitting the CDN directly.
 
 ### AI chat (user)
 ```

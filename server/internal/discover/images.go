@@ -10,14 +10,31 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// traktImageHosts is the closed set of Trakt CDN hosts the relay will fetch
-// from. The relay exists because these hosts send no CORS headers, so the web
-// renderer cannot read their bytes directly the way it can TMDB's; the
-// allowlist is what keeps the endpoint a Trakt-artwork relay rather than an
+// validTraktImageHost accepts any *.trakt.tv subdomain rather than naming CDN
+// hosts, because Trakt migrates them: payloads moved from walter-r2.trakt.tv
+// (still what their docs show) to media.trakt.tv in July 2026, and a pinned
+// allowlist silently lost every poster when they did. The relay exists because
+// these CDNs send no CORS headers, so the web renderer cannot read their bytes
+// directly the way it can TMDB's. The suffix plus the strict charset (which
+// also excludes '@', ':' and '/', so the fetched URL cannot be steered to
+// another origin) keeps the endpoint a Trakt-artwork relay rather than an
 // open proxy.
-var traktImageHosts = map[string]bool{
-	"walter.trakt.tv":    true,
-	"walter-r2.trakt.tv": true,
+func validTraktImageHost(host string) bool {
+	if len(host) < len("x.trakt.tv") || len(host) > 64 {
+		return false
+	}
+	if !strings.HasSuffix(host, ".trakt.tv") || strings.Contains(host, "..") {
+		return false
+	}
+	for _, c := range host {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '.', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // traktImageClient has a zero Transport on purpose: it consults
@@ -40,7 +57,7 @@ func (h *Handler) TraktImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := chi.URLParam(r, "host")
-	if !traktImageHosts[host] {
+	if !validTraktImageHost(host) {
 		http.Error(w, `{"error":"image not found"}`, http.StatusNotFound)
 		return
 	}

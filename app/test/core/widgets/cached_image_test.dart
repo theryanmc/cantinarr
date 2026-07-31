@@ -37,18 +37,44 @@ void main() {
       expect(source.headers, {'Authorization': 'Bearer tok'});
     });
 
-    test('web rewrites the legacy walter host too', () {
-      final source = resolveImageSource(
-        url: 'https://walter.trakt.tv/images/shows/000/001/posters/a.jpg',
-        serverUrl: 'https://cantina.example',
-        accessToken: 'tok',
-        isWeb: true,
-      );
-      expect(
-        source.url,
-        'https://cantina.example/api/trakt/images/walter.trakt.tv'
-        '/images/shows/000/001/posters/a.jpg',
-      );
+    test('web rewrites whichever trakt.tv CDN host the payload carries', () {
+      // media.trakt.tv is what Trakt serves today; walter*.trakt.tv is what
+      // it served before July 2026. The rewrite follows the domain so a CDN
+      // migration on Trakt's side cannot silently blank the posters again.
+      for (final host in [
+        'media.trakt.tv',
+        'walter.trakt.tv',
+        'walter-r2.trakt.tv',
+      ]) {
+        final source = resolveImageSource(
+          url: 'https://$host/images/shows/000/001/posters/a.jpg',
+          serverUrl: 'https://cantina.example',
+          accessToken: 'tok',
+          isWeb: true,
+        );
+        expect(
+          source.url,
+          'https://cantina.example/api/trakt/images/$host'
+          '/images/shows/000/001/posters/a.jpg',
+        );
+      }
+    });
+
+    test('web never relays lookalike or apex trakt hosts', () {
+      for (final url in [
+        'https://notrakt.tv/images/a.jpg',
+        'https://media.trakt.tv.evil.com/images/a.jpg',
+        'https://trakt.tv/images/a.jpg',
+      ]) {
+        final source = resolveImageSource(
+          url: url,
+          serverUrl: 'https://cantina.example',
+          accessToken: 'tok',
+          isWeb: true,
+        );
+        expect(source.url, url);
+        expect(source.headers, isNull);
+      }
     });
 
     test('a trailing-slash server url never doubles the slash', () {

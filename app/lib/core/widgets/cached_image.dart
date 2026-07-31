@@ -12,10 +12,12 @@ import '../theme/app_theme.dart';
 /// A resolved image request: the URL to fetch plus any headers it needs.
 typedef ImageSource = ({String url, Map<String, String>? headers});
 
-/// Trakt's artwork CDN. Unlike TMDB's CDN it sends no CORS headers, so the
-/// web renderer is forbidden from reading its bytes; the backend relays these
-/// hosts at `/api/trakt/images/{host}/…` so web can fetch them same-origin.
-const _corslessTraktHosts = {'walter.trakt.tv', 'walter-r2.trakt.tv'};
+/// True for Trakt's artwork CDNs (media.trakt.tv today, walter*.trakt.tv
+/// before July 2026 — Trakt migrates these hosts, so match the domain rather
+/// than pinning names). Unlike TMDB's CDN they send no CORS headers, so the
+/// web renderer is forbidden from reading their bytes; the backend relays them
+/// at `/api/trakt/images/{host}/…` so web can fetch same-origin.
+bool _isTraktCdnHost(String host) => host.endsWith('.trakt.tv');
 
 /// Resolves what [CachedImage] should actually fetch.
 ///
@@ -35,7 +37,7 @@ ImageSource resolveImageSource({
 
   final uri = Uri.tryParse(url);
   if (uri == null ||
-      !_corslessTraktHosts.contains(uri.host) ||
+      !_isTraktCdnHost(uri.host) ||
       !uri.path.startsWith('/images/')) {
     return passthrough;
   }
