@@ -31,6 +31,7 @@ class DownloadsModuleShell extends ConsumerWidget {
               title: InstanceDropdown(
                 instances: instanceState.downloadInstances,
                 activeInstanceId: instanceState.activeDownloadInstanceId,
+                aggregateOption: (id: allDownloadInstancesId, label: 'All'),
                 onChanged: (id) => ref
                     .read(instanceProvider.notifier)
                     .setActiveDownloadInstance(id),

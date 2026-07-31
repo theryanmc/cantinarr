@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/network/websocket_client.dart';
 import '../../../core/providers/instance_provider.dart';
@@ -11,6 +12,13 @@ import '../data/downloads_api_service.dart';
 import '../data/downloads_models.dart';
 
 /// Shows the download client queue with global and per-item controls.
+///
+/// With the aggregate "All" view active every download client is a source:
+/// each client's queue is fetched (and pushed over the WebSocket) separately,
+/// rendered as one list in client-menu order (usenet clients first) with a
+/// client badge per item, and the global toggle pauses or resumes every
+/// client at once. A client that fails to load is named in a banner instead
+/// of silently missing from the list.
 class DownloadsQueueScreen extends ConsumerStatefulWidget {
   const DownloadsQueueScreen({super.key});
 
@@ -20,10 +28,18 @@ class DownloadsQueueScreen extends ConsumerStatefulWidget {
 }
 
 class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
-  DownloadsQueue? _queue;
+  /// Last known queue per source instance id.
+  final Map<String, DownloadsQueue> _queues = {};
+
+  /// Load failure per source instance id; cleared by any successful read.
+  final Map<String, String> _sourceErrors = {};
+
   bool _isLoading = true;
-  String? _error;
   Timer? _refreshTimer;
+
+  /// Bumped by every load; in-flight results from a superseded load (e.g.
+  /// started before a selection switch) are dropped instead of applied.
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -51,55 +67,58 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     _loadQueue(silent: true);
   }
 
-  DownloadsApiService? _buildService() {
-    final instanceId = ref.read(instanceProvider).activeDownloadInstance?.id;
-    if (instanceId == null) return null;
-    return DownloadsApiService(
-      backendDio: ref.read(backendClientProvider),
-      instanceId: instanceId,
-    );
+  /// The clients this screen currently shows: every download client in the
+  /// aggregate "All" view, otherwise just the active one.
+  List<ServiceInstance> _sourcesFrom(InstanceState state) {
+    if (state.allDownloadsActive) return state.downloadInstances;
+    final active = state.activeDownloadInstance;
+    return active == null ? const [] : [active];
   }
 
+  DownloadsApiService _serviceFor(ServiceInstance source) =>
+      DownloadsApiService(
+        backendDio: ref.read(backendClientProvider),
+        instanceId: source.id,
+      );
+
   Future<void> _loadQueue({bool silent = false}) async {
-    final service = _buildService();
-    if (service == null) {
-      setState(() {
-        _isLoading = false;
-        _error = 'No download client configured';
-      });
+    final generation = ++_loadGeneration;
+    final sources = _sourcesFrom(ref.read(instanceProvider));
+    if (sources.isEmpty) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
       return;
     }
 
     if (!silent) setState(() => _isLoading = true);
-    try {
-      final queue = await service.getQueue();
-      if (!mounted) return;
-      setState(() {
-        _queue = queue;
-        _isLoading = false;
-        _error = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      // Keep showing the last known data on silent refresh failures.
-      if (silent) return;
-      setState(() {
-        _isLoading = false;
-        _error = 'Failed to load queue: $e';
-      });
-    }
+    await Future.wait(sources.map((source) async {
+      try {
+        final queue = await _serviceFor(source).getQueue();
+        if (!mounted || generation != _loadGeneration) return;
+        setState(() {
+          _queues[source.id] = queue;
+          _sourceErrors.remove(source.id);
+        });
+      } catch (e) {
+        if (!mounted || generation != _loadGeneration) return;
+        // Keep showing the last known data; the banner names the client.
+        setState(() => _sourceErrors[source.id] = '$e');
+      }
+    }));
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() => _isLoading = false);
   }
 
   /// Applies a full queue snapshot pushed over the WebSocket — no REST
   /// roundtrip needed; the event data matches the REST queue payload.
-  void _applyQueueEvent(WsEvent event) {
+  void _applyQueueEvent(String instanceId, WsEvent event) {
     if (!mounted) return;
     try {
       final queue = DownloadsQueue.fromJson(event.data);
       setState(() {
-        _queue = queue;
+        _queues[instanceId] = queue;
+        _sourceErrors.remove(instanceId);
         _isLoading = false;
-        _error = null;
       });
     } catch (_) {
       // Malformed payload (e.g. server/app version skew); the polling
@@ -120,20 +139,42 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     }
   }
 
-  Future<void> _toggleGlobalPause() async {
-    final service = _buildService();
-    final queue = _queue;
-    if (service == null || queue == null) return;
-    await _runAction(
-      queue.paused ? service.resumeAll : service.pauseAll,
-      failureLabel:
-          queue.paused ? 'Failed to resume queue' : 'Failed to pause queue',
-    );
+  /// Whether every source with known data reports its queue paused.
+  bool _allPaused(List<ServiceInstance> sources) {
+    final known = [
+      for (final source in sources)
+        if (_queues[source.id] != null) _queues[source.id]!,
+    ];
+    return known.isNotEmpty && known.every((queue) => queue.paused);
   }
 
-  Future<void> _togglePauseItem(DownloadQueueItem item) async {
-    final service = _buildService();
-    if (service == null) return;
+  /// Pauses or resumes every shown client. Failures are named per client;
+  /// the rest proceed regardless.
+  Future<void> _toggleGlobalPause() async {
+    final sources = _sourcesFrom(ref.read(instanceProvider));
+    if (sources.isEmpty) return;
+    final resume = _allPaused(sources);
+    final failures = <String>[];
+    await Future.wait(sources.map((source) async {
+      try {
+        final service = _serviceFor(source);
+        resume ? await service.resumeAll() : await service.pauseAll();
+      } catch (_) {
+        failures.add(source.name);
+      }
+    }));
+    if (!mounted) return;
+    if (failures.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to ${resume ? 'resume' : 'pause'}: '
+              '${failures.join(', ')}')));
+    }
+    await _loadQueue(silent: true);
+  }
+
+  Future<void> _togglePauseItem(
+      ServiceInstance source, DownloadQueueItem item) async {
+    final service = _serviceFor(source);
     await _runAction(
       () => item.isPaused
           ? service.resumeItem(item.id)
@@ -142,20 +183,17 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
     );
   }
 
-  Future<void> _removeItem(DownloadQueueItem item) async {
-    final serviceType =
-        ref.read(instanceProvider).activeDownloadInstance?.serviceType ?? '';
+  Future<void> _removeItem(
+      ServiceInstance source, DownloadQueueItem item) async {
     final deleteData = await showDialog<bool>(
       context: context,
-      builder: (_) =>
-          _RemoveDownloadDialog(name: item.name, serviceType: serviceType),
+      builder: (_) => _RemoveDownloadDialog(
+          name: item.name, serviceType: source.serviceType),
     );
     if (deleteData == null || !mounted) return;
 
-    final service = _buildService();
-    if (service == null) return;
     try {
-      await service.deleteItem(item.id, deleteData: deleteData);
+      await _serviceFor(source).deleteItem(item.id, deleteData: deleteData);
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Removed from queue')));
@@ -169,18 +207,26 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuild when instance changes
-    ref.listen(instanceProvider.select((s) => s.activeDownloadInstanceId),
-        (_, __) => _loadQueue());
+    final instanceState = ref.watch(instanceProvider);
+    final sources = _sourcesFrom(instanceState);
 
-    // Live queue snapshots over the WebSocket for the active instance;
-    // the periodic poll remains as a fallback when the socket is down.
-    final wsInstanceId =
-        ref.watch(instanceProvider.select((s) => s.activeDownloadInstance?.id));
-    if (wsInstanceId != null) {
-      ref.listen(downloadsQueueEventsProvider(wsInstanceId), (_, next) {
+    // Reset and reload when the selection changes (client <-> All).
+    ref.listen(instanceProvider.select((s) => s.activeDownloadInstanceId),
+        (_, __) {
+      setState(() {
+        _queues.clear();
+        _sourceErrors.clear();
+        _isLoading = true;
+      });
+      _loadQueue();
+    });
+
+    // Live queue snapshots over the WebSocket for every shown client; the
+    // periodic poll remains as a fallback when the socket is down.
+    for (final source in sources) {
+      ref.listen(downloadsQueueEventsProvider(source.id), (_, next) {
         final event = next.valueOrNull;
-        if (event != null) _applyQueueEvent(event);
+        if (event != null) _applyQueueEvent(source.id, event);
       });
     }
 
@@ -188,14 +234,32 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       return const Center(
           child: CircularProgressIndicator(color: AppTheme.accent));
     }
-    if (_error != null) {
+
+    final failedSources = [
+      for (final source in sources)
+        if (_sourceErrors.containsKey(source.id)) source,
+    ];
+    final nothingLoaded =
+        sources.every((source) => _queues[source.id] == null);
+    String? fatalError;
+    if (sources.isEmpty) {
+      fatalError = 'No download client configured';
+    } else if (nothingLoaded && failedSources.length == sources.length) {
+      fatalError = sources.length == 1
+          ? 'Failed to load queue: ${_sourceErrors[sources.single.id]}'
+          : 'Failed to load queues:\n${[
+              for (final source in failedSources)
+                '${source.name}: ${_sourceErrors[source.id]}'
+            ].join('\n')}';
+    }
+    if (fatalError != null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Text(_error!,
+              child: Text(fatalError,
                   style: const TextStyle(color: AppTheme.textSecondary),
                   textAlign: TextAlign.center),
             ),
@@ -206,21 +270,35 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
       );
     }
 
-    final queue = _queue ?? const DownloadsQueue();
+    // One list in source order (usenet clients first, matching the client
+    // menu); each client's own queue order is preserved within its block.
+    final entries = [
+      for (final source in sources)
+        for (final item
+            in _queues[source.id]?.items ?? const <DownloadQueueItem>[])
+          (source: source, item: item),
+    ];
+    final showClient = sources.length > 1;
+    final speedBps = sources.fold<int>(
+        0, (sum, source) => sum + (_queues[source.id]?.speedBps ?? 0));
 
     return Column(
       children: [
         _GlobalQueueHeader(
-          paused: queue.paused,
-          speedFormatted: queue.speedFormatted,
-          itemCount: queue.items.length,
+          paused: _allPaused(sources),
+          speedFormatted: formatSpeed(speedBps),
+          itemCount: entries.length,
+          multiClient: showClient,
           onTogglePause: _toggleGlobalPause,
         ),
+        if (failedSources.isNotEmpty)
+          _SourceErrorBanner(
+              names: [for (final source in failedSources) source.name]),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _loadQueue,
             color: AppTheme.accent,
-            child: queue.items.isEmpty
+            child: entries.isEmpty
                 ? ListView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: const [
@@ -238,13 +316,15 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
                 : ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: queue.items.length,
+                    itemCount: entries.length,
                     itemBuilder: (context, index) {
-                      final item = queue.items[index];
+                      final entry = entries[index];
                       return _DownloadItemCard(
-                        item: item,
-                        onTogglePause: () => _togglePauseItem(item),
-                        onRemove: () => _removeItem(item),
+                        item: entry.item,
+                        clientName: showClient ? entry.source.name : null,
+                        onTogglePause: () =>
+                            _togglePauseItem(entry.source, entry.item),
+                        onRemove: () => _removeItem(entry.source, entry.item),
                       );
                     },
                   ),
@@ -255,17 +335,21 @@ class _DownloadsQueueScreenState extends ConsumerState<DownloadsQueueScreen> {
   }
 }
 
-/// Header row with total speed and a global pause/resume toggle.
+/// Header row with total speed and a global pause/resume toggle. In the
+/// aggregate view the speed is the sum across clients and the toggle acts
+/// on every client.
 class _GlobalQueueHeader extends StatelessWidget {
   final bool paused;
   final String speedFormatted;
   final int itemCount;
+  final bool multiClient;
   final VoidCallback onTogglePause;
 
   const _GlobalQueueHeader({
     required this.paused,
     required this.speedFormatted,
     required this.itemCount,
+    required this.multiClient,
     required this.onTogglePause,
   });
 
@@ -290,7 +374,7 @@ class _GlobalQueueHeader extends StatelessWidget {
           Expanded(
             child: Text(
               paused
-                  ? 'Queue paused'
+                  ? (multiClient ? 'All queues paused' : 'Queue paused')
                   : '$speedFormatted • $itemCount item${itemCount == 1 ? '' : 's'}',
               style: const TextStyle(
                   color: AppTheme.textPrimary,
@@ -307,6 +391,38 @@ class _GlobalQueueHeader extends StatelessWidget {
               foregroundColor: paused ? AppTheme.available : AppTheme.accent,
               textStyle:
                   const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Names the clients whose last load failed, so partial aggregate data is
+/// never mistaken for the whole picture. Pull to refresh retries them.
+class _SourceErrorBanner extends StatelessWidget {
+  final List<String> names;
+
+  const _SourceErrorBanner({required this.names});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      color: AppTheme.error.withValues(alpha: 0.12),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 15, color: AppTheme.error),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Not responding: ${names.join(', ')}',
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 12),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -425,14 +541,19 @@ class _RemoveDownloadDialogState extends State<_RemoveDownloadDialog> {
 }
 
 /// One download in the queue: name, status chip, progress bar, sizes,
-/// per-item speed (torrents), ETA, category badge and an actions menu.
+/// per-item speed (torrents), ETA, category badge, the owning client
+/// (aggregate view only) and an actions menu.
 class _DownloadItemCard extends StatelessWidget {
   final DownloadQueueItem item;
+
+  /// Owning client name; shown as a badge only in the aggregate view.
+  final String? clientName;
   final VoidCallback onTogglePause;
   final VoidCallback onRemove;
 
   const _DownloadItemCard({
     required this.item,
+    this.clientName,
     required this.onTogglePause,
     required this.onRemove,
   });
@@ -441,6 +562,7 @@ class _DownloadItemCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = _statusStyle(item.status);
     final eta = item.etaFormatted;
+    final client = clientName;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -515,6 +637,8 @@ class _DownloadItemCard extends StatelessWidget {
                 _DownloadBadge(text: style.label, color: style.color),
                 if (item.category.isNotEmpty)
                   _DownloadBadge(text: item.category, color: AppTheme.accent),
+                if (client != null)
+                  _DownloadBadge(text: client, color: AppTheme.textSecondary),
               ],
             ),
           ),

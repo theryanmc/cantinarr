@@ -20,6 +20,7 @@ Future<void> _pump(
   required List<ServiceInstance> instances,
   String? activeInstanceId,
   ValueChanged<String>? onChanged,
+  ({String id, String label})? aggregateOption,
 }) {
   return tester.pumpWidget(MaterialApp(
     home: Scaffold(
@@ -27,6 +28,7 @@ Future<void> _pump(
         instances: instances,
         activeInstanceId: activeInstanceId,
         onChanged: onChanged ?? (_) {},
+        aggregateOption: aggregateOption,
       ),
     ),
   ));
@@ -74,6 +76,29 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(changes, ['radarr-4k']);
+  });
+
+  testWidgets('an aggregate option is listed first and selectable',
+      (tester) async {
+    final changes = <String>[];
+    await _pump(
+      tester,
+      instances: const [_main, _fourK],
+      activeInstanceId: 'all',
+      aggregateOption: (id: 'all', label: 'All'),
+      onChanged: changes.add,
+    );
+
+    // The aggregate id is a valid value: its label renders collapsed.
+    expect(find.text('All'), findsOneWidget);
+
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Main Radarr'), findsOneWidget);
+
+    await tester.tap(find.text('Main Radarr'));
+    await tester.pumpAndSettle();
+    expect(changes, ['radarr-main']);
   });
 
   testWidgets('re-selecting the active instance still reports it',

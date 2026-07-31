@@ -84,7 +84,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Full module** -- library with author drill-down, queue with Import Doctor, history, and wanted (missing / cutoff unmet).
 
 ### Downloads & Tautulli (admin)
-- **Unified download queue** across SABnzbd, qBittorrent, NZBGet, and Transmission: pause/resume all or per item, remove (optionally with data; NZBGet removes the queue item only, files stay on disk), speeds, ETAs -- live via WebSocket snapshots.
+- **Unified download queue** across SABnzbd, qBittorrent, NZBGet, and Transmission: pause/resume all or per item, remove (optionally with data; NZBGet removes the queue item only, files stay on disk), speeds, ETAs -- live via WebSocket snapshots. With several clients the default **All** view merges every queue into one list (usenet clients first, matching the client menu; each item badged with its client) with summed speed and a **master pause/resume across every client**; history merges newest-first the same way, and a client that stops responding is named in a banner instead of silently missing from the aggregate.
 - **Tautulli** -- current Plex streams with quality/transcode badges, watch history, and top-stats.
 
 ### Issues & AI remediation

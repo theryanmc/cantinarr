@@ -2,6 +2,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/auth/logic/auth_provider.dart';
 import '../models/backend_connection.dart';
 
+/// Sentinel "instance id" meaning the aggregate view across every download
+/// client. Real instance ids are always `<serviceType>-<uuid8>`, so this can
+/// never collide with one. It is the default selection whenever two or more
+/// download clients exist.
+const String allDownloadInstancesId = 'all';
+
 /// Tracks available instances and which is currently active per service type.
 class InstanceState {
   final List<ServiceInstance> radarrInstances;
@@ -95,9 +101,19 @@ class InstanceState {
         orElse: () => chaptarrInstances.first);
   }
 
+  /// Whether the aggregate "All" downloads view is active. Only meaningful
+  /// with two or more clients; with a single client the aggregate would be
+  /// identical to that client's view, so it is never offered.
+  bool get allDownloadsActive =>
+      downloadInstances.length > 1 &&
+      activeDownloadInstanceId == allDownloadInstancesId;
+
   /// Get the active download client instance, falling back to default.
+  /// Null when no clients exist or when the aggregate "All" view is active —
+  /// there is no single active instance then.
   ServiceInstance? get activeDownloadInstance {
     if (downloadInstances.isEmpty) return null;
+    if (allDownloadsActive) return null;
     if (activeDownloadInstanceId != null) {
       final found = downloadInstances
           .where((i) => i.id == activeDownloadInstanceId)
@@ -154,10 +170,13 @@ class InstanceNotifier extends Notifier<InstanceState> {
                   orElse: () => chaptarr.first))
               .id
           : null,
-      activeDownloadInstanceId: downloads.isNotEmpty
-          ? (downloads.firstWhere((i) => i.isDefault,
-              orElse: () => downloads.first)).id
-          : null,
+      // With several download clients the aggregate "All" view is the
+      // default; a lone client is its own default (All is never offered).
+      activeDownloadInstanceId: downloads.isEmpty
+          ? null
+          : downloads.length > 1
+              ? allDownloadInstancesId
+              : downloads.first.id,
       activeTautulliInstanceId: tautulli.isNotEmpty
           ? (tautulli.firstWhere((i) => i.isDefault,
               orElse: () => tautulli.first)).id
