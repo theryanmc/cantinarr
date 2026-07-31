@@ -55,8 +55,11 @@ class _PreviewApp extends ConsumerWidget {
 }
 
 /// Admin with every module lit up: two Radarr instances (exercises the
-/// sidebar instance selector), Sonarr, Chaptarr, a download client, Tautulli,
-/// plus AI + Chaptarr services for the assistant module and Books tab.
+/// sidebar instance selector), Sonarr, Chaptarr, three download clients
+/// (exercises the aggregate "All" downloads view; torrent clients listed
+/// before usenet here to prove the menu reorders them usenet-first),
+/// Tautulli, plus AI + Chaptarr services for the assistant module and Books
+/// tab.
 const _adminState = AuthState(
   connection: BackendConnection(
     serverUrl: 'http://localhost:8585',
@@ -94,10 +97,20 @@ const _adminState = AuthState(
         isDefault: true,
       ),
       ServiceInstance(
+        id: 'qbit-main',
+        serviceType: 'qbittorrent',
+        name: 'qBittorrent',
+        isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'qbit-yana',
+        serviceType: 'qbittorrent',
+        name: 'qBittorrent (Yana)',
+      ),
+      ServiceInstance(
         id: 'sab-main',
         serviceType: 'sabnzbd',
         name: 'SABnzbd',
-        isDefault: true,
       ),
       ServiceInstance(
         id: 'tautulli-main',
@@ -126,8 +139,59 @@ Dio _stubDio() {
 }
 
 /// Empty-but-well-shaped responses so providers settle into their empty
-/// states instead of erroring where the shape matters.
+/// states instead of erroring where the shape matters. Download queues carry
+/// fixture items so the aggregate "All" view has something to merge.
 class _StubAdapter implements HttpClientAdapter {
+  static Map<String, dynamic> _queueItem(
+    String id,
+    String name,
+    double progress, {
+    int speedBps = 0,
+    String status = 'downloading',
+  }) =>
+      {
+        'id': id,
+        'name': name,
+        'size_bytes': 4 * 1024 * 1024 * 1024,
+        'size_left_bytes':
+            (4 * 1024 * 1024 * 1024 * (100 - progress) ~/ 100),
+        'progress': progress,
+        'speed_bps': speedBps,
+        'eta_seconds': speedBps > 0 ? 1800 : 0,
+        'status': status,
+        'category': 'movies',
+      };
+
+  static final Map<String, Map<String, dynamic>> _downloadQueues = {
+    'sab-main': {
+      'paused': false,
+      'speed_bps': 6 * 1024 * 1024,
+      'items': [
+        _queueItem('sab-1', 'Movie.Night.2026.1080p.WEB-DL', 62),
+        _queueItem('sab-2', 'Docu.Series.S01E03.720p', 12,
+            status: 'queued'),
+      ],
+    },
+    'qbit-main': {
+      'paused': false,
+      'speed_bps': 2 * 1024 * 1024,
+      'items': [
+        _queueItem('qb-1', 'Indie.Film.2025.2160p.REMUX', 38,
+            speedBps: 2 * 1024 * 1024),
+      ],
+    },
+    'qbit-yana': {
+      'paused': false,
+      'speed_bps': 512 * 1024,
+      'items': [
+        _queueItem('qb-2', 'Classic.Trilogy.1983.1080p', 91,
+            speedBps: 512 * 1024),
+        _queueItem('qb-3', 'Space.Opera.S02.Complete', 5,
+            status: 'stalledDL'),
+      ],
+    },
+  };
+
   @override
   Future<ResponseBody> fetch(
     RequestOptions options,
@@ -136,7 +200,14 @@ class _StubAdapter implements HttpClientAdapter {
   ) async {
     final path = options.path;
     final Object body;
-    if (path.contains('/discover') || path.contains('/search')) {
+    final downloadsQueue =
+        RegExp(r'/downloads/([^/]+)/queue$').firstMatch(path);
+    if (downloadsQueue != null) {
+      body = _downloadQueues[downloadsQueue.group(1)] ??
+          {'paused': false, 'speed_bps': 0, 'items': <Object>[]};
+    } else if (path.contains('/downloads/') && path.endsWith('/history')) {
+      body = {'items': <Object>[]};
+    } else if (path.contains('/discover') || path.contains('/search')) {
       body = {'results': [], 'page': 1, 'total_pages': 1, 'total_results': 0};
     } else if (path.contains('/issues')) {
       body = {'issues': []};

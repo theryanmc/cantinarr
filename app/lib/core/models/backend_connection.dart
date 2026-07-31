@@ -102,15 +102,18 @@ class BackendConnection {
   List<ServiceInstance> get chaptarrInstances =>
       instances.where((i) => i.serviceType == 'chaptarr').toList();
 
-  /// Get all download client instances
-  /// (SABnzbd, qBittorrent, NZBGet or Transmission).
-  List<ServiceInstance> get downloadInstances => instances
-      .where((i) =>
-          i.serviceType == 'sabnzbd' ||
-          i.serviceType == 'qbittorrent' ||
-          i.serviceType == 'nzbget' ||
-          i.serviceType == 'transmission')
-      .toList();
+  /// Get all download client instances, usenet clients (SABnzbd, NZBGet)
+  /// before torrent clients (qBittorrent, Transmission); the server's order
+  /// is preserved within each group. Every download-client menu and the
+  /// aggregate "All" view list clients in this order.
+  List<ServiceInstance> get downloadInstances {
+    const usenet = {'sabnzbd', 'nzbget'};
+    const torrent = {'qbittorrent', 'transmission'};
+    return [
+      ...instances.where((i) => usenet.contains(i.serviceType)),
+      ...instances.where((i) => torrent.contains(i.serviceType)),
+    ];
+  }
 
   /// Get all Tautulli instances.
   List<ServiceInstance> get tautulliInstances =>

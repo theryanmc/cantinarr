@@ -74,6 +74,34 @@ void main() {
     expect(connection.mediaDownloadsEnabledFor('sonarr-legacy'), isFalse);
   });
 
+  test('downloadInstances lists usenet clients before torrent clients', () {
+    const connection = BackendConnection(
+      serverUrl: 'https://cantinarr.example',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(
+            id: 'qbittorrent-a', serviceType: 'qbittorrent', name: 'qBit'),
+        ServiceInstance(
+            id: 'qbittorrent-b',
+            serviceType: 'qbittorrent',
+            name: 'qBit (Yana)'),
+        ServiceInstance(id: 'radarr-main', serviceType: 'radarr', name: 'Movies'),
+        ServiceInstance(id: 'sabnzbd-a', serviceType: 'sabnzbd', name: 'SAB'),
+        ServiceInstance(
+            id: 'transmission-a', serviceType: 'transmission', name: 'Trans'),
+        ServiceInstance(id: 'nzbget-a', serviceType: 'nzbget', name: 'NZBGet'),
+      ],
+    );
+
+    // Usenet group first, then torrents; server order kept within each group.
+    expect(
+      connection.downloadInstances.map((i) => i.id).toList(),
+      ['sabnzbd-a', 'nzbget-a', 'qbittorrent-a', 'qbittorrent-b',
+          'transmission-a'],
+    );
+  });
+
   test('legacy payload falls back to the global capability', () {
     const connection = BackendConnection(
       serverUrl: 'https://cantinarr.example',

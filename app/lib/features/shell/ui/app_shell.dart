@@ -918,6 +918,12 @@ class _AppShellState extends ConsumerState<AppShell>
           : const <ServiceInstance>[];
       final activeInstance =
           _activeInstanceForModule(instanceState, module.type);
+      // Downloads offers the aggregate "All" view above its clients; the raw
+      // stored id is passed through so the sentinel can be marked active.
+      final isDownloads = module.type == ModuleType.downloads;
+      final activeInstanceId = isDownloads
+          ? instanceState.activeDownloadInstanceId
+          : activeInstance?.id;
 
       final item = _DrawerItem(
         icon: module.icon,
@@ -928,7 +934,10 @@ class _AppShellState extends ConsumerState<AppShell>
             ? _InstanceSelector(
                 appName: module.label,
                 instances: selectorInstances,
-                activeInstanceId: activeInstance?.id,
+                activeInstanceId: activeInstanceId,
+                aggregateOption: isDownloads
+                    ? (id: allDownloadInstancesId, label: 'All')
+                    : null,
                 onSelected: (instanceId) {
                   if (isOverlay) Navigator.pop(context);
                   _navigateToModule(
@@ -949,10 +958,10 @@ class _AppShellState extends ConsumerState<AppShell>
           _navigateToModule(
             context,
             module,
-            instanceId: _defaultInstanceForModule(
+            instanceId: _defaultInstanceIdForModule(
               instanceState,
               module.type,
-            )?.id,
+            ),
           );
           if (module.type != ModuleType.assistant) {
             ref.read(moduleProvider.notifier).setActiveModule(
@@ -1212,16 +1221,23 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
-  ServiceInstance? _defaultInstanceForModule(
+  /// The selection a plain module-row tap resets to. For downloads with
+  /// several clients that is the aggregate "All" view, matching its default.
+  String? _defaultInstanceIdForModule(
     InstanceState state,
     ModuleType type,
   ) {
     final instances = _instancesForModule(state, type);
     if (instances.isEmpty) return null;
-    return instances.firstWhere(
-      (instance) => instance.isDefault,
-      orElse: () => instances.first,
-    );
+    if (type == ModuleType.downloads && instances.length > 1) {
+      return allDownloadInstancesId;
+    }
+    return instances
+        .firstWhere(
+          (instance) => instance.isDefault,
+          orElse: () => instances.first,
+        )
+        .id;
   }
 
   void _navigateToModule(
@@ -1453,15 +1469,23 @@ class _InstanceSelector extends StatelessWidget {
   final String? activeInstanceId;
   final ValueChanged<String> onSelected;
 
+  /// Optional aggregate entry (the downloads "All" view) listed above the
+  /// instances; selecting it reports its id through [onSelected].
+  final ({String id, String label})? aggregateOption;
+
   const _InstanceSelector({
     required this.appName,
     required this.instances,
     required this.activeInstanceId,
     required this.onSelected,
+    this.aggregateOption,
   });
 
   @override
   Widget build(BuildContext context) {
+    final aggregate = aggregateOption;
+    final aggregateActive =
+        aggregate != null && activeInstanceId == aggregate.id;
     final activeInstance = instances.firstWhere(
       (instance) => instance.id == activeInstanceId,
       orElse: () => instances.firstWhere(
@@ -1469,12 +1493,33 @@ class _InstanceSelector extends StatelessWidget {
         orElse: () => instances.first,
       ),
     );
+    final activeName = aggregateActive ? aggregate.label : activeInstance.name;
 
     return PopupMenuButton<String>(
       tooltip: 'Choose $appName instance',
       color: AppTheme.surface,
       onSelected: onSelected,
       itemBuilder: (context) => [
+        if (aggregate != null)
+          PopupMenuItem<String>(
+            value: aggregate.id,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    aggregate.label,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (aggregateActive)
+                  const Icon(
+                    Icons.check,
+                    size: 18,
+                    color: AppTheme.accent,
+                  ),
+              ],
+            ),
+          ),
         for (final instance in instances)
           PopupMenuItem<String>(
             value: instance.id,
@@ -1486,7 +1531,7 @@ class _InstanceSelector extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (instance.id == activeInstance.id)
+                if (!aggregateActive && instance.id == activeInstance.id)
                   const Icon(
                     Icons.check,
                     size: 18,
@@ -1510,7 +1555,7 @@ class _InstanceSelector extends StatelessWidget {
             children: [
               Flexible(
                 child: Text(
-                  activeInstance.name,
+                  activeName,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: AppTheme.textSecondary,
