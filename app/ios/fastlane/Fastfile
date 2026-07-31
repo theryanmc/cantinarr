@@ -68,6 +68,13 @@ platform :ios do
       end
     end
 
+    # ASC processes screenshot uploads asynchronously, and deliver's
+    # post-upload verification lists the set before processing settles: fresh
+    # uploads read as "missing", get re-uploaded, and the listing ends up with
+    # duplicates (observed twice in a row; fastlane#16851). Waiting for
+    # processing to finish before verification closes the race.
+    ENV["DELIVER_SKIP_WAIT_FOR_SCREENSHOT_PROCESSING"] = "false"
+
     # The ASC API intermittently returns empty bodies that spaceship surfaces
     # as "No data". Everything deliver does here is an idempotent PATCH/upload,
     # so retrying the whole call is safe.
