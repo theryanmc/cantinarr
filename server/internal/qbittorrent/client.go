@@ -58,22 +58,40 @@ func (c *Client) Login() error {
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return fmt.Errorf("qbittorrent login failed: redirect status %d to %q (redirects are not followed; use the WebUI's final URL)", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("qbittorrent login failed: status %d", resp.StatusCode)
-	}
+
+	// Two WebUI generations answer this endpoint differently, and both are in
+	// the wild:
+	//   - qBittorrent 5.x succeeds with 204 No Content and an empty body, and
+	//     rejects bad credentials with 401 Unauthorized.
+	//   - qBittorrent 4.x succeeds with 200 and the plain text "Ok.", and
+	//     answers "Fails." (also 200) for bad credentials.
+	// Accept both rather than pinning either one.
 	trimmed := strings.TrimSpace(string(body))
-	if !strings.HasPrefix(trimmed, "Ok") {
-		// The login endpoint answers plain "Ok." or "Fails."; an HTML body is
-		// some other page entirely (wrong port or path), not a bad password.
-		if strings.HasPrefix(trimmed, "<") {
-			return fmt.Errorf("qbittorrent login failed: unexpected response (is this the qBittorrent WebUI URL?)")
+	switch {
+	case resp.StatusCode == http.StatusNoContent:
+		// 5.x success: nothing to inspect in the body.
+	case resp.StatusCode == http.StatusOK:
+		// 4.x success is "Ok."; 5.x never lands here, so an empty 200 body is
+		// treated as success rather than as a missing "Ok.".
+		if trimmed != "" && !strings.HasPrefix(trimmed, "Ok") {
+			// An HTML body is some other page entirely (wrong port or path),
+			// not a bad password.
+			if strings.HasPrefix(trimmed, "<") {
+				return fmt.Errorf("qbittorrent login failed: unexpected response (is this the qBittorrent WebUI URL?)")
+			}
+			return fmt.Errorf("qbittorrent login failed: invalid credentials")
 		}
+	case resp.StatusCode == http.StatusUnauthorized:
 		return fmt.Errorf("qbittorrent login failed: invalid credentials")
+	default:
+		// The body is deliberately not echoed: it can carry the submitted
+		// credentials back (see TestLoginFailuresDoNotEchoCredentials).
+		return fmt.Errorf("qbittorrent login failed: status %d", resp.StatusCode)
 	}
 
 	// When the WebUI has auth bypass enabled (localhost/whitelisted IPs),
-	// login succeeds with "Ok." but returns no SID cookie — requests work
-	// without one, so an empty cookie set is not an error.
+	// login succeeds but returns no SID cookie — requests work without one,
+	// so an empty cookie set is not an error.
 	c.mu.Lock()
 	c.cookies = resp.Cookies()
 	c.authenticated = true
