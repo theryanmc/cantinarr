@@ -175,6 +175,74 @@ func TestLoginDistinguishesWrongPageFromBadPassword(t *testing.T) {
 	}
 }
 
+// TestLoginAcceptsBothWebUIGenerations pins the two login contracts we have to
+// live with: qBittorrent 5.x answers a successful login with 204 No Content and
+// an empty body (and 401 for bad credentials), while 4.x answers 200 "Ok."
+// (and 200 "Fails."). Reading 204 as a failure locked every 5.x WebUI out.
+func TestLoginAcceptsBothWebUIGenerations(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		wantErr    string // "" means the login must succeed
+		setsCookie bool
+	}{
+		{name: "5.x success", status: http.StatusNoContent, body: "", setsCookie: true},
+		{name: "5.x success behind auth bypass", status: http.StatusNoContent, body: ""},
+		{name: "5.x bad credentials", status: http.StatusUnauthorized, body: "Unauthorized", wantErr: "invalid credentials"},
+		{name: "4.x success", status: http.StatusOK, body: "Ok.", setsCookie: true},
+		{name: "4.x bad credentials", status: http.StatusOK, body: "Fails.", wantErr: "invalid credentials"},
+		{name: "empty 200 body", status: http.StatusOK, body: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.setsCookie {
+					http.SetCookie(w, &http.Cookie{Name: "SID", Value: "sid-1"})
+				}
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(srv.Close)
+
+			err := NewClient(srv.URL, "admin", "adminadmin").Login()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Login() = %v, want success for a %d response", err, tc.status)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Login() accepted a %d %q response", tc.status, tc.body)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %v, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestLoginStillRejectsWrongPageOn204Path pins that accepting an empty body no
+// longer being proof of failure did not also make an HTML page look like a
+// success: a wrong port answering 200 with a page must still be reported as the
+// wrong URL, not as a working WebUI.
+func TestLoginStillRejectsWrongPageOn204Path(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "<!doctype html><html><body>login</body></html>")
+	}))
+	t.Cleanup(srv.Close)
+
+	err := NewClient(srv.URL, "admin", "adminadmin").Login()
+	if err == nil {
+		t.Fatal("Login accepted an HTML 200 response")
+	}
+	if !strings.Contains(err.Error(), "unexpected response") {
+		t.Errorf("error = %v, want the wrong-page explanation", err)
+	}
+}
+
 // TestLoginRedirectNamesLocation pins that a refused login redirect reports
 // where the WebUI tried to send us, so scheme misconfigurations are
 // self-diagnosing.
