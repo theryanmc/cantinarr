@@ -159,16 +159,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         letterSpacing: 2.2,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    const Text(
-                      'YOUR MEDIA, ONE SIGNAL',
-                      style: TextStyle(
-                        color: AppTheme.signal,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.45,
-                      ),
-                    ),
                     const SizedBox(height: 12),
                     Text(
                       showPasskeyOffer ? 'Secure your account' : _subtitle,
