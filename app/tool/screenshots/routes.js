@@ -2,7 +2,18 @@
 // numbering (and therefore the store display order) of the output files.
 module.exports = [
   { name: 'discover', route: '/dashboard/movies', settle: 6500 },
-  { name: 'seasons', route: '/detail/tv/94997', settle: 6500 },
+  {
+    name: 'seasons',
+    route: '/detail/tv/94997',
+    settle: 6500,
+    post: 1500,
+    // The detail header grew tall enough to push the Seasons section below
+    // the fold; scroll it into frame so the shot shows its subject.
+    actions: async (page, d) => {
+      await page.mouse.move(d.vw / 2, d.vh / 2);
+      await page.mouse.wheel(0, Math.round(d.vh * 0.85));
+    },
+  },
   {
     name: 'search',
     route: '/dashboard/movies',

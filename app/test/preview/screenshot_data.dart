@@ -227,6 +227,15 @@ Map<String, dynamic> _upcomingMovies() => _page([
 
 Map<String, dynamic> _popularTv() => _page([for (final t in _tv) _tvItem(t)]);
 
+/// The headline row (`/featured`): the server picks the feed and reports it
+/// in `source`. The harness reports TMDB weekly trending — the default when
+/// no Trakt credential exists — so the row titles itself "Trending This Week".
+Map<String, dynamic> _featuredMovies() =>
+    {..._popularMovies(), 'source': 'tmdb_trending'};
+
+Map<String, dynamic> _featuredTv() =>
+    {..._popularTv(), 'source': 'tmdb_trending'};
+
 /// Trakt "anticipated" rows. The service maps each entry through
 /// TraktItem.fromAnticipatedJson: {movie|show: {ids:{tmdb}, title, year,
 /// images:{poster:[url]}}}. A scheme-less url is prefixed with https:// by the
@@ -1205,6 +1214,8 @@ Object? screenshotBodyFor(String rawPath, Map<String, dynamic> query) {
   final path = rawPath.split('?').first;
 
   // ── Discovery rows ──
+  if (path.endsWith('/api/discover/movies/featured')) return _featuredMovies();
+  if (path.endsWith('/api/discover/tv/featured')) return _featuredTv();
   if (path.endsWith('/api/discover/movies/popular')) return _popularMovies();
   if (path.endsWith('/api/discover/movies/top-rated')) return _topRatedMovies();
   if (path.endsWith('/api/discover/movies/upcoming')) return _upcomingMovies();
