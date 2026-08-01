@@ -39,6 +39,8 @@ jobs:
     name: CI green
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Must stay within what the calling job grants — every caller hands this
+    # exactly these two scopes.
     permissions:
       actions: read
       contents: read
