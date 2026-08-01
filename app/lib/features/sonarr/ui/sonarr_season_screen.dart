@@ -16,12 +16,13 @@ import 'sonarr_series_detail_screen.dart' show seasonLabel;
 import 'widgets/episode_status.dart';
 
 /// Episode list for one season — or the whole series when [seasonNumber] is
-/// null ("All Seasons", grouped by season headers). Tapping an episode opens
-/// its detail sheet; the magnifier runs an automatic per-episode search;
-/// long-pressing one opens its action menu (searches, select, monitor toggle,
-/// delete file). The Automatic button's arrow enters selection mode — pick
-/// episodes with All / Undownloaded / None quick-selects, then search them all
-/// at once or delete their downloaded files.
+/// null ("All Seasons", grouped by season headers). Every row carries a
+/// bookmark that both shows and toggles that episode's monitored state.
+/// Tapping an episode opens its detail sheet; the magnifier runs an automatic
+/// per-episode search; long-pressing one opens its action menu (searches,
+/// select, monitor toggle, delete file). The Automatic button's arrow enters
+/// selection mode — pick episodes with All / Undownloaded / None quick-selects,
+/// then search them all at once or delete their downloaded files.
 class SonarrSeasonScreen extends ConsumerStatefulWidget {
   final String instanceId;
   final SonarrSeries series;
@@ -49,6 +50,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
   String? _error;
   bool _selecting = false;
   final Set<int> _selectedIds = {};
+  final Set<int> _togglingMonitored = {};
 
   bool get _allSeasons => widget.seasonNumber == null;
 
@@ -195,6 +197,28 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
     );
   }
 
+  /// Flips one episode's monitored flag. The row's bookmark is the feedback,
+  /// so the result is patched into the list in place rather than refetching
+  /// the season.
+  Future<void> _toggleEpisodeMonitored(SonarrEpisode episode) async {
+    final target = !episode.monitored;
+    setState(() => _togglingMonitored.add(episode.id));
+    try {
+      await _service.setEpisodesMonitored([episode.id], monitored: target);
+      if (!mounted) return;
+      setState(() {
+        _episodes = [
+          for (final e in _episodes)
+            e.id == episode.id ? e.withMonitored(target) : e,
+        ];
+      });
+    } catch (e) {
+      _toast('Could not change monitoring: $e');
+    } finally {
+      if (mounted) setState(() => _togglingMonitored.remove(episode.id));
+    }
+  }
+
   /// Long-press menu for one episode.
   Future<void> _showEpisodeMenu(SonarrEpisode episode) async {
     final title = episode.title != null && episode.title!.isNotEmpty
@@ -226,16 +250,7 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
       case 'select':
         _startSelecting(preselect: [episode.id]);
       case 'monitor':
-        try {
-          await _service.setEpisodesMonitored([episode.id],
-              monitored: !episode.monitored);
-          _toast(episode.monitored
-              ? 'Unmonitored ${episode.seasonEpisodeLabel}'
-              : 'Monitoring ${episode.seasonEpisodeLabel}');
-          _load();
-        } catch (e) {
-          _toast('Could not change monitoring: $e');
-        }
+        _toggleEpisodeMonitored(episode);
       case 'delete':
         _confirmDeleteFiles([episode]);
     }
@@ -452,11 +467,13 @@ class _SonarrSeasonScreenState extends ConsumerState<SonarrSeasonScreen> {
             queueItem: _queueByEpisode[episode.id],
             selecting: _selecting,
             selected: _selectedIds.contains(episode.id),
+            monitorBusy: _togglingMonitored.contains(episode.id),
             onTap: _selecting
                 ? () => _toggleSelected(episode)
                 : () => _openEpisode(episode),
             onLongPress: _selecting ? null : () => _showEpisodeMenu(episode),
             onSearch: () => _automaticEpisodeSearch(episode),
+            onToggleMonitored: () => _toggleEpisodeMonitored(episode),
           );
         },
       ),
@@ -496,24 +513,40 @@ class _SeasonHeader extends StatelessWidget {
   }
 }
 
+/// Tap-target width of an episode row's trailing buttons. Tighter than the
+/// 48px default so the monitor bookmark and the magnifier both fit beside the
+/// title on a narrow phone.
+const double _iconSlot = 40;
+
 class _EpisodeTile extends StatelessWidget {
   final SonarrEpisode episode;
   final SonarrQueueItem? queueItem;
   final bool selecting;
   final bool selected;
+  final bool monitorBusy;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
   final VoidCallback onSearch;
+  final VoidCallback onToggleMonitored;
 
   const _EpisodeTile({
     required this.episode,
     required this.queueItem,
     required this.selecting,
     required this.selected,
+    required this.monitorBusy,
     required this.onTap,
     required this.onLongPress,
     required this.onSearch,
+    required this.onToggleMonitored,
   });
+
+  /// Filled accent bookmark = monitored, hollow grey = not — the same encoding
+  /// the season cards use one level up.
+  Widget _monitorIcon() => Icon(
+        episode.monitored ? Icons.bookmark : Icons.bookmark_border,
+        color: episode.monitored ? AppTheme.accent : AppTheme.textSecondary,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -583,12 +616,38 @@ class _EpisodeTile extends StatelessWidget {
                 ],
               ),
             ),
-            if (!selecting)
+            if (selecting)
+              // The buttons step aside for selection mode, but the monitored
+              // signal stays: it is part of deciding what to search.
+              SizedBox(
+                width: _iconSlot,
+                height: _iconSlot,
+                child: Center(child: _monitorIcon()),
+              )
+            else ...[
+              IconButton(
+                icon: monitorBusy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.accent))
+                    : _monitorIcon(),
+                tooltip: episode.monitored ? 'Stop monitoring' : 'Monitor',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                    width: _iconSlot, height: _iconSlot),
+                onPressed: monitorBusy ? null : onToggleMonitored,
+              ),
               IconButton(
                 icon: const Icon(Icons.search, color: AppTheme.textSecondary),
                 tooltip: 'Automatic search',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                    width: _iconSlot, height: _iconSlot),
                 onPressed: onSearch,
               ),
+            ],
           ],
         ),
       ),

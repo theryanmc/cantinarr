@@ -56,6 +56,7 @@ Map<String, dynamic> _episodeJson({
   required bool hasFile,
   required bool aired,
   int seasonNumber = 1,
+  bool monitored = false,
 }) =>
     {
       'id': id,
@@ -66,7 +67,7 @@ Map<String, dynamic> _episodeJson({
       'hasFile': hasFile,
       // Downloaded episodes carry their file id (used by delete-file flows).
       'episodeFileId': hasFile ? id * 10 : 0,
-      'monitored': false,
+      'monitored': monitored,
       'airDateUtc': DateTime.now()
           .toUtc()
           .add(Duration(days: aired ? -30 : 30))
@@ -294,6 +295,87 @@ void main() {
         'episodeIds': [102],
         'monitored': true
       });
+    });
+
+    // Episode 101 monitored, 102 and 103 not — enough to tell the two
+    // bookmark states apart on screen.
+    final mixedEpisodes = [
+      _episodeJson(
+          id: 101,
+          episodeNumber: 1,
+          hasFile: true,
+          aired: true,
+          monitored: true),
+      _episodeJson(id: 102, episodeNumber: 2, hasFile: false, aired: true),
+      _episodeJson(id: 103, episodeNumber: 3, hasFile: false, aired: false),
+    ];
+
+    /// The [icon] inside the row whose title is [episodeTitle].
+    Finder rowIcon(String episodeTitle, IconData icon) => find.descendant(
+          of: find
+              .ancestor(
+                  of: find.text(episodeTitle), matching: find.byType(InkWell))
+              .first,
+          matching: find.byIcon(icon),
+        );
+
+    testWidgets('every row shows whether that episode is monitored',
+        (tester) async {
+      await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
+
+      expect(find.byIcon(Icons.bookmark), findsOneWidget);
+      expect(find.byIcon(Icons.bookmark_border), findsNWidgets(2));
+      expect(rowIcon('Episode 1', Icons.bookmark), findsOneWidget);
+      expect(rowIcon('Episode 2', Icons.bookmark_border), findsOneWidget);
+    });
+
+    testWidgets('the row bookmark toggles monitoring without a refetch',
+        (tester) async {
+      final adapter = await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
+
+      await tester.tap(rowIcon('Episode 2', Icons.bookmark_border));
+      await tester.pumpAndSettle();
+
+      final puts = ofMethod(adapter, 'PUT');
+      expect(puts, hasLength(1));
+      expect(puts.single.path, endsWith('/episode/monitor'));
+      expect(puts.single.body, {
+        'episodeIds': [102],
+        'monitored': true
+      });
+      // Only that row flips, and the season is not fetched again.
+      expect(rowIcon('Episode 2', Icons.bookmark), findsOneWidget);
+      expect(find.byIcon(Icons.bookmark), findsNWidgets(2));
+      expect(
+        adapter.requests
+            .where((r) => r.method == 'GET' && r.path.endsWith('/episode')),
+        hasLength(1),
+      );
+
+      // And back off again.
+      await tester.tap(rowIcon('Episode 2', Icons.bookmark));
+      await tester.pumpAndSettle();
+      expect(ofMethod(adapter, 'PUT').last.body, {
+        'episodeIds': [102],
+        'monitored': false
+      });
+      expect(rowIcon('Episode 2', Icons.bookmark_border), findsOneWidget);
+    });
+
+    testWidgets('selection mode keeps the monitored signal, drops the buttons',
+        (tester) async {
+      await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
+
+      await tester.longPress(find.text('Episode 2'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Select Episodes'));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Monitor'), findsNothing);
+      expect(find.byTooltip('Stop monitoring'), findsNothing);
+      expect(find.byTooltip('Automatic search'), findsNothing);
+      expect(find.byIcon(Icons.bookmark), findsOneWidget);
+      expect(find.byIcon(Icons.bookmark_border), findsNWidgets(2));
     });
 
     testWidgets('episode menu deletes a downloaded file after confirming',
