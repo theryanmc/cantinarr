@@ -154,6 +154,40 @@ class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+// _RejectedPostAdapter answers every status check with "not requested" and
+// rejects the POST outright with an error the app has no specific label for —
+// the shape of a live arr-side validation refusal that mutated nothing.
+class _RejectedPostAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.method == 'POST') {
+      return ResponseBody.fromString(
+        jsonEncode({
+          'error': 'chaptarr add book: chaptarr POST returned status 400',
+        }),
+        500,
+        headers: {
+          'content-type': ['application/json'],
+        },
+      );
+    }
+    return ResponseBody.fromString(
+      jsonEncode({'status': 'unavailable'}),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
 class _DeferredPostRefreshAdapter implements HttpClientAdapter {
   final refreshResponse = Completer<ResponseBody>();
   var statusChecks = 0;
@@ -669,13 +703,28 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
     expect(find.text('Request'), findsOneWidget);
+    // The refresh proved the tapped format landed despite the failed call, so
+    // the announcement matches the row instead of disowning the outcome.
+    expect(find.text('eBook requested.'), findsOneWidget);
+  });
+
+  testWidgets('an answered rejection that changed nothing names the failure',
+      (tester) async {
+    final adapter = _RejectedPostAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = adapter;
+    await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+    await tester.pumpAndSettle();
+    await tester.tap(_row('ebook'));
+    await tester.pumpAndSettle();
+
+    // The server answered, so the outcome is a confirmed failure — not the
+    // hedged couldn't-confirm line — and the row stays requestable.
     expect(
-      find.text(
-        'The request outcome couldn’t be confirmed. The book status was '
-        'refreshed.',
-      ),
+      find.text('The library could not complete this request. Try again later.'),
       findsOneWidget,
     );
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
   });
 
   testWidgets('a successful POST stays disabled until refreshed truth arrives',

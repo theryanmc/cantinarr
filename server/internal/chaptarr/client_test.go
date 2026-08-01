@@ -2,6 +2,7 @@ package chaptarr
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -363,6 +364,64 @@ func TestAddBookToleratesStringGenres(t *testing.T) {
 	}
 	if len(book.Genres) != 2 || book.Genres[0] != "Science Fiction" {
 		t.Fatalf("genres = %#v, want [Science Fiction, Fantasy]", []string(book.Genres))
+	}
+}
+
+// TestAddBookClassifiesAuthorPendingImport pins the 0.9.879+ refusal: the fork
+// queues an unknown author for an asynchronous metadata import and 400s the add
+// until it lands. The body below is the live validation payload shape; the
+// classified error must be errors.Is-able without echoing the upstream text.
+func TestAddBookClassifiesAuthorPendingImport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "gr:253739298"})
+	if !errors.Is(err, ErrAuthorPendingImport) {
+		t.Fatalf("AddBook error = %v, want ErrAuthorPendingImport", err)
+	}
+	if strings.Contains(err.Error(), "Shivakumar") {
+		t.Fatalf("error echoed upstream validation text: %v", err)
+	}
+}
+
+// TestAddBookOtherRejectionsStayGenericStatusErrors keeps every other non-2xx —
+// a different validation failure, a non-array error body, a plain 500 — on the
+// existing sanitized status-only error, never the pending-import verdict.
+func TestAddBookOtherRejectionsStayGenericStatusErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"different validation", http.StatusBadRequest, `[{"propertyName":"Editions","errorMessage":"Cannot add book: no editions were supplied."}]`},
+		{"non-array body", http.StatusBadRequest, `{"message":"Validation failed"}`},
+		{"server error", http.StatusInternalServerError, `{"message":"Object reference not set to an instance of an object."}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+
+			_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "x"})
+			if err == nil {
+				t.Fatal("AddBook returned nil error")
+			}
+			if errors.Is(err, ErrAuthorPendingImport) {
+				t.Fatalf("error = %v, misclassified as author-pending-import", err)
+			}
+			want := fmt.Sprintf("returned status %d", tc.status)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want it to carry %q", err, want)
+			}
+		})
 	}
 }
 

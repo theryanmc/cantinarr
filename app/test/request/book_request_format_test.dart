@@ -149,6 +149,40 @@ void main() {
     }
   });
 
+  test('an answered rejection is definitive; gateway statuses stay unconfirmed',
+      () async {
+    Future<RequestSubmissionException> submit(int statusCode) async {
+      final adapter = _CaptureAdapter(
+        statusCode: statusCode,
+        response: {'error': 'add failed in a way the app has no label for'},
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+      try {
+        await RequestService(backendDio: dio).requestBook(
+          foreignId: 'book-123',
+          title: 'A Book',
+          format: BookRequestFormat.ebook,
+        );
+        fail('requestBook did not throw for status $statusCode');
+      } on RequestSubmissionException catch (e) {
+        return e;
+      }
+    }
+
+    final rejected = await submit(500);
+    expect(rejected.definitive, isTrue,
+        reason: 'the server answered, so the failure is a confirmed outcome');
+    expect(rejected.message,
+        'The library could not complete this request. Try again later.');
+
+    final gateway = await submit(503);
+    expect(gateway.definitive, isFalse,
+        reason: 'a proxy answering for the server leaves the outcome unknown');
+    expect(gateway.message,
+        'This book could not be requested. Check the connection and try again.');
+  });
+
   test('pending book requests expose media and format labels', () {
     final item = PendingRequestItem.fromJson({
       'id': 1,

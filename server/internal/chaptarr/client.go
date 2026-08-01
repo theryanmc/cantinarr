@@ -906,13 +906,71 @@ func (c *Client) AddAuthor(req AddAuthorRequest) (*Author, error) {
 	return &author, nil
 }
 
+// ErrAuthorPendingImport reports Chaptarr refusing an add because its metadata
+// service does not know the book's author yet: newer forks queue the author
+// for an asynchronous import and reject the add until that import lands
+// (verified live against Chaptarr 0.9.879). The condition heals on its own, so
+// callers should keep the request alive rather than fail it.
+var ErrAuthorPendingImport = errors.New("the book's author is still being imported by the library's metadata service")
+
 // AddBook adds a single book (and, if needed, its author) to the library.
+// Unlike the generic helpers it inspects a rejection's structured validation
+// fields so an author-pending-import refusal stays distinguishable; raw error
+// bodies are still never propagated (they can contain credentials or URLs).
 func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
-	var book Book
-	if err := c.do("POST", "/api/v1/book", req, &book); err != nil {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr add book: marshal request body: %w", err)
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/v1/book", bytes.NewReader(data))
+	if err != nil {
 		return nil, fmt.Errorf("chaptarr add book: %w", err)
 	}
+	httpReq.Header.Set("X-Api-Key", c.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		// Host-free, like doWith: transport errors embed the full request URL.
+		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book: %s", transporterr.Summarize(err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusBadRequest && addRejectedForPendingAuthorImport(resp.Body) {
+			return nil, fmt.Errorf("chaptarr add book: %w", ErrAuthorPendingImport)
+		}
+		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode)
+	}
+	var book Book
+	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
+		return nil, fmt.Errorf("chaptarr add book: decode response: %w", err)
+	}
 	return &book, nil
+}
+
+// addRejectedForPendingAuthorImport reports whether a 400 validation payload is
+// the fork's "author not on the metadata server yet, queued for import"
+// refusal. Only the structured propertyName/errorMessage fields are inspected,
+// and the match is phrase-based so wording drift fails closed to the generic
+// status error rather than misclassifying a different rejection.
+func addRejectedForPendingAuthorImport(body io.Reader) bool {
+	var failures []struct {
+		PropertyName string `json:"propertyName"`
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&failures); err != nil {
+		return false
+	}
+	for _, failure := range failures {
+		if !strings.EqualFold(strings.TrimSpace(failure.PropertyName), "author") {
+			continue
+		}
+		message := strings.ToLower(failure.ErrorMessage)
+		if strings.Contains(message, "queued for import") ||
+			(strings.Contains(message, "metadata server") && strings.Contains(message, "available")) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetBookMonitored toggles monitoring for the given books. Chaptarr's

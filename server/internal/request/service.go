@@ -48,6 +48,12 @@ var (
 // could not be added is sitting in the approval queue instead.
 const bookParkedMessage = "This book couldn't be matched in the library, so it was saved as a request for an admin instead of being added automatically."
 
+// bookAuthorImportingMessage explains a park caused by the library's metadata
+// service still importing the book's author (chaptarr.ErrAuthorPendingImport):
+// the add works once that import lands, so the request waits in the approval
+// queue instead of failing.
+const bookAuthorImportingMessage = "This book's author is still being imported into the library, so it was saved as a request for an admin instead of being added automatically."
+
 // Season scope choices a user (or admin) can attach to a TV request.
 const (
 	SeasonScopeAll    = "all"
@@ -729,20 +735,32 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 
 	status, title, err := s.addToArr(resolved)
 	if err != nil {
-		// A book whose metadata record can't be re-found is the one add failure
-		// that must not end with the request on the floor: the requester wanted
-		// this title, nothing about it is invalid, and an admin who adds the
-		// author in Chaptarr can then approve the parked row and have it work.
-		// Every other failure (no instance, no root folder, ambiguous profiles)
-		// is a configuration answer the requester needs to see, not queue.
-		if resolved.mediaType == "book" && errors.Is(err, ErrBookMetadataUnresolved) {
-			// The lock is already held for books, so park through the unlocked path.
-			parked, parkErr := s.createPendingUnlocked(resolved)
-			if parkErr != nil {
-				return nil, err
+		// A book whose add cannot complete yet must not end with the request on
+		// the floor: the requester wanted this title and nothing about it is
+		// invalid. Two such failures park into the approval queue — a metadata
+		// record that can't be re-found (an admin who adds the author in Chaptarr
+		// can then approve the parked row and have it work), and an author the
+		// library's metadata service is still importing (the import completes on
+		// its own; approving afterwards replays the add). Every other failure (no
+		// instance, no root folder, ambiguous profiles) is a configuration answer
+		// the requester needs to see, not queue.
+		if resolved.mediaType == "book" {
+			parkMessage := ""
+			switch {
+			case errors.Is(err, ErrBookMetadataUnresolved):
+				parkMessage = bookParkedMessage
+			case errors.Is(err, chaptarr.ErrAuthorPendingImport):
+				parkMessage = bookAuthorImportingMessage
 			}
-			parked.Message = bookParkedMessage
-			return parked, nil
+			if parkMessage != "" {
+				// The lock is already held for books, so park through the unlocked path.
+				parked, parkErr := s.createPendingUnlocked(resolved)
+				if parkErr != nil {
+					return nil, err
+				}
+				parked.Message = parkMessage
+				return parked, nil
+			}
 		}
 		return nil, err
 	}
