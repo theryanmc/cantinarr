@@ -13,6 +13,7 @@ import 'edit_series_screen.dart';
 import 'series_actions.dart';
 import 'sonarr_releases_screen.dart';
 import 'sonarr_season_screen.dart';
+import 'widgets/monitor_bookmark.dart';
 import 'widgets/season_availability.dart';
 
 /// Series detail: an "All Seasons" summary plus a per-season list with
@@ -48,6 +49,13 @@ class _SonarrSeriesDetailScreenState
   Map<int, List<SonarrQueueItem>> _queueBySeason = const {};
   List<SonarrQueueItem> _queue = const [];
 
+  /// How many episodes each season has left unmonitored. Season statistics
+  /// cannot answer this — the episodes they leave out of `episodeCount` are
+  /// unaired *or* unmonitored with no way to tell which — so the episode list
+  /// is the only source, and a season missing from this map simply has no
+  /// answer yet (or the fetch failed) and shows the plain two-state bookmark.
+  Map<int, int> _unmonitoredBySeason = const {};
+
   @override
   void initState() {
     super.initState();
@@ -62,18 +70,23 @@ class _SonarrSeriesDetailScreenState
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      // The queue only annotates the cards, so a queue that fails to load
-      // leaves the screen intact rather than taking it down.
+      // The queue and the episode list only annotate the cards, so either one
+      // failing to load leaves the screen intact rather than taking it down.
       final queueFuture = _service
           .getSeriesQueue(_series.id)
           .catchError((_) => const <SonarrQueueItem>[]);
+      final episodesFuture = _service
+          .getEpisodes(_series.id)
+          .catchError((_) => const <SonarrEpisode>[]);
       final series = await _service.getSeriesById(_series.id);
       final queue = await queueFuture;
+      final episodes = await episodesFuture;
       if (!mounted) return;
       setState(() {
         _series = series;
         _queue = queue;
         _queueBySeason = _bySeason(queue);
+        _unmonitoredBySeason = _unmonitoredCounts(episodes);
         _isLoading = false;
         _error = null;
       });
@@ -84,6 +97,17 @@ class _SonarrSeriesDetailScreenState
         _error = 'Failed to load series: $e';
       });
     }
+  }
+
+  /// Unmonitored episodes per season, counting every season the list covers so
+  /// a fully monitored season records a 0 rather than falling back to "no
+  /// answer". An empty list (the fetch failed) leaves every season unanswered.
+  static Map<int, int> _unmonitoredCounts(List<SonarrEpisode> episodes) {
+    final out = <int, int>{};
+    for (final e in episodes) {
+      out[e.seasonNumber] = (out[e.seasonNumber] ?? 0) + (e.monitored ? 0 : 1);
+    }
+    return out;
   }
 
   static Map<int, List<SonarrQueueItem>> _bySeason(
@@ -143,10 +167,27 @@ class _SonarrSeriesDetailScreenState
     } finally {
       if (mounted) setState(() => _togglingSeasons.remove(season.seasonNumber));
     }
+    _refreshUnmonitoredCounts();
   }
 
-  void _openSeason(SonarrSeason season) {
-    Navigator.of(context, rootNavigator: true).push(
+  /// Re-reads the episode list after a monitoring change. Sonarr cascades a
+  /// season's monitored flag onto its episodes, so the counts the bookmarks
+  /// are drawn from go stale the moment a season is toggled.
+  Future<void> _refreshUnmonitoredCounts() async {
+    try {
+      final episodes = await _service.getEpisodes(_series.id);
+      if (!mounted) return;
+      setState(() => _unmonitoredBySeason = _unmonitoredCounts(episodes));
+    } catch (_) {
+      // Leave the bookmarks on their last known fill; a refresh fixes them.
+    }
+  }
+
+  /// The episode list is where monitoring, files and grabs change, so the
+  /// cards are re-read on the way back rather than left showing what was true
+  /// before the drill-down.
+  Future<void> _openSeason(SonarrSeason season) async {
+    await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => SonarrSeasonScreen(
           instanceId: widget.instanceId,
@@ -155,11 +196,12 @@ class _SonarrSeriesDetailScreenState
         ),
       ),
     );
+    if (mounted) _load();
   }
 
   /// Every episode across all seasons, grouped by season headers.
-  void _openAllSeasons() {
-    Navigator.of(context, rootNavigator: true).push(
+  Future<void> _openAllSeasons() async {
+    await Navigator.of(context, rootNavigator: true).push(
       AmbientPageRoute(
         builder: (_) => SonarrSeasonScreen(
           instanceId: widget.instanceId,
@@ -167,6 +209,7 @@ class _SonarrSeriesDetailScreenState
         ),
       ),
     );
+    if (mounted) _load();
   }
 
   void _toast(String message) {
@@ -310,6 +353,8 @@ class _SonarrSeriesDetailScreenState
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
                             queue: _queueBySeason[s.seasonNumber] ?? const [],
+                            unmonitoredEpisodes:
+                                _unmonitoredBySeason[s.seasonNumber],
                             busy: _togglingSeasons.contains(s.seasonNumber),
                             onTap: () => _openSeason(s),
                             onLongPress: () => _showSeasonActions(s),
@@ -422,6 +467,11 @@ class _AllSeasonsCard extends StatelessWidget {
 class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
   final List<SonarrQueueItem> queue;
+
+  /// Episodes in this season Sonarr is not monitoring, or null when the
+  /// episode list has not been read (or failed) and the bookmark can only
+  /// speak for the season flag.
+  final int? unmonitoredEpisodes;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -430,11 +480,33 @@ class _SeasonCard extends StatelessWidget {
   const _SeasonCard({
     required this.season,
     required this.queue,
+    required this.unmonitoredEpisodes,
     required this.busy,
     required this.onTap,
     required this.onLongPress,
     required this.onToggleMonitored,
   });
+
+  MonitorFill get _fill => !season.monitored
+      ? MonitorFill.none
+      : (unmonitoredEpisodes ?? 0) > 0
+          ? MonitorFill.partial
+          : MonitorFill.full;
+
+  /// The tooltip carries the action, plus the reason the bookmark looks
+  /// half-filled — the availability line calls a still-airing season's
+  /// remainder "unaired", so nothing else on the card says it.
+  String get _tooltip {
+    if (!season.monitored) return 'Monitor';
+    final left = unmonitoredEpisodes ?? 0;
+    if (left == 0) return 'Stop monitoring';
+    return 'Stop monitoring — $left '
+        '${left == 1 ? 'episode is' : 'episodes are'} unmonitored';
+  }
+
+  /// A season nobody is monitoring fades, the same way its episodes do one
+  /// level down. The bookmark keeps its full strength — it is the way back.
+  double get _contentOpacity => season.monitored ? 1 : 0.5;
 
   @override
   Widget build(BuildContext context) {
@@ -452,61 +524,62 @@ class _SeasonCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
-              width: 44,
-              height: 60,
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Icon(
-                Icons.video_library_outlined,
-                color: season.monitored
-                    ? AppTheme.available
-                    : AppTheme.unavailable,
-                size: 22,
+            Opacity(
+              opacity: _contentOpacity,
+              child: Container(
+                width: 44,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: AppTheme.surfaceVariant,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(
+                  Icons.video_library_outlined,
+                  color: season.monitored
+                      ? AppTheme.available
+                      : AppTheme.unavailable,
+                  size: 22,
+                ),
               ),
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(seasonLabel(season.seasonNumber),
-                      style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600)),
-                  if (stats != null && stats.sizeOnDisk > 0) ...[
-                    const SizedBox(height: 4),
-                    Text(stats.sizeFormatted,
+              child: Opacity(
+                opacity: _contentOpacity,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(seasonLabel(season.seasonNumber),
                         style: const TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 13)),
+                            color: AppTheme.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600)),
+                    if (stats != null && stats.sizeOnDisk > 0) ...[
+                      const SizedBox(height: 4),
+                      Text(stats.sizeFormatted,
+                          style: const TextStyle(
+                              color: AppTheme.textSecondary, fontSize: 13)),
+                    ],
+                    const SizedBox(height: 6),
+                    _AvailabilityLine(
+                      stats: stats,
+                      moreToCome: stats?.nextAiring != null,
+                      queue: queue,
+                    ),
                   ],
-                  const SizedBox(height: 6),
-                  _AvailabilityLine(
-                    stats: stats,
-                    moreToCome: stats?.nextAiring != null,
-                    queue: queue,
-                  ),
-                ],
+                ),
               ),
             ),
             IconButton(
               onPressed: busy ? null : onToggleMonitored,
-              tooltip: season.monitored ? 'Stop monitoring' : 'Monitor',
+              tooltip: _tooltip,
               icon: busy
                   ? const SizedBox(
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: AppTheme.accent))
-                  : Icon(
-                      season.monitored ? Icons.bookmark : Icons.bookmark_border,
-                      color: season.monitored
-                          ? AppTheme.accent
-                          : AppTheme.textSecondary,
-                    ),
+                  : MonitorBookmark(_fill),
             ),
           ],
         ),
