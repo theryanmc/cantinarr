@@ -349,6 +349,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	// Flutter sends protocols: ['Bearer', 'actualToken']
 	protocols := websocket.Subprotocols(r)
 	if len(protocols) < 2 || protocols[0] != "Bearer" {
+		log.Printf("websocket: 401 from %s: no bearer subprotocol", r.RemoteAddr)
 		http.Error(w, "missing auth", http.StatusUnauthorized)
 		return
 	}
@@ -356,6 +357,9 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 	claims, _, err := h.authService.AuthenticateToken(token)
 	if err != nil {
+		// Reason and source only — never token material (see the subprotocol
+		// echo note below for the same rule on the success path).
+		log.Printf("websocket: 401 from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
