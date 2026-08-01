@@ -201,6 +201,13 @@ func main() {
 	remediationService := remediation.NewService(database, registry, bridge, notifier)
 	remediationHandler := remediation.NewHandler(remediationService)
 
+	// Parked book requests (Chaptarr 0.9.879+ still importing the author) are
+	// server-owned: the sweep retries them to completion and only a stall
+	// becomes an auto-resolving system issue — wired here because the issue
+	// store lives in remediation.
+	requestService.SetBookImportStallSink(remediationService)
+	requestService.StartBookParkMaintenance(ctx)
+
 	// Proxy handler
 	proxyHandler := proxy.NewHandler(instanceStore)
 

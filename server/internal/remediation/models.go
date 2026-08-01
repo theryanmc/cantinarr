@@ -76,6 +76,7 @@ const (
 	ResolutionAdminCompleted       = "admin_completed"
 	ResolutionAIHealthRestored     = "ai_health_restored"
 	ResolutionPushDeliveryRestored = "push_delivery_restored"
+	ResolutionBookImportCleared    = "book_import_cleared"
 	ResolutionLegacyUnknown        = "legacy_unknown"
 )
 

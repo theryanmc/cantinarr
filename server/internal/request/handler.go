@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,6 +63,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.service.CreateMediaRequest(claims.UserID, &req)
 	if err != nil {
+		// Service errors are host-free by construction, so the one line that
+		// makes a failed create diagnosable from the container log is safe.
+		log.Printf("request: create %s request failed: %v", req.MediaType, err)
 		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
@@ -252,6 +256,7 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.ApproveRequest(claims.UserID, id, &override)
 	if err != nil {
+		log.Printf("request: approve request %d failed: %v", id, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

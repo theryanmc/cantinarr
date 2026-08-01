@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     book_format TEXT,
     book_record_id INTEGER,
     search_term TEXT,
+    park_reason TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
@@ -774,6 +775,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// fails toward human review.
 		{alter: "ALTER TABLE issues ADD COLUMN problem_kind TEXT"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN auto_rule_id INTEGER"},
+		// Why a pending book request is parked rather than awaiting a human
+		// decision ('author_import': Chaptarr's metadata service is still
+		// importing the author; the server retries and completes it itself).
+		// NULL for ordinary approval-queue rows, so every existing pending row
+		// keeps meaning "a human decides".
+		{alter: "ALTER TABLE request_log ADD COLUMN park_reason TEXT"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

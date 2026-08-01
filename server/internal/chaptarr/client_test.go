@@ -388,16 +388,33 @@ func TestAddBookClassifiesAuthorPendingImport(t *testing.T) {
 	}
 }
 
+// TestAddBookClassifiesEditionsNotHydrated pins the second named 0.9.879+
+// refusal: an add whose payload carried no editions before the fork's metadata
+// service could hydrate them.
+func TestAddBookClassifiesEditionsNotHydrated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `[{"propertyName":"Editions","errorMessage":"Cannot add book: no editions were supplied. Retry the add so Chaptarr can hydrate edition metadata from the metadata server."}]`)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "key").AddBook(AddBookRequest{ForeignBookID: "x"})
+	if !errors.Is(err, ErrEditionsNotHydrated) {
+		t.Fatalf("AddBook error = %v, want ErrEditionsNotHydrated", err)
+	}
+}
+
 // TestAddBookOtherRejectionsStayGenericStatusErrors keeps every other non-2xx —
-// a different validation failure, a non-array error body, a plain 500 — on the
-// existing sanitized status-only error, never the pending-import verdict.
+// an unmatched validation failure, a non-array error body, a plain 500 — on the
+// existing sanitized status-only error, never a classified verdict.
 func TestAddBookOtherRejectionsStayGenericStatusErrors(t *testing.T) {
 	cases := []struct {
 		name   string
 		status int
 		body   string
 	}{
-		{"different validation", http.StatusBadRequest, `[{"propertyName":"Editions","errorMessage":"Cannot add book: no editions were supplied."}]`},
+		{"unmatched validation", http.StatusBadRequest, `[{"propertyName":"QualityProfileId","errorMessage":"At least one quality profile must be selected"}]`},
 		{"non-array body", http.StatusBadRequest, `{"message":"Validation failed"}`},
 		{"server error", http.StatusInternalServerError, `{"message":"Object reference not set to an instance of an object."}`},
 	}
@@ -414,8 +431,8 @@ func TestAddBookOtherRejectionsStayGenericStatusErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("AddBook returned nil error")
 			}
-			if errors.Is(err, ErrAuthorPendingImport) {
-				t.Fatalf("error = %v, misclassified as author-pending-import", err)
+			if errors.Is(err, ErrAuthorPendingImport) || errors.Is(err, ErrEditionsNotHydrated) {
+				t.Fatalf("error = %v, misclassified as a named rejection", err)
 			}
 			want := fmt.Sprintf("returned status %d", tc.status)
 			if !strings.Contains(err.Error(), want) {

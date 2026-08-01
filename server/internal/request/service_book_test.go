@@ -2,6 +2,7 @@ package request
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -2083,16 +2084,24 @@ func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
 
 // TestBookRequestParksWhenAuthorImportIsPending covers the 0.9.879+ Chaptarr
 // behavior of queuing an unknown author for an asynchronous metadata import and
-// rejecting the add until it lands: the request must park as pending with its
-// own explanation instead of failing, and approving it after the import
-// completes must replay the add and succeed.
+// rejecting the add until it lands. The park is server-owned: the requester is
+// told "requested, finishes automatically", no admin surface counts or pages
+// it, an early approval is refused with the plan, and the maintenance sweep
+// completes it silently once the import lands.
 func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	var authorImported atomic.Bool
+	var addSucceeded atomic.Bool
 	var addAttempts atomic.Int32
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			// The added record appears in the live library only once the add
+			// succeeded, so post-sweep status reads resolve live truth.
+			if addSucceeded.Load() {
+				_, _ = w.Write([]byte(`[{"id":42,"title":"The CEO Mindset","foreignBookId":"gr:253739298","monitored":true,"mediaType":"ebook","author":{"id":7,"authorName":"Shiv Shivakumar"},"authorId":7,"statistics":{"bookFileCount":0}}]`))
+				return
+			}
 			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
 			_, _ = w.Write([]byte(`[
@@ -2116,6 +2125,7 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 				_, _ = w.Write([]byte(`[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`))
 				return
 			}
+			addSucceeded.Store(true)
 			_, _ = w.Write([]byte(`{"id":42,"title":"The CEO Mindset","foreignBookId":"gr:253739298","monitored":true}`))
 		default:
 			http.Error(w, "unexpected route", http.StatusNotFound)
@@ -2124,6 +2134,8 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
 	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:253739298",
@@ -2137,38 +2149,231 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	if addAttempts.Load() == 0 {
 		t.Fatal("AddBook was never attempted; the park must come from the live refusal")
 	}
-	if resp.Status != StatusPending {
-		t.Fatalf("status = %s, want pending", resp.Status)
+	if resp.Status != StatusRequested {
+		t.Fatalf("status = %s, want requested (the park is invisible to the requester)", resp.Status)
+	}
+	if got := resp.BookFormats[BookFormatEbook]; got != StatusRequested {
+		t.Fatalf("book_formats[ebook] = %q, want requested", got)
 	}
 	if resp.Message != bookAuthorImportingMessage {
 		t.Fatalf("message = %q, want the author-importing explanation", resp.Message)
 	}
-	var storedSearch string
+	var requestID int64
+	var storedSearch, storedPark string
 	if err := svc.db.QueryRow(
-		"SELECT COALESCE(search_term,'') FROM request_log WHERE user_id=? AND foreign_id='gr:253739298' AND media_type='book' AND status='pending'",
+		"SELECT id, COALESCE(search_term,''), COALESCE(park_reason,'') FROM request_log WHERE user_id=? AND foreign_id='gr:253739298' AND media_type='book' AND status='pending'",
 		uid,
-	).Scan(&storedSearch); err != nil {
+	).Scan(&requestID, &storedSearch, &storedPark); err != nil {
 		t.Fatalf("read parked row: %v", err)
 	}
 	if storedSearch != "the ceo mindset" {
 		t.Fatalf("parked search_term = %q, want the requester's search preserved for replay", storedSearch)
 	}
-
-	// The metadata service finishes the author import; approving the parked
-	// request must now replay the add and succeed.
-	authorImported.Store(true)
-	adminID := createTestAdmin(t, svc)
-	pending, err := svc.ListPending()
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("ListPending = %+v err=%v, want exactly 1", pending, err)
+	if storedPark != bookParkReasonAuthorImport {
+		t.Fatalf("park_reason = %q, want %q", storedPark, bookParkReasonAuthorImport)
 	}
-	decision, err := svc.ApproveRequest(adminID, pending[0].ID, nil)
+	if len(rec.adminEvents) != 0 {
+		t.Fatalf("admin events = %+v, want none (a server-owned park pages nobody)", rec.adminEvents)
+	}
+	if pending, err := svc.ListPending(); err != nil || len(pending) != 0 {
+		t.Fatalf("ListPending = %+v err=%v, want empty (no decision exists)", pending, err)
+	}
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("PendingCount = %d err=%v, want 0", count, err)
+	}
+	status, err := svc.GetUserBookStatusForInstance(uid, "gr:253739298", "")
 	if err != nil {
-		t.Fatalf("ApproveRequest after the import landed: %v", err)
+		t.Fatalf("GetUserBookStatusForInstance: %v", err)
 	}
-	if decision.Status != StatusRequested {
-		t.Fatalf("approved status = %s, want requested", decision.Status)
+	if got := status.BookFormats[BookFormatEbook]; got != StatusRequested {
+		t.Fatalf("status read = %q, want requested (pending would narrate an approval that is not happening)", got)
 	}
+
+	// Approving before the import lands is a refused non-event: the row stays
+	// parked and the admin is handed the plan.
+	adminID := createTestAdmin(t, svc)
+	if _, err := svc.ApproveRequest(adminID, requestID, nil); err == nil ||
+		!strings.Contains(err.Error(), "completes automatically") {
+		t.Fatalf("early ApproveRequest error = %v, want the still-importing plan", err)
+	}
+
+	// The import lands; one maintenance pass completes the request silently.
+	authorImported.Store(true)
+	rec.userEvents = nil
+	svc.SweepParkedBookRequests()
+	var finalStatus string
+	var parkAfter sql.NullString
+	var approvedBy sql.NullInt64
+	if err := svc.db.QueryRow(
+		"SELECT status, park_reason, approved_by FROM request_log WHERE id = ?", requestID,
+	).Scan(&finalStatus, &parkAfter, &approvedBy); err != nil {
+		t.Fatalf("read completed row: %v", err)
+	}
+	if finalStatus != StatusRequested {
+		t.Fatalf("swept status = %q, want requested", finalStatus)
+	}
+	if parkAfter.Valid {
+		t.Fatalf("park_reason = %q after completion, want NULL", parkAfter.String)
+	}
+	if approvedBy.Valid {
+		t.Fatalf("approved_by = %d, want NULL (nobody decided a system completion)", approvedBy.Int64)
+	}
+	for _, ev := range rec.userEvents {
+		if ev.userID == uid {
+			t.Fatalf("owner received %+v; a system completion is silent for the owner", ev)
+		}
+	}
+	status, err = svc.GetUserBookStatusForInstance(uid, "gr:253739298", "")
+	if err != nil {
+		t.Fatalf("GetUserBookStatusForInstance after sweep: %v", err)
+	}
+	if got := status.BookFormats[BookFormatEbook]; got != StatusRequested {
+		t.Fatalf("post-sweep status = %q, want requested from live truth", got)
+	}
+}
+
+// TestSweepDemotesParksThatGiveUpOrFailUnexpectedly pins the two hand-off
+// edges: a park older than the give-up horizon and a park whose retry fails
+// for a reason other than the still-pending import both demote to an ordinary
+// approval-queue row, firing the request_pending page that was withheld at
+// park time — the moment a human decision first exists.
+func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			// The record has vanished from the provider: the retry fails with
+			// unresolved metadata, which is not the pending import.
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
+
+	insertPark := func(foreignID, title, requestedAt string) int64 {
+		res, err := svc.db.Exec(
+			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason, requested_at)
+			 VALUES (?, 0, ?, 'ebook', ?, 'book', ?, ?, ?, ?)`,
+			uid, foreignID, testInstanceID(t, svc), title, StatusPending, bookParkReasonAuthorImport, requestedAt,
+		)
+		if err != nil {
+			t.Fatalf("insert park: %v", err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	oldID := insertPark("gr:old", "An Abandoned Wait", "2020-01-01 00:00:00")
+	freshID := insertPark("gr:fresh", "A Vanished Record", "2049-01-01 00:00:00")
+	// The fresh row's requested_at is future-dated so only the demotion paths
+	// differ: old → give-up, fresh → unexpected retry failure. Normalize it to
+	// now so age math stays sane.
+	if _, err := svc.db.Exec("UPDATE request_log SET requested_at = datetime('now') WHERE id = ?", freshID); err != nil {
+		t.Fatalf("normalize requested_at: %v", err)
+	}
+
+	svc.SweepParkedBookRequests()
+
+	for _, id := range []int64{oldID, freshID} {
+		var status string
+		var park sql.NullString
+		if err := svc.db.QueryRow("SELECT status, park_reason FROM request_log WHERE id = ?", id).Scan(&status, &park); err != nil {
+			t.Fatalf("read row %d: %v", id, err)
+		}
+		if status != StatusPending || park.Valid {
+			t.Fatalf("row %d = status %q park %v, want an ordinary pending row", id, status, park)
+		}
+	}
+	if pending, err := svc.ListPending(); err != nil || len(pending) != 2 {
+		t.Fatalf("ListPending = %+v err=%v, want both demoted rows visible", pending, err)
+	}
+	pages := 0
+	for _, ev := range rec.adminEvents {
+		if ev.eventType == "request_pending" {
+			pages++
+		}
+	}
+	if pages != 2 {
+		t.Fatalf("request_pending pages = %d (%+v), want one per demoted row", pages, rec.adminEvents)
+	}
+}
+
+// TestReportBookImportStallsTransitionsPerInstance drives the stall sink: a
+// park past the stall horizon reports unhealthy with its waiting title, and
+// once no stalled parks remain the same instance reports healthy so the issue
+// auto-resolves.
+func TestReportBookImportStallsTransitionsPerInstance(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	sink := &recordingStallSink{}
+	svc.SetBookImportStallSink(sink)
+	instanceID := testInstanceID(t, svc)
+
+	if _, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason, requested_at)
+		 VALUES (?, 0, 'gr:stuck', 'ebook', ?, 'book', 'A Stuck Book', ?, ?, datetime('now', '-2 days'))`,
+		uid, instanceID, StatusPending, bookParkReasonAuthorImport,
+	); err != nil {
+		t.Fatalf("insert stalled park: %v", err)
+	}
+
+	svc.reportBookImportStalls()
+	if len(sink.calls) != 1 {
+		t.Fatalf("sink calls = %+v, want one per chaptarr instance", sink.calls)
+	}
+	if sink.calls[0].healthy || len(sink.calls[0].titles) != 1 || sink.calls[0].titles[0] != "A Stuck Book" {
+		t.Fatalf("stall call = %+v, want unhealthy with the waiting title", sink.calls[0])
+	}
+	if sink.calls[0].instanceID != instanceID {
+		t.Fatalf("stall instance = %q, want %q", sink.calls[0].instanceID, instanceID)
+	}
+
+	// The park cleared (denied here); the next pass reports healthy.
+	if _, err := svc.db.Exec("UPDATE request_log SET status = ? WHERE foreign_id = 'gr:stuck'", StatusDenied); err != nil {
+		t.Fatalf("clear park: %v", err)
+	}
+	sink.calls = nil
+	svc.reportBookImportStalls()
+	if len(sink.calls) != 1 || !sink.calls[0].healthy {
+		t.Fatalf("post-clear calls = %+v, want one healthy transition", sink.calls)
+	}
+}
+
+type stallCall struct {
+	instanceID   string
+	instanceName string
+	titles       []string
+	healthy      bool
+}
+
+type recordingStallSink struct {
+	calls []stallCall
+}
+
+func (r *recordingStallSink) RecordBookImportStall(instanceID, instanceName string, titles []string, healthy bool) error {
+	r.calls = append(r.calls, stallCall{instanceID: instanceID, instanceName: instanceName, titles: titles, healthy: healthy})
+	return nil
+}
+
+// testInstanceID returns the id of the test fixture's single Chaptarr instance.
+func testInstanceID(t *testing.T, s *Service) string {
+	t.Helper()
+	var id string
+	if err := s.db.QueryRow("SELECT id FROM service_instances WHERE service_type = 'chaptarr'").Scan(&id); err != nil {
+		t.Fatalf("read chaptarr instance id: %v", err)
+	}
+	return id
 }
 
 // TestBookRequestLookupTransportFailureStaysAnError separates "the provider does
