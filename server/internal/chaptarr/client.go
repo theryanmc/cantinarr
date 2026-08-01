@@ -913,6 +913,12 @@ func (c *Client) AddAuthor(req AddAuthorRequest) (*Author, error) {
 // callers should keep the request alive rather than fail it.
 var ErrAuthorPendingImport = errors.New("the book's author is still being imported by the library's metadata service")
 
+// ErrEditionsNotHydrated reports the 0.9.879+ refusal of an add whose payload
+// carried no editions before the fork's metadata service could hydrate them.
+// Unlike the author case nothing is queued, so this is a plain retryable
+// failure with a name instead of a bare status code.
+var ErrEditionsNotHydrated = errors.New("the library could not prepare this book's editions yet; try again shortly")
+
 // AddBook adds a single book (and, if needed, its author) to the library.
 // Unlike the generic helpers it inspects a rejection's structured validation
 // fields so an author-pending-import refusal stays distinguishable; raw error
@@ -935,8 +941,10 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == http.StatusBadRequest && addRejectedForPendingAuthorImport(resp.Body) {
-			return nil, fmt.Errorf("chaptarr add book: %w", ErrAuthorPendingImport)
+		if resp.StatusCode == http.StatusBadRequest {
+			if classified := classifyAddBookRejection(resp.Body); classified != nil {
+				return nil, fmt.Errorf("chaptarr add book: %w", classified)
+			}
 		}
 		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode)
 	}
@@ -947,30 +955,37 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 	return &book, nil
 }
 
-// addRejectedForPendingAuthorImport reports whether a 400 validation payload is
-// the fork's "author not on the metadata server yet, queued for import"
-// refusal. Only the structured propertyName/errorMessage fields are inspected,
-// and the match is phrase-based so wording drift fails closed to the generic
-// status error rather than misclassifying a different rejection.
-func addRejectedForPendingAuthorImport(body io.Reader) bool {
+// classifyAddBookRejection maps a 400 validation payload onto the named
+// refusals worth distinguishing: the author still importing, or editions the
+// metadata service hasn't hydrated. Only the structured propertyName/
+// errorMessage fields are inspected, and the match is phrase-based so wording
+// drift fails closed (nil) to the generic status error rather than
+// misclassifying a different rejection.
+func classifyAddBookRejection(body io.Reader) error {
 	var failures []struct {
 		PropertyName string `json:"propertyName"`
 		ErrorMessage string `json:"errorMessage"`
 	}
 	if err := json.NewDecoder(io.LimitReader(body, 64<<10)).Decode(&failures); err != nil {
-		return false
+		return nil
 	}
 	for _, failure := range failures {
-		if !strings.EqualFold(strings.TrimSpace(failure.PropertyName), "author") {
-			continue
-		}
+		property := strings.ToLower(strings.TrimSpace(failure.PropertyName))
 		message := strings.ToLower(failure.ErrorMessage)
-		if strings.Contains(message, "queued for import") ||
-			(strings.Contains(message, "metadata server") && strings.Contains(message, "available")) {
-			return true
+		switch property {
+		case "author":
+			if strings.Contains(message, "queued for import") ||
+				(strings.Contains(message, "metadata server") && strings.Contains(message, "available")) {
+				return ErrAuthorPendingImport
+			}
+		case "editions":
+			if strings.Contains(message, "no editions were supplied") ||
+				strings.Contains(message, "hydrate") {
+				return ErrEditionsNotHydrated
+			}
 		}
 	}
-	return false
+	return nil
 }
 
 // SetBookMonitored toggles monitoring for the given books. Chaptarr's
