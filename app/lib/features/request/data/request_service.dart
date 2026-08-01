@@ -230,21 +230,21 @@ String _requestErrorMessage(DioException error) {
   if (lower.contains('book not found') || lower.contains('foreign id')) {
     return 'This book could not be matched in the library. Search for it again and retry.';
   }
+  if (_requestErrorIsDefinitive(error)) {
+    return 'The library could not complete this request. Try again later.';
+  }
   return 'This book could not be requested. Check the connection and try again.';
 }
 
 bool _requestErrorIsDefinitive(DioException error) {
-  final data = error.response?.data;
-  final raw = data is Map
-      ? (data['error'] ?? data['message'])?.toString().toLowerCase() ?? ''
-      : data?.toString().toLowerCase() ?? '';
-  return raw.contains('no audiobook edition') ||
-      raw.contains('no ebook edition') ||
-      raw.contains('root folder') ||
-      raw.contains('quality profile') ||
-      raw.contains('metadata profile') ||
-      raw.contains('book not found') ||
-      raw.contains('foreign id');
+  // The server rejects a book create atomically, so an answered request is a
+  // definitive "nothing was submitted" and its message is worth showing.
+  // No response (timeout, connection drop) and gateway statuses (a proxy
+  // answering for a server that may still be working) leave the outcome
+  // genuinely unknown — only those fall back to the couldn't-confirm toast.
+  final status = error.response?.statusCode;
+  if (status == null) return false;
+  return status < 502 || status > 504;
 }
 
 /// The TV season-scope choices a user may attach to a request. The string

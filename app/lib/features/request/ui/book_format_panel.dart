@@ -218,6 +218,19 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       if (submission == null) {
         await _refreshAfterSubmission();
         if (!mounted) return;
+        // The refresh just told us whether the tapped format landed despite the
+        // failed call (a server error can postdate a durable add). When it did,
+        // announce that truth — the rows already show it, and a failure toast
+        // beside a Requested row would contradict the screen.
+        final landed = _detail.statusFor(format);
+        final covered = landed == RequestStatus.requested ||
+            landed == RequestStatus.downloading ||
+            landed == RequestStatus.available ||
+            landed == RequestStatus.pending;
+        if (covered) {
+          _announce(_formatOutcome(format, landed));
+          return;
+        }
         _announce(definitiveFailure && failureMessage != null
             ? failureMessage
             : 'The request outcome couldn’t be confirmed. The book status was '

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2077,6 +2078,96 @@ func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("parked pending rows = %d, want 1 (the request must survive the failed add)", count)
+	}
+}
+
+// TestBookRequestParksWhenAuthorImportIsPending covers the 0.9.879+ Chaptarr
+// behavior of queuing an unknown author for an asynchronous metadata import and
+// rejecting the add until it lands: the request must park as pending with its
+// own explanation instead of failing, and approving it after the import
+// completes must replay the add and succeed.
+func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
+	var authorImported atomic.Bool
+	var addAttempts atomic.Int32
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"The CEO Mindset","titleSlug":"the-ceo-mindset","foreignBookId":"gr:253739298",
+					"author":{"authorName":"Shiv Shivakumar","foreignAuthorId":"gr:21186439"},
+					"editions":[{"foreignEditionId":"gr:e1","title":"The CEO Mindset","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			addAttempts.Add(1)
+			if !authorImported.Load() {
+				// The live 0.9.879 refusal, verbatim shape.
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":42,"title":"The CEO Mindset","foreignBookId":"gr:253739298","monitored":true}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:253739298",
+		Title:      "The CEO Mindset",
+		BookFormat: BookFormatEbook,
+		SearchTerm: "the ceo mindset",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaRequest returned an error instead of parking the request: %v", err)
+	}
+	if addAttempts.Load() == 0 {
+		t.Fatal("AddBook was never attempted; the park must come from the live refusal")
+	}
+	if resp.Status != StatusPending {
+		t.Fatalf("status = %s, want pending", resp.Status)
+	}
+	if resp.Message != bookAuthorImportingMessage {
+		t.Fatalf("message = %q, want the author-importing explanation", resp.Message)
+	}
+	var storedSearch string
+	if err := svc.db.QueryRow(
+		"SELECT COALESCE(search_term,'') FROM request_log WHERE user_id=? AND foreign_id='gr:253739298' AND media_type='book' AND status='pending'",
+		uid,
+	).Scan(&storedSearch); err != nil {
+		t.Fatalf("read parked row: %v", err)
+	}
+	if storedSearch != "the ceo mindset" {
+		t.Fatalf("parked search_term = %q, want the requester's search preserved for replay", storedSearch)
+	}
+
+	// The metadata service finishes the author import; approving the parked
+	// request must now replay the add and succeed.
+	authorImported.Store(true)
+	adminID := createTestAdmin(t, svc)
+	pending, err := svc.ListPending()
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListPending = %+v err=%v, want exactly 1", pending, err)
+	}
+	decision, err := svc.ApproveRequest(adminID, pending[0].ID, nil)
+	if err != nil {
+		t.Fatalf("ApproveRequest after the import landed: %v", err)
+	}
+	if decision.Status != StatusRequested {
+		t.Fatalf("approved status = %s, want requested", decision.Status)
 	}
 }
 
