@@ -23,12 +23,26 @@ on:
         type: boolean
         default: false
 
+# Keyed on the ref rather than the SHA for pushes: back-to-back merges must not
+# race to publish `latest`, and cancelling the older run is what keeps the
+# newest commit's image the one that wins.
 concurrency:
   group: docker-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Nothing reaches GHCR until CI has passed on this exact commit. A pull
+  # request is deliberately exempt: its build below is one of the PR's own
+  # checks, and the pr-N preview image is meant to be pullable while the rest
+  # of the checks are still running.
+  gate:
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      enforce: ${{ github.event_name != 'pull_request' }}
+
   build:
+    needs: [gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read

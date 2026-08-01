@@ -29,7 +29,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # An upload is irreversible — it burns a build number and reaches testers —
+  # so no IPA is built until CI has passed on this exact commit.
+  gate:
+    uses: ./.github/workflows/require-ci-green.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
   deploy:
+    needs: [gate]
     runs-on: macos-26
 
     defaults:
