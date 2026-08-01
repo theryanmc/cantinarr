@@ -295,87 +295,50 @@ void main() {
         'episodeIds': [102],
         'monitored': true
       });
-    });
+      expect(find.text('Monitoring S01E02'), findsOneWidget);
 
-    // Episode 101 monitored, 102 and 103 not — enough to tell the two
-    // bookmark states apart on screen.
-    final mixedEpisodes = [
-      _episodeJson(
-          id: 101,
-          episodeNumber: 1,
-          hasFile: true,
-          aired: true,
-          monitored: true),
-      _episodeJson(id: 102, episodeNumber: 2, hasFile: false, aired: true),
-      _episodeJson(id: 103, episodeNumber: 3, hasFile: false, aired: false),
-    ];
-
-    /// The [icon] inside the row whose title is [episodeTitle].
-    Finder rowIcon(String episodeTitle, IconData icon) => find.descendant(
-          of: find
-              .ancestor(
-                  of: find.text(episodeTitle), matching: find.byType(InkWell))
-              .first,
-          matching: find.byIcon(icon),
-        );
-
-    testWidgets('every row shows whether that episode is monitored',
-        (tester) async {
-      await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
-
-      expect(find.byIcon(Icons.bookmark), findsOneWidget);
-      expect(find.byIcon(Icons.bookmark_border), findsNWidgets(2));
-      expect(rowIcon('Episode 1', Icons.bookmark), findsOneWidget);
-      expect(rowIcon('Episode 2', Icons.bookmark_border), findsOneWidget);
-    });
-
-    testWidgets('the row bookmark toggles monitoring without a refetch',
-        (tester) async {
-      final adapter = await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
-
-      await tester.tap(rowIcon('Episode 2', Icons.bookmark_border));
-      await tester.pumpAndSettle();
-
-      final puts = ofMethod(adapter, 'PUT');
-      expect(puts, hasLength(1));
-      expect(puts.single.path, endsWith('/episode/monitor'));
-      expect(puts.single.body, {
-        'episodeIds': [102],
-        'monitored': true
-      });
-      // Only that row flips, and the season is not fetched again.
-      expect(rowIcon('Episode 2', Icons.bookmark), findsOneWidget);
-      expect(find.byIcon(Icons.bookmark), findsNWidgets(2));
+      // The change is patched in place — no refetch — so the menu offers the
+      // other direction the next time it opens.
       expect(
         adapter.requests
             .where((r) => r.method == 'GET' && r.path.endsWith('/episode')),
         hasLength(1),
       );
-
-      // And back off again.
-      await tester.tap(rowIcon('Episode 2', Icons.bookmark));
-      await tester.pumpAndSettle();
-      expect(ofMethod(adapter, 'PUT').last.body, {
-        'episodeIds': [102],
-        'monitored': false
-      });
-      expect(rowIcon('Episode 2', Icons.bookmark_border), findsOneWidget);
-    });
-
-    testWidgets('selection mode keeps the monitored signal, drops the buttons',
-        (tester) async {
-      await _pumpSeasonScreen(tester, episodes: mixedEpisodes);
-
       await tester.longPress(find.text('Episode 2'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Select Episodes'));
-      await tester.pumpAndSettle();
+      expect(find.text('Unmonitor Episode'), findsOneWidget);
+    });
 
-      expect(find.byTooltip('Monitor'), findsNothing);
-      expect(find.byTooltip('Stop monitoring'), findsNothing);
-      expect(find.byTooltip('Automatic search'), findsNothing);
-      expect(find.byIcon(Icons.bookmark), findsOneWidget);
-      expect(find.byIcon(Icons.bookmark_border), findsNWidgets(2));
+    testWidgets('unmonitored episodes are dimmed, monitored ones are not',
+        (tester) async {
+      await _pumpSeasonScreen(tester, episodes: [
+        _episodeJson(
+            id: 101,
+            episodeNumber: 1,
+            hasFile: true,
+            aired: true,
+            monitored: true),
+        _episodeJson(id: 102, episodeNumber: 2, hasFile: false, aired: true),
+      ]);
+
+      /// Every opacity applied to the row whose title is [episodeTitle].
+      List<double> rowOpacities(String episodeTitle) => tester
+          .widgetList<Opacity>(find.descendant(
+            of: find
+                .ancestor(
+                    of: find.text(episodeTitle), matching: find.byType(InkWell))
+                .first,
+            matching: find.byType(Opacity),
+          ))
+          .map((o) => o.opacity)
+          .toList();
+
+      expect(rowOpacities('Episode 1'), everyElement(1.0));
+      expect(rowOpacities('Episode 2'), isNotEmpty);
+      expect(rowOpacities('Episode 2'), everyElement(lessThan(1.0)));
+      // Dimming is the only monitoring signal on a row now — no bookmarks.
+      expect(find.byIcon(Icons.bookmark), findsNothing);
+      expect(find.byIcon(Icons.bookmark_border), findsNothing);
     });
 
     testWidgets('episode menu deletes a downloaded file after confirming',
