@@ -285,6 +285,32 @@ void main() {
       expect(find.byTooltip('Stop monitoring'), findsOneWidget);
     });
 
+    testWidgets('a monitored season with every episode left out is half-filled',
+        (tester) async {
+      // The other way the flags come apart: monitoring a season cascades onto
+      // its episodes, but unmonitoring them one by one leaves the season flag
+      // alone. Nothing in it is being searched for now — yet the flag is what
+      // the next episode Sonarr discovers inherits, so this is not a season
+      // nobody is watching either.
+      await _pump(
+        tester,
+        _SeriesAdapter(episodes: [
+          for (var e = 1; e <= 8; e++)
+            _episodeJson(id: 2100 + e, season: 21, monitored: true),
+          for (var e = 1; e <= 13; e++)
+            _episodeJson(id: 2200 + e, season: 22, monitored: false),
+        ]),
+      );
+
+      expect(_fillOf(tester, 'Season 22'), MonitorFill.partial);
+      // The season flag is on, so the card is not dimmed.
+      expect(_opacitiesOf(tester, 'Season 22'), everyElement(1.0));
+      expect(
+        find.byTooltip('Stop monitoring — 13 episodes are unmonitored'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('an unmonitored season is hollow and dimmed', (tester) async {
       await _pump(
         tester,
