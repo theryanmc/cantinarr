@@ -143,6 +143,34 @@ func TestDispatcherCoalescesToNewestCompleteSnapshotPerInstance(t *testing.T) {
 	}
 }
 
+// Two reads inside one wall-clock tick carry the SAME observedAt: snapshots are
+// stamped with time.Now().UTC(), and .UTC() strips Go's monotonic reading, so
+// the clock cannot separate them. The newer snapshot must still win — it is the
+// recovery evidence the coalescer exists to preserve. Frozen clock, because the
+// real one only produces this tie by luck.
+func TestDispatcherKeepsNewestSnapshotWhenTimestampsTie(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	dispatcher := NewAutoDispatcher(svc)
+	frozen := time.Date(2026, 8, 2, 4, 0, 0, 0, time.UTC)
+	dispatcher.now = func() time.Time { return frozen }
+
+	stale := observedProblem("old", 1, 100)
+	recovered := stale
+	recovered.DownloadID = "replacement"
+	recovered.Signal = arr.QueueSignal{Status: "downloading", TrackedDownloadStatus: "ok", Size: 100, SizeLeft: 75}
+	recovered.Diagnosis = arr.Diagnose(recovered.Signal)
+
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{stale})
+	dispatcher.ObserveQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{recovered})
+
+	dispatcher.snapshotMu.Lock()
+	defer dispatcher.snapshotMu.Unlock()
+	pending := dispatcher.pendingSnapshots["radarr\x00"+testRadarrInstanceID]
+	if len(pending) != 1 || len(pending[0].items) != 1 || pending[0].items[0].DownloadID != "replacement" {
+		t.Fatalf("tied timestamps kept the stale snapshot: %+v", pending)
+	}
+}
+
 func TestDispatcherPreservesSuccessResetBeforeLatestFailure(t *testing.T) {
 	svc, _, _ := setupTestService(t)
 	dispatcher := NewAutoDispatcher(svc)
