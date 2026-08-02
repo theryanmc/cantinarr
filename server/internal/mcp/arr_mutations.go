@@ -637,13 +637,13 @@ func RemoveQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Cl
 }
 
 // RemediateQueueItemHelper applies one of the structured queue remediations
-// (remove | blocklist_search | change_category) to a queue item. Shared body of
+// (remove | blocklist_search | blocklist_only | change_category) to a queue item. Shared body of
 // the remediate_queue_item tool and the Executor's remediate_queue kind.
 func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, queueID int, action string) (string, error) {
 	switch action {
-	case "remove", "blocklist_search", "change_category":
+	case "remove", "blocklist_search", "blocklist_only", "change_category":
 	default:
-		return mutationNotStarted("action must be \"remove\", \"blocklist_search\", or \"change_category\"")
+		return mutationNotStarted("action must be \"remove\", \"blocklist_search\", \"blocklist_only\", or \"change_category\"")
 	}
 
 	switch mediaType {
@@ -675,6 +675,14 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, radarrQueueTitle(*item)), nil
 			}
 			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no movie id")}
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := rc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, radarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := rc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err
@@ -710,6 +718,14 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, sonarrQueueTitle(*item)), nil
 			}
 			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no episode id")}
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := sc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, sonarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := sc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err
@@ -745,6 +761,14 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, chaptarrQueueTitle(*item)), nil
 			}
 			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no book id")}
+		case "blocklist_only":
+			// skipRedownload suppresses the automatic replacement search the
+			// blocklist would otherwise trigger. The blocklist still stands, so the
+			// dead release cannot come back through the service's own RSS pass.
+			if err := cc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s) without searching for a replacement. The copy already in the library is untouched.", queueID, chaptarrQueueTitle(*item)), nil
 		case "change_category":
 			if err := cc.RemoveQueueItem(queueID, false, false, false, true); err != nil {
 				return "", err

@@ -34,6 +34,19 @@ type QueueSignal struct {
 	Protocol              string
 	Size                  float64
 	SizeLeft              float64
+	// MediaFileID is the file the library already holds for this queue item's
+	// movie/episode, with the same tri-state as QueueObservation: nil unknown,
+	// 0 known absent, positive known present. It decides whether a dead release
+	// is worth replacing — a positive id means the download was an upgrade, so
+	// abandoning it costs the user nothing. Unknown fails safe toward chasing a
+	// replacement, because a library gap must never be left unfilled.
+	MediaFileID *int64
+}
+
+// hasExistingCopy reports that the library is KNOWN to already hold a file for
+// this item. Unknown file state deliberately answers false.
+func (s QueueSignal) hasExistingCopy() bool {
+	return s.MediaFileID != nil && *s.MediaFileID > 0
 }
 
 // QueueMediaContext is the stable media identity the arr already returned with
@@ -100,8 +113,14 @@ const (
 	ActionForceImport     = "force_import"
 	ActionRemove          = "remove"
 	ActionBlocklistSearch = "blocklist_search"
-	ActionChangeCategory  = "change_category"
-	ActionRescan          = "rescan"
+	// ActionBlocklistOnly drops a dead release and blocklists it WITHOUT
+	// chasing a replacement. It is the right remedy when the library already
+	// holds a copy: the download was an upgrade, nothing is unwatchable, and
+	// the service's own RSS pass keeps grabbing better releases as they are
+	// posted — which is how such a download was picked up in the first place.
+	ActionBlocklistOnly  = "blocklist_only"
+	ActionChangeCategory = "change_category"
+	ActionRescan         = "rescan"
 )
 
 // messageRule matches a single statusMessages line by its stable English
@@ -388,6 +407,37 @@ func (s QueueSignal) healthy() bool {
 //  5. trackedDownloadState == failed -> remove + blocklist + re-search.
 //  6. otherwise healthy.
 func Diagnose(sig QueueSignal) Diagnosis {
+	return dropReplacementSearchWhenCopyExists(classify(sig), sig)
+}
+
+// dropReplacementSearchWhenCopyExists turns "throw this release away and search
+// for another" into "throw it away" when the library already holds a copy.
+//
+// It fires only when blocklist_search is the diagnosis's SOLE remedy — that is
+// precisely the set of verdicts meaning "this download is dead, nothing here can
+// be imported", where the search half exists only to fetch a replacement. A
+// verdict that also offers a manual import is untouched: there the downloaded
+// file may still be usable, which is a different question from whether the
+// library has a copy.
+//
+// Why dropping the search is right, not lazy: an automatic re-search is how a
+// stalled release gets re-grabbed from a listing the blocklist does not match,
+// and it buys nothing the service's own RSS pass will not do for free once a
+// better release is posted. Chasing a replacement for something the user can
+// already watch trades a real risk for no benefit.
+func dropReplacementSearchWhenCopyExists(d Diagnosis, sig QueueSignal) Diagnosis {
+	if !sig.hasExistingCopy() || len(d.SuggestedActions) != 1 || d.SuggestedActions[0] != ActionBlocklistSearch {
+		return d
+	}
+	d.SuggestedActions = []string{ActionBlocklistOnly}
+	d.Transparency = strings.TrimSpace(d.Transparency) +
+		" You already have a copy of this, so it will just be dropped — no replacement hunt. A better version still gets picked up automatically whenever one shows up."
+	return d
+}
+
+// classify is the rule engine proper. Diagnose wraps it so every verdict passes
+// through the library-state adjustment above on one path.
+func classify(sig QueueSignal) Diagnosis {
 	state := strings.ToLower(sig.TrackedDownloadState)
 	status := strings.ToLower(sig.TrackedDownloadStatus)
 

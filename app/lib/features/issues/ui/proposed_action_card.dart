@@ -689,6 +689,8 @@ class _ActionCopy {
             return 'Remove the stuck item from the download queue';
           case 'blocklist_search':
             return 'Blocklist the current release and search for a replacement';
+          case 'blocklist_only':
+            return 'Drop and blocklist this release — you already have a copy';
           case 'change_category':
             return 'Change the download category to unblock the import';
           default:
@@ -721,6 +723,8 @@ class _ActionCopy {
             return 'Cantinarr will remove an item from the download queue. This cannot be undone from Cantinarr.';
           case 'blocklist_search':
             return 'Cantinarr will blocklist the current release, remove it from the queue, and search for another copy.';
+          case 'blocklist_only':
+            return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. The copy already in your library is untouched.';
           case 'change_category':
             return 'Cantinarr will change a download category in your connected services.';
           default:

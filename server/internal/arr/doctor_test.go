@@ -2,6 +2,7 @@ package arr
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -429,5 +430,72 @@ func TestDiagnoseFirstMatchWins(t *testing.T) {
 	got := Diagnose(sig)
 	if got.Problem != "Nothing importable in the folder" {
 		t.Fatalf("first-match-wins broken: got %q", got.Problem)
+	}
+}
+
+// fileID is a shorthand for the tri-state library file field.
+func fileID(id int64) *int64 { return &id }
+
+// A dead release is only worth replacing when the library has nothing to fall
+// back on. When a copy already exists the download was an upgrade, so the
+// remedy drops it and stops — chasing a replacement is how the identical
+// release gets re-grabbed from a listing the blocklist does not match.
+func TestDiagnoseDropsTheReplacementSearchWhenACopyExists(t *testing.T) {
+	stalled := QueueSignal{
+		TrackedDownloadStatus: "error",
+		ErrorMessage:          "The download is stalled with no connections",
+	}
+
+	cases := []struct {
+		name        string
+		mediaFileID *int64
+		wantActions []string
+	}{
+		{name: "library already holds a copy", mediaFileID: fileID(622), wantActions: []string{ActionBlocklistOnly}},
+		{name: "library gap must still be filled", mediaFileID: fileID(0), wantActions: []string{ActionBlocklistSearch}},
+		{name: "unknown file state fails safe toward replacing", mediaFileID: nil, wantActions: []string{ActionBlocklistSearch}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			sig := stalled
+			sig.MediaFileID = tt.mediaFileID
+			got := Diagnose(sig)
+			if !slices.Equal(got.SuggestedActions, tt.wantActions) {
+				t.Fatalf("actions = %v, want %v", got.SuggestedActions, tt.wantActions)
+			}
+			// The problem label is a persisted rule key: it must NOT fork just
+			// because the library happens to hold a copy, or standing rules
+			// keyed on it silently stop matching.
+			if got.Problem != "Download stalled" {
+				t.Fatalf("problem = %q, want the label unchanged", got.Problem)
+			}
+			if tt.mediaFileID != nil && *tt.mediaFileID > 0 {
+				if !strings.Contains(got.Transparency, "already have a copy") {
+					t.Fatalf("transparency did not explain why no replacement is coming: %q", got.Transparency)
+				}
+			} else if strings.Contains(got.Transparency, "already have a copy") {
+				t.Fatalf("transparency claimed a copy that is not proven: %q", got.Transparency)
+			}
+		})
+	}
+}
+
+// A verdict that also offers a manual import is about a file that may still be
+// importable — a different question from whether the library has a copy. Those
+// keep their replacement search.
+func TestDiagnoseKeepsTheSearchWhenAnImportIsStillWorthTrying(t *testing.T) {
+	sig := QueueSignal{
+		TrackedDownloadStatus: "warning",
+		TrackedDownloadState:  "importBlocked",
+		StatusMessages:        msg("Invalid video file: sample.mkv"),
+		MediaFileID:           fileID(622),
+	}
+	got := Diagnose(sig)
+	want := []string{ActionForceImport, ActionBlocklistSearch}
+	if !slices.Equal(got.SuggestedActions, want) {
+		t.Fatalf("actions = %v, want %v left alone", got.SuggestedActions, want)
+	}
+	if strings.Contains(got.Transparency, "already have a copy") {
+		t.Fatalf("multi-option verdict gained the abandon copy: %q", got.Transparency)
 	}
 }
