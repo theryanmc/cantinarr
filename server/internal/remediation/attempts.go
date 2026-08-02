@@ -67,34 +67,38 @@ func actsOnOneDownload(kind ActionKind, canonical json.RawMessage) bool {
 	}
 }
 
-// noteActionTargetDownload records the arr download a dispatched action acted on.
-//
-// Why issues.download_id is the right source: the Executor's identity gate
-// (validateDownloadIdentity) REFUSES to dispatch a queue-scoped action whose
-// live queue row carries any other download id, so an action that reached the
-// arr at all provably acted on the issue's download id as it stood at that
-// moment. Copying it here freezes that fact; issues.download_id itself keeps
-// tracking whatever the arr is holding now and cannot answer "what did that
-// past fix touch?".
-//
-// Best-effort by design: a lost stamp costs the repeat guard one lap, never
-// correctness of the dispatch that just happened.
-func (s *Service) noteActionTargetDownload(actionID, issueID int64, kind ActionKind, canonical json.RawMessage) {
-	if !actsOnOneDownload(kind, canonical) {
-		return
-	}
+// issueDownloadIdentity reads the release an issue is currently pinned to. Call
+// it IMMEDIATELY BEFORE dispatch, never after: the observation sweeper rewrites
+// issues.download_id whenever the arr swaps the release, and an arr round-trip
+// is long enough for that to land. Reading before means the recorded target is
+// the same value the Executor's identity gate is about to validate against.
+func (s *Service) issueDownloadIdentity(issueID int64) string {
 	var downloadID sql.NullString
 	if err := s.db.QueryRow("SELECT download_id FROM issues WHERE id = ?", issueID).Scan(&downloadID); err != nil {
-		log.Printf("remediation: read issue %d download id for action %d: %v", issueID, actionID, err)
-		return
+		log.Printf("remediation: read issue %d download identity: %v", issueID, err)
+		return ""
 	}
-	target := strings.TrimSpace(downloadID.String)
-	if target == "" {
-		return // no download identity to attribute this fix to.
+	return strings.TrimSpace(downloadID.String)
+}
+
+// noteActionTargetDownload records the arr download a dispatched action acted on.
+//
+// Why the issue's download identity is the right source: the Executor's gate
+// (validateDownloadIdentity) REFUSES to dispatch a queue-scoped action whose
+// live queue row carries any other download id, so an action that reached the
+// arr at all provably acted on that download. Copying it onto the action freezes
+// the fact; issues.download_id itself keeps tracking whatever the arr holds now
+// and can never answer "what did that past fix touch?".
+//
+// Best-effort by design: a lost stamp costs the repeat guard one lap, never the
+// correctness of the dispatch that just happened.
+func (s *Service) noteActionTargetDownload(actionID int64, kind ActionKind, canonical json.RawMessage, downloadID string) {
+	if downloadID == "" || !actsOnOneDownload(kind, canonical) {
+		return
 	}
 	if _, err := s.db.Exec(
 		"UPDATE agent_actions SET target_download_id = ? WHERE id = ? AND target_download_id IS NULL",
-		target, actionID,
+		downloadID, actionID,
 	); err != nil {
 		log.Printf("remediation: record action %d target download: %v", actionID, err)
 	}

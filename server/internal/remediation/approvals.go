@@ -212,6 +212,12 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		}
 	}
 
+	// Snapshot the release this dispatch is about to act on BEFORE the arr
+	// round-trip, so the recorded target is the same value the Executor's
+	// identity gate validates against rather than whatever the observation
+	// sweeper may pin the issue to while the arr call is in flight.
+	targetDownloadID := s.issueDownloadIdentity(act.IssueID)
+
 	// Replay the approved action against the arr. This is the ONLY mutation path.
 	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun)
 	resultText = secrets.RedactText(resultText)
@@ -257,7 +263,7 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 	// record which release this fix acted on. That stamp is what later tells a
 	// repeat of an ineffective remedy apart from a first attempt on a new one.
 	if finalStatus != ActionFailed {
-		s.noteActionTargetDownload(actionID, act.IssueID, ActionKind(act.Kind), paramsToRun)
+		s.noteActionTargetDownload(actionID, ActionKind(act.Kind), paramsToRun, targetDownloadID)
 	}
 	if finalStatus == ActionOutcomeUnknown {
 		// An unknown/partial outcome is a hard human-verification boundary. If we

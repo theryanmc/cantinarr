@@ -141,6 +141,30 @@ func TestDispatchRecordsTheDownloadTheFixActedOn(t *testing.T) {
 	}
 }
 
+// An arr round-trip is long enough for the observation sweeper to re-pin the
+// issue to a replacement release. The stamp must name the release the dispatch
+// actually gated on, not whatever the issue points at once it returns —
+// otherwise a fix gets attributed to a download it never touched, and the guard
+// blocks a first attempt while letting a real repeat through.
+func TestStampNamesTheReleaseTheDispatchGatedOn(t *testing.T) {
+	svc, fx, _, issueID, actionID := autoApprovalFixture(t)
+	fx.duringExec = func() {
+		if _, err := svc.db.Exec("UPDATE issues SET download_id = 'dl-2' WHERE id = ?", issueID); err != nil {
+			t.Errorf("re-pin issue mid-dispatch: %v", err)
+		}
+	}
+	if _, err := svc.ApproveAction(testAdminID, actionID, nil); err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	var target *string
+	if err := svc.db.QueryRow("SELECT target_download_id FROM agent_actions WHERE id = ?", actionID).Scan(&target); err != nil {
+		t.Fatalf("read target download: %v", err)
+	}
+	if target == nil || *target != "dl-1" {
+		t.Fatalf("target_download_id = %v, want dl-1 (the release the gate validated), not the mid-flight replacement", target)
+	}
+}
+
 // A library-wide fix acts on no single release, so it must never be attributed
 // to one — otherwise a later search or rescan would look like a repeat.
 func TestLibraryWideFixIsAttributedToNoDownload(t *testing.T) {
@@ -155,7 +179,8 @@ func TestLibraryWideFixIsAttributedToNoDownload(t *testing.T) {
 	}
 	searchID, _ := res.LastInsertId()
 
-	svc.noteActionTargetDownload(searchID, issueID, ActionTriggerSearch, []byte(`{"media_type":"movie","tmdb_id":42}`))
+	svc.noteActionTargetDownload(searchID, ActionTriggerSearch,
+		[]byte(`{"media_type":"movie","tmdb_id":42}`), svc.issueDownloadIdentity(issueID))
 
 	var target *string
 	if err := svc.db.QueryRow("SELECT target_download_id FROM agent_actions WHERE id = ?", searchID).Scan(&target); err != nil {
