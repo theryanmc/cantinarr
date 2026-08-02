@@ -51,7 +51,31 @@ func (s *Service) ApproveAction(adminID, actionID int64, override *json.RawMessa
 // admin pattern-approved. Preflight/CAS conflicts surface as
 // ErrActionDecisionConflict and the sweep skips silently — the observer or a
 // human already owns the proposal.
+//
+// One thing a rule may never do unattended: replay a fix that already dispatched
+// against the release the issue is STILL holding. That pairing means the fix did
+// not hold, and repeating it unattended is an unbounded loop against the arr. The
+// proposal stays visible for a human who can see the history, and the rule stands
+// down — a track record with an ineffective fix in it is not a clean one.
 func (s *Service) autoApproveAction(ruleID, actionID int64) (*AgentAction, error) {
+	repeat, err := s.autoApprovalWouldRepeatFailedRemedy(actionID)
+	if err != nil {
+		return nil, err
+	}
+	if repeat {
+		var issueID int64
+		if err := s.db.QueryRow("SELECT issue_id FROM agent_actions WHERE id = ?", actionID).Scan(&issueID); err != nil {
+			return nil, fmt.Errorf("load issue for repeated remedy %d: %w", actionID, err)
+		}
+		paused, perr := s.pauseRuleForRepeatedRemedy(ruleID, issueID)
+		if perr != nil {
+			return nil, perr
+		}
+		if paused {
+			s.notifyAutoApprovalPaused(ruleID, issueID)
+		}
+		return nil, errRemedyAlreadyApplied
+	}
 	return s.approveAction(approvalActor{ruleID: ruleID}, actionID)
 }
 
@@ -188,6 +212,12 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		}
 	}
 
+	// Snapshot the release this dispatch is about to act on BEFORE the arr
+	// round-trip, so the recorded target is the same value the Executor's
+	// identity gate validates against rather than whatever the observation
+	// sweeper may pin the issue to while the arr call is in flight.
+	targetDownloadID := s.issueDownloadIdentity(act.IssueID)
+
 	// Replay the approved action against the arr. This is the ONLY mutation path.
 	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun)
 	resultText = secrets.RedactText(resultText)
@@ -228,6 +258,12 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 		}
 	} else {
 		resumeText = "Approved and executed: " + resultText
+	}
+	// Anything but a clean pre-dispatch refusal may have changed the arr, so
+	// record which release this fix acted on. That stamp is what later tells a
+	// repeat of an ineffective remedy apart from a first attempt on a new one.
+	if finalStatus != ActionFailed {
+		s.noteActionTargetDownload(actionID, ActionKind(act.Kind), paramsToRun, targetDownloadID)
 	}
 	if finalStatus == ActionOutcomeUnknown {
 		// An unknown/partial outcome is a hard human-verification boundary. If we

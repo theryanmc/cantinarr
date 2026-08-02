@@ -433,7 +433,16 @@ type loopState struct {
 // admin approval; the loop exits and no goroutine is held during the wait). It
 // operates on st so Run and Resume share one implementation.
 func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st *loopState, model string, settings Settings) error {
-	system := buildSystemPrompt(issue)
+	// Read the issue's remediation memory at every loop entry, not once per run:
+	// the fix an admin approved dispatches DURING the park, so a resume must see
+	// its own outcome. A read failure must never block an investigation, so it
+	// degrades to "no memory" and is logged.
+	attempts, err := r.svc.priorRemediationAttempts(issue.ID)
+	if err != nil {
+		log.Printf("remediation: load prior attempts for issue %d: %v", issue.ID, err)
+		attempts = nil
+	}
+	system := buildSystemPrompt(issue, attempts)
 	tools := r.toolServer.ToolsByName(readToolAllowList)
 	for _, tool := range mcp.AgentTools() {
 		if settings.Mode == ModeInvestigateOnly && tool.Name == mcp.ToolProposeAction {
@@ -676,7 +685,7 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
 			if proofErr != nil || !known || !proven {
 				return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-					"The queue target changed, but Cantinarr could not verify the exact file in the arr library. An administrator needs to review it.")
+					unverifiedCloseMessage(attempts))
 			}
 			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
 				arrStateClearedResolution, ResolutionArrStateCleared,

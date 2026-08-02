@@ -36,6 +36,11 @@ const (
 	autoRulePausedIssueUnresolved   = "An issue this rule acted on closed without being resolved. Review the outcome before re-arming this rule."
 )
 
+// executionFailedPauseCause is the issue-thread clause for every pause triggered
+// by a bad dispatch outcome (failed, partial, unverifiable, unresolved closure).
+// A rule stood down because a fix it approved did not work.
+const executionFailedPauseCause = "this fix did not complete successfully"
+
 // actionAutoFacet derives the rule key's per-kind safety discriminator from
 // the CANONICAL params (validateActionParams output; struct-field order).
 // ok=false means the params don't parse for the kind, which disqualifies the
@@ -312,7 +317,7 @@ func pauseRuleForFailureTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bo
 	if err != nil {
 		return false, err
 	}
-	if err := insertRulePausedMessageTx(tx, issueID, label); err != nil {
+	if err := insertRulePausedMessageTx(tx, issueID, label, executionFailedPauseCause); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -359,13 +364,14 @@ func autoRuleIDsForIssueTx(tx *sql.Tx, issueID int64) ([]int64, error) {
 
 // insertRulePausedMessageTx posts the fixed system-authored thread message
 // explaining that automation stood down on this issue. Committed atomically
-// with the pause itself.
-func insertRulePausedMessageTx(tx *sql.Tx, issueID int64, label string) error {
+// with the pause itself. cause is a code constant, never caller free text — the
+// whole message must stay server-authored copy.
+func insertRulePausedMessageTx(tx *sql.Tx, issueID int64, label, cause string) error {
 	_, err := tx.Exec(
 		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
 		 VALUES (?, ?, NULL, ?)`,
 		issueID, AuthorSystem,
-		fmt.Sprintf("The standing auto-approval rule \"%s\" was paused because this fix did not complete successfully. Matching fixes will wait for manual approval until an administrator re-arms it.", label),
+		fmt.Sprintf("The standing auto-approval rule %q was paused because %s. Matching fixes will wait for manual approval until an administrator re-arms it.", label, cause),
 	)
 	if err != nil {
 		return fmt.Errorf("record rule-paused message: %w", err)
@@ -579,9 +585,11 @@ func (s *Service) sweepAutoApprovals(now time.Time) {
 		}
 		if _, err := s.autoApproveAction(ruleID, c.actionID); err != nil {
 			// A decision/closure/recovery race is normal: someone else owned the
-			// proposal first and the CAS or preflight said so. Anything else is
-			// worth a log line, but never stops the rest of the sweep.
-			if errors.Is(err, ErrActionDecisionConflict) {
+			// proposal first and the CAS or preflight said so. A repeated remedy
+			// is an expected stand-down, already recorded on the rule and in the
+			// issue thread. Anything else is worth a log line, but never stops
+			// the rest of the sweep.
+			if errors.Is(err, ErrActionDecisionConflict) || errors.Is(err, errRemedyAlreadyApplied) {
 				continue
 			}
 			log.Printf("remediation: auto-approve action %d via rule %d: %v", c.actionID, ruleID, err)
