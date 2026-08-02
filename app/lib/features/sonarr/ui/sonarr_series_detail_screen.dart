@@ -49,12 +49,13 @@ class _SonarrSeriesDetailScreenState
   Map<int, List<SonarrQueueItem>> _queueBySeason = const {};
   List<SonarrQueueItem> _queue = const [];
 
-  /// How many episodes each season has left unmonitored. Season statistics
-  /// cannot answer this — the episodes they leave out of `episodeCount` are
-  /// unaired *or* unmonitored with no way to tell which — so the episode list
-  /// is the only source, and a season missing from this map simply has no
-  /// answer yet (or the fetch failed) and shows the plain two-state bookmark.
-  Map<int, int> _unmonitoredBySeason = const {};
+  /// How much of each season's episode list Sonarr is monitoring. Season
+  /// statistics cannot answer this — the episodes they leave out of
+  /// `episodeCount` are unaired *or* unmonitored with no way to tell which —
+  /// so the episode list is the only source, and a season missing from this
+  /// map simply has no answer yet (or the fetch failed) and shows the plain
+  /// two-state bookmark.
+  Map<int, ({int monitored, int total})> _episodeMonitorBySeason = const {};
 
   @override
   void initState() {
@@ -86,7 +87,7 @@ class _SonarrSeriesDetailScreenState
         _series = series;
         _queue = queue;
         _queueBySeason = _bySeason(queue);
-        _unmonitoredBySeason = _unmonitoredCounts(episodes);
+        _episodeMonitorBySeason = _episodeMonitorCounts(episodes);
         _isLoading = false;
         _error = null;
       });
@@ -99,13 +100,19 @@ class _SonarrSeriesDetailScreenState
     }
   }
 
-  /// Unmonitored episodes per season, counting every season the list covers so
-  /// a fully monitored season records a 0 rather than falling back to "no
-  /// answer". An empty list (the fetch failed) leaves every season unanswered.
-  static Map<int, int> _unmonitoredCounts(List<SonarrEpisode> episodes) {
-    final out = <int, int>{};
+  /// Monitored and total episodes per season, counting every season the list
+  /// covers so a season that is wholly one way or the other still records an
+  /// answer rather than falling back to "no answer". An empty list (the fetch
+  /// failed) leaves every season unanswered.
+  static Map<int, ({int monitored, int total})> _episodeMonitorCounts(
+      List<SonarrEpisode> episodes) {
+    final out = <int, ({int monitored, int total})>{};
     for (final e in episodes) {
-      out[e.seasonNumber] = (out[e.seasonNumber] ?? 0) + (e.monitored ? 0 : 1);
+      final seen = out[e.seasonNumber] ?? (monitored: 0, total: 0);
+      out[e.seasonNumber] = (
+        monitored: seen.monitored + (e.monitored ? 1 : 0),
+        total: seen.total + 1,
+      );
     }
     return out;
   }
@@ -167,17 +174,17 @@ class _SonarrSeriesDetailScreenState
     } finally {
       if (mounted) setState(() => _togglingSeasons.remove(season.seasonNumber));
     }
-    _refreshUnmonitoredCounts();
+    _refreshEpisodeMonitorCounts();
   }
 
   /// Re-reads the episode list after a monitoring change. Sonarr cascades a
   /// season's monitored flag onto its episodes, so the counts the bookmarks
   /// are drawn from go stale the moment a season is toggled.
-  Future<void> _refreshUnmonitoredCounts() async {
+  Future<void> _refreshEpisodeMonitorCounts() async {
     try {
       final episodes = await _service.getEpisodes(_series.id);
       if (!mounted) return;
-      setState(() => _unmonitoredBySeason = _unmonitoredCounts(episodes));
+      setState(() => _episodeMonitorBySeason = _episodeMonitorCounts(episodes));
     } catch (_) {
       // Leave the bookmarks on their last known fill; a refresh fixes them.
     }
@@ -353,8 +360,8 @@ class _SonarrSeriesDetailScreenState
                       ...seasons.map((s) => _SeasonCard(
                             season: s,
                             queue: _queueBySeason[s.seasonNumber] ?? const [],
-                            unmonitoredEpisodes:
-                                _unmonitoredBySeason[s.seasonNumber],
+                            episodeMonitor:
+                                _episodeMonitorBySeason[s.seasonNumber],
                             busy: _togglingSeasons.contains(s.seasonNumber),
                             onTap: () => _openSeason(s),
                             onLongPress: () => _showSeasonActions(s),
@@ -468,10 +475,10 @@ class _SeasonCard extends StatelessWidget {
   final SonarrSeason season;
   final List<SonarrQueueItem> queue;
 
-  /// Episodes in this season Sonarr is not monitoring, or null when the
-  /// episode list has not been read (or failed) and the bookmark can only
-  /// speak for the season flag.
-  final int? unmonitoredEpisodes;
+  /// How many of this season's episodes Sonarr is monitoring, out of how many
+  /// it has, or null when the episode list has not been read (or failed) and
+  /// the bookmark can only speak for the season flag.
+  final ({int monitored, int total})? episodeMonitor;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
@@ -480,28 +487,48 @@ class _SeasonCard extends StatelessWidget {
   const _SeasonCard({
     required this.season,
     required this.queue,
-    required this.unmonitoredEpisodes,
+    required this.episodeMonitor,
     required this.busy,
     required this.onTap,
     required this.onLongPress,
     required this.onToggleMonitored,
   });
 
-  MonitorFill get _fill => !season.monitored
-      ? MonitorFill.none
-      : (unmonitoredEpisodes ?? 0) > 0
-          ? MonitorFill.partial
-          : MonitorFill.full;
+  /// A whole bookmark and an empty one are reserved for a season that is
+  /// wholly one thing — the season flag and every episode in it agreeing.
+  /// Everything mixed reads the same half-filled way, in both directions:
+  /// episodes left out of a monitored season, and episodes monitored on their
+  /// own inside a season that is not. The second case is reachable from the
+  /// episode list (monitoring one episode leaves the season flag alone), and
+  /// a hollow bookmark there would claim Sonarr is watching nothing.
+  MonitorFill get _fill {
+    final counts = episodeMonitor;
+    if (counts == null || counts.total == 0) {
+      return season.monitored ? MonitorFill.full : MonitorFill.none;
+    }
+    if (counts.monitored == counts.total) {
+      return season.monitored ? MonitorFill.full : MonitorFill.partial;
+    }
+    return counts.monitored == 0 && !season.monitored
+        ? MonitorFill.none
+        : MonitorFill.partial;
+  }
 
   /// The tooltip carries the action, plus the reason the bookmark looks
   /// half-filled — the availability line calls a still-airing season's
   /// remainder "unaired", so nothing else on the card says it.
   String get _tooltip {
-    if (!season.monitored) return 'Monitor';
-    final left = unmonitoredEpisodes ?? 0;
-    if (left == 0) return 'Stop monitoring';
-    return 'Stop monitoring — $left '
-        '${left == 1 ? 'episode is' : 'episodes are'} unmonitored';
+    final counts = episodeMonitor;
+    if (season.monitored) {
+      final left = counts == null ? 0 : counts.total - counts.monitored;
+      if (left == 0) return 'Stop monitoring';
+      return 'Stop monitoring — $left '
+          '${left == 1 ? 'episode is' : 'episodes are'} unmonitored';
+    }
+    final on = counts?.monitored ?? 0;
+    if (on == 0) return 'Monitor';
+    return 'Monitor — $on '
+        '${on == 1 ? 'episode is' : 'episodes are'} monitored';
   }
 
   /// A season nobody is monitoring fades, the same way its episodes do one

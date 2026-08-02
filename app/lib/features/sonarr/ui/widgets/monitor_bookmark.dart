@@ -3,10 +3,13 @@ import '../../../../core/theme/app_theme.dart';
 
 /// How much of a season Sonarr is actually watching.
 enum MonitorFill {
-  /// The season itself is unmonitored — nothing in it is being searched for.
+  /// Neither the season nor any episode in it is monitored — nothing in it is
+  /// being searched for.
   none,
 
-  /// The season is monitored, but some of its episodes are not.
+  /// Part of the season is monitored and part is not: episodes left out of a
+  /// monitored season, or episodes monitored on their own inside a season that
+  /// is not monitored.
   partial,
 
   /// The season and every episode in it are monitored.
@@ -16,8 +19,9 @@ enum MonitorFill {
 /// The monitoring bookmark on a season card. A hollow grey bookmark is a
 /// season nobody is watching and a solid accent one is a season watched whole;
 /// [MonitorFill.partial] fills the bottom half of that same bookmark, so a
-/// season with episodes deliberately left out reads as "watched, but not all
-/// of it" at a glance instead of looking identical to a whole one.
+/// season that is only partly watched — either way round — reads as "some of
+/// this, but not all of it" at a glance instead of looking identical to a
+/// whole one or to an empty one.
 class MonitorBookmark extends StatelessWidget {
   final MonitorFill fill;
 
