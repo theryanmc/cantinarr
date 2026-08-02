@@ -81,10 +81,12 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 		switch facet {
 		case "remove":
 			action = "Remove from queue"
+		// The facet STRINGS are persisted rule keys — renaming one orphans every
+		// rule armed on it. Only these display labels may change.
 		case "blocklist_search":
-			action = "Blocklist & re-search"
+			action = "Blocklist the release"
 		case "blocklist_only":
-			action = "Blocklist, no re-search"
+			action = "Blocklist, no replacement"
 		case "change_category":
 			action = "Change download category"
 		default:

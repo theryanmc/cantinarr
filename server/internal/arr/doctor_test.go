@@ -436,11 +436,15 @@ func TestDiagnoseFirstMatchWins(t *testing.T) {
 // fileID is a shorthand for the tri-state library file field.
 func fileID(id int64) *int64 { return &id }
 
-// A dead release is only worth replacing when the library has nothing to fall
-// back on. When a copy already exists the download was an upgrade, so the
-// remedy drops it and stops — chasing a replacement is how the identical
-// release gets re-grabbed from a listing the blocklist does not match.
-func TestDiagnoseDropsTheReplacementSearchWhenACopyExists(t *testing.T) {
+// bp is a shorthand for the tri-state provenance field.
+func bp(v bool) *bool { return &v }
+
+// Dropping a dead release without replacing it needs BOTH halves to be true:
+// the library already has a copy, AND nobody went looking for this download.
+// Each half rules out a different mistake — a library gap that RSS alone will
+// never fill (it carries only newly POSTED releases), and overruling someone
+// who explicitly asked for the thing.
+func TestDeadReleaseIsOnlyAbandonedWhenNobodyAskedAndACopyExists(t *testing.T) {
 	stalled := QueueSignal{
 		TrackedDownloadStatus: "error",
 		ErrorMessage:          "The download is stalled with no connections",
@@ -449,34 +453,73 @@ func TestDiagnoseDropsTheReplacementSearchWhenACopyExists(t *testing.T) {
 	cases := []struct {
 		name        string
 		mediaFileID *int64
+		opportunist *bool
 		wantActions []string
 	}{
-		{name: "library already holds a copy", mediaFileID: fileID(622), wantActions: []string{ActionBlocklistOnly}},
-		{name: "library gap must still be filled", mediaFileID: fileID(0), wantActions: []string{ActionBlocklistSearch}},
-		{name: "unknown file state fails safe toward replacing", mediaFileID: nil, wantActions: []string{ActionBlocklistSearch}},
+		{
+			name: "nobody asked and a copy exists", mediaFileID: fileID(622), opportunist: bp(true),
+			wantActions: []string{ActionBlocklistOnly},
+		},
+		{
+			name: "a search produced it, so someone wanted it now", mediaFileID: fileID(622), opportunist: bp(false),
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "unknown provenance never assumes nobody asked", mediaFileID: fileID(622), opportunist: nil,
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "a library gap is filled even when nobody asked", mediaFileID: fileID(0), opportunist: bp(true),
+			wantActions: []string{ActionBlocklistSearch},
+		},
+		{
+			name: "unknown file state fails safe toward replacing", mediaFileID: nil, opportunist: bp(true),
+			wantActions: []string{ActionBlocklistSearch},
+		},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			sig := stalled
 			sig.MediaFileID = tt.mediaFileID
+			sig.GrabbedOpportunistically = tt.opportunist
 			got := Diagnose(sig)
 			if !slices.Equal(got.SuggestedActions, tt.wantActions) {
 				t.Fatalf("actions = %v, want %v", got.SuggestedActions, tt.wantActions)
 			}
-			// The problem label is a persisted rule key: it must NOT fork just
-			// because the library happens to hold a copy, or standing rules
-			// keyed on it silently stop matching.
+			// The problem label is a persisted rule key: it must NOT fork on
+			// library state or provenance, or standing rules keyed on it
+			// silently stop matching.
 			if got.Problem != "Download stalled" {
 				t.Fatalf("problem = %q, want the label unchanged", got.Problem)
 			}
-			if tt.mediaFileID != nil && *tt.mediaFileID > 0 {
-				if !strings.Contains(got.Transparency, "already have a copy") {
-					t.Fatalf("transparency did not explain why no replacement is coming: %q", got.Transparency)
-				}
-			} else if strings.Contains(got.Transparency, "already have a copy") {
-				t.Fatalf("transparency claimed a copy that is not proven: %q", got.Transparency)
+			abandoning := slices.Equal(tt.wantActions, []string{ActionBlocklistOnly})
+			if abandoning != strings.Contains(got.Transparency, "nobody asked") {
+				t.Fatalf("transparency does not match the fix: %q", got.Transparency)
 			}
 		})
+	}
+}
+
+// Resolving provenance costs a history read, so the classifier has to tell
+// callers when it would actually change the answer.
+func TestProvenanceIsOnlyWorthReadingWhenItChangesTheFix(t *testing.T) {
+	dead := QueueSignal{TrackedDownloadStatus: "error", ErrorMessage: "The download is stalled with no connections"}
+	withCopy := dead
+	withCopy.MediaFileID = fileID(622)
+	if !Diagnose(withCopy).ReplacementIsOptional(withCopy) {
+		t.Fatal("a dead release with a copy on disk should invite a provenance read")
+	}
+	gap := dead
+	gap.MediaFileID = fileID(0)
+	if Diagnose(gap).ReplacementIsOptional(gap) {
+		t.Fatal("a library gap must be filled regardless of who asked")
+	}
+	importable := QueueSignal{
+		TrackedDownloadStatus: "warning", TrackedDownloadState: "importBlocked",
+		StatusMessages: msg("Invalid video file: sample.mkv"), MediaFileID: fileID(622),
+	}
+	if Diagnose(importable).ReplacementIsOptional(importable) {
+		t.Fatal("a verdict that still offers an import is not a throw-it-away verdict")
 	}
 }
 

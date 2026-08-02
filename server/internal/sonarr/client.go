@@ -673,6 +673,35 @@ func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int
 	return resp.Records, nil
 }
 
+// GrabProvenance reports how the *newest* grab of this download came about —
+// the grab that put the item currently in the queue there. Radarr stamps a
+// releaseSource on every grabbed history event: "Rss" means it found the
+// release on its own because it beat what the library already had; anything
+// else ("Search", "UserInvokedSearch", "InteractiveSearch", "ReleasePush")
+// means something went looking. An empty string means unknown, which callers
+// must treat as "assume a search was involved" rather than guessing.
+//
+// One download can carry several grab records (a re-grab of the same release
+// makes another), so newest-first ordering is load-bearing.
+func (c *Client) GrabProvenance(episodeID int, downloadID string) (string, error) {
+	var resp struct {
+		Records []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=10&sortKey=date&sortDirection=descending&eventType=1&episodeId=%d&downloadId=%s",
+		episodeID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return "", fmt.Errorf("sonarr grab provenance: %w", err)
+	}
+	for _, record := range resp.Records {
+		for key, value := range record.Data {
+			if strings.EqualFold(key, "releaseSource") {
+				return value, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 // GetImportHistorySince returns the completed-import history records dated
 // after since, newest first, read from one bounded page. complete reports
 // whether that page provably covered the whole window: it reached a record at

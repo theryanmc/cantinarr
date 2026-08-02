@@ -665,22 +665,17 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, radarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			// skipRedownload, then run the search ourselves. Blocklisting a queue
-			// item makes the service fire its OWN replacement search whenever its
-			// failed-download handling is enabled, so leaving it on would dispatch
-			// two searches for one approved fix. The admin approved exactly one
-			// re-search: run exactly one, and do not make the outcome depend on a
-			// service setting that governs UNATTENDED failures, not this decision.
-			if err := rc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
+			if err := rc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.MovieID != 0 {
-				if err := rc.TriggerMoviesSearch([]int{item.MovieID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, radarrQueueTitle(*item)), nil
-			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no movie id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, radarrQueueTitle(*item)), nil
 		case "blocklist_only":
 			// skipRedownload suppresses the automatic replacement search the
 			// blocklist would otherwise trigger. The blocklist still stands, so the
@@ -714,22 +709,17 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, sonarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			// skipRedownload, then run the search ourselves. Blocklisting a queue
-			// item makes the service fire its OWN replacement search whenever its
-			// failed-download handling is enabled, so leaving it on would dispatch
-			// two searches for one approved fix. The admin approved exactly one
-			// re-search: run exactly one, and do not make the outcome depend on a
-			// service setting that governs UNATTENDED failures, not this decision.
-			if err := sc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
+			if err := sc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.EpisodeID != 0 {
-				if err := sc.TriggerEpisodeSearch([]int{item.EpisodeID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, sonarrQueueTitle(*item)), nil
-			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no episode id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, sonarrQueueTitle(*item)), nil
 		case "blocklist_only":
 			// skipRedownload suppresses the automatic replacement search the
 			// blocklist would otherwise trigger. The blocklist still stands, so the
@@ -763,22 +753,17 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, chaptarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			// skipRedownload, then run the search ourselves. Blocklisting a queue
-			// item makes the service fire its OWN replacement search whenever its
-			// failed-download handling is enabled, so leaving it on would dispatch
-			// two searches for one approved fix. The admin approved exactly one
-			// re-search: run exactly one, and do not make the outcome depend on a
-			// service setting that governs UNATTENDED failures, not this decision.
-			if err := cc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
+			// Clear the stuck item and blocklist it — then stop. Whether a
+			// replacement is searched for is the SERVICE's call, made from settings
+			// an administrator already set (including whether a release a human
+			// hand-picked may be substituted automatically). Blocklisting is exactly
+			// what triggers that policy, so skipRedownload stays false and Cantinarr
+			// adds no search of its own: an agent that searched here would be doing
+			// something no human clicking the same button would produce.
+			if err := cc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
 				return "", err
 			}
-			if item.BookID != 0 {
-				if err := cc.TriggerBookSearch([]int{item.BookID}); err != nil {
-					return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: err}
-				}
-				return fmt.Sprintf("Removed and blocklisted queue item %d (%s) and started a fresh search for a different release.", queueID, chaptarrQueueTitle(*item)), nil
-			}
-			return "", &PartialMutationError{Completed: fmt.Sprintf("queue item %d was removed and blocklisted", queueID), Pending: "starting the replacement search", Err: fmt.Errorf("the queue item had no book id")}
+			return fmt.Sprintf("Removed and blocklisted queue item %d (%s). Whether a replacement is searched for now follows the service's own failed-download handling.", queueID, chaptarrQueueTitle(*item)), nil
 		case "blocklist_only":
 			// skipRedownload suppresses the automatic replacement search the
 			// blocklist would otherwise trigger. The blocklist still stands, so the

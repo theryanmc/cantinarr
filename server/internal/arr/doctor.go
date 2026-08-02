@@ -41,12 +41,25 @@ type QueueSignal struct {
 	// abandoning it costs the user nothing. Unknown fails safe toward chasing a
 	// replacement, because a library gap must never be left unfilled.
 	MediaFileID *int64
+	// GrabbedOpportunistically reports that the service found this release on
+	// its own (an RSS pass), rather than because something went looking for it.
+	// nil means unknown. Resolving it costs a history read, so only the callers
+	// that can afford one fill it; everyone else leaves it nil and gets the
+	// service's ordinary behaviour.
+	GrabbedOpportunistically *bool
 }
 
-// hasExistingCopy reports that the library is KNOWN to already hold a file for
+// HasExistingCopy reports that the library is KNOWN to already hold a file for
 // this item. Unknown file state deliberately answers false.
-func (s QueueSignal) hasExistingCopy() bool {
+func (s QueueSignal) HasExistingCopy() bool {
 	return s.MediaFileID != nil && *s.MediaFileID > 0
+}
+
+// nobodyAskedForIt reports that this release exists only because an RSS pass
+// picked it up. Unknown provenance answers false: a fix must never assume no
+// one wanted something.
+func (s QueueSignal) nobodyAskedForIt() bool {
+	return s.GrabbedOpportunistically != nil && *s.GrabbedOpportunistically
 }
 
 // QueueMediaContext is the stable media identity the arr already returned with
@@ -407,31 +420,50 @@ func (s QueueSignal) healthy() bool {
 //  5. trackedDownloadState == failed -> remove + blocklist + re-search.
 //  6. otherwise healthy.
 func Diagnose(sig QueueSignal) Diagnosis {
-	return dropReplacementSearchWhenCopyExists(classify(sig), sig)
+	return abandonUnwantedUpgrade(classify(sig), sig)
 }
 
-// dropReplacementSearchWhenCopyExists turns "throw this release away and search
-// for another" into "throw it away" when the library already holds a copy.
+// ReplacementIsOptional reports that this verdict's only remedy is throwing the
+// release away, AND the library already holds a copy — the one situation where
+// knowing who asked for the download changes the right fix. Callers use it to
+// decide whether resolving provenance is worth a history read.
+func (d Diagnosis) ReplacementIsOptional(sig QueueSignal) bool {
+	return sig.HasExistingCopy() && len(d.SuggestedActions) == 1 &&
+		d.SuggestedActions[0] == ActionBlocklistSearch
+}
+
+// abandonUnwantedUpgrade turns "throw this release away and search for another"
+// into "throw it away" for the one case where nobody wanted it in the first
+// place: the service picked the release up on its own (an RSS pass) purely
+// because it beat a file the library already has.
 //
-// It fires only when blocklist_search is the diagnosis's SOLE remedy — that is
-// precisely the set of verdicts meaning "this download is dead, nothing here can
-// be imported", where the search half exists only to fetch a replacement. A
-// verdict that also offers a manual import is untouched: there the downloaded
-// file may still be usable, which is a different question from whether the
-// library has a copy.
+// Both halves are required, and each rules out a different mistake.
 //
-// Why dropping the search is right, not lazy: an automatic re-search is how a
-// stalled release gets re-grabbed from a listing the blocklist does not match,
-// and it buys nothing the service's own RSS pass will not do for free once a
-// better release is posted. Chasing a replacement for something the user can
-// already watch trades a real risk for no benefit.
-func dropReplacementSearchWhenCopyExists(d Diagnosis, sig QueueSignal) Diagnosis {
-	if !sig.hasExistingCopy() || len(d.SuggestedActions) != 1 || d.SuggestedActions[0] != ActionBlocklistSearch {
+// The library must already hold a copy — otherwise there is a real gap, and RSS
+// alone will not fill it: an RSS feed carries only newly POSTED releases, and
+// the services run no periodic search of their own, so a release that already
+// exists in an indexer is reachable only by searching for it.
+//
+// And nobody must have asked. If a search produced this download, someone
+// wanted the thing now, and quietly deciding not to replace it overrules them.
+// The service's own failed-download handling already governs that case, with
+// settings an administrator has already made — including whether a release a
+// human hand-picked may be substituted automatically. Cantinarr does not
+// second-guess those; it just clears the stuck item, which is the part the
+// service will never do by itself.
+//
+// It fires only when blocklist_search is the verdict's SOLE remedy — the set of
+// verdicts meaning "this download is dead, nothing here can be imported", where
+// the search half exists only to fetch a replacement. A verdict that also offers
+// a manual import is untouched: whether the downloaded file is usable is a
+// different question from whether the library has a copy.
+func abandonUnwantedUpgrade(d Diagnosis, sig QueueSignal) Diagnosis {
+	if !d.ReplacementIsOptional(sig) || !sig.nobodyAskedForIt() {
 		return d
 	}
 	d.SuggestedActions = []string{ActionBlocklistOnly}
 	d.Transparency = strings.TrimSpace(d.Transparency) +
-		" You already have a copy of this, so it will just be dropped — no replacement hunt. A better version still gets picked up automatically whenever one shows up."
+		" You already have a copy, and nobody asked for this one — it was picked up automatically because it looked better. It will just be dropped. A better version still gets picked up whenever one shows up."
 	return d
 }
 

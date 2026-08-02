@@ -425,7 +425,11 @@ func newRemediationRadarr(t *testing.T, recorder *callRecorder, queueJSON string
 
 const remediationMovieQueueJSON = `{"totalRecords":1,"records":[{"id":42,"movieId":7,"downloadId":"dl-1","protocol":"usenet","title":"Stuck.Release","movie":{"id":7,"title":"Scoped Movie","year":2026,"tmdbId":550}}]}`
 
-func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testing.T) {
+// Blocklisting is what triggers the service's own failed-download handling, so
+// Cantinarr must add no search of its own — an agent that did would produce
+// behaviour no human clicking the same button gets, and would override settings
+// the administrator already made.
+func TestRemediateQueueItemBlocklistSearchLeavesReplacementToTheService(t *testing.T) {
 	recorder := &callRecorder{}
 	arrServer := newRemediationRadarr(t, recorder, remediationMovieQueueJSON)
 
@@ -439,26 +443,18 @@ func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testin
 	if err != nil {
 		t.Fatalf("remediate_queue_item: %v", err)
 	}
-	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") || !strings.Contains(result.Text, "Scoped Movie") {
+	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") ||
+		!strings.Contains(result.Text, "failed-download handling") {
 		t.Fatalf("result = %q", result.Text)
 	}
 
-	// Exactly two: the blocklisting DELETE and ONE search. skipRedownload=true
-	// is what keeps it at one — the service fires its own replacement search on a
-	// blocklist when failed-download handling is on, and an approved fix must not
-	// dispatch two searches for one decision.
 	mutations := recorder.mutations()
-	if len(mutations) != 2 {
-		t.Fatalf("mutations = %+v, want remove followed by exactly one search", mutations)
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the blocklisting DELETE alone", mutations)
 	}
 	if mutations[0].Method != http.MethodDelete ||
-		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
-		t.Fatalf("first mutation = %+v, want blocklisting DELETE of queue 42", mutations[0])
-	}
-	command := decodeBody(t, mutations[1].Body)
-	movieIDs, _ := command["movieIds"].([]any)
-	if command["name"] != "MoviesSearch" || len(movieIDs) != 1 || movieIDs[0] != float64(7) {
-		t.Fatalf("replacement search command = %v, want MoviesSearch for movie 7", command)
+		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
+		t.Fatalf("mutation = %+v, want a DELETE that leaves redownload to the service", mutations[0])
 	}
 }
 
@@ -520,7 +516,9 @@ func TestRemediateQueueItemChangeCategoryKeepsDownloadInClient(t *testing.T) {
 	}
 }
 
-func TestRemediateQueueItemTVBlocklistSearchTargetsExactEpisode(t *testing.T) {
+// Same contract on the TV side: clear and blocklist the exact episode's item,
+// and leave the replacement question to Sonarr's own settings.
+func TestRemediateQueueItemTVBlocklistSearchLeavesReplacementToTheService(t *testing.T) {
 	recorder := &callRecorder{}
 	arrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -552,16 +550,11 @@ func TestRemediateQueueItemTVBlocklistSearchTargetsExactEpisode(t *testing.T) {
 	}
 
 	mutations := recorder.mutations()
-	if len(mutations) != 2 {
-		t.Fatalf("mutations = %+v, want remove followed by episode search", mutations)
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the blocklisting DELETE alone", mutations)
 	}
-	if mutations[0].URI != "/api/v3/queue/8?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
-		t.Fatalf("first mutation = %+v", mutations[0])
-	}
-	command := decodeBody(t, mutations[1].Body)
-	episodeIDs, _ := command["episodeIds"].([]any)
-	if command["name"] != "EpisodeSearch" || len(episodeIDs) != 1 || episodeIDs[0] != float64(55) {
-		t.Fatalf("replacement search command = %v, want EpisodeSearch for episode 55", command)
+	if mutations[0].URI != "/api/v3/queue/8?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
+		t.Fatalf("mutation = %+v, want a DELETE that leaves redownload to Sonarr", mutations[0])
 	}
 }
 

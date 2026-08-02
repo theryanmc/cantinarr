@@ -688,7 +688,7 @@ class _ActionCopy {
           case 'remove':
             return 'Remove the stuck item from the download queue';
           case 'blocklist_search':
-            return 'Blocklist the current release and search for a replacement';
+            return 'Blocklist the current release and let the service replace it';
           case 'blocklist_only':
             return 'Drop and blocklist this release — you already have a copy';
           case 'change_category':
@@ -722,7 +722,7 @@ class _ActionCopy {
           case 'remove':
             return 'Cantinarr will remove an item from the download queue. This cannot be undone from Cantinarr.';
           case 'blocklist_search':
-            return 'Cantinarr will blocklist the current release, remove it from the queue, and search for another copy.';
+            return 'Cantinarr will blocklist the current release and remove it from the queue. Whether a replacement is searched for follows your service\'s own failed-download settings.';
           case 'blocklist_only':
             return 'Cantinarr will blocklist the stuck release and remove it from the queue, without searching for a replacement. The copy already in your library is untouched.';
           case 'change_category':
