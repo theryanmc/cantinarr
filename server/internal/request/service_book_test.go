@@ -2350,6 +2350,81 @@ func TestReportBookImportStallsTransitionsPerInstance(t *testing.T) {
 	}
 }
 
+// TestReportBookImportStallsDoesNotDeadlockTheSingleConnection reproduces the
+// 2026-08-01 production deadlock: the pool is capped at one connection
+// (SQLite is single-writer), so reporting from inside an open instance cursor
+// left the sink's transaction waiting for a connection that could never be
+// freed. The goroutine hung forever holding that connection, and every later
+// query in the process — token refreshes above all — blocked behind it, which
+// is why the server went dark a few minutes after every restart while
+// static files and token-invalid requests still answered instantly.
+//
+// The sink here does real transactional DB work, exactly like the production
+// issue store. On the buggy code this test times out instead of passing.
+func TestReportBookImportStallsDoesNotDeadlockTheSingleConnection(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	if _, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason, requested_at)
+		 VALUES (?, 0, 'gr:stuck', 'ebook', ?, 'book', 'A Stuck Book', ?, ?, datetime('now', '-2 days'))`,
+		uid, testInstanceID(t, svc), StatusPending, bookParkReasonAuthorImport,
+	); err != nil {
+		t.Fatalf("insert stalled park: %v", err)
+	}
+	sink := &transactionalStallSink{db: svc.db}
+	svc.SetBookImportStallSink(sink)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.reportBookImportStalls()
+	}()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("reportBookImportStalls deadlocked: it reported while its instance cursor still held the pool's only connection")
+	}
+	if sink.calls() == 0 {
+		t.Fatal("sink was never called; the reporter must still report after draining its cursor")
+	}
+}
+
+// transactionalStallSink mirrors the production sink's shape: it opens a
+// transaction, which is precisely the operation that cannot obtain a
+// connection while a caller's cursor is still open.
+type transactionalStallSink struct {
+	db    *sql.DB
+	mu    sync.Mutex
+	count int
+}
+
+func (s *transactionalStallSink) RecordBookImportStall(instanceID, instanceName string, titles []string, healthy bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM issues").Scan(&n); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.count++
+	s.mu.Unlock()
+	return tx.Commit()
+}
+
+func (s *transactionalStallSink) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.count
+}
+
 type stallCall struct {
 	instanceID   string
 	instanceName string
