@@ -3658,21 +3658,38 @@ func (s *Service) reportBookImportStalls() {
 		return
 	}
 
-	instances, err := s.db.Query("SELECT id, name FROM service_instances WHERE service_type = 'chaptarr'")
+	// The instance list is fully drained and the cursor closed BEFORE any sink
+	// call. The pool is capped at a single connection (SQLite is single-writer),
+	// so an open *sql.Rows holds the only connection there is: reporting from
+	// inside the loop would block the sink's own transaction forever, and that
+	// deadlocked goroutine would take every later query in the process with it.
+	type chaptarrInstance struct{ id, name string }
+	var instances []chaptarrInstance
+	instanceRows, err := s.db.Query("SELECT id, name FROM service_instances WHERE service_type = 'chaptarr'")
 	if err != nil {
 		log.Printf("request: query chaptarr instances for stall report: %v", err)
 		return
 	}
-	defer instances.Close()
-	for instances.Next() {
-		var id, name string
-		if err := instances.Scan(&id, &name); err != nil {
+	for instanceRows.Next() {
+		var inst chaptarrInstance
+		if err := instanceRows.Scan(&inst.id, &inst.name); err != nil {
+			_ = instanceRows.Close()
 			log.Printf("request: scan chaptarr instance for stall report: %v", err)
 			return
 		}
-		titles, isStalled := stalled[id]
-		if err := sink.RecordBookImportStall(id, name, titles, !isStalled); err != nil {
-			log.Printf("request: record book import stall for instance %s: %v", id, err)
+		instances = append(instances, inst)
+	}
+	instanceErr := instanceRows.Err()
+	_ = instanceRows.Close()
+	if instanceErr != nil {
+		log.Printf("request: read chaptarr instances for stall report: %v", instanceErr)
+		return
+	}
+
+	for _, inst := range instances {
+		titles, isStalled := stalled[inst.id]
+		if err := sink.RecordBookImportStall(inst.id, inst.name, titles, !isStalled); err != nil {
+			log.Printf("request: record book import stall for instance %s: %v", inst.id, err)
 		}
 	}
 }
