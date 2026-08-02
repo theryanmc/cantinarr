@@ -665,7 +665,13 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, radarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			if err := rc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
+			// skipRedownload, then run the search ourselves. Blocklisting a queue
+			// item makes the service fire its OWN replacement search whenever its
+			// failed-download handling is enabled, so leaving it on would dispatch
+			// two searches for one approved fix. The admin approved exactly one
+			// re-search: run exactly one, and do not make the outcome depend on a
+			// service setting that governs UNATTENDED failures, not this decision.
+			if err := rc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
 				return "", err
 			}
 			if item.MovieID != 0 {
@@ -708,7 +714,13 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, sonarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			if err := sc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
+			// skipRedownload, then run the search ourselves. Blocklisting a queue
+			// item makes the service fire its OWN replacement search whenever its
+			// failed-download handling is enabled, so leaving it on would dispatch
+			// two searches for one approved fix. The admin approved exactly one
+			// re-search: run exactly one, and do not make the outcome depend on a
+			// service setting that governs UNATTENDED failures, not this decision.
+			if err := sc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
 				return "", err
 			}
 			if item.EpisodeID != 0 {
@@ -751,7 +763,13 @@ func RemediateQueueItemHelper(rc *radarr.Client, sc *sonarr.Client, cc *chaptarr
 			}
 			return fmt.Sprintf("Removed queue item %d (%s) and deleted the download.", queueID, chaptarrQueueTitle(*item)), nil
 		case "blocklist_search":
-			if err := cc.RemoveQueueItem(queueID, true, true, false, false); err != nil {
+			// skipRedownload, then run the search ourselves. Blocklisting a queue
+			// item makes the service fire its OWN replacement search whenever its
+			// failed-download handling is enabled, so leaving it on would dispatch
+			// two searches for one approved fix. The admin approved exactly one
+			// re-search: run exactly one, and do not make the outcome depend on a
+			// service setting that governs UNATTENDED failures, not this decision.
+			if err := cc.RemoveQueueItem(queueID, true, true, true, false); err != nil {
 				return "", err
 			}
 			if item.BookID != 0 {
