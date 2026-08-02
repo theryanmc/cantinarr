@@ -535,6 +535,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     decided_at DATETIME,
     deny_reason TEXT,
     executed_at DATETIME,
+    target_download_id TEXT,                     -- arr download id this action actually acted on, proven live at dispatch; NULL when the action targets no single download. Keyed on by the repeat guard, so a remedy is never auto-repeated against a release it already failed on
     result_text TEXT,                            -- execution outcome, mirrored back into agent_steps + transcript
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -744,6 +745,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE issues ADD COLUMN arr_queue_id INTEGER"},
 		{alter: "ALTER TABLE issues ADD COLUMN resolution_kind TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE agent_actions ADD COLUMN approved_params TEXT"},
+		// The arr download id an executed action actually acted on, proven from a
+		// live queue read at dispatch. It is the only identity that can tell
+		// "this remedy already ran against this exact release" apart from "the
+		// issue's download identity moved on", because issues.download_id tracks
+		// whatever the arr is holding now, not what a past fix touched.
+		{alter: "ALTER TABLE agent_actions ADD COLUMN target_download_id TEXT"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN arr_added_at DATETIME"},
 		{alter: "ALTER TABLE issue_observation_downloads ADD COLUMN queue_file_id INTEGER CHECK (queue_file_id >= 0)"},
 		// The numeric Chaptarr record id a fulfilled book-format request created
