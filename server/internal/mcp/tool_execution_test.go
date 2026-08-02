@@ -443,12 +443,16 @@ func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testin
 		t.Fatalf("result = %q", result.Text)
 	}
 
+	// Exactly two: the blocklisting DELETE and ONE search. skipRedownload=true
+	// is what keeps it at one — the service fires its own replacement search on a
+	// blocklist when failed-download handling is on, and an approved fix must not
+	// dispatch two searches for one decision.
 	mutations := recorder.mutations()
 	if len(mutations) != 2 {
-		t.Fatalf("mutations = %+v, want remove followed by search", mutations)
+		t.Fatalf("mutations = %+v, want remove followed by exactly one search", mutations)
 	}
 	if mutations[0].Method != http.MethodDelete ||
-		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
+		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
 		t.Fatalf("first mutation = %+v, want blocklisting DELETE of queue 42", mutations[0])
 	}
 	command := decodeBody(t, mutations[1].Body)
@@ -551,7 +555,7 @@ func TestRemediateQueueItemTVBlocklistSearchTargetsExactEpisode(t *testing.T) {
 	if len(mutations) != 2 {
 		t.Fatalf("mutations = %+v, want remove followed by episode search", mutations)
 	}
-	if mutations[0].URI != "/api/v3/queue/8?removeFromClient=true&blocklist=true&skipRedownload=false&changeCategory=false" {
+	if mutations[0].URI != "/api/v3/queue/8?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
 		t.Fatalf("first mutation = %+v", mutations[0])
 	}
 	command := decodeBody(t, mutations[1].Body)
