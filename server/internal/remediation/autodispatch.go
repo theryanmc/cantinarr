@@ -69,17 +69,26 @@ func (a *AutoDispatcher) enqueueSnapshotJob(job queueSnapshotJob) {
 	// success and latest failure only, then preserve success -> failure when the
 	// failure actually happened later. This keeps the queue small without
 	// dropping newer evidence before the durable DB watermark can inspect it.
+	//
+	// candidates is ordered oldest-arrival first, and ties resolve to the LAST
+	// one (>= rather than >). Observation timestamps are stamped with
+	// time.Now().UTC(), and .UTC() strips Go's monotonic reading, so two reads
+	// inside one wall-clock tick compare equal — on a coarse platform clock that
+	// is entirely reachable. Preferring the earlier arrival there would throw
+	// away the newer snapshot, which is the exact recovery evidence this
+	// coalescer exists to keep. With no clock difference to go on, arrival order
+	// is the only ordering left.
 	candidates := append(append([]queueSnapshotJob(nil), a.pendingSnapshots[key]...), job)
 	var latestSuccess, latestFailure queueSnapshotJob
 	hasSuccess, hasFailure := false, false
 	for _, candidate := range candidates {
 		if candidate.failure == nil {
-			if !hasSuccess || candidate.observedAt.After(latestSuccess.observedAt) {
+			if !hasSuccess || !candidate.observedAt.Before(latestSuccess.observedAt) {
 				latestSuccess, hasSuccess = candidate, true
 			}
 			continue
 		}
-		if !hasFailure || candidate.observedAt.After(latestFailure.observedAt) {
+		if !hasFailure || !candidate.observedAt.Before(latestFailure.observedAt) {
 			latestFailure, hasFailure = candidate, true
 		}
 	}
