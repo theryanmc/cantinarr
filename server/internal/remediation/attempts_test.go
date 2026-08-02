@@ -282,3 +282,129 @@ func TestUnverifiedCloseNamesTheRecurrence(t *testing.T) {
 		t.Fatalf("recurrence escalation did not explain itself: %q", loud)
 	}
 }
+
+// seedAbandonScenario builds an auto movie incident whose baseline recorded an
+// existing library file — the shape of a stuck UPGRADE.
+func seedAbandonScenario(t *testing.T, svc *Service, baselineFileID int64) int64 {
+	t.Helper()
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, problem_kind, instance_id, download_id, arr_queue_id)
+		 VALUES ('auto','investigating','movie',42,'Example','stalled','Download stalled','radarr-observe','dl-1',7)`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observations (issue_id, service_type, scope_key, state, signature,
+		   baseline_has_file, baseline_file_id, baseline_captured_at)
+		 VALUES (?, 'radarr', 'scope-abandon', 'promoted', 'sig', 1, ?, CURRENT_TIMESTAMP)`,
+		issueID, baselineFileID,
+	); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+	return issueID
+}
+
+// An abandoned upgrade recovers by the library keeping exactly the file it had.
+// The ordinary proof reads that as failure, so this incident would escalate to
+// an administrator despite the fix doing precisely what it was approved to do.
+func TestAbandonedUpgradeCountsAsRecovered(t *testing.T) {
+	svc, _, _ := setupObservationService(t, true) // library holds file 10
+	issueID := seedAbandonScenario(t, svc, 10)
+	issue, err := svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("GetIssue: %v", err)
+	}
+
+	// Before the fix dispatches there is nothing that makes an unchanged file
+	// mean success.
+	proven, err := svc.upgradeAbandonProven(issue)
+	if err != nil {
+		t.Fatalf("upgradeAbandonProven: %v", err)
+	}
+	if proven {
+		t.Fatal("unchanged file counted as recovery with no abandon fix on record")
+	}
+
+	seedExecutedAttempt(t, svc, issueID, ActionRemediateQueue,
+		`{"media_type":"movie","queue_id":7,"action":"blocklist_only"}`, "dl-1", time.Now().UTC())
+
+	proven, err = svc.upgradeAbandonProven(issue)
+	if err != nil {
+		t.Fatalf("upgradeAbandonProven: %v", err)
+	}
+	if !proven {
+		t.Fatal("a dispatched abandon fix with the baseline file intact is the intended outcome")
+	}
+}
+
+// The gate is the server's OWN abandon fix. A different remedy leaves "queue row
+// gone, file unchanged" meaning what it always meant — a download that quietly
+// died, which still needs an administrator.
+func TestOnlyAnAbandonFixMakesAnUnchangedFileARecovery(t *testing.T) {
+	svc, _, _ := setupObservationService(t, true)
+	issueID := seedAbandonScenario(t, svc, 10)
+	issue, _ := svc.GetIssue(issueID)
+	seedExecutedAttempt(t, svc, issueID, ActionRemediateQueue,
+		`{"media_type":"movie","queue_id":7,"action":"blocklist_search"}`, "dl-1", time.Now().UTC())
+
+	proven, err := svc.upgradeAbandonProven(issue)
+	if err != nil {
+		t.Fatalf("upgradeAbandonProven: %v", err)
+	}
+	if proven {
+		t.Fatal("a blocklist_search outcome was accepted as a deliberate abandon")
+	}
+}
+
+// If the library file is not the one the baseline recorded, something else
+// happened here and the abandon proof must not speak for it.
+func TestAbandonProofRequiresTheBaselineFileToStillBeThere(t *testing.T) {
+	svc, _, _ := setupObservationService(t, true) // library holds file 10
+	issueID := seedAbandonScenario(t, svc, 99)    // baseline recorded a different file
+	issue, _ := svc.GetIssue(issueID)
+	seedExecutedAttempt(t, svc, issueID, ActionRemediateQueue,
+		`{"media_type":"movie","queue_id":7,"action":"blocklist_only"}`, "dl-1", time.Now().UTC())
+
+	proven, err := svc.upgradeAbandonProven(issue)
+	if err != nil {
+		t.Fatalf("upgradeAbandonProven: %v", err)
+	}
+	if proven {
+		t.Fatal("a changed library file was accepted as an untouched copy")
+	}
+}
+
+// A missing movie has no copy to fall back on, so nothing about it can ever be
+// an abandoned upgrade — even after an abandon fix somehow ran.
+func TestMissingMediaIsNeverAnAbandonedUpgrade(t *testing.T) {
+	svc, _, _ := setupObservationService(t, false) // library holds nothing
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, problem_kind, instance_id, download_id, arr_queue_id)
+		 VALUES ('auto','investigating','movie',42,'Example','stalled','Download stalled','radarr-observe','dl-1',7)`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observations (issue_id, service_type, scope_key, state, signature,
+		   baseline_has_file, baseline_file_id, baseline_captured_at)
+		 VALUES (?, 'radarr', 'scope-missing', 'promoted', 'sig', 0, NULL, CURRENT_TIMESTAMP)`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+	issue, _ := svc.GetIssue(issueID)
+	seedExecutedAttempt(t, svc, issueID, ActionRemediateQueue,
+		`{"media_type":"movie","queue_id":7,"action":"blocklist_only"}`, "dl-1", time.Now().UTC())
+
+	proven, err := svc.upgradeAbandonProven(issue)
+	if err != nil {
+		t.Fatalf("upgradeAbandonProven: %v", err)
+	}
+	if proven {
+		t.Fatal("a library gap was closed as an abandoned upgrade")
+	}
+}

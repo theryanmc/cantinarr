@@ -83,6 +83,8 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 			action = "Remove from queue"
 		case "blocklist_search":
 			action = "Blocklist & re-search"
+		case "blocklist_only":
+			action = "Blocklist, no re-search"
 		case "change_category":
 			action = "Change download category"
 		default:

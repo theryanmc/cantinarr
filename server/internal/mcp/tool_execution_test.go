@@ -458,6 +458,40 @@ func TestRemediateQueueItemBlocklistSearchRemovesThenSearchesSameMovie(t *testin
 	}
 }
 
+// The whole point of blocklist_only is the search that does NOT happen: when the
+// library already holds a copy, an automatic replacement hunt is how a dead
+// release gets re-grabbed from a listing the blocklist does not match. The
+// blocklist must still be set, or the service's own RSS pass brings it straight
+// back.
+func TestRemediateQueueItemBlocklistOnlyBlocklistsWithoutSearching(t *testing.T) {
+	recorder := &callRecorder{}
+	arrServer := newRemediationRadarr(t, recorder, remediationMovieQueueJSON)
+
+	server := newDefaultInstanceToolServer(t, map[string]string{"radarr": arrServer.URL})
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"remediate_queue_item",
+		json.RawMessage(`{"queue_id":42,"media_type":"movie","action":"blocklist_only"}`),
+		adminCallContext(),
+	)
+	if err != nil {
+		t.Fatalf("remediate_queue_item: %v", err)
+	}
+	if !strings.Contains(result.Text, "Removed and blocklisted queue item 42") ||
+		!strings.Contains(result.Text, "without searching for a replacement") {
+		t.Fatalf("result = %q", result.Text)
+	}
+
+	mutations := recorder.mutations()
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %+v, want the DELETE alone with no replacement search", mutations)
+	}
+	if mutations[0].Method != http.MethodDelete ||
+		mutations[0].URI != "/api/v3/queue/42?removeFromClient=true&blocklist=true&skipRedownload=true&changeCategory=false" {
+		t.Fatalf("mutation = %+v, want a blocklisting DELETE with skipRedownload=true", mutations[0])
+	}
+}
+
 func TestRemediateQueueItemChangeCategoryKeepsDownloadInClient(t *testing.T) {
 	recorder := &callRecorder{}
 	arrServer := newRemediationRadarr(t, recorder, remediationMovieQueueJSON)
@@ -539,7 +573,7 @@ func TestRemediateQueueItemRejectsUnknownTargetsBeforeMutating(t *testing.T) {
 			json.RawMessage(`{"queue_id":42,"media_type":"movie","action":"nuke"}`),
 			adminCallContext(),
 		)
-		assertRejectedWith(t, err, `action must be "remove", "blocklist_search", or "change_category"`)
+		assertRejectedWith(t, err, `action must be "remove", "blocklist_search", "blocklist_only", or "change_category"`)
 	})
 
 	t.Run("missing queue item", func(t *testing.T) {

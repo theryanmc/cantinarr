@@ -289,7 +289,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
+		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -351,7 +351,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "remediate_queue_item",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove, blocklist the release, and start a fresh search for a different one), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
+		Description: "Apply a one-click fix to a stuck queue item: remove (delete it and the download), blocklist_search (remove, blocklist the release, and start a fresh search for a different one), blocklist_only (remove and blocklist WITHOUT searching for a replacement — the right choice when the library already holds a copy and the download was only an upgrade), or change_category (hand the download to the client's post-import category for tools like Unpackerr). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -366,7 +366,7 @@ var arrToolDefinitions = []Tool{
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"remove", "blocklist_search", "change_category"},
+					"enum":        []string{"remove", "blocklist_search", "blocklist_only", "change_category"},
 					"description": "The remediation to apply",
 				},
 			},

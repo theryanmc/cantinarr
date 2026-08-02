@@ -43,7 +43,7 @@ type GrabReleaseParams struct {
 type RemediateQueueParams struct {
 	MediaType string `json:"media_type"`
 	QueueID   int    `json:"queue_id"`
-	Action    string `json:"action"` // remove | blocklist_search | change_category
+	Action    string `json:"action"` // remove | blocklist_search | blocklist_only | change_category
 }
 
 // ManualImportParams imports a download's files.
@@ -120,9 +120,9 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			return nil, fmt.Errorf("remediate_queue requires a positive queue_id")
 		}
 		switch p.Action {
-		case "remove", "blocklist_search", "change_category":
+		case "remove", "blocklist_search", "blocklist_only", "change_category":
 		default:
-			return nil, fmt.Errorf("action must be \"remove\", \"blocklist_search\", or \"change_category\"")
+			return nil, fmt.Errorf("action must be \"remove\", \"blocklist_search\", \"blocklist_only\", or \"change_category\"")
 		}
 		return canonicalJSON(p)
 

@@ -2287,6 +2287,7 @@ func radarrObservation(item radarr.DetailedQueueItem) arr.QueueObservation {
 		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+		MediaFileID: item.FileIDAtSnapshot(),
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }
@@ -2338,6 +2339,7 @@ func sonarrObservation(item sonarr.DetailedQueueItem) arr.QueueObservation {
 		Status: item.Status, TrackedDownloadStatus: item.TrackedDownloadStatus,
 		TrackedDownloadState: item.TrackedDownloadState, ErrorMessage: item.ErrorMessage,
 		StatusMessages: messages, Protocol: item.Protocol, Size: item.Size, SizeLeft: item.Sizeleft,
+		MediaFileID: item.FileIDAtSnapshot(),
 	}
 	return arr.QueueObservation{DownloadID: item.DownloadID, AddedAt: item.Added, FileIDAtSnapshot: item.FileIDAtSnapshot(), Media: media, Signal: signal, Diagnosis: arr.Diagnose(signal)}
 }

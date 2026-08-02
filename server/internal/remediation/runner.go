@@ -684,8 +684,17 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			// even a typed auto-incident conclusion.
 			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
 			if proofErr != nil || !known || !proven {
-				return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-					unverifiedCloseMessage(attempts))
+				// The proof above was written for missing media, where recovery
+				// means a new file arrives. A deliberately abandoned upgrade
+				// recovers the opposite way — the library keeps exactly the file
+				// it already had — so an unchanged file reads as failure there.
+				// Safe to check only here: this branch has already typed-proven
+				// the exact queue target is gone.
+				abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
+				if abandonErr != nil || !abandoned {
+					return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+						unverifiedCloseMessage(attempts))
+				}
 			}
 			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
 				arrStateClearedResolution, ResolutionArrStateCleared,

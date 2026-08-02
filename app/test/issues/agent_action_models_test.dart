@@ -114,6 +114,26 @@ void main() {
       expect(a.params.queueAction, 'blocklist_search');
     });
 
+    test('a stuck-upgrade abandon is a recognized queue fix', () {
+      final a = AgentAction.fromJson({
+        'id': 1,
+        'issue_id': 2,
+        'kind': 'remediate_queue',
+        'params':
+            '{"media_type":"movie","queue_id":7,"action":"blocklist_only"}',
+        'rationale': '',
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'issue_media_type': 'movie',
+        'instance_id': 'radarr-movies',
+        'instance_name': 'Movies',
+        'instance_service_type': 'radarr',
+      });
+      expect(a.params.queueAction, 'blocklist_only');
+      expect(a.params.validationProblem(a.kind), isNull);
+    });
+
     test('malformed params never crash; an unknown kind still parses', () {
       final a = AgentAction.fromJson({
         'id': 1,

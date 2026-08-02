@@ -131,7 +131,7 @@ var AgentToolProposeAction = Tool{
 		"- grab_release: download a specific release. params: {media_type, guid, indexer_id, queue_id_to_replace?} " +
 		"(guid + indexer_id come from search_releases; set queue_id_to_replace to swap out a current queue item).\n" +
 		"- remediate_queue: act on a stuck queue item. params: {media_type, queue_id, action} where action is " +
-		"\"remove\", \"blocklist_search\" (remove + blocklist + re-search), or \"change_category\".\n" +
+		"\"remove\", \"blocklist_search\" (remove + blocklist + re-search), \"blocklist_only\" (remove + blocklist, NO replacement search — correct when the library already has a copy and this download was just an upgrade), or \"change_category\".\n" +
 		"- manual_import: import a download's files. params: {media_type, queue_id, force} (force imports despite " +
 		"permanent rejections — only when a rejection is known-safe/temporary).\n" +
 		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values. " +

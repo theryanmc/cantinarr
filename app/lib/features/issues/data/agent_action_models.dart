@@ -441,7 +441,7 @@ class AgentActionParams {
   /// remediate_queue / manual_import: the target queue item id.
   int? get queueId => _int('queue_id');
 
-  /// remediate_queue: remove | blocklist_search | change_category.
+  /// remediate_queue: remove | blocklist_search | blocklist_only | change_category.
   String? get queueAction => _str('action');
 
   /// manual_import: whether to force past arr's safety checks.
@@ -554,6 +554,7 @@ class AgentActionParams {
             !const {
               'remove',
               'blocklist_search',
+              'blocklist_only',
               'change_category',
             }.contains(queueAction)) {
           return 'The proposed queue change is not recognized.';

@@ -26,6 +26,7 @@ func sonarrSignal(item sonarr.DetailedQueueItem) arr.QueueSignal {
 		ErrorMessage:          item.ErrorMessage,
 		StatusMessages:        messages,
 		Protocol:              item.Protocol,
+		MediaFileID:           item.FileIDAtSnapshot(),
 	}
 }
 
@@ -42,6 +43,7 @@ func radarrSignal(item radarr.DetailedQueueItem) arr.QueueSignal {
 		ErrorMessage:          item.ErrorMessage,
 		StatusMessages:        messages,
 		Protocol:              item.Protocol,
+		MediaFileID:           item.FileIDAtSnapshot(),
 	}
 }
 
@@ -153,7 +155,7 @@ func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
 				" then " + toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q}`, queueID, mediaType))
 		case arr.ActionForceImport:
 			return toolCall("execute_manual_import", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "force": true}`, queueID, mediaType))
-		case arr.ActionRemove, arr.ActionBlocklistSearch, arr.ActionChangeCategory:
+		case arr.ActionRemove, arr.ActionBlocklistSearch, arr.ActionBlocklistOnly, arr.ActionChangeCategory:
 			return toolCall("remediate_queue_item", fmt.Sprintf(`{"queue_id": %d, "media_type": %q, "action": %q}`, queueID, mediaType, v))
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/arr"
 )
 
 // Remediation memory. A fix is only "already tried" against the exact arr
@@ -220,6 +222,81 @@ func (s *Service) autoApprovalWouldRepeatFailedRemedy(actionID int64) (bool, err
 		}
 	}
 	return false, rows.Err()
+}
+
+// issueHadExecutedFacet reports whether a fix of this exact kind and facet ever
+// dispatched on an issue. The facet comes from the typed params, never a SQL
+// JSON probe, so a match can only ever be as narrow as the canonical form —
+// the same discipline rule matching follows.
+func (s *Service) issueHadExecutedFacet(issueID int64, kind ActionKind, facet string) (bool, error) {
+	rows, err := s.db.Query(
+		`SELECT COALESCE(NULLIF(approved_params, ''), params) FROM agent_actions
+		 WHERE issue_id = ? AND kind = ? AND status = ? AND executed_at IS NOT NULL`,
+		issueID, string(kind), ActionExecuted,
+	)
+	if err != nil {
+		return false, fmt.Errorf("query executed %s fixes: %w", kind, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var params string
+		if err := rows.Scan(&params); err != nil {
+			return false, fmt.Errorf("scan executed %s fix: %w", kind, err)
+		}
+		if got, ok := actionAutoFacet(kind, json.RawMessage(params)); ok && got == facet {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// upgradeAbandonProven reports that this incident ended the way a deliberately
+// abandoned upgrade is supposed to end: the server dropped a dead release that
+// was only ever going to replace a file the library already had, and that file
+// is still exactly the file it was.
+//
+// The ordinary recovery proof cannot see this. It was written for missing media,
+// where recovery means a NEW file arrives with an import receipt to bind it — so
+// it reads "the library file never changed" as failure and escalates. For an
+// abandoned upgrade the unchanged file IS the successful outcome: nothing was
+// ever unwatchable, and the point of the fix was to stop chasing a replacement.
+//
+// Three things must all hold, and each is typed state rather than judgment:
+// the incident's baseline recorded a real file, the library still holds that
+// exact file, and the server itself dispatched a blocklist_only fix here. The
+// last one is what keeps this honest — without it, "queue row gone, file
+// unchanged" also describes a download that quietly died, which must still reach
+// an administrator. Callers must additionally have proven the exact queue target
+// is absent; this answers only "was the outcome the intended one".
+func (s *Service) upgradeAbandonProven(issue *Issue) (bool, error) {
+	var baselineHasFile sql.NullBool
+	var baselineFileID sql.NullInt64
+	var captured sql.NullTime
+	if err := s.db.QueryRow(
+		"SELECT baseline_has_file, baseline_file_id, baseline_captured_at FROM issue_observations WHERE issue_id = ?",
+		issue.ID,
+	).Scan(&baselineHasFile, &baselineFileID, &captured); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read baseline for upgrade abandon: %w", err)
+	}
+	if !captured.Valid || !baselineHasFile.Valid || !baselineHasFile.Bool ||
+		!baselineFileID.Valid || baselineFileID.Int64 <= 0 {
+		return false, nil // no proven pre-incident copy: this was never an upgrade.
+	}
+	abandoned, err := s.issueHadExecutedFacet(issue.ID, ActionRemediateQueue, arr.ActionBlocklistOnly)
+	if err != nil || !abandoned {
+		return false, err
+	}
+	current, err := s.exactIssueFileState(issue)
+	if err != nil {
+		return false, err
+	}
+	if !current.known || !current.hasFile || current.fileID <= 0 {
+		return false, nil
+	}
+	return current.fileID == baselineFileID.Int64, nil
 }
 
 // pauseRuleForRepeatedRemedy disarms a rule that was about to replay an
