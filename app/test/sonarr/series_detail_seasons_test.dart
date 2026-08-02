@@ -251,6 +251,23 @@ void main() {
         _episodeJson(id: 2200 + e, season: 22, monitored: false),
     ];
 
+    /// The same list after season 22 is switched off: Sonarr cascades a
+    /// season's monitored flag onto its episodes, so they all come back
+    /// unmonitored except the ones [monitoredAlone] names — episodes the admin
+    /// went back into the list and monitored on their own.
+    List<Map<String, dynamic>> season22Off({
+      Set<int> monitoredAlone = const {},
+    }) =>
+        [
+          for (var e = 1; e <= 8; e++)
+            _episodeJson(id: 2100 + e, season: 21, monitored: true),
+          for (var e = 1; e <= 13; e++)
+            _episodeJson(
+                id: 2200 + e,
+                season: 22,
+                monitored: monitoredAlone.contains(e)),
+        ];
+
     testWidgets('a season holding unmonitored episodes is half-filled',
         (tester) async {
       await _pump(tester, _SeriesAdapter(episodes: episodes));
@@ -272,7 +289,7 @@ void main() {
       await _pump(
         tester,
         _SeriesAdapter(
-          episodes: episodes,
+          episodes: season22Off(),
           seriesJson: _seriesJson(season22Monitored: false),
         ),
         seriesJson: _seriesJson(season22Monitored: false),
@@ -286,6 +303,51 @@ void main() {
       // The monitored season beside it is untouched.
       expect(_fillOf(tester, 'Season 21'), MonitorFill.full);
       expect(_opacitiesOf(tester, 'Season 21'), everyElement(1.0));
+    });
+
+    testWidgets(
+        'an unmonitored season holding a monitored episode is half-filled',
+        (tester) async {
+      // Reachable from the episode list: monitoring one episode leaves the
+      // season flag alone, and a hollow bookmark would say Sonarr is watching
+      // nothing in a season it is still searching an episode of.
+      await _pump(
+        tester,
+        _SeriesAdapter(
+          episodes: season22Off(monitoredAlone: {12}),
+          seriesJson: _seriesJson(season22Monitored: false),
+        ),
+        seriesJson: _seriesJson(season22Monitored: false),
+      );
+
+      expect(_fillOf(tester, 'Season 22'), MonitorFill.partial);
+      // The season itself is still off, so the card stays in the background —
+      // the half-filled bookmark is what says part of it is being watched.
+      expect(_opacitiesOf(tester, 'Season 22'), everyElement(lessThan(1.0)));
+      expect(
+        find.byTooltip('Monitor — 1 episode is monitored'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a whole season monitored episode by episode is half-filled',
+        (tester) async {
+      // Every episode is monitored, but the season flag is not: nothing new
+      // Sonarr learns about will be picked up, so this is not a whole season.
+      await _pump(
+        tester,
+        _SeriesAdapter(
+          episodes: season22Off(monitoredAlone: {for (var e = 1; e <= 13; e++) e}),
+          seriesJson: _seriesJson(season22Monitored: false),
+        ),
+        seriesJson: _seriesJson(season22Monitored: false),
+      );
+
+      expect(_fillOf(tester, 'Season 22'), MonitorFill.partial);
+      expect(
+        find.byTooltip('Monitor — 13 episodes are monitored'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('an episode list that fails leaves plain two-state bookmarks',
