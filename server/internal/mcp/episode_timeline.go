@@ -212,14 +212,12 @@ func renderOneSeason(series *sonarr.Series, tmdbID int, timeline arr.SeasonTimel
 
 	if timeline.PreAirFill && len(timeline.ImportedBeforeAir) > 0 {
 		// Same prescriptive shape diagnose_queue already uses: name the exact
-		// next calls so the agent proposes the whole remedy, not half of it.
-		// The search is a SEPARATE proposal on purpose — blocklisting hands the
-		// replacement decision to the service's own failed-download policy, and
-		// bundling a search would quietly overrule the admin's setting.
+		// next call. ONE call — this is one problem with one repair, and asking
+		// an admin to approve the second half of a decision they already made is
+		// not a safety property, it is a worse product.
 		fmt.Fprintf(&sb, "\n→ next: propose_action delete_media_files {\"media_type\": \"tv\", \"tmdb_id\": %d, \"season\": %d, \"episodes\": [%s], \"blocklist\": true}",
 			tmdbID, timeline.Season, episodeNumberList(timeline.ImportedBeforeAir))
-		fmt.Fprintf(&sb, "\n  then, once that is approved and the files are gone: propose_action trigger_search {\"media_type\": \"tv\", \"tmdb_id\": %d, \"season\": %d, \"aired_only\": true} — it searches only the episodes that have actually aired, so the ones still to come are left for the service to grab as they air.",
-			tmdbID, timeline.Season)
+		sb.WriteString("\n  That one fix deletes those files, blocks the releases that delivered them, and searches the episodes that have already aired — the ones still to come are left for the service to grab as they air. Do not propose a separate search afterwards.")
 	}
 	return sb.String()
 }

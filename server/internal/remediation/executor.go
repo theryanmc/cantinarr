@@ -150,7 +150,10 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		if p.BookID != 0 {
 			bookIDs = []int{p.BookID}
 		}
-		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.Episode, p.AiredOnly, p.AuthorID, bookIDs)
+		// airedOnly is false here on purpose: replacing what a bad import
+		// destroyed belongs to delete_media_files, so a proposed search is
+		// always the plain one. See TriggerSearchParams.
+		return mcp.TriggerSearchHelper(e.bridge, rc, sc, cc, p.MediaType, p.TmdbID, p.Season, p.Episode, false, p.AuthorID, bookIDs)
 
 	case ActionDeleteMediaFiles:
 		var p DeleteMediaFilesParams

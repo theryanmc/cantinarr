@@ -38,17 +38,23 @@ type deletedFile struct {
 // DeleteMediaFilesHelper removes files the *arr already imported and, when
 // blocklist is set, marks the grab that delivered each one as failed.
 //
+// This is the WHOLE repair, in one admin approval: delete, blocklist, replace.
+// One problem gets one decision — an admin who approved "delete the wrong files
+// and get the right ones" is not asked back to authorise the second half of
+// their own sentence.
+//
 // Two ordering rules are load-bearing:
 //
-//   - Files are deleted BEFORE anything is blocklisted. Blocklisting is what
-//     triggers the service's own failed-download handling, and a replacement it
-//     finds while the old file is still on disk gets rejected as "not an
-//     upgrade" — the fix would report success and change nothing.
-//   - Cantinarr does not search afterwards. Marking a grab failed hands the
-//     replacement decision to the admin's own autoRedownloadFailed setting,
-//     which is theirs to make; a search of our own would quietly overrule it.
-//     The outcome text says which way that setting is currently pointing so the
-//     admin can propose an explicit search if it is off.
+//   - Files are deleted BEFORE anything is blocklisted, and the replacement
+//     search runs LAST. Blocklisting is what triggers the service's own
+//     failed-download handling, and a replacement found while the old file is
+//     still on disk is rejected as "not an upgrade" — the fix would report
+//     success and change nothing.
+//   - The repair's own search is called off in exactly one case: blocklisting
+//     already made the service go looking. That is the boundary PR #363 drew —
+//     never duplicate or overrule the admin's own autoRedownloadFailed setting —
+//     and it is a reason to skip a redundant search, not a reason to hand half a
+//     repair back to a human. See replaceWhatAired.
 //
 // A partial failure is reported in the text with a nil error whenever at least
 // one file was actually deleted: the Executor treats a non-nil error as a
@@ -178,6 +184,7 @@ func deleteSonarrEpisodeFiles(bridge *tmdb.Bridge, sc *sonarr.Client, tmdbID int
 	fmt.Fprintf(&sb, "Deleted %s from %s season %d.", pluralFiles(len(deleted)), series.Title, *season)
 	fmt.Fprintf(&sb, " Episodes: %s.", joinLabels(deleted))
 
+	serviceWillReplace := false
 	if blocklist {
 		history, herr := sc.GetSeriesHistory(series.ID, *season, 0)
 		if herr != nil {
@@ -185,9 +192,10 @@ func deleteSonarrEpisodeFiles(bridge *tmdb.Bridge, sc *sonarr.Client, tmdbID int
 		} else {
 			text, blocked := blocklistOutcome(sc.MarkHistoryFailed, sonarrGrabsFor(history, deleted))
 			sb.WriteString(text)
-			appendReplacementPolicy(&sb, blocked, sc.GetFailedDownloadPolicy)
+			serviceWillReplace = appendReplacementPolicy(&sb, blocked, sc.GetFailedDownloadPolicy)
 		}
 	}
+	sb.WriteString(replaceWhatAired(sc, series, *season, serviceWillReplace))
 
 	if len(skipped) > 0 {
 		fmt.Fprintf(&sb, " Left alone: %s.", strings.Join(skipped, ", "))
@@ -227,6 +235,7 @@ func deleteRadarrMovieFile(rc *radarr.Client, tmdbID int, blocklist bool, propos
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Deleted the imported file for %s.", movie.Title)
+	serviceWillReplace := false
 	if blocklist {
 		history, herr := rc.GetMovieHistory(movie.ID, 0)
 		if herr != nil {
@@ -234,9 +243,17 @@ func deleteRadarrMovieFile(rc *radarr.Client, tmdbID int, blocklist bool, propos
 		} else {
 			text, blocked := blocklistOutcome(rc.MarkHistoryFailed, radarrGrabsFor(history, movie.ID))
 			sb.WriteString(text)
-			appendReplacementPolicy(&sb, blocked, rc.GetFailedDownloadPolicy)
+			serviceWillReplace = appendReplacementPolicy(&sb, blocked, rc.GetFailedDownloadPolicy)
 		}
 	}
+	if serviceWillReplace {
+		return sb.String(), nil
+	}
+	if err := rc.TriggerMoviesSearch([]int{movie.ID}); err != nil {
+		fmt.Fprintf(&sb, " The replacement search could not be started (%v); an admin should search for it in Radarr.", err)
+		return sb.String(), nil
+	}
+	sb.WriteString(" Searched for a replacement.")
 	return sb.String(), nil
 }
 
@@ -362,19 +379,23 @@ func blocklistOutcome(markFailed func(int64) error, grabs []grabToFail) (string,
 // Only says anything when a release was actually stood down. The setting governs
 // what a FAILED grab does, so quoting it after a blocklist that did not happen
 // would promise a replacement search that nothing will trigger.
-func appendReplacementPolicy(sb *strings.Builder, blocklisted bool, policy func() (bool, error)) {
+func appendReplacementPolicy(sb *strings.Builder, blocklisted bool, policy func() (bool, error)) bool {
 	if !blocklisted || policy == nil {
-		return
+		return false
 	}
 	auto, err := policy()
 	if err != nil {
-		return
+		// Unknown policy: say nothing and let the repair finish the job itself.
+		// A duplicate search costs a wasted indexer query; a skipped one leaves
+		// the reporter with the missing episode they complained about.
+		return false
 	}
 	if auto {
-		sb.WriteString(" This service is set to redownload failed grabs, so it will look for replacements itself.")
-		return
+		sb.WriteString(" This service is set to redownload failed grabs, so it is looking for replacements itself.")
+		return true
 	}
-	sb.WriteString(" This service is NOT set to redownload failed grabs, so nothing will be searched automatically.")
+	sb.WriteString(" This service does not redownload failed grabs on its own.")
+	return false
 }
 
 // releaseLabel bounds an arr-supplied release title for an admin-facing summary.
@@ -405,6 +426,34 @@ func pluralFiles(n int) string {
 	return fmt.Sprintf("%d files", n)
 }
 
+// replaceWhatAired finishes the repair: the episodes that have aired and are now
+// missing get searched, and the rest of the season is left for the service to
+// grab as it comes out.
+//
+// This is part of the SAME fix, not a follow-up. Deleting the wrong files and
+// not replacing them is half a repair, and an admin who approved "delete the
+// wrong files and get the right ones" should not have to come back and approve
+// the second half of their own decision.
+//
+// serviceWillReplace is the one thing that can call it off. Marking a grab
+// failed is what triggers the service's own failed-download handling, so when
+// that is switched on the search has already been dispatched by the service and
+// ours would only duplicate it — the rule PR #363 settled. When it is off, or
+// when nothing was blocklisted to trigger it, the search belongs to the repair.
+func replaceWhatAired(sc *sonarr.Client, series *sonarr.Series, seasonNumber int, serviceWillReplace bool) string {
+	if serviceWillReplace {
+		return ""
+	}
+	// A failed search never fails the repair. The files are already gone, which
+	// is the irreversible half; the admin needs to be told what is left to do
+	// rather than shown a half-happened fix reported as a clean failure.
+	text, err := triggerAiredEpisodeSearch(sc, series, seasonNumber)
+	if err != nil {
+		return fmt.Sprintf(" The replacement search could not be started (%v); an admin should search the aired episodes in Sonarr.", err)
+	}
+	return " " + text
+}
+
 // triggerAiredEpisodeSearch searches exactly the episodes of a season that have
 // aired and have no file. Episodes that have not aired are deliberately left
 // alone: there is nothing legitimate to find yet, and searching for them is how
@@ -419,9 +468,14 @@ func triggerAiredEpisodeSearch(sc *sonarr.Client, series *sonarr.Series, seasonN
 		ids       []int
 		labels    []string
 		airedHeld int
+		unaired   int
 	)
 	for _, ep := range episodes {
-		if ep.AirDateUtc == nil || ep.AirDateUtc.After(now) {
+		if ep.AirDateUtc == nil {
+			continue
+		}
+		if ep.AirDateUtc.After(now) {
+			unaired++
 			continue
 		}
 		if ep.HasFile {
@@ -447,6 +501,10 @@ func triggerAiredEpisodeSearch(sc *sonarr.Client, series *sonarr.Series, seasonN
 	if err := sc.TriggerEpisodeSearch(ids); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Search started for the %d aired episode(s) of %s season %d still missing a file: %s. Check get_queue in a bit to see if releases were grabbed.",
-		len(ids), series.Title, seasonNumber, strings.Join(labels, ", ")), nil
+	out := fmt.Sprintf("Searched the %d aired episode(s) of %s season %d that are missing a file: %s.",
+		len(ids), series.Title, seasonNumber, strings.Join(labels, ", "))
+	if unaired > 0 {
+		out += fmt.Sprintf(" The %d episode(s) still to air were left alone — the service will grab each one as it comes out.", unaired)
+	}
+	return out, nil
 }

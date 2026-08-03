@@ -705,9 +705,7 @@ class _ActionCopy {
             ? 'Force-import the downloaded files (overrides safety checks)'
             : 'Manually import the downloaded files';
       case AgentActionKind.triggerSearch:
-        return a.params.airedOnly
-            ? 'Search only the episodes of this season that have already aired'
-            : 'Start an automatic search for this title';
+        return 'Start an automatic search for this title';
       case AgentActionKind.rescan:
         return 'Rescan the files on disk and re-run the import';
       case AgentActionKind.deleteMediaFiles:
@@ -717,17 +715,23 @@ class _ActionCopy {
     }
   }
 
-  /// Summary for a deletion of files the media service already imported. The
-  /// blocklist choice is a different promise to the admin — files gone versus
-  /// files gone *and* that release stood down — so it is never folded away.
+  /// Summary for a deletion of files the media service already imported. This
+  /// is the WHOLE repair in one line — delete, optionally block, then go and
+  /// get what should have been there — because that is the single decision the
+  /// admin is being asked for. The blocklist choice stays a distinct promise
+  /// (files gone versus files gone *and* that release stood down), so it is
+  /// never folded away.
   static String _deleteSummary(AgentActionParams p) {
     final one = p.mediaType != 'tv' || p.episodes.length == 1;
     final files = one ? 'file' : 'files';
+    final replacements = one ? 'a replacement' : 'replacements';
     if (!p.blocklist) {
-      return 'Delete the wrong $files already in your library';
+      return 'Delete the wrong $files already in your library and look for '
+          '$replacements';
     }
     final release = one ? 'that release' : 'those releases';
-    return 'Delete the wrong $files and block $release from coming back';
+    return 'Delete the wrong $files, block $release from coming back, and look '
+        'for $replacements';
   }
 
   /// Fixed confirmation copy selected only from typed enums/validated flags.
@@ -756,9 +760,7 @@ class _ActionCopy {
             ? 'Cantinarr will force-import downloaded files and override normal import safety checks.'
             : 'Cantinarr will import downloaded files into your media library.';
       case AgentActionKind.triggerSearch:
-        return a.params.airedOnly
-            ? 'Cantinarr will search only the episodes of this season that have already aired and are still missing, and may add downloads to the queue. Episodes that have not aired yet are left alone — your media service will grab each one as it comes out.'
-            : 'Cantinarr will start a search and may add a download to the queue.';
+        return 'Cantinarr will start a search and may add a download to the queue.';
       case AgentActionKind.rescan:
         return 'Cantinarr will rescan files and run the import process in your connected media service.';
       case AgentActionKind.deleteMediaFiles:
@@ -775,6 +777,14 @@ class _ActionCopy {
   /// cannot be undone, and states what the blocklist choice does and does not
   /// do. Every value interpolated here is a validated integer, never an
   /// agent-authored string.
+  ///
+  /// It also describes the REPLACEMENT, because that is part of this same fix
+  /// rather than a follow-up an admin is asked to approve separately. Getting
+  /// rid of a wrong copy and getting the right one is one decision; a card that
+  /// stopped at "deleted" would be asking for authorisation to leave a hole.
+  /// The only thing that changes the ending is blocking: standing a release
+  /// down is what makes a media service go looking on its own, and when it
+  /// does, Cantinarr stays out of the way instead of duplicating the search.
   static String _deleteConfirmation(AgentActionParams p) {
     final episodes = p.episodes;
     final isTv = p.mediaType == 'tv';
@@ -805,11 +815,6 @@ class _ActionCopy {
             : ' It also blocks the releases those files came from, so your '
                 'media service will not download those same releases again.',
       );
-      buffer.write(
-        ' Whether anything replaces ${one ? 'it' : 'them'} follows your media '
-        "service's own failed-download setting — Cantinarr does not start a "
-        'search of its own.',
-      );
     } else {
       buffer.write(
         one
@@ -817,6 +822,24 @@ class _ActionCopy {
                 'service could download the same one again.'
             : ' The releases those files came from are not blocked, so your '
                 'media service could download the same ones again.',
+      );
+    }
+
+    buffer.write(
+      isTv
+          ? ' Cantinarr then looks for replacements, but only for the episodes '
+              'of this season that have already aired. The rest of the season '
+              'is left alone — your media service will grab each episode as it '
+              'comes out.'
+          : ' Cantinarr then looks for a replacement.',
+    );
+    if (p.blocklist) {
+      buffer.write(
+        one
+            ? ' If blocking that release already sent your media service '
+                'looking for a replacement itself, Cantinarr leaves that to it.'
+            : ' If blocking those releases already sent your media service '
+                'looking for replacements itself, Cantinarr leaves that to it.',
       );
     }
     return buffer.toString();
@@ -906,9 +929,6 @@ class _ActionCopy {
         if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
         if (p.season != null) rows.add(('Season', '${p.season}', false));
         if (p.episode != null) rows.add(('Episode', '${p.episode}', false));
-        if (p.airedOnly) {
-          rows.add(('Scope', 'Only episodes that have already aired', false));
-        }
         if (p.authorId != null) {
           rows.add(('Author id', '${p.authorId}', false));
         }

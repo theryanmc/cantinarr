@@ -133,11 +133,15 @@ func TestEpisodeTimelineRendersTheLiveSeason(t *testing.T) {
 	}
 }
 
-// TestEpisodeTimelinePrescribesBothHalvesOfTheRemedy: the → next line is what
-// turns evidence into a proposal. It must name the exact episodes to delete and
-// the follow-up search as a SEPARATE approval — bundling the search would
-// overrule the instance's own replacement policy.
-func TestEpisodeTimelinePrescribesBothHalvesOfTheRemedy(t *testing.T) {
+// TestEpisodeTimelinePrescribesOneFixForOneProblem: the → next line is what
+// turns evidence into a proposal, and it prescribes exactly ONE call. Deleting
+// the impossible files, standing their releases down, and searching for what
+// has actually aired are three halves of a single repair, and splitting them
+// across two approvals asks an admin to approve the second half of a decision
+// they already made. The negative half of this test is the guard on that: a
+// timeline that names trigger_search or aired_only again has reintroduced the
+// split, whatever the surrounding prose says.
+func TestEpisodeTimelinePrescribesOneFixForOneProblem(t *testing.T) {
 	text := renderEpisodeTimeline(futuramaSeriesRecord(), 615, 11,
 		map[int][]arr.EpisodeState{11: futuramaS11States(t)}, futuramaS11Files(t), futuramaNow)
 
@@ -145,12 +149,23 @@ func TestEpisodeTimelinePrescribesBothHalvesOfTheRemedy(t *testing.T) {
 	if !strings.Contains(text, wantDelete) {
 		t.Fatalf("timeline missing the delete proposal %q:\n%s", wantDelete, text)
 	}
-	wantSearch := `propose_action trigger_search {"media_type": "tv", "tmdb_id": 615, "season": 11, "aired_only": true}`
-	if !strings.Contains(text, wantSearch) {
-		t.Fatalf("timeline missing the aired-only follow-up %q:\n%s", wantSearch, text)
+	if got := strings.Count(text, "propose_action"); got != 1 {
+		t.Fatalf("timeline prescribes %d calls, want exactly 1:\n%s", got, text)
 	}
-	if !strings.Contains(text, "once that is approved and the files are gone") {
-		t.Fatalf("timeline does not order the two proposals:\n%s", text)
+	for _, unwanted := range []string{"trigger_search", "aired_only", "once that is approved"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("timeline splits the repair back into two proposals (%q):\n%s", unwanted, text)
+		}
+	}
+	// And it says so, because an agent reading only the one call has to know the
+	// search is already in it rather than infer that from its absence.
+	for _, want := range []string{
+		"searches the episodes that have already aired",
+		"Do not propose a separate search afterwards.",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("timeline does not say the one fix is the whole repair (%q):\n%s", want, text)
+		}
 	}
 	// E10 has no file, so it must not be in the delete list.
 	if strings.Contains(text, "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]") {
@@ -471,10 +486,20 @@ func TestGetEpisodeTimelineJoinsEpisodesAndFiles(t *testing.T) {
 		"[WEBDL-1080p]",
 		"Futurama.S11E01.Beef.1080p.DSNP.WEB-DL.DDP5.1.H.264.Dual-CM",
 		`→ next: propose_action delete_media_files {"media_type": "tv", "tmdb_id": 615, "season": 11, "episodes": [1, 2], "blocklist": true}`,
-		`"aired_only": true`,
+		"Do not propose a separate search afterwards.",
 	} {
 		if !strings.Contains(result.Text, want) {
 			t.Fatalf("timeline missing %q:\n%s", want, result.Text)
+		}
+	}
+	// The whole repair is that one call, end to end through the tool — not a
+	// delete the agent is expected to chase with a search of its own.
+	if got := strings.Count(result.Text, "propose_action"); got != 1 {
+		t.Fatalf("tool prescribed %d calls, want exactly 1:\n%s", got, result.Text)
+	}
+	for _, unwanted := range []string{"trigger_search", "aired_only"} {
+		if strings.Contains(result.Text, unwanted) {
+			t.Fatalf("tool output still names %q:\n%s", unwanted, result.Text)
 		}
 	}
 	// The whole series is read, then rendered for the season in scope.
@@ -540,14 +565,14 @@ func TestGetEpisodeTimelineAnswersInPlainLanguage(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "movies have no episode timeline",
-			urls: map[string]string{"sonarr": arrServer.URL},
+			name:  "movies have no episode timeline",
+			urls:  map[string]string{"sonarr": arrServer.URL},
 			input: `{"media_type":"movie","tmdb_id":550}`,
 			want:  "An episode timeline exists only for TV.",
 		},
 		{
-			name: "books have no episode timeline either",
-			urls: map[string]string{"sonarr": arrServer.URL},
+			name:  "books have no episode timeline either",
+			urls:  map[string]string{"sonarr": arrServer.URL},
 			input: `{"media_type":"book"}`,
 			want:  "An episode timeline exists only for TV.",
 		},

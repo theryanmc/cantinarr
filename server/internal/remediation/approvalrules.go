@@ -75,16 +75,7 @@ func actionAutoFacet(kind ActionKind, canonical json.RawMessage) (string, bool) 
 			return "blocklist", true
 		}
 		return "files_only", true
-	case ActionTriggerSearch:
-		var p TriggerSearchParams
-		if err := json.Unmarshal(canonical, &p); err != nil {
-			return "", false
-		}
-		if p.AiredOnly {
-			return "aired_only", true
-		}
-		return "", true
-	case ActionGrabRelease, ActionRescan:
+	case ActionGrabRelease, ActionTriggerSearch, ActionRescan:
 		return "", true
 	default:
 		return "", false
@@ -121,11 +112,7 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 			action = "Manual import"
 		}
 	case ActionTriggerSearch:
-		if facet == "aired_only" {
-			action = "Search the episodes that aired"
-		} else {
-			action = "Search again"
-		}
+		action = "Search again"
 	case ActionRescan:
 		action = "Rescan"
 	case ActionDeleteMediaFiles:

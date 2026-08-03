@@ -90,36 +90,17 @@ func TestDeleteMediaFilesBoundsTheEpisodeList(t *testing.T) {
 	}
 }
 
-func TestTriggerSearchAiredOnlyValidation(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		params  string
-		wantErr string
-	}{
-		{name: "tv season", params: `{"media_type":"tv","tmdb_id":615,"season":11,"aired_only":true}`},
-		{name: "rejects an exact episode", params: `{"media_type":"tv","tmdb_id":615,"season":11,"episode":3,"aired_only":true}`, wantErr: "no episode"},
-		{name: "rejects a seasonless search", params: `{"media_type":"tv","tmdb_id":615,"aired_only":true}`, wantErr: "TV season search"},
-		{name: "rejects a movie", params: `{"media_type":"movie","tmdb_id":772,"aired_only":true}`, wantErr: "TV season search"},
-		{name: "rejects a book", params: `{"media_type":"book","book_id":9,"aired_only":true}`, wantErr: "TV season search"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := validateActionParams(ActionTriggerSearch, json.RawMessage(tc.params))
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("error = %v, want it to contain %q", err, tc.wantErr)
-			}
-		})
+// One problem gets one proposal. Replacing what a bad import destroyed is part
+// of delete_media_files, so the agent has no way to propose it separately —
+// structurally, not by prompt instruction.
+func TestTriggerSearchHasNoAiredOnlyVariant(t *testing.T) {
+	_, err := validateActionParams(ActionTriggerSearch,
+		json.RawMessage(`{"media_type":"tv","tmdb_id":615,"season":11,"aired_only":true}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid params") {
+		t.Fatalf("error = %v, want the unknown field rejected", err)
 	}
 }
 
-// aired_only is omitempty so that every trigger_search action stored before this
-// field existed still canonicalizes to the identical bytes — and therefore the
-// identical fingerprint — it did then.
 func TestTriggerSearchWithoutAiredOnlyKeepsItsOldCanonicalForm(t *testing.T) {
 	canonical, err := validateActionParams(ActionTriggerSearch,
 		json.RawMessage(`{"media_type":"tv","tmdb_id":615,"season":11}`))
@@ -240,7 +221,6 @@ func TestDeleteAndSearchFacetsSeparateTheDestructiveVariants(t *testing.T) {
 	}{
 		{ActionDeleteMediaFiles, `{"media_type":"tv","tmdb_id":615,"season":11,"episodes":[1],"blocklist":true}`, "blocklist", "Delete the wrong files and block that release · Wrong content"},
 		{ActionDeleteMediaFiles, `{"media_type":"tv","tmdb_id":615,"season":11,"episodes":[1]}`, "files_only", "Delete the wrong files · Wrong content"},
-		{ActionTriggerSearch, `{"media_type":"tv","tmdb_id":615,"season":11,"aired_only":true}`, "aired_only", "Search the episodes that aired · Wrong content"},
 		{ActionTriggerSearch, `{"media_type":"tv","tmdb_id":615,"season":11}`, "", "Search again · Wrong content"},
 	} {
 		canonical, err := validateActionParams(tc.kind, json.RawMessage(tc.params))

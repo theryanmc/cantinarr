@@ -85,8 +85,10 @@ AgentAction _specialSearch() => AgentAction.fromJson({
       'instance_service_type': 'sonarr',
     });
 
-/// A season search narrowed to the episodes that have already come out.
-AgentAction _airedOnlySearch() => AgentAction.fromJson({
+/// A trigger_search proposal that still carries the removed `aired_only` flag.
+/// The server can no longer emit it, so the card must treat it as an
+/// unrecognized field and refuse to offer a decision.
+AgentAction _staleAiredOnlySearch() => AgentAction.fromJson({
       'id': 15,
       'issue_id': 5,
       'kind': 'trigger_search',
@@ -96,7 +98,7 @@ AgentAction _airedOnlySearch() => AgentAction.fromJson({
         'season': 11,
         'aired_only': true,
       },
-      'rationale': 'The unaired episodes need no search; they are monitored.',
+      'rationale': 'Search only what has come out so far.',
       'status': 'proposed',
       'can_decide': true,
       'issue_status': 'awaiting_approval',
@@ -342,41 +344,23 @@ void main() {
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
   });
 
-  testWidgets('an aired-only search says it searches only what has aired',
+  testWidgets('a search still carrying aired_only is frozen, not decidable',
       (tester) async {
     await _pump(
       tester,
       auth: _adminState,
       service: _FakeIssuesService(),
-      action: _airedOnlySearch(),
+      action: _staleAiredOnlySearch(),
     );
 
+    // No scope row survives, and the extra key blocks the decision outright
+    // instead of being silently dropped from a fix an admin then authorises.
+    expect(find.text('Scope'), findsNothing);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
     expect(
-      find.text(
-          'Search only the episodes of this season that have already aired'),
+      find.textContaining('does not recognize'),
       findsOneWidget,
     );
-    expect(find.text('Scope'), findsOneWidget);
-    expect(
-      find.text('Only episodes that have already aired'),
-      findsOneWidget,
-    );
-    // Nothing about this proposal blocks a decision.
-    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
-
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining(
-          'search only the episodes of this season that have already aired'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Episodes that have not aired yet are left alone'),
-      findsOneWidget,
-    );
-    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
-    await tester.pumpAndSettle();
   });
 
   testWidgets('a blocklisting deletion states the exact, irreversible target',
@@ -389,8 +373,8 @@ void main() {
     );
 
     expect(
-      find.text(
-          'Delete the wrong files and block those releases from coming back'),
+      find.text('Delete the wrong files, block those releases from coming '
+          'back, and look for replacements'),
       findsOneWidget,
     );
     // The exact target, from validated integers — the show's title is not in
@@ -424,9 +408,21 @@ void main() {
           'will not download those same releases again'),
       findsOneWidget,
     );
-    // The replacement decision belongs to the service's own setting, not us.
+    // The repair does not stop at the deletion: the same approval covers
+    // getting back what has already aired, and only what has already aired.
     expect(
-      find.textContaining("service's own failed-download setting"),
+      find.textContaining('Cantinarr then looks for replacements, but only for '
+          'the episodes of this season that have already aired. The rest of '
+          'the season is left alone — your media service will grab each '
+          'episode as it comes out.'),
+      findsOneWidget,
+    );
+    // Blocking is the one thing that can make the media service search first,
+    // and then Cantinarr stands down rather than duplicating it.
+    expect(
+      find.textContaining('If blocking those releases already sent your media '
+          'service looking for replacements itself, Cantinarr leaves that to '
+          'it.'),
       findsOneWidget,
     );
     await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
@@ -443,7 +439,8 @@ void main() {
     );
 
     expect(
-      find.text('Delete the wrong files already in your library'),
+      find.text('Delete the wrong files already in your library and look for '
+          'replacements'),
       findsOneWidget,
     );
     expect(find.text('Block the release'), findsOneWidget);
@@ -466,9 +463,18 @@ void main() {
       find.textContaining('The releases those files came from are not blocked'),
       findsOneWidget,
     );
-    // Without a blocklist there is no failed-download policy to defer to.
+    // The replacement half of the repair is promised either way.
     expect(
-      find.textContaining("service's own failed-download setting"),
+      find.textContaining('Cantinarr then looks for replacements, but only for '
+          'the episodes of this season that have already aired. The rest of '
+          'the season is left alone — your media service will grab each '
+          'episode as it comes out.'),
+      findsOneWidget,
+    );
+    // Nothing was blocked, so there is no media-service search to stand down
+    // for — the card must not hedge a search it will definitely run.
+    expect(
+      find.textContaining('Cantinarr leaves that to it'),
       findsNothing,
     );
     await tester.tap(find.widgetWithText(TextButton, 'Cancel'));

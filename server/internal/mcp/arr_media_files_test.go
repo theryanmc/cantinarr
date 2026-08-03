@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
 
@@ -39,13 +40,22 @@ type sonarrFileFake struct {
 	// per-series endpoint exists to replace.
 	globalHistory []map[string]any
 
-	// historyStatus, deleteFails and failedStatus let a test fail exactly one
-	// remote operation, which is how partial-success reporting is proved.
+	// historyStatus, deleteFails, failedStatus, policyStatus and commandStatus
+	// let a test fail exactly one remote operation, which is how partial-success
+	// reporting is proved.
 	historyStatus  int
 	deleteFails    map[int]bool
 	failedStatus   int
 	policyStatus   int
+	commandStatus  int
 	autoRedownload bool
+
+	// libraryMu guards the episode and file fixtures, which a successful delete
+	// mutates. The repair reads the season again to decide what to replace, so a
+	// fake that kept serving the file it had just deleted would answer "nothing
+	// to search" for a season it had emptied itself — and every assertion about
+	// the second half of the fix would be measuring the fixture, not the code.
+	libraryMu sync.Mutex
 
 	// commands captures every POST /api/v3/command body (the search dispatch).
 	// The httptest handler runs on another goroutine than the assertions, so
@@ -85,7 +95,7 @@ func (f *sonarrFileFake) start() *httptest.Server {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episode":
 			_ = json.NewEncoder(w).Encode(f.episodesFor(r.URL.Query().Get("seasonNumber")))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/episodefile":
-			_ = json.NewEncoder(w).Encode(f.files)
+			_ = json.NewEncoder(w).Encode(f.fileRecords())
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/history":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"totalRecords": len(f.globalHistory), "records": f.globalHistory,
@@ -96,6 +106,7 @@ func (f *sonarrFileFake) start() *httptest.Server {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
+			f.forgetFile(id)
 			_, _ = w.Write([]byte(`{}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/history/series":
 			if f.historyStatus != 0 {
@@ -123,6 +134,10 @@ func (f *sonarrFileFake) start() *httptest.Server {
 			f.commandMu.Lock()
 			f.commands = append(f.commands, payload)
 			f.commandMu.Unlock()
+			if f.commandStatus != 0 {
+				w.WriteHeader(f.commandStatus)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 		default:
 			f.t.Errorf("unexpected sonarr request %s %s", r.Method, r.URL.RequestURI())
@@ -136,7 +151,52 @@ func (f *sonarrFileFake) start() *httptest.Server {
 // episodesFor narrows the fixture the way Sonarr narrows /api/v3/episode, so a
 // caller that forgets the season filter cannot accidentally pass.
 func (f *sonarrFileFake) episodesFor(season string) []map[string]any {
-	return matchingRecords(f.episodes, "seasonNumber", season)
+	f.libraryMu.Lock()
+	defer f.libraryMu.Unlock()
+	return copyRecords(matchingRecords(f.episodes, "seasonNumber", season))
+}
+
+func (f *sonarrFileFake) fileRecords() []map[string]any {
+	f.libraryMu.Lock()
+	defer f.libraryMu.Unlock()
+	return copyRecords(f.files)
+}
+
+// forgetFile applies to the fixture what a successful DELETE applies to the
+// library: the file record is gone, and the episode that held it now holds
+// nothing. That second half is what makes the season read as "aired and
+// missing" on the repair's own re-read.
+func (f *sonarrFileFake) forgetFile(id int) {
+	f.libraryMu.Lock()
+	defer f.libraryMu.Unlock()
+	for _, ep := range f.episodes {
+		if fmt.Sprintf("%v", ep["episodeFileId"]) == fmt.Sprintf("%d", id) {
+			ep["hasFile"] = false
+			ep["episodeFileId"] = 0
+		}
+	}
+	remaining := make([]map[string]any, 0, len(f.files))
+	for _, file := range f.files {
+		if fmt.Sprintf("%v", file["id"]) != fmt.Sprintf("%d", id) {
+			remaining = append(remaining, file)
+		}
+	}
+	f.files = remaining
+}
+
+// copyRecords hands the handler its own maps to encode, so a record being
+// serialised on one goroutine is never the record a delete is rewriting on
+// another.
+func copyRecords(records []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
+		clone := make(map[string]any, len(rec))
+		for key, value := range rec {
+			clone[key] = value
+		}
+		out = append(out, clone)
+	}
+	return out
 }
 
 // matchingRecords narrows a fixture on one field the way the *arr narrows on
@@ -269,6 +329,77 @@ func perEpisodeGrabHistory(episodes int) []map[string]any {
 		)
 	}
 	return out
+}
+
+// --- a season caught mid-run ---
+//
+// The live fixture above is a season where NOTHING has aired yet, which is the
+// moment issue #814 was captured. The repair resolves "aired" from time.Now()
+// at the instant it runs, so everything about what it searches needs a season
+// that straddles now — and anchored to the real clock, because a fixed date
+// quietly changes meaning as the calendar moves past it.
+
+// midFlightSeasonEpisodes is that season: E01 and E02 are out, E03..E05 are
+// not, and all five hold a file that landed before any of them aired.
+func midFlightSeasonEpisodes() []map[string]any {
+	now := time.Now().UTC()
+	airs := []time.Duration{-48 * time.Hour, -24 * time.Hour, 24 * time.Hour, 48 * time.Hour, 72 * time.Hour}
+	out := make([]map[string]any, 0, len(airs))
+	for i, offset := range airs {
+		out = append(out, map[string]any{
+			"id": 1100 + i + 1, "seriesId": 28, "seasonNumber": 11, "episodeNumber": i + 1,
+			"title": fmt.Sprintf("Episode %d", i+1), "airDateUtc": now.Add(offset).Format(time.RFC3339),
+			"monitored": true, "hasFile": true, "episodeFileId": 5100 + i + 1,
+		})
+	}
+	return out
+}
+
+// midFlightFileRecords are the files behind them: one batch, imported a month
+// ago — before the first episode aired and long before the fix was proposed, so
+// the staleness gate spares none of them.
+func midFlightFileRecords() []map[string]any {
+	imported := time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	out := make([]map[string]any, 0, 5)
+	for i := 1; i <= 5; i++ {
+		out = append(out, map[string]any{
+			"id": 5100 + i, "seriesId": 28, "seasonNumber": 11, "dateAdded": imported,
+			"relativePath": fmt.Sprintf("Season 11/Futurama - S11E%02d.mkv", i),
+			"sceneName":    fmt.Sprintf("Futurama.S11E%02d.1080p.DSNP.WEB-DL.DDP5.1.H.264.Dual-CM", i),
+		})
+	}
+	return out
+}
+
+// midFlightProposedAt is "the fix was proposed a moment ago".
+func midFlightProposedAt() time.Time { return time.Now().UTC() }
+
+// midFlightFake wires the three together with the production history shape.
+func midFlightFake(t *testing.T) *sonarrFileFake {
+	t.Helper()
+	return &sonarrFileFake{
+		t: t, series: futuramaSeries(), episodes: midFlightSeasonEpisodes(), files: midFlightFileRecords(),
+		history: perEpisodeGrabHistory(5),
+	}
+}
+
+// episodeSearchIDs returns the episode ids of the single search the repair
+// dispatched, or nil when it dispatched none. Anything other than one
+// EpisodeSearch fails the test: a SeasonSearch would re-grab the whole season,
+// including the episodes that are the reason this fix exists.
+func episodeSearchIDs(t *testing.T, fake *sonarrFileFake) []int {
+	t.Helper()
+	commands := fake.commandsSeen()
+	if len(commands) == 0 {
+		return nil
+	}
+	if len(commands) != 1 {
+		t.Fatalf("the repair dispatched %d commands: %+v", len(commands), commands)
+	}
+	if commands[0]["name"] != "EpisodeSearch" {
+		t.Fatalf("command = %+v, want EpisodeSearch", commands[0])
+	}
+	return commandEpisodeIDs(t, commands[0])
 }
 
 func intPtr(v int) *int { return &v }
@@ -793,16 +924,17 @@ func TestDeleteMediaFilesReportsAnUnreadableHistoryWithoutFailing(t *testing.T) 
 // TestDeleteMediaFilesReportsNoGrabRecord covers the history that reads fine
 // but holds no grab for the deleted files: nothing can be blocklisted, and
 // saying so beats silence. The instance's replacement policy stays unquoted for
-// the same reason — it only governs grabs that were actually marked failed.
+// the same reason — it only governs grabs that were actually marked failed —
+// and with nothing stood down, nothing was triggered to replace the files, so
+// the repair's own search is the only one that will happen.
 func TestDeleteMediaFilesReportsNoGrabRecord(t *testing.T) {
-	fake := &sonarrFileFake{
-		t: t, series: futuramaSeries(), episodes: futuramaS11Episodes(), files: futuramaS11FileRecords(),
-		history: []map[string]any{}, autoRedownload: true,
-	}
+	fake := midFlightFake(t)
+	fake.history = []map[string]any{}
+	fake.autoRedownload = true
 	server := fake.start()
 
 	text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
-		"tv", 615, intPtr(11), []int{1, 2}, true, futuramaProposedAt)
+		"tv", 615, intPtr(11), []int{1, 2}, true, midFlightProposedAt())
 	if err != nil {
 		t.Fatalf("DeleteMediaFilesHelper: %v", err)
 	}
@@ -819,6 +951,9 @@ func TestDeleteMediaFilesReportsNoGrabRecord(t *testing.T) {
 		if strings.HasPrefix(call.URI, "/api/v3/config/downloadclient") {
 			t.Fatalf("the replacement policy was read although nothing was stood down: %+v", fake.rec.all())
 		}
+	}
+	if got := episodeSearchIDs(t, fake); !equalInts(got, []int{1101, 1102}) {
+		t.Fatalf("searched %v — nothing was blocklisted, so nothing else is going to replace those files:\n%s", got, text)
 	}
 }
 
@@ -846,37 +981,41 @@ func TestDeleteMediaFilesReportsAFailedBlocklistWithoutPromisingAReplacement(t *
 	}
 }
 
-// TestDeleteMediaFilesStatesTheInstancesReplacementPolicy: Cantinarr does not
-// search after a blocklist (PR #363), so the admin's own autoRedownloadFailed
-// setting decides. Saying nothing would leave a gap they never see.
+// TestDeleteMediaFilesStatesTheInstancesReplacementPolicy: the repair replaces
+// what it deleted unless the service is already doing it, and the instance's
+// autoRedownloadFailed setting is the only thing that decides which. So the
+// sentence and the dispatch have to agree — a text that says the service is
+// looking for replacements, next to a search of our own, means one of them is
+// lying to the admin reading the outcome.
 func TestDeleteMediaFilesStatesTheInstancesReplacementPolicy(t *testing.T) {
 	cases := []struct {
 		name           string
 		autoRedownload bool
 		want           string
 		unwanted       string
+		wantSearched   []int
 	}{
 		{
 			name: "policy on, the service replaces them itself", autoRedownload: true,
-			want:     "This service is set to redownload failed grabs, so it will look for replacements itself.",
-			unwanted: "NOT set to redownload",
+			want:         "This service is set to redownload failed grabs, so it is looking for replacements itself.",
+			unwanted:     "does not redownload failed grabs on its own",
+			wantSearched: nil,
 		},
 		{
-			name: "policy off, nobody is searching", autoRedownload: false,
-			want:     "This service is NOT set to redownload failed grabs, so nothing will be searched automatically.",
-			unwanted: "so it will look for replacements itself",
+			name: "policy off, so the repair finishes the job", autoRedownload: false,
+			want:         "This service does not redownload failed grabs on its own.",
+			unwanted:     "it is looking for replacements itself",
+			wantSearched: []int{1101, 1102},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &sonarrFileFake{
-				t: t, series: futuramaSeries(), episodes: futuramaS11Episodes(), files: futuramaS11FileRecords(),
-				history: perEpisodeGrabHistory(9), autoRedownload: tc.autoRedownload,
-			}
+			fake := midFlightFake(t)
+			fake.autoRedownload = tc.autoRedownload
 			server := fake.start()
 
 			text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
-				"tv", 615, intPtr(11), []int{1, 2}, true, futuramaProposedAt)
+				"tv", 615, intPtr(11), []int{1, 2, 3}, true, midFlightProposedAt())
 			if err != nil {
 				t.Fatalf("DeleteMediaFilesHelper: %v", err)
 			}
@@ -886,22 +1025,27 @@ func TestDeleteMediaFilesStatesTheInstancesReplacementPolicy(t *testing.T) {
 			if strings.Contains(text, tc.unwanted) {
 				t.Fatalf("outcome states the opposite policy %q:\n%s", tc.unwanted, text)
 			}
+			if got := episodeSearchIDs(t, fake); !equalInts(got, tc.wantSearched) {
+				t.Fatalf("searched episode ids %v, want %v — the policy sentence and the search must say the same thing:\n%s",
+					got, tc.wantSearched, text)
+			}
 		})
 	}
 }
 
-// TestDeleteMediaFilesWithoutBlocklistNeverReadsHistoryOrPolicy proves the
-// files-only facet is genuinely files-only: no release is stood down and the
-// outcome makes no claim about replacements.
-func TestDeleteMediaFilesWithoutBlocklistNeverReadsHistoryOrPolicy(t *testing.T) {
-	fake := &sonarrFileFake{
-		t: t, series: futuramaSeries(), episodes: futuramaS11Episodes(), files: futuramaS11FileRecords(),
-		history: perEpisodeGrabHistory(9), autoRedownload: true,
-	}
+// TestDeleteMediaFilesWithoutBlocklistStillReplacesWhatAired proves the
+// files-only facet is genuinely files-only — no release is stood down, and
+// neither the history nor the replacement policy is even read, because with
+// nothing marked failed there is no failed-download handling to defer to. The
+// replacement is still ours to do: the reporter's episode is missing either
+// way.
+func TestDeleteMediaFilesWithoutBlocklistStillReplacesWhatAired(t *testing.T) {
+	fake := midFlightFake(t)
+	fake.autoRedownload = true // would suppress the search if it were ever read
 	server := fake.start()
 
 	text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
-		"tv", 615, intPtr(11), []int{1, 2}, false, futuramaProposedAt)
+		"tv", 615, intPtr(11), []int{1, 2, 3}, false, midFlightProposedAt())
 	if err != nil {
 		t.Fatalf("DeleteMediaFilesHelper: %v", err)
 	}
@@ -912,6 +1056,167 @@ func TestDeleteMediaFilesWithoutBlocklistNeverReadsHistoryOrPolicy(t *testing.T)
 	}
 	if strings.Contains(text, "Blocklisted") || strings.Contains(text, "redownload failed grabs") {
 		t.Fatalf("files-only outcome claims a blocklist happened:\n%s", text)
+	}
+	if got := episodeSearchIDs(t, fake); !equalInts(got, []int{1101, 1102}) {
+		t.Fatalf("searched episode ids %v, want the aired-and-missing ones [1101 1102]:\n%s", got, text)
+	}
+	if !strings.Contains(text, "Searched the 2 aired episode(s) of Futurama season 11 that are missing a file: E01, E02.") {
+		t.Fatalf("outcome does not report the replacement search:\n%s", text)
+	}
+}
+
+// --- the folded repair: replacing what the deletion took away ---
+//
+// Deleting the wrong files and stopping there is half a fix: the reporter is
+// left with exactly the missing episode they complained about. So the search is
+// part of THIS action, not a second proposal — and the only thing that calls it
+// off is the service having already dispatched one of its own.
+
+// TestDeleteMediaFilesSearchesWhenTheReplacementPolicyCannotBeRead: the policy
+// read is how the repair learns whether the service is already looking. When it
+// fails, the repair finishes the job rather than assume it was done for it — a
+// duplicate search costs one wasted indexer query, a skipped one costs the
+// admin the episode they were promised.
+func TestDeleteMediaFilesSearchesWhenTheReplacementPolicyCannotBeRead(t *testing.T) {
+	fake := midFlightFake(t)
+	fake.policyStatus = http.StatusInternalServerError
+	server := fake.start()
+
+	text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
+		"tv", 615, intPtr(11), []int{1, 2, 3}, true, midFlightProposedAt())
+	if err != nil {
+		t.Fatalf("an unreadable policy must not fail the repair: %v", err)
+	}
+	if !strings.Contains(text, "Blocklisted 3 release(s)") {
+		t.Fatalf("outcome does not report the blocklist that did happen:\n%s", text)
+	}
+	// The policy is unknown, so the outcome must not claim it points either way.
+	if strings.Contains(text, "redownload failed grabs") {
+		t.Fatalf("outcome quotes a policy it could not read:\n%s", text)
+	}
+	read := false
+	for _, call := range fake.rec.all() {
+		if strings.HasPrefix(call.URI, "/api/v3/config/downloadclient") {
+			read = true
+		}
+	}
+	if !read {
+		t.Fatalf("the policy was never read, so this test proves nothing: %+v", fake.rec.all())
+	}
+	if got := episodeSearchIDs(t, fake); !equalInts(got, []int{1101, 1102}) {
+		t.Fatalf("searched %v — an unknown policy must not silently cancel the replacement:\n%s", got, text)
+	}
+}
+
+// TestDeleteMediaFilesWithNothingAiredSearchesNothing is the live case at the
+// moment of approval: on a season filled entirely ahead of its air dates, the
+// correct number of releases to go looking for is zero. Searching an unaired
+// episode is exactly how the library got into this state.
+func TestDeleteMediaFilesWithNothingAiredSearchesNothing(t *testing.T) {
+	now := time.Now().UTC()
+	imported := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	episodes, files := stalenessFixture([]stalenessEpisode{
+		{number: 1, airsAt: now.Add(24 * time.Hour).Format(time.RFC3339), importedAt: imported},
+		{number: 2, airsAt: now.Add(48 * time.Hour).Format(time.RFC3339), importedAt: imported},
+	})
+	fake := &sonarrFileFake{
+		t: t, series: futuramaSeries(), episodes: episodes, files: files,
+		history: perEpisodeGrabHistory(2), autoRedownload: false,
+	}
+	server := fake.start()
+
+	text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
+		"tv", 615, intPtr(11), []int{1, 2}, true, midFlightProposedAt())
+	if err != nil {
+		t.Fatalf("DeleteMediaFilesHelper: %v", err)
+	}
+	if commands := fake.commandsSeen(); len(commands) != 0 {
+		t.Fatalf("a season with nothing aired dispatched %+v", commands)
+	}
+	// The deletion still has to be reported for what it was.
+	for _, want := range []string{
+		"Deleted 2 files from Futurama season 11.",
+		"Episodes: S11E01, S11E02.",
+		"Blocklisted 2 release(s)",
+		"no episode of Futurama season 11 has aired yet",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("outcome missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestDeleteMediaFilesReportsAFailedSearchWithoutFailingTheRepair: the files
+// are gone, which is the irreversible half. A search the service refuses to
+// start leaves the admin with a to-do, not an action reported as a clean
+// failure that mutated nothing — the Executor reads a non-nil error as exactly
+// that, and here it would be a lie.
+func TestDeleteMediaFilesReportsAFailedSearchWithoutFailingTheRepair(t *testing.T) {
+	fake := midFlightFake(t)
+	fake.commandStatus = http.StatusInternalServerError
+	server := fake.start()
+
+	text, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
+		"tv", 615, intPtr(11), []int{1, 2, 3}, false, midFlightProposedAt())
+	if err != nil {
+		t.Fatalf("a failed search must not fail the whole repair, got %v", err)
+	}
+	for _, want := range []string{
+		"Deleted 3 files from Futurama season 11.",
+		"Episodes: S11E01, S11E02, S11E03.",
+		"The replacement search could not be started",
+		"an admin should search the aired episodes in Sonarr",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("outcome missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Searched the") {
+		t.Fatalf("outcome claims a search that the service rejected:\n%s", text)
+	}
+	if commands := fake.commandsSeen(); len(commands) != 1 {
+		t.Fatalf("the search was never attempted, so this test proves nothing: %+v", commands)
+	}
+}
+
+// TestDeleteMediaFilesSearchesOnlyAfterEveryDeleteAndBlocklist pins the order
+// the whole repair depends on. A replacement found while the old file is still
+// on disk is rejected as "not an upgrade", and one found before the bad release
+// is stood down can be that same release coming straight back — either way the
+// fix would report success and change nothing.
+func TestDeleteMediaFilesSearchesOnlyAfterEveryDeleteAndBlocklist(t *testing.T) {
+	fake := midFlightFake(t)
+	fake.autoRedownload = false
+	server := fake.start()
+
+	if _, err := DeleteMediaFilesHelper(nil, nil, sonarr.NewClient(server.URL, "key"),
+		"tv", 615, intPtr(11), []int{1, 2, 3}, true, midFlightProposedAt()); err != nil {
+		t.Fatalf("DeleteMediaFilesHelper: %v", err)
+	}
+
+	lastDelete, lastBlocklist, firstSearch := -1, -1, -1
+	for i, call := range fake.rec.all() {
+		switch {
+		case call.Method == http.MethodDelete && strings.HasPrefix(call.URI, "/api/v3/episodefile/"):
+			lastDelete = i
+		case call.Method == http.MethodPost && strings.HasPrefix(call.URI, "/api/v3/history/failed/"):
+			lastBlocklist = i
+		case call.Method == http.MethodPost && call.URI == "/api/v3/command":
+			if firstSearch < 0 {
+				firstSearch = i
+			}
+		}
+	}
+	if lastDelete < 0 || lastBlocklist < 0 || firstSearch < 0 {
+		t.Fatalf("expected deletes, blocklists and a search, got %+v", fake.rec.all())
+	}
+	if firstSearch < lastDelete {
+		t.Fatalf("the search at call %d ran before the last delete at call %d — a replacement found while the old file is on disk is rejected as not an upgrade:\n%+v",
+			firstSearch, lastDelete, fake.rec.all())
+	}
+	if firstSearch < lastBlocklist {
+		t.Fatalf("the search at call %d ran before the last blocklist at call %d — it can re-grab the very release being stood down:\n%+v",
+			firstSearch, lastBlocklist, fake.rec.all())
 	}
 }
 
@@ -979,6 +1284,195 @@ func TestDeleteMediaFilesForAnUnknownSeriesIsBenign(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not in the library") {
 		t.Fatalf("unknown series message = %v", err)
+	}
+}
+
+// --- DeleteMediaFilesHelper, movies ---
+
+// radarrFileFake is the movie-side stand-in: the library record, the file
+// behind it, the history the blocklist walks back through, the instance's
+// replacement policy, and the command endpoint the repair's own search lands
+// on.
+type radarrFileFake struct {
+	t   *testing.T
+	rec *callRecorder
+
+	movies  []map[string]any
+	file    map[string]any
+	history []map[string]any
+
+	policyStatus   int
+	autoRedownload bool
+
+	commandMu sync.Mutex
+	commands  []map[string]any
+}
+
+func (f *radarrFileFake) commandsSeen() []map[string]any {
+	f.commandMu.Lock()
+	defer f.commandMu.Unlock()
+	return append([]map[string]any(nil), f.commands...)
+}
+
+func (f *radarrFileFake) start() *httptest.Server {
+	f.t.Helper()
+	if f.rec == nil {
+		f.rec = &callRecorder{}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		f.rec.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_ = json.NewEncoder(w).Encode(matchingRecords(f.movies, "tmdbId", r.URL.Query().Get("tmdbId")))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v3/moviefile/"):
+			_ = json.NewEncoder(w).Encode(f.file)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v3/moviefile/"):
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/history/movie":
+			_ = json.NewEncoder(w).Encode(f.history)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v3/history/failed/"):
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/config/downloadclient":
+			if f.policyStatus != 0 {
+				w.WriteHeader(f.policyStatus)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"autoRedownloadFailed": f.autoRedownload})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/command":
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				f.t.Errorf("decode command %q: %v", raw, err)
+			}
+			f.commandMu.Lock()
+			f.commands = append(f.commands, payload)
+			f.commandMu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		default:
+			f.t.Errorf("unexpected radarr request %s %s", r.Method, r.URL.RequestURI())
+			http.NotFound(w, r)
+		}
+	}))
+	f.t.Cleanup(server.Close)
+	return server
+}
+
+// theThingMovie holds one imported file, and theThingFile records that it
+// landed a month ago — long before the fix was proposed, so the staleness gate
+// recognises it as the file the diagnosis actually looked at.
+func theThingMovie() []map[string]any {
+	return []map[string]any{
+		{"id": 12, "title": "Other Movie", "tmdbId": 550, "hasFile": true, "movieFileId": 4412, "monitored": true},
+		{"id": 77, "title": "The Thing", "tmdbId": 1091, "year": 1982, "hasFile": true, "movieFileId": 4477, "monitored": true},
+	}
+}
+
+func theThingFile() map[string]any {
+	return map[string]any{
+		"id": 4477, "movieId": 77, "relativePath": "The Thing (1982).mkv",
+		"dateAdded": time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339),
+	}
+}
+
+func theThingHistory() []map[string]any {
+	const title = "The.Thing.1982.1080p.BluRay.x264-GROUP"
+	return []map[string]any{
+		{"id": int64(9077), "movieId": 77, "eventType": "downloadFolderImported", "downloadId": "SABnzbd_nzo_movie", "sourceTitle": title},
+		{"id": int64(8077), "movieId": 77, "eventType": "grabbed", "downloadId": "SABnzbd_nzo_movie", "sourceTitle": title},
+	}
+}
+
+// TestDeleteMovieFileFinishesTheRepairUnlessTheServiceWill is the movie half of
+// the folded repair. A movie has no air dates to reason about, so there is no
+// set to narrow: the one film that just lost its file is the one to search for
+// — unless marking the grab failed already handed that to the service.
+func TestDeleteMovieFileFinishesTheRepairUnlessTheServiceWill(t *testing.T) {
+	cases := []struct {
+		name           string
+		autoRedownload bool
+		want           string
+		unwanted       string
+		wantSearch     bool
+	}{
+		{
+			name: "policy off, so the repair searches for the replacement itself", autoRedownload: false,
+			want: "Searched for a replacement.", unwanted: "it is looking for replacements itself", wantSearch: true,
+		},
+		{
+			name: "policy on, the service already dispatched one", autoRedownload: true,
+			want:     "This service is set to redownload failed grabs, so it is looking for replacements itself.",
+			unwanted: "Searched for a replacement.", wantSearch: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &radarrFileFake{
+				t: t, movies: theThingMovie(), file: theThingFile(), history: theThingHistory(),
+				autoRedownload: tc.autoRedownload,
+			}
+			server := fake.start()
+
+			text, err := DeleteMediaFilesHelper(nil, radarr.NewClient(server.URL, "key"), nil,
+				"movie", 1091, nil, nil, true, midFlightProposedAt())
+			if err != nil {
+				t.Fatalf("DeleteMediaFilesHelper: %v", err)
+			}
+			if deletes := requestsMatching(fake.rec, http.MethodDelete, "/api/v3/moviefile/"); !equalStrings(deletes, []string{"/api/v3/moviefile/4477"}) {
+				t.Fatalf("deleted %v, want only the file the named movie holds", deletes)
+			}
+			if posts := requestsMatching(fake.rec, http.MethodPost, "/api/v3/history/failed/"); !equalStrings(posts, []string{"/api/v3/history/failed/8077"}) {
+				t.Fatalf("blocklisted %v, want the grab that delivered that file", posts)
+			}
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("outcome missing %q:\n%s", tc.want, text)
+			}
+			if strings.Contains(text, tc.unwanted) {
+				t.Fatalf("outcome claims %q as well:\n%s", tc.unwanted, text)
+			}
+
+			commands := fake.commandsSeen()
+			if !tc.wantSearch {
+				if len(commands) != 0 {
+					t.Fatalf("the service was already searching, yet the repair dispatched %+v", commands)
+				}
+				return
+			}
+			if len(commands) != 1 || commands[0]["name"] != "MoviesSearch" {
+				t.Fatalf("dispatched %+v, want exactly one MoviesSearch", commands)
+			}
+			ids, ok := commands[0]["movieIds"].([]any)
+			if !ok || len(ids) != 1 || ids[0].(float64) != 77 {
+				t.Fatalf("MoviesSearch named %+v, want only the movie whose file was deleted", commands[0])
+			}
+		})
+	}
+}
+
+// TestDeleteMovieFileSearchesWhenNothingWasBlocklisted: with no grab record
+// there is nothing to mark failed, so no failed-download handling was triggered
+// and nobody else is going to replace the file that was just deleted.
+func TestDeleteMovieFileSearchesWhenNothingWasBlocklisted(t *testing.T) {
+	fake := &radarrFileFake{
+		t: t, movies: theThingMovie(), file: theThingFile(), history: []map[string]any{},
+		autoRedownload: true,
+	}
+	server := fake.start()
+
+	text, err := DeleteMediaFilesHelper(nil, radarr.NewClient(server.URL, "key"), nil,
+		"movie", 1091, nil, nil, true, midFlightProposedAt())
+	if err != nil {
+		t.Fatalf("DeleteMediaFilesHelper: %v", err)
+	}
+	if !strings.Contains(text, "No grab record was found") {
+		t.Fatalf("outcome should say why nothing was blocklisted:\n%s", text)
+	}
+	if commands := fake.commandsSeen(); len(commands) != 1 || commands[0]["name"] != "MoviesSearch" {
+		t.Fatalf("dispatched %+v, want the repair's own MoviesSearch:\n%s", commands, text)
+	}
+	if !strings.Contains(text, "Searched for a replacement.") {
+		t.Fatalf("outcome does not report the replacement search:\n%s", text)
 	}
 }
 
