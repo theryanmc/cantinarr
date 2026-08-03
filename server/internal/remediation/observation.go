@@ -1944,6 +1944,22 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
 		return arrRecoveryProbe{}, nil
 	}
+	// A pre-air season issue is not a queue incident: it deliberately has no
+	// issue_observations row, its season scope has no queue-shaped key, and
+	// recovery for this class means "no unaired episode holds a file" — never
+	// "the queue settled". Route it to its own proof; the queue-shaped flow
+	// below would misread the missing observation row as a hard error and park
+	// the issue for an admin before the agent ever ran. Gated on SourceAuto so a
+	// future problem-labelled user report keeps the never-machine-close rule.
+	if issue.Source == SourceAuto && serviceType == "sonarr" {
+		kind, err := s.storedProblemKind(issue.ID)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		if kind == arr.ProblemPreAirSeasonFill {
+			return s.probePreAirRecovery(issue)
+		}
+	}
 	now := time.Now().UTC() // request-start ordering; delayed reads remain stale.
 	items, err := s.fetchQueueSnapshot(serviceType, issue.InstanceID)
 	if err != nil {
@@ -1987,6 +2003,15 @@ func (s *Service) probeArrRecovery(issue *Issue) (arrRecoveryProbe, error) {
 	}
 	if len(matched) == 0 {
 		settled, err := s.queueAbsenceSettled(issue.ID, now)
+		if errors.Is(err, sql.ErrNoRows) {
+			// No observation row exists for this issue — nothing ever created
+			// one, so there is no absence timer to advance and nothing here can
+			// prove recovery. Report "no recovery detected" rather than failing
+			// the preflight: the runner's conclusion gate still holds its own
+			// proofs, and parking a never-observed issue over a missing timer
+			// row is how a whole incident class silently loses its agent.
+			return arrRecoveryProbe{}, nil
+		}
 		if err != nil {
 			return arrRecoveryProbe{}, err
 		}
@@ -2082,6 +2107,15 @@ func (s *Service) preflightArrRecovery(issueID int64) (bool, error) {
 	}
 	serviceType := mediaServiceType(issue.MediaType)
 	probe, err := s.probeArrRecovery(issue)
+	if errors.Is(err, errStaleObservation) {
+		// A fresher complete snapshot committed between this probe's queue fetch
+		// and its store; the stale read proves nothing about the present. Defer
+		// exactly like live recovery — report "the arr still owns this attempt"
+		// without touching any state — so the next enqueue or sweep retries
+		// against current data instead of parking a healthy issue for an admin
+		// over a pure timing artifact.
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
