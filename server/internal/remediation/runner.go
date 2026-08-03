@@ -38,6 +38,15 @@ var readToolAllowList = []string{
 	"get_library",
 	"get_arr_health",
 	"get_episode_timeline",
+	// Read-only settings views. Several diagnoses — "Not an upgrade", "Not a
+	// Custom Format upgrade" — are verdicts the SERVICE reached from its own
+	// configuration, and without these the agent can see the refusal but never
+	// the reason for it. Neither can change anything; the write tools
+	// (upsert_custom_format, preview_profile_change, apply_profile_change) stay
+	// off this list, and scopeReadToolInput pins both to the issue's own
+	// instance and to their bounded summary form.
+	"get_quality_profiles",
+	"get_custom_formats",
 }
 
 // readToolAllowSet is readToolAllowList as a set, for O(1) dispatch checks.
@@ -1251,7 +1260,9 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 	}
 	params["media_type"] = issue.MediaType
 	queueScopedTool := toolName == "get_queue" || toolName == "diagnose_queue" || toolName == "get_manual_import_candidates"
-	if toolName != "get_arr_health" {
+	// A settings read is about the INSTANCE, not about a title, so requiring a
+	// media identity for it would refuse a read that never needed one.
+	if toolName != "get_arr_health" && toolName != "get_quality_profiles" && toolName != "get_custom_formats" {
 		switch issue.MediaType {
 		case "movie":
 			if issue.TmdbID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
@@ -1344,6 +1355,26 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.AuthorID > 0 {
 			params["author_id"] = issue.AuthorID
 		}
+	case "get_quality_profiles", "get_custom_formats":
+		// Refusing an issue with no instance is MANDATORY, not defensive. Unlike
+		// every other read tool these two are not handed callCtx.InstanceID, and
+		// their own resolver falls back to the service's DEFAULT instance when
+		// instance_id is blank — so a scoped read on an instance-less issue
+		// would silently return a different instance's configuration.
+		if issue.InstanceID == "" {
+			return nil, fmt.Errorf("issue has no authoritative instance for scoped %s", toolName)
+		}
+		// media_type is not in either schema; the rest select the header+raw-JSON
+		// forms, which are the ones the settings package warns about and are far
+		// larger than a step-budgeted agent should be reading. Deleting them
+		// leaves only the bounded summary.
+		delete(params, "media_type")
+		delete(params, "profile_id")
+		delete(params, "format_id")
+		delete(params, "include_languages")
+		delete(params, "language_name")
+		params["service"] = mediaServiceType(issue.MediaType)
+		params["instance_id"] = issue.InstanceID
 	case "get_episode_timeline":
 		// Season-shaped on purpose: episode_number is deliberately NOT injected,
 		// so an issue naming one episode still sees the whole season around it.
