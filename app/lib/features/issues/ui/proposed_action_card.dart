@@ -153,6 +153,10 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
           backgroundColor: AppTheme.surface,
+          // A destructive fix explains itself at length. Scrolling keeps the
+          // whole warning reachable on a small screen or at a large text scale,
+          // instead of clipping the part that says it cannot be undone.
+          scrollable: true,
           title: const Text(
             'Approve this change?',
             style: TextStyle(color: AppTheme.textPrimary),
@@ -701,12 +705,29 @@ class _ActionCopy {
             ? 'Force-import the downloaded files (overrides safety checks)'
             : 'Manually import the downloaded files';
       case AgentActionKind.triggerSearch:
-        return 'Start an automatic search for this title';
+        return a.params.airedOnly
+            ? 'Search only the episodes of this season that have already aired'
+            : 'Start an automatic search for this title';
       case AgentActionKind.rescan:
         return 'Rescan the files on disk and re-run the import';
+      case AgentActionKind.deleteMediaFiles:
+        return _deleteSummary(a.params);
       case AgentActionKind.unknown:
         return 'Apply a fix';
     }
+  }
+
+  /// Summary for a deletion of files the media service already imported. The
+  /// blocklist choice is a different promise to the admin — files gone versus
+  /// files gone *and* that release stood down — so it is never folded away.
+  static String _deleteSummary(AgentActionParams p) {
+    final one = p.mediaType != 'tv' || p.episodes.length == 1;
+    final files = one ? 'file' : 'files';
+    if (!p.blocklist) {
+      return 'Delete the wrong $files already in your library';
+    }
+    final release = one ? 'that release' : 'those releases';
+    return 'Delete the wrong $files and block $release from coming back';
   }
 
   /// Fixed confirmation copy selected only from typed enums/validated flags.
@@ -735,12 +756,94 @@ class _ActionCopy {
             ? 'Cantinarr will force-import downloaded files and override normal import safety checks.'
             : 'Cantinarr will import downloaded files into your media library.';
       case AgentActionKind.triggerSearch:
-        return 'Cantinarr will start a search and may add a download to the queue.';
+        return a.params.airedOnly
+            ? 'Cantinarr will search only the episodes of this season that have already aired and are still missing, and may add downloads to the queue. Episodes that have not aired yet are left alone — your media service will grab each one as it comes out.'
+            : 'Cantinarr will start a search and may add a download to the queue.';
       case AgentActionKind.rescan:
         return 'Cantinarr will rescan files and run the import process in your connected media service.';
+      case AgentActionKind.deleteMediaFiles:
+        return _deleteConfirmation(a.params);
       case AgentActionKind.unknown:
         return 'Cantinarr will make a change in your connected media service.';
     }
+  }
+
+  /// Confirmation for the one fix that destroys something. These files are
+  /// already in the library — nothing is queued, nothing is recoverable from
+  /// Cantinarr — so the copy names the exact target (the show's title is not in
+  /// the params, the season and episode numbers are), says plainly that it
+  /// cannot be undone, and states what the blocklist choice does and does not
+  /// do. Every value interpolated here is a validated integer, never an
+  /// agent-authored string.
+  static String _deleteConfirmation(AgentActionParams p) {
+    final episodes = p.episodes;
+    final isTv = p.mediaType == 'tv';
+    final one = !isTv || episodes.length == 1;
+
+    final String target;
+    if (isTv && episodes.isNotEmpty) {
+      final season = p.season;
+      target = '${one ? '1 file' : '${episodes.length} files'} from your '
+          'library — ${season == null ? '' : 'season $season, '}'
+          '${one ? 'episode' : 'episodes'} ${_episodeRanges(episodes)}';
+    } else if (isTv) {
+      target = 'the episode files listed on this fix';
+    } else {
+      target = 'the movie file in your library';
+    }
+
+    final buffer = StringBuffer(
+      'Cantinarr will permanently delete $target. This cannot be undone: '
+      '${one ? 'the file is' : 'the files are'} removed from disk and '
+      'Cantinarr keeps no copy.',
+    );
+    if (p.blocklist) {
+      buffer.write(
+        one
+            ? ' It also blocks the release that file came from, so your media '
+                'service will not download that same release again.'
+            : ' It also blocks the releases those files came from, so your '
+                'media service will not download those same releases again.',
+      );
+      buffer.write(
+        ' Whether anything replaces ${one ? 'it' : 'them'} follows your media '
+        "service's own failed-download setting — Cantinarr does not start a "
+        'search of its own.',
+      );
+    } else {
+      buffer.write(
+        one
+            ? ' The release that file came from is not blocked, so your media '
+                'service could download the same one again.'
+            : ' The releases those files came from are not blocked, so your '
+                'media service could download the same ones again.',
+      );
+    }
+    return buffer.toString();
+  }
+
+  /// Compresses a validated episode list into an exact, compact form ("1–9",
+  /// "1–3, 7, 10–12"). Exactness matters — this is the only place an admin sees
+  /// WHICH episodes an irreversible deletion covers — and compactness keeps a
+  /// whole season readable inside a confirmation dialog.
+  static String _episodeRanges(List<int> episodes) {
+    if (episodes.isEmpty) return '';
+    final sorted = [...episodes]..sort();
+    final parts = <String>[];
+    var start = sorted.first;
+    var previous = start;
+    for (var i = 1; i <= sorted.length; i++) {
+      final current = i < sorted.length ? sorted[i] : null;
+      if (current != null && (current == previous || current == previous + 1)) {
+        previous = current;
+        continue;
+      }
+      parts.add(start == previous ? '$start' : '$start–$previous');
+      if (current == null) break;
+      start = current;
+      previous = current;
+    }
+    return parts.join(', ');
   }
 
   /// The quoted, non-editable data rows for the action's params. Each tuple is
@@ -803,6 +906,9 @@ class _ActionCopy {
         if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
         if (p.season != null) rows.add(('Season', '${p.season}', false));
         if (p.episode != null) rows.add(('Episode', '${p.episode}', false));
+        if (p.airedOnly) {
+          rows.add(('Scope', 'Only episodes that have already aired', false));
+        }
         if (p.authorId != null) {
           rows.add(('Author id', '${p.authorId}', false));
         }
@@ -813,6 +919,16 @@ class _ActionCopy {
         if (p.authorId != null) {
           rows.add(('Author id', '${p.authorId}', false));
         }
+      case AgentActionKind.deleteMediaFiles:
+        if (p.mediaType != null) rows.add(('Type', mediaLabel(), false));
+        if (p.tmdbId != null) rows.add(('TMDB id', '${p.tmdbId}', false));
+        if (p.season != null) rows.add(('Season', '${p.season}', false));
+        final toDelete = p.episodes;
+        if (toDelete.isNotEmpty) {
+          rows.add(('Episodes', _episodeRanges(toDelete), false));
+          rows.add(('Files to delete', '${toDelete.length}', false));
+        }
+        rows.add(('Block the release', p.blocklist ? 'yes' : 'no', false));
       case AgentActionKind.unknown:
         // Unknown kind: list whatever params arrived, generically + verbatim.
         p.raw.forEach((k, v) {

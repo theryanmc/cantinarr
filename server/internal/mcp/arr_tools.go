@@ -130,6 +130,10 @@ var arrToolDefinitions = []Tool{
 					"type":        "integer",
 					"description": "TV only: limit the search to this episode (requires season_number)",
 				},
+				"aired_only": map[string]interface{}{
+					"type":        "boolean",
+					"description": "TV season search only: search just the episodes that have already aired and are missing a file, leaving the rest of the season for the service to grab as it airs",
+				},
 				"author_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Book only: search all monitored books of this Chaptarr author id (used when book_id is absent)",
@@ -284,6 +288,30 @@ var arrToolDefinitions = []Tool{
 					"description": "Which service's health to fetch (default: all)",
 				},
 			},
+		},
+	},
+	{
+		Name:        "get_episode_timeline",
+		Permission:  auth.PermissionArrRead,
+		Description: "Show one TV season episode by episode: air date, whether it has aired yet, and the file the library holds for it (release name, quality, and when it was imported). Flags files the service imported BEFORE that episode aired — content that cannot be what it claims to be — and lists the aired episodes that are missing. Use this for any \"wrong episode\", \"wrong season\", or \"this isn't what I asked for\" report, and after a fix to confirm the season is clean. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"tv"},
+					"description": "Only TV has an episode timeline",
+				},
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The series' TMDB id, from get_library",
+				},
+				"season_number": map[string]interface{}{
+					"type":        "integer",
+					"description": "Which season to lay out; omit for a per-season rollup of the whole series",
+				},
+			},
+			"required": []string{"media_type"},
 		},
 	},
 	{
@@ -1136,6 +1164,14 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		// Filtering after fetching only the requested 20 records can falsely hide
 		// a title whose last event is slightly older. Fetch the bounded maximum,
 		// then return at most the caller's requested count.
+		//
+		// For a scoped title this is still only a mitigation: a busy library
+		// generates 100 global records in days, and a scoped read of anything
+		// older then returns "no history found" — indistinguishable from a title
+		// that genuinely has none. Radarr and Sonarr both expose a per-title
+		// history endpoint, so a scoped read asks the service for that title's
+		// records instead of sifting a global page for them. The client-side
+		// filter still runs afterwards as the identity gate.
 		fetchLimit = 100
 	}
 
@@ -1145,7 +1181,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if radarrClient == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
 		}
-		records, err := radarrClient.GetHistory(fetchLimit)
+		records, err := scopedRadarrHistory(radarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1180,7 +1216,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if sonarrClient == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
 		}
-		records, err := sonarrClient.GetHistory(fetchLimit)
+		records, err := scopedSonarrHistory(s.bridge, sonarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1267,6 +1303,7 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 		MediaType     string `json:"media_type"`
 		SeasonNumber  *int   `json:"season_number"`
 		EpisodeNumber *int   `json:"episode_number"`
+		AiredOnly     bool   `json:"aired_only"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
 	}
@@ -1278,7 +1315,7 @@ func (s *ToolServer) triggerSearch(input json.RawMessage) (*ToolResult, error) {
 	if params.BookID != 0 {
 		bookIDs = []int{params.BookID}
 	}
-	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AuthorID, bookIDs)
+	text, err := TriggerSearchHelper(s.bridge, s.GetRadarr(), s.GetSonarr(), s.GetChaptarr(), params.MediaType, params.TmdbID, params.SeasonNumber, params.EpisodeNumber, params.AiredOnly, params.AuthorID, bookIDs)
 	if err != nil {
 		return nil, err
 	}

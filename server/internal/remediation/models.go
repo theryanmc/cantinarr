@@ -106,10 +106,16 @@ type ActionKind string
 
 const (
 	ActionGrabRelease    ActionKind = "grab_release"
-	ActionRemediateQueue ActionKind = "remediate_queue" // remove | blocklist_search | change_category
+	ActionRemediateQueue ActionKind = "remediate_queue" // remove | blocklist_search | blocklist_only | change_category
 	ActionManualImport   ActionKind = "manual_import"   // force bool
 	ActionTriggerSearch  ActionKind = "trigger_search"
 	ActionRescan         ActionKind = "rescan"
+	// ActionDeleteMediaFiles removes files the *arr has already IMPORTED, and
+	// optionally blocklists the releases that brought them. Every other kind acts
+	// on a live queue row; this one is the only route to a download that already
+	// finished successfully — which is the shape of every "you gave me the wrong
+	// content" report, because by the time anyone watches it the queue is empty.
+	ActionDeleteMediaFiles ActionKind = "delete_media_files"
 )
 
 // Issue is one row of the issues table as returned to clients. Nullable columns

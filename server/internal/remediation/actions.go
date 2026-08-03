@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 )
 
@@ -58,13 +59,36 @@ type ManualImportParams struct {
 // so they target a single book by book_id or all of an author's monitored books
 // by author_id. The book fields are omitempty so a movie/TV action's canonical
 // JSON (and therefore its fingerprint) is unchanged by their addition.
+//
+// AiredOnly narrows a TV season search to the episodes that have actually aired
+// and are missing a file. The set is deliberately NOT modelled as an episode
+// list: episodes air while a proposal waits for an admin, so the only correct
+// answer is the one the server computes from live air dates at DISPATCH time.
+// omitempty keeps every already-stored action's canonical JSON — and therefore
+// its fingerprint — byte-identical to what it was before this field existed.
 type TriggerSearchParams struct {
 	MediaType string `json:"media_type"`
 	TmdbID    int    `json:"tmdb_id,omitempty"`
 	Season    *int   `json:"season,omitempty"`
 	Episode   *int   `json:"episode,omitempty"`
+	AiredOnly bool   `json:"aired_only,omitempty"`
 	AuthorID  int    `json:"author_id,omitempty"`
 	BookID    int    `json:"book_id,omitempty"`
+}
+
+// DeleteMediaFilesParams removes files the *arr already imported. TV names an
+// exact season plus the episode numbers whose files are wrong; movies address
+// the single library file by tmdb_id. Blocklist additionally marks the grab that
+// delivered each deleted file as failed, which is the *arr's own "Mark as
+// Failed" button and the only way to blocklist a release that already imported —
+// there is no add-to-blocklist API. What happens next is then the admin's own
+// failed-download policy, not Cantinarr's choice (see PR #363).
+type DeleteMediaFilesParams struct {
+	MediaType string `json:"media_type"`
+	TmdbID    int    `json:"tmdb_id"`
+	Season    *int   `json:"season,omitempty"`
+	Episodes  []int  `json:"episodes,omitempty"`
+	Blocklist bool   `json:"blocklist,omitempty"`
 }
 
 // RescanParams rescans the media on disk and runs the import pass. Movies/TV are
@@ -79,6 +103,29 @@ type RescanParams struct {
 
 // validMediaType reports whether m is a supported media type.
 func validMediaType(m string) bool { return m == "movie" || m == "tv" || m == "book" }
+
+// maxDeleteEpisodes bounds one delete_media_files proposal. A pre-air fill is a
+// season-shaped problem, so a whole long season must fit; anything past that is
+// a model that has stopped reasoning about one incident, and an admin should see
+// a validation error rather than a hundred-line approval card.
+const maxDeleteEpisodes = 60
+
+// sortedUniqueEpisodes canonicalizes an episode list so an identical set of
+// episodes always produces identical bytes — and therefore an identical
+// fingerprint — regardless of the order the model listed them in.
+func sortedUniqueEpisodes(in []int) []int {
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, ep := range in {
+		if _, dup := seen[ep]; dup {
+			continue
+		}
+		seen[ep] = struct{}{}
+		out = append(out, ep)
+	}
+	sort.Ints(out)
+	return out
+}
 
 // validateActionParams validates params against the kind's schema and returns the
 // CANONICAL JSON form to store + fingerprint. Canonicalization is by struct-field
@@ -154,6 +201,9 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.TmdbID != 0 || p.Season != nil || p.Episode != nil {
 				return nil, fmt.Errorf("trigger_search for a book must not set tmdb_id")
 			}
+			if p.AiredOnly {
+				return nil, fmt.Errorf("aired_only applies only to a TV season search")
+			}
 			if p.AuthorID <= 0 && p.BookID <= 0 {
 				return nil, fmt.Errorf("trigger_search for a book requires a positive author_id or book_id")
 			}
@@ -174,6 +224,52 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.Episode != nil && (*p.Episode <= 0 || p.Season == nil) {
 				return nil, fmt.Errorf("an episode search requires a positive episode and a season")
 			}
+			// aired_only is the season-wide "search whatever has actually come out"
+			// variant. Pairing it with an exact episode would be a contradiction:
+			// that episode either aired or it didn't, and the server would rather
+			// say so than silently search nothing.
+			if p.AiredOnly && (p.MediaType != "tv" || p.Season == nil || p.Episode != nil) {
+				return nil, fmt.Errorf("aired_only requires a TV season search with no episode")
+			}
+		}
+		return canonicalJSON(p)
+
+	case ActionDeleteMediaFiles:
+		var p DeleteMediaFilesParams
+		if err := strictUnmarshal(raw, &p); err != nil {
+			return nil, err
+		}
+		// Chaptarr models a book's files differently and has no equivalent
+		// mark-as-failed, so a book issue has no safe replay for this kind.
+		if p.MediaType != "movie" && p.MediaType != "tv" {
+			return nil, fmt.Errorf("delete_media_files supports media_type \"movie\" or \"tv\"")
+		}
+		if p.TmdbID <= 0 {
+			return nil, fmt.Errorf("delete_media_files requires a positive tmdb_id")
+		}
+		if p.MediaType == "movie" {
+			if p.Season != nil || len(p.Episodes) > 0 {
+				return nil, fmt.Errorf("season and episodes apply only to media_type tv")
+			}
+			return canonicalJSON(p)
+		}
+		if p.Season == nil || *p.Season < 0 {
+			return nil, fmt.Errorf("delete_media_files for TV requires a season")
+		}
+		if len(p.Episodes) == 0 {
+			return nil, fmt.Errorf("delete_media_files for TV requires at least one episode number")
+		}
+		// Sort and dedupe so the same set of episodes always fingerprints
+		// identically no matter what order the model listed them in — the same
+		// canonicalization guarantee canonicalJSON gives the other kinds.
+		p.Episodes = sortedUniqueEpisodes(p.Episodes)
+		for _, ep := range p.Episodes {
+			if ep <= 0 {
+				return nil, fmt.Errorf("episode numbers must be positive")
+			}
+		}
+		if len(p.Episodes) > maxDeleteEpisodes {
+			return nil, fmt.Errorf("delete_media_files is limited to %d episodes per proposal", maxDeleteEpisodes)
 		}
 		return canonicalJSON(p)
 
@@ -242,6 +338,8 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 	}
 	if mediaType == "book" {
 		switch kind {
+		case ActionDeleteMediaFiles:
+			return fmt.Errorf("%s is not available for book issues", kind)
 		case ActionGrabRelease, ActionTriggerSearch:
 			// Without a stored book record id, accepting one from the model would
 			// let a book incident mutate a wholly unrelated title. Queue/manual-
@@ -341,6 +439,33 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		if authorID <= 0 || p.AuthorID != authorID {
 			return fmt.Errorf("author_id %d does not match issue author_id %d", p.AuthorID, authorID)
 		}
+	case ActionDeleteMediaFiles:
+		var p DeleteMediaFilesParams
+		if err := json.Unmarshal(canonical, &p); err != nil {
+			return err
+		}
+		if err := checkMedia(p.MediaType); err != nil {
+			return err
+		}
+		// This kind carries a LIST where the others carry one episode, so it can't
+		// reuse checkMediaID's single-episode comparison. The rule is the same:
+		// an issue that names one exact episode may delete that episode's file and
+		// no other, while a season- or series-scoped issue is free to name the
+		// episodes the timeline found inside the season it already owns.
+		if tmdbID <= 0 {
+			return fmt.Errorf("issue has no authoritative tmdb_id for %s", kind)
+		}
+		if p.TmdbID != tmdbID {
+			return fmt.Errorf("tmdb_id %d does not match issue tmdb_id %d", p.TmdbID, tmdbID)
+		}
+		if mediaType == "tv" {
+			if (season > 0 || episode > 0) && (p.Season == nil || *p.Season != season) {
+				return fmt.Errorf("season %s does not match issue season %d", intPtrForError(p.Season), season)
+			}
+			if episode > 0 && (len(p.Episodes) != 1 || p.Episodes[0] != episode) {
+				return fmt.Errorf("episodes %v do not match issue episode %d", p.Episodes, episode)
+			}
+		}
 	case ActionRescan:
 		var p RescanParams
 		if err := json.Unmarshal(canonical, &p); err != nil {
@@ -357,6 +482,16 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 		}
 	}
 	return nil
+}
+
+// intPtrForError renders an optional int for a validation message. Formatting a
+// *int with %v prints its address, which tells an admin reading the failure
+// nothing about what the model actually proposed.
+func intPtrForError(v *int) string {
+	if v == nil {
+		return "(unset)"
+	}
+	return strconv.Itoa(*v)
 }
 
 // strictUnmarshal decodes raw into v, rejecting unknown fields so a proposal can

@@ -219,7 +219,7 @@ func (s *Service) approveAction(actor approvalActor, actionID int64) (*AgentActi
 	targetDownloadID := s.issueDownloadIdentity(act.IssueID)
 
 	// Replay the approved action against the arr. This is the ONLY mutation path.
-	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun)
+	resultText, execErr := s.executor.Execute(context.Background(), act.IssueID, ActionKind(act.Kind), paramsToRun, act.CreatedAt)
 	resultText = secrets.RedactText(resultText)
 
 	// The resume transcript must attribute the decision truthfully: the model

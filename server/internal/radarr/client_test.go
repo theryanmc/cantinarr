@@ -1,9 +1,11 @@
 package radarr
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -226,6 +228,138 @@ func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("queue requests=%d, want one atomic bounded page", requests)
+	}
+}
+
+func TestDeleteMovieFileUsesExactAuthenticatedEndpoint(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v3/moviefile/73" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "delete-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := NewClient(server.URL, "delete-key").DeleteMovieFile(73); err != nil {
+		t.Fatalf("DeleteMovieFile() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// TestGetMovieHistoryScopesToMovie pins the scoped-history read that makes
+// months-old records reachable: /history/movie is server-side filtered and
+// answers with a bare JSON array (no records envelope, no paging), so pageSize
+// is our own cap on the newest-first records and must never be sent upstream.
+func TestGetMovieHistoryScopesToMovie(t *testing.T) {
+	var query url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v3/history/movie" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		query = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id":9001,"movieId":42,"eventType":"downloadFolderImported","downloadId":"SAB123","date":"2026-07-21T09:30:00Z","quality":{"quality":{"name":"Bluray-1080p"}}},
+			{"id":9000,"movieId":42,"eventType":"grabbed","downloadId":"SAB123","date":"2026-07-21T09:00:00Z","data":{"releaseSource":"Rss"}},
+			{"id":8999,"movieId":42,"eventType":"grabbed","downloadId":"SAB000","date":"2026-01-02T00:00:00Z"}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewClient(server.URL, "key")
+	records, err := client.GetMovieHistory(42, 0)
+	if err != nil {
+		t.Fatalf("GetMovieHistory() error = %v", err)
+	}
+	if len(records) != 3 || records[0].ID != 9001 || records[0].Quality.Quality.Name != "Bluray-1080p" ||
+		records[1].DownloadID != "SAB123" || records[1].Data["releaseSource"] != "Rss" {
+		t.Fatalf("records = %+v", records)
+	}
+	if query.Get("movieId") != "42" || query.Get("includeMovie") != "true" {
+		t.Errorf("query = %v", query)
+	}
+	if _, ok := query["pageSize"]; ok {
+		t.Errorf("request sent pageSize = %q to an unpaged endpoint", query.Get("pageSize"))
+	}
+	if _, ok := query["page"]; ok {
+		t.Errorf("request sent page = %q to an unpaged endpoint", query.Get("page"))
+	}
+
+	capped, err := client.GetMovieHistory(42, 2)
+	if err != nil {
+		t.Fatalf("GetMovieHistory(capped) error = %v", err)
+	}
+	if len(capped) != 2 || capped[0].ID != 9001 || capped[1].ID != 9000 {
+		t.Fatalf("capped records = %+v, want the two newest", capped)
+	}
+}
+
+// TestMarkHistoryFailedPostsGrabRecord pins the only route Radarr offers for
+// blocklisting an already-imported release: a bodiless POST to the grab's own
+// history id.
+func TestMarkHistoryFailedPostsGrabRecord(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v3/history/failed/9000" || r.URL.RawQuery != "" {
+			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if got := r.Header.Get("X-Api-Key"); got != "failed-key" {
+			t.Errorf("X-Api-Key = %q", got)
+		}
+		if body, _ := io.ReadAll(r.Body); len(body) != 0 {
+			t.Errorf("body = %q, want empty", body)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := NewClient(server.URL, "failed-key").MarkHistoryFailed(9000); err != nil {
+		t.Fatalf("MarkHistoryFailed() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+// TestGetFailedDownloadPolicyReadsInstanceSetting pins where the replacement
+// decision comes from: the instance's own download-client config, not us. Each
+// case sets autoRedownloadFailedFromInteractiveSearch to the OPPOSITE value —
+// it is a neighbouring setting about a different trigger, and a reader that
+// grabbed it instead would otherwise pass.
+func TestGetFailedDownloadPolicyReadsInstanceSetting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"enabled", `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":true,"autoRedownloadFailedFromInteractiveSearch":false}`, true},
+		{"disabled", `{"enableCompletedDownloadHandling":true,"autoRedownloadFailed":false,"autoRedownloadFailedFromInteractiveSearch":true}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v3/config/downloadclient" || r.URL.RawQuery != "" {
+					t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(server.Close)
+
+			autoRedownload, err := NewClient(server.URL, "key").GetFailedDownloadPolicy()
+			if err != nil {
+				t.Fatalf("GetFailedDownloadPolicy() error = %v", err)
+			}
+			if autoRedownload != tc.want {
+				t.Errorf("autoRedownloadFailed = %v, want %v", autoRedownload, tc.want)
+			}
+		})
 	}
 }
 

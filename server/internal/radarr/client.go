@@ -61,6 +61,10 @@ type MovieFile struct {
 	RelativePath string `json:"relativePath"`
 	Path         string `json:"path"`
 	Size         int64  `json:"size"`
+	// DateAdded is when Radarr imported this file. Pointer-typed so an absent
+	// field reads as "unknown" rather than the zero time, which a caller
+	// comparing timestamps would otherwise treat as impossibly old.
+	DateAdded *time.Time `json:"dateAdded"`
 }
 
 type QualityProfile struct {
@@ -206,6 +210,17 @@ func (c *Client) GetMovieFile(id int) (*MovieFile, error) {
 		return nil, fmt.Errorf("radarr movie file: %w", err)
 	}
 	return &file, nil
+}
+
+// DeleteMovieFile deletes one imported file from disk and from Radarr's
+// records. The movie itself stays monitored, so Radarr remains free to grab a
+// replacement under its own policy.
+func (c *Client) DeleteMovieFile(id int) error {
+	path := fmt.Sprintf("/api/v3/moviefile/%d", id)
+	if err := c.do(http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("radarr delete movie file: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) GetMovieByTMDB(tmdbID int) (*Movie, error) {
@@ -523,6 +538,29 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	return resp.Records, nil
 }
 
+// GetMovieHistory returns the history Radarr still holds for one movie — every
+// grab, import and failure. Prefer it over GetHistory whenever the caller knows
+// the movie: GetHistory reads one page of the GLOBAL log, so a busy instance
+// buries a title's records within hours, while this endpoint filters
+// server-side and reaches records months old.
+//
+// /history/movie answers with a bare JSON array, not the paged envelope the
+// /history endpoint uses, so there is no records wrapper to unwrap and no
+// server-side page size to ask for. pageSize is therefore a purely client-side
+// cap on how many of the returned records (newest first, the order Radarr sends
+// them in) the caller wants back; pageSize <= 0 returns all of them.
+func (c *Client) GetMovieHistory(movieID, pageSize int) ([]HistoryRecord, error) {
+	var records []HistoryRecord
+	path := fmt.Sprintf("/api/v3/history/movie?movieId=%d&includeMovie=true", movieID)
+	if err := c.do("GET", path, nil, &records); err != nil {
+		return nil, fmt.Errorf("radarr movie history: %w", err)
+	}
+	if pageSize > 0 && len(records) > pageSize {
+		records = records[:pageSize]
+	}
+	return records, nil
+}
+
 // GetImportHistory returns a bounded server-filtered import witness for one
 // internal movie and observed download identity. Callers still revalidate every
 // returned field; filters reduce both noise and truncation risk.
@@ -597,6 +635,36 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 		inWindow = append(inWindow, rec)
 	}
 	return inWindow, complete, nil
+}
+
+// MarkHistoryFailed marks one grab history record as a failed download — the
+// "Mark as Failed" button. It is Radarr's only route to blocklist a release
+// that already finished and imported: the blocklist endpoint has no add
+// operation, and the queue-side blocklist flag needs a live queue row, which a
+// download that completed two weeks ago no longer has. Marking a grab failed
+// also lets Radarr decide for itself whether to look for a replacement (see
+// GetFailedDownloadPolicy).
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v3/history/failed/%d", historyID)
+	if err := c.do(http.MethodPost, path, nil, nil); err != nil {
+		return fmt.Errorf("radarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports the instance's autoRedownloadFailed setting:
+// whether Radarr searches for a replacement on its own once a download is
+// marked failed. That is the admin's decision, so a caller that blocklists a
+// release must read it rather than assume — with the policy on, adding a search
+// of our own only duplicates the grab Radarr already dispatched.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v3/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("radarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
 }
 
 type CalendarItem struct {

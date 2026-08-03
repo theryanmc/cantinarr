@@ -6,6 +6,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"github.com/windoze95/cantinarr-server/internal/tmdb"
 )
 
 // mediaReadScope is an optional, server-imposed identity filter used by the
@@ -182,6 +183,53 @@ func filterChaptarrHistory(records []chaptarr.HistoryRecord, scope mediaReadScop
 		}
 	}
 	return out
+}
+
+// scopedSonarrHistory reads history for the scope's exact series when the scope
+// names one, falling back to the global page otherwise.
+//
+// The global page is the whole reason this exists. `GetHistory` returns the most
+// recent records across the entire library; on a busy instance that window is a
+// few days wide, so post-filtering it for a title whose last event was two weeks
+// ago yields nothing and the caller is told there is no history — when what
+// actually happened is that the caller looked in the wrong place. The per-series
+// endpoint has no such window.
+//
+// A resolution failure is never fatal: an unresolvable series just falls back to
+// the global page, which is exactly the behaviour that existed before.
+func scopedSonarrHistory(bridge *tmdb.Bridge, client *sonarr.Client, scope mediaReadScope, fetchLimit int) ([]sonarr.HistoryRecord, error) {
+	if scope.hasTitleIdentity() {
+		if series := resolveScopedSeries(bridge, client, scope); series != nil {
+			return client.GetSeriesHistory(series.ID, scope.SeasonNumber, fetchLimit)
+		}
+	}
+	return client.GetHistory(fetchLimit)
+}
+
+// resolveScopedSeries turns the scope's TVDB/TMDB identity into the series
+// record, preferring TVDB because Sonarr indexes on it directly.
+func resolveScopedSeries(bridge *tmdb.Bridge, client *sonarr.Client, scope mediaReadScope) *sonarr.Series {
+	if scope.TvdbID > 0 {
+		if series, err := client.GetSeriesByTVDB(scope.TvdbID); err == nil && series != nil {
+			return series
+		}
+	}
+	if scope.TmdbID > 0 {
+		if series, err := seriesByTMDB(bridge, client, scope.TmdbID); err == nil && series != nil {
+			return series
+		}
+	}
+	return nil
+}
+
+// scopedRadarrHistory is the movie half of scopedSonarrHistory.
+func scopedRadarrHistory(client *radarr.Client, scope mediaReadScope, fetchLimit int) ([]radarr.HistoryRecord, error) {
+	if scope.TmdbID > 0 {
+		if movie, err := client.GetMovieByTMDB(scope.TmdbID); err == nil && movie != nil {
+			return client.GetMovieHistory(movie.ID, fetchLimit)
+		}
+	}
+	return client.GetHistory(fetchLimit)
 }
 
 func filterRadarrHistory(client *radarr.Client, records []radarr.HistoryRecord, scope mediaReadScope) ([]radarr.HistoryRecord, error) {

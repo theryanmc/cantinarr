@@ -250,6 +250,27 @@ func (s *Service) issueHadExecutedFacet(issueID int64, kind ActionKind, facet st
 	return false, rows.Err()
 }
 
+// issueHasExecutedFix reports whether ANY approved fix has actually reached the
+// arr for this issue, of any kind.
+//
+// Deliberately broader than priorRemediationAttempts, which only sees fixes
+// attributable to one download. A fix that acts on the library rather than on a
+// queue row — deleting files the arr already imported — has no download to
+// attribute, so it is invisible there. The difference matters exactly once: at
+// the point where a user-reported issue is handed to an admin, where "I applied
+// the fix, please confirm" and "I could not do anything" must not read alike.
+func (s *Service) issueHasExecutedFix(issueID int64) (bool, error) {
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(1) FROM agent_actions
+		 WHERE issue_id = ? AND status IN (?, ?) AND executed_at IS NOT NULL`,
+		issueID, ActionExecuted, ActionOutcomeUnknown,
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("count executed fixes: %w", err)
+	}
+	return count > 0, nil
+}
+
 // upgradeAbandonProven reports that this incident ended the way a deliberately
 // abandoned upgrade is supposed to end: the server dropped a dead release that
 // was only ever going to replace a file the library already had, and that file
