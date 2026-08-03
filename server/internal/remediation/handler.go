@@ -99,6 +99,15 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Whether the reporter may close this themselves is a live question about
+	// dispatch state, so it is answered on the read that renders the control
+	// rather than cached on the row.
+	if issue.ReporterID != nil && *issue.ReporterID == claims.UserID {
+		if allowed, err := h.service.CanReporterConfirmFix(issue); err == nil {
+			issue.CanConfirmFixed = allowed
+		}
+	}
+
 	// An admin opening the thread marks the issue read (clears the unread dot);
 	// the reporter viewing their own issue must NOT. Reflect it in this payload
 	// too so the caller sees the new state immediately.
@@ -157,6 +166,39 @@ func (h *Handler) Reply(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.service.PostReply(id, authorKind, claims.UserID, body.Body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ConfirmFixed handles POST /api/issues/{id}/confirm-fixed — the reporter's own
+// verdict that the applied fix worked, and the only way a subjective report ever
+// closes without an administrator adjudicating someone else's opinion.
+func (h *Handler) ConfirmFixed(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid issue id"})
+		return
+	}
+	issue, err := h.service.GetIssue(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	// Deliberately NOT canAccessIssue: that also admits any admin, and an
+	// administrator recording their verdict as the reporter's would be a lie in
+	// the audit trail. Admins have /api/admin/issues/{id}/resolve.
+	if issue.ReporterID == nil || *issue.ReporterID != claims.UserID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if err := h.service.ReporterConfirmFix(r.Context(), id, claims.UserID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
