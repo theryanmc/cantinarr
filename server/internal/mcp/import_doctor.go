@@ -419,10 +419,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, instanceID string) (*T
 
 	var header strings.Builder
 	if problems == 0 {
-		header.WriteString("Import Doctor: no queue problems found.")
-		if healthy > 0 {
-			fmt.Fprintf(&header, " %d item(s) are downloading or importing normally.", healthy)
-		}
+		header.WriteString(noQueueProblemsText(healthy, scope))
 	} else {
 		fmt.Fprintf(&header, "Import Doctor found %d queue item(s) needing attention", problems)
 		if healthy > 0 {

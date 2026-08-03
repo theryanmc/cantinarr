@@ -263,7 +263,7 @@ func TestScopedSonarrHistoryFallsBackWhenTheSeriesCannotBeResolved(t *testing.T)
 	}
 	arrServer := fake.start()
 
-	records, err := scopedSonarrHistory(nil, sonarr.NewClient(arrServer.URL, "key"),
+	records, _, err := scopedSonarrHistory(nil, sonarr.NewClient(arrServer.URL, "key"),
 		mediaReadScope{TmdbID: 615, SeasonNumber: 11}, 100)
 	if err != nil {
 		t.Fatalf("an unresolvable series must not fail the read: %v", err)
@@ -284,7 +284,7 @@ func TestScopedSonarrHistoryPrefersTVDBOverTheTMDBBridge(t *testing.T) {
 	fake := &sonarrFileFake{t: t, series: futuramaSeries(), history: futuramaSeriesHistory()}
 	arrServer := fake.start()
 
-	records, err := scopedSonarrHistory(nil, sonarr.NewClient(arrServer.URL, "key"),
+	records, _, err := scopedSonarrHistory(nil, sonarr.NewClient(arrServer.URL, "key"),
 		mediaReadScope{TmdbID: 615, TvdbID: 73871, SeasonNumber: 11}, 100)
 	if err != nil {
 		t.Fatalf("scopedSonarrHistory: %v", err)
@@ -445,7 +445,7 @@ func TestScopedRadarrHistoryFallsBackWhenTheMovieCannotBeResolved(t *testing.T) 
 	}
 	arrServer := fake.start()
 
-	records, err := scopedRadarrHistory(radarr.NewClient(arrServer.URL, "key"), mediaReadScope{TmdbID: 550}, 100)
+	records, _, err := scopedRadarrHistory(radarr.NewClient(arrServer.URL, "key"), mediaReadScope{TmdbID: 550}, 100)
 	if err != nil {
 		t.Fatalf("an unresolvable movie must not fail the read: %v", err)
 	}

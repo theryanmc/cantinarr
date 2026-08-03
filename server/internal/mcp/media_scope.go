@@ -196,14 +196,18 @@ func filterChaptarrHistory(records []chaptarr.HistoryRecord, scope mediaReadScop
 // endpoint has no such window.
 //
 // A resolution failure is never fatal: an unresolvable series just falls back to
-// the global page, which is exactly the behaviour that existed before.
-func scopedSonarrHistory(bridge *tmdb.Bridge, client *sonarr.Client, scope mediaReadScope, fetchLimit int) ([]sonarr.HistoryRecord, error) {
+// the global page, which is exactly the behaviour that existed before. The
+// returned perTitle flag reports which of the two happened, because an empty
+// result means opposite things in each case — see noHistoryText.
+func scopedSonarrHistory(bridge *tmdb.Bridge, client *sonarr.Client, scope mediaReadScope, fetchLimit int) (records []sonarr.HistoryRecord, perTitle bool, err error) {
 	if scope.hasTitleIdentity() {
 		if series := resolveScopedSeries(bridge, client, scope); series != nil {
-			return client.GetSeriesHistory(series.ID, scope.SeasonNumber, fetchLimit)
+			records, err = client.GetSeriesHistory(series.ID, scope.SeasonNumber, fetchLimit)
+			return records, err == nil, err
 		}
 	}
-	return client.GetHistory(fetchLimit)
+	records, err = client.GetHistory(fetchLimit)
+	return records, false, err
 }
 
 // resolveScopedSeries turns the scope's TVDB/TMDB identity into the series
@@ -222,14 +226,17 @@ func resolveScopedSeries(bridge *tmdb.Bridge, client *sonarr.Client, scope media
 	return nil
 }
 
-// scopedRadarrHistory is the movie half of scopedSonarrHistory.
-func scopedRadarrHistory(client *radarr.Client, scope mediaReadScope, fetchLimit int) ([]radarr.HistoryRecord, error) {
+// scopedRadarrHistory is the movie half of scopedSonarrHistory, including its
+// perTitle report.
+func scopedRadarrHistory(client *radarr.Client, scope mediaReadScope, fetchLimit int) (records []radarr.HistoryRecord, perTitle bool, err error) {
 	if scope.TmdbID > 0 {
 		if movie, err := client.GetMovieByTMDB(scope.TmdbID); err == nil && movie != nil {
-			return client.GetMovieHistory(movie.ID, fetchLimit)
+			records, err = client.GetMovieHistory(movie.ID, fetchLimit)
+			return records, err == nil, err
 		}
 	}
-	return client.GetHistory(fetchLimit)
+	records, err = client.GetHistory(fetchLimit)
+	return records, false, err
 }
 
 func filterRadarrHistory(client *radarr.Client, records []radarr.HistoryRecord, scope mediaReadScope) ([]radarr.HistoryRecord, error) {
