@@ -27,6 +27,11 @@ const (
 	observationStateSettling   = "settling"
 	queueSnapshotFreshness     = 90 * time.Second
 	observationSweepPeriod     = time.Minute
+	// preAirSweepTicks is how many sweep ticks pass between fallback pre-air
+	// checks. The instant path is a Sonarr webhook; this only covers instances
+	// that never had one configured, and a season filled ahead of its air dates
+	// has already been wrong for a while by the time anyone could act on it.
+	preAirSweepTicks = 15
 )
 
 const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
@@ -1711,12 +1716,20 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 			a.svc.flushActionAlerts(time.Now().UTC())
 			ticker := time.NewTicker(observationSweepPeriod)
 			defer ticker.Stop()
+			// The pre-air fallback rides this same goroutine rather than its own:
+			// every arr library read in the service already happens here, and a
+			// second timer would race reconciliation for the one DB connection.
+			preAirTicks := 0
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
 					a.sweepObservedInstances()
+					if preAirTicks++; preAirTicks >= preAirSweepTicks {
+						preAirTicks = 0
+						a.svc.SweepPreAirImports()
+					}
 					// Owed admin pushes advance on the same clock that moves
 					// incidents in and out of tracking, so a hold-down is
 					// always measured against fresh state. Rule approvals stay

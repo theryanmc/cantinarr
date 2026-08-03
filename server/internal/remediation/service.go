@@ -55,6 +55,10 @@ type Service struct {
 	// after a newer one.
 	observationMu sync.Mutex
 
+	// preAirSweep remembers how far the fallback pre-air pass has read each
+	// instance's history, so a quiet instance costs one arr call per pass.
+	preAirSweep preAirSweepState
+
 	// jobs is the buffered queue of investigation/resume jobs. The Runner drains
 	// it via StartWorkers; Enqueue/EnqueueResume push onto it. Buffered so the
 	// request and approval paths never block on the agent.

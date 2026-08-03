@@ -66,7 +66,33 @@ func (s *ToolServer) getEpisodeTimeline(input json.RawMessage, instanceID string
 
 	now := time.Now().UTC()
 	bySeason := groupEpisodeStates(episodes)
-	return &ToolResult{Text: renderEpisodeTimeline(series, params.TmdbID, params.SeasonNumber, bySeason, fileByID, now)}, nil
+	result := &ToolResult{Text: renderEpisodeTimeline(series, params.TmdbID, params.SeasonNumber, bySeason, fileByID, now)}
+	result.Verification = seasonCleanVerification(bySeason, fileByID, params.SeasonNumber, now)
+	return result, nil
+}
+
+// seasonCleanVerification is the server's own answer to "is the impossible
+// content still there", emitted out of band so the runner never has to believe
+// the model's reading of this text.
+//
+// Only for a read scoped to ONE season: that is the shape of the incident, and
+// a series-wide rollup would answer a question nobody asked. A season Sonarr
+// does not hold gets no verdict at all rather than a clean one — an absent
+// season must never read as a repaired season.
+func seasonCleanVerification(bySeason map[int][]arr.EpisodeState, fileByID map[int]sonarr.EpisodeFile, seasonNumber int, now time.Time) *ToolVerification {
+	if seasonNumber <= 0 {
+		return nil
+	}
+	states, ok := bySeason[seasonNumber]
+	if !ok || len(states) == 0 {
+		return nil
+	}
+	timeline := arr.BuildSeasonTimeline(seasonNumber, withImportTimes(states, fileByID), now)
+	return &ToolVerification{
+		Kind:          VerificationSeasonClean,
+		ExactScope:    true,
+		TargetPresent: timeline.PreAirFill,
+	}
 }
 
 // groupEpisodeStates converts Sonarr's episode records into the service-neutral
