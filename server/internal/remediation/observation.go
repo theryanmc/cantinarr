@@ -32,6 +32,10 @@ const (
 	// that never had one configured, and a season filled ahead of its air dates
 	// has already been wrong for a while by the time anyone could act on it.
 	preAirSweepTicks = 15
+	// preventionSweepTicks is how many sweep ticks pass between recurrence
+	// roll-ups. Hourly: it is a DB-only pass whose input changes on the scale
+	// of days.
+	preventionSweepTicks = 60
 )
 
 const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
@@ -1720,6 +1724,7 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 			// every arr library read in the service already happens here, and a
 			// second timer would race reconciliation for the one DB connection.
 			preAirTicks := 0
+			preventionTicks := 0
 			for {
 				select {
 				case <-ctx.Done():
@@ -1729,6 +1734,15 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 					if preAirTicks++; preAirTicks >= preAirSweepTicks {
 						preAirTicks = 0
 						a.svc.SweepPreAirImports()
+					}
+					// Recurrence is measured in days, so an hourly pass is
+					// already far finer than the thing it looks at. It runs
+					// after the rule sweep and before the alert flushes for the
+					// same reason everything else here does: a notice raised on
+					// this tick starts its hold-down immediately.
+					if preventionTicks++; preventionTicks >= preventionSweepTicks {
+						preventionTicks = 0
+						a.svc.SweepPreventionNotices()
 					}
 					// Owed admin pushes advance on the same clock that moves
 					// incidents in and out of tracking, so a hold-down is

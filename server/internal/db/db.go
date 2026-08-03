@@ -572,6 +572,38 @@ CREATE TABLE IF NOT EXISTS agent_approval_rules (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_approval_rules_key
     ON agent_approval_rules(problem_kind, action_kind, action_facet);
+
+-- One durable record per (instance, problem label) that Cantinarr has told an
+-- admin about: this problem keeps happening, and here is the setting that would
+-- stop it. Distinct from an issue, which is the SURFACE — the issue can be
+-- dismissed and reopened, while this row is the memory that decides whether to
+-- speak again and how soon.
+--
+-- The key gets a standalone unique index, matching agent_approval_rules, so a
+-- later scope column is an index swap rather than a table rebuild.
+CREATE TABLE IF NOT EXISTS prevention_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    problem_kind TEXT NOT NULL,                -- arr.Diagnosis.Problem label, verbatim
+    raise_count INTEGER NOT NULL DEFAULT 0,    -- how many times we have said it; caps the cooldown
+    occurrences INTEGER NOT NULL DEFAULT 0,    -- issues counted at the last raise
+    distinct_media INTEGER NOT NULL DEFAULT 0,
+    distinct_days INTEGER NOT NULL DEFAULT 0,  -- the recurrence axis: separate days, not fan-out
+    first_seen_at DATETIME,
+    last_seen_at DATETIME,
+    last_raised_at DATETIME,
+    issue_id INTEGER REFERENCES issues(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prevention_notices_key
+    ON prevention_notices(instance_id, problem_kind);
+
+-- Serves the recurrence roll-up. Partial on the exact predicate the sweep uses:
+-- with source = 'auto' as a LITERAL in the query, SQLite can use this as a
+-- covering index and satisfy the GROUP BY from index order instead of scanning
+-- issues and building a temp B-tree.
+CREATE INDEX IF NOT EXISTS idx_issues_problem_recurrence
+    ON issues(instance_id, problem_kind, created_at, dedupe_key)
+    WHERE source = 'auto' AND problem_kind IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agent_approval_rules_status
     ON agent_approval_rules(status);
 
