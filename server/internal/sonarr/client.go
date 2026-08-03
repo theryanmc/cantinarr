@@ -657,6 +657,36 @@ func (c *Client) GetHistory(pageSize int) ([]HistoryRecord, error) {
 	return resp.Records, nil
 }
 
+// GetSeriesHistory returns the history Sonarr still holds for one series —
+// every grab, import and failure — optionally narrowed to a single season.
+// Prefer it over GetHistory whenever the caller knows the series: GetHistory
+// reads one page of the GLOBAL log, so a busy instance buries a title's records
+// within hours, while this endpoint filters server-side and reaches records
+// months old.
+//
+// /history/series answers with a bare JSON array, not the paged envelope the
+// /history endpoint uses, so there is no records wrapper to unwrap and no
+// server-side page size to ask for. pageSize is therefore a purely client-side
+// cap on how many of the returned records (newest first, the order Sonarr sends
+// them in) the caller wants back; pageSize <= 0 returns all of them.
+//
+// Only a positive seasonNumber narrows the read — 0 asks for the whole series
+// rather than for Specials, which is what every caller here wants.
+func (c *Client) GetSeriesHistory(seriesID, seasonNumber, pageSize int) ([]HistoryRecord, error) {
+	path := fmt.Sprintf("/api/v3/history/series?seriesId=%d&includeSeries=true&includeEpisode=true", seriesID)
+	if seasonNumber > 0 {
+		path += fmt.Sprintf("&seasonNumber=%d", seasonNumber)
+	}
+	var records []HistoryRecord
+	if err := c.do("GET", path, nil, &records); err != nil {
+		return nil, fmt.Errorf("sonarr series history: %w", err)
+	}
+	if pageSize > 0 && len(records) > pageSize {
+		records = records[:pageSize]
+	}
+	return records, nil
+}
+
 func (c *Client) GetImportHistory(episodeID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
 	var resp struct {
 		TotalRecords int             `json:"totalRecords"`
@@ -728,6 +758,36 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 		inWindow = append(inWindow, rec)
 	}
 	return inWindow, complete, nil
+}
+
+// MarkHistoryFailed marks one grab history record as a failed download — the
+// "Mark as Failed" button. It is Sonarr's only route to blocklist a release
+// that already finished and imported: the blocklist endpoint has no add
+// operation, and the queue-side blocklist flag needs a live queue row, which a
+// download that completed two weeks ago no longer has. Marking a grab failed
+// also lets Sonarr decide for itself whether to look for a replacement (see
+// GetFailedDownloadPolicy).
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v3/history/failed/%d", historyID)
+	if err := c.do(http.MethodPost, path, nil, nil); err != nil {
+		return fmt.Errorf("sonarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports the instance's autoRedownloadFailed setting:
+// whether Sonarr searches for a replacement on its own once a download is
+// marked failed. That is the admin's decision, so a caller that blocklists a
+// release must read it rather than assume — with the policy on, adding a search
+// of our own only duplicates the grab Sonarr already dispatched.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v3/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("sonarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
 }
 
 type CalendarItem struct {
@@ -907,13 +967,23 @@ type Episode struct {
 }
 
 // EpisodeFile is Sonarr's metadata for one completed episode file on disk.
+// SceneName is the release the file arrived as and DateAdded is when Sonarr
+// imported it — together they say which release put this file here and when,
+// which is the only way to tell a file apart from the episode it claims to be.
 type EpisodeFile struct {
-	ID           int    `json:"id"`
-	SeriesID     int    `json:"seriesId"`
-	SeasonNumber int    `json:"seasonNumber"`
-	RelativePath string `json:"relativePath"`
-	Path         string `json:"path"`
-	Size         int64  `json:"size"`
+	ID           int        `json:"id"`
+	SeriesID     int        `json:"seriesId"`
+	SeasonNumber int        `json:"seasonNumber"`
+	RelativePath string     `json:"relativePath"`
+	Path         string     `json:"path"`
+	Size         int64      `json:"size"`
+	SceneName    string     `json:"sceneName"`
+	DateAdded    *time.Time `json:"dateAdded"`
+	Quality      struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
 }
 
 // GetEpisodeFile returns live metadata for one completed file in Sonarr.
@@ -924,6 +994,30 @@ func (c *Client) GetEpisodeFile(id int) (*EpisodeFile, error) {
 		return nil, fmt.Errorf("sonarr episode file: %w", err)
 	}
 	return &file, nil
+}
+
+// GetEpisodeFiles lists every file Sonarr holds for a series, across seasons.
+// The episode list says only whether a file exists; these records say what it
+// actually is (scene name, quality) and when it landed, so a file's import time
+// can be compared against the air time of the episode it sits on.
+func (c *Client) GetEpisodeFiles(seriesID int) ([]EpisodeFile, error) {
+	var files []EpisodeFile
+	path := fmt.Sprintf("/api/v3/episodefile?seriesId=%d", seriesID)
+	if err := c.do(http.MethodGet, path, nil, &files); err != nil {
+		return nil, fmt.Errorf("sonarr episode files: %w", err)
+	}
+	return files, nil
+}
+
+// DeleteEpisodeFile deletes one imported file from disk and from Sonarr's
+// records. The episode itself stays monitored, so Sonarr remains free to grab a
+// replacement under its own policy.
+func (c *Client) DeleteEpisodeFile(id int) error {
+	path := fmt.Sprintf("/api/v3/episodefile/%d", id)
+	if err := c.do(http.MethodDelete, path, nil, nil); err != nil {
+		return fmt.Errorf("sonarr delete episode file: %w", err)
+	}
+	return nil
 }
 
 // GetEpisodes lists the episodes of one season of a series.

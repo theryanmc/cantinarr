@@ -62,7 +62,29 @@ func actionAutoFacet(kind ActionKind, canonical json.RawMessage) (string, bool) 
 			return "", false
 		}
 		return p.Action, true
-	case ActionGrabRelease, ActionTriggerSearch, ActionRescan:
+	case ActionDeleteMediaFiles:
+		// Deleting files is destructive either way, but blocklisting also stands
+		// down a release for good and hands the replacement decision to the
+		// service's own failed-download policy. An admin who is happy to
+		// auto-approve one has not thereby approved the other.
+		var p DeleteMediaFilesParams
+		if err := json.Unmarshal(canonical, &p); err != nil {
+			return "", false
+		}
+		if p.Blocklist {
+			return "blocklist", true
+		}
+		return "files_only", true
+	case ActionTriggerSearch:
+		var p TriggerSearchParams
+		if err := json.Unmarshal(canonical, &p); err != nil {
+			return "", false
+		}
+		if p.AiredOnly {
+			return "aired_only", true
+		}
+		return "", true
+	case ActionGrabRelease, ActionRescan:
 		return "", true
 	default:
 		return "", false
@@ -99,9 +121,19 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 			action = "Manual import"
 		}
 	case ActionTriggerSearch:
-		action = "Search again"
+		if facet == "aired_only" {
+			action = "Search the episodes that aired"
+		} else {
+			action = "Search again"
+		}
 	case ActionRescan:
 		action = "Rescan"
+	case ActionDeleteMediaFiles:
+		if facet == "blocklist" {
+			action = "Delete the wrong files and block that release"
+		} else {
+			action = "Delete the wrong files"
+		}
 	}
 	return action + " · " + problemKind
 }

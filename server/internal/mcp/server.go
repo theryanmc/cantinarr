@@ -371,6 +371,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getArrHealth(input, callCtx.InstanceID)
 	case "diagnose_queue":
 		return s.diagnoseQueue(input, callCtx.InstanceID)
+	case "get_episode_timeline":
+		return s.getEpisodeTimeline(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":

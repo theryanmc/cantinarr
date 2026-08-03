@@ -85,6 +85,53 @@ AgentAction _specialSearch() => AgentAction.fromJson({
       'instance_service_type': 'sonarr',
     });
 
+/// A season search narrowed to the episodes that have already come out.
+AgentAction _airedOnlySearch() => AgentAction.fromJson({
+      'id': 15,
+      'issue_id': 5,
+      'kind': 'trigger_search',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'aired_only': true,
+      },
+      'rationale': 'The unaired episodes need no search; they are monitored.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
+/// A deletion of files the media service already imported. [blocklist] is the
+/// facet under test: the same nine files either just go, or go and take their
+/// releases out of circulation with them.
+AgentAction _deleteFiles({required bool blocklist}) => AgentAction.fromJson({
+      'id': 16,
+      'issue_id': 5,
+      'kind': 'delete_media_files',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        'blocklist': blocklist,
+      },
+      'rationale': 'Every file was imported before its episode aired.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_title': 'The Show',
+      'issue_media_type': 'tv',
+      'instance_id': 'sonarr-living-room',
+      'instance_name': 'Living Room TV',
+      'instance_service_type': 'sonarr',
+    });
+
 /// A fake service that returns canned decision results without any network I/O.
 class _FakeIssuesService extends IssuesService {
   _FakeIssuesService() : super(backendDio: Dio());
@@ -293,6 +340,139 @@ void main() {
     expect(find.text('Episode'), findsOneWidget);
     expect(find.text('1'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+  });
+
+  testWidgets('an aired-only search says it searches only what has aired',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _airedOnlySearch(),
+    );
+
+    expect(
+      find.text(
+          'Search only the episodes of this season that have already aired'),
+      findsOneWidget,
+    );
+    expect(find.text('Scope'), findsOneWidget);
+    expect(
+      find.text('Only episodes that have already aired'),
+      findsOneWidget,
+    );
+    // Nothing about this proposal blocks a decision.
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'search only the episodes of this season that have already aired'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Episodes that have not aired yet are left alone'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a blocklisting deletion states the exact, irreversible target',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _deleteFiles(blocklist: true),
+    );
+
+    expect(
+      find.text(
+          'Delete the wrong files and block those releases from coming back'),
+      findsOneWidget,
+    );
+    // The exact target, from validated integers — the show's title is not in
+    // the params, so season + episode numbers + count carry it.
+    expect(find.text('Season'), findsOneWidget);
+    expect(find.text('11'), findsOneWidget);
+    expect(find.text('Episodes'), findsOneWidget);
+    expect(find.text('1–9'), findsOneWidget);
+    expect(find.text('Files to delete'), findsOneWidget);
+    expect(find.text('9'), findsOneWidget);
+    expect(find.text('Block the release'), findsOneWidget);
+    expect(find.text('yes'), findsOneWidget);
+    // An irreversible fix is still an approvable one.
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'permanently delete 9 files from your library — season 11, '
+          'episodes 1–9'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+          'This cannot be undone: the files are removed from disk'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+          'will not download those same releases again'),
+      findsOneWidget,
+    );
+    // The replacement decision belongs to the service's own setting, not us.
+    expect(
+      find.textContaining("service's own failed-download setting"),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a files-only deletion warns the same release can return',
+      (tester) async {
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: _deleteFiles(blocklist: false),
+    );
+
+    expect(
+      find.text('Delete the wrong files already in your library'),
+      findsOneWidget,
+    );
+    expect(find.text('Block the release'), findsOneWidget);
+    expect(find.text('no'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining(
+          'permanently delete 9 files from your library — season 11, '
+          'episodes 1–9'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('This cannot be undone'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('The releases those files came from are not blocked'),
+      findsOneWidget,
+    );
+    // Without a blocklist there is no failed-download policy to defer to.
+    expect(
+      find.textContaining("service's own failed-download setting"),
+      findsNothing,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('a non-admin sees a read-only "waiting on an admin" footer',

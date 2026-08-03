@@ -6,6 +6,9 @@ void main() {
     test('map wire values, tolerate unknowns', () {
       expect(AgentActionKind.fromValue('grab_release'),
           AgentActionKind.grabRelease);
+      expect(AgentActionKind.fromValue('delete_media_files'),
+          AgentActionKind.deleteMediaFiles);
+      expect(AgentActionKind.deleteMediaFiles.value, 'delete_media_files');
       expect(
           AgentActionKind.fromValue('a_future_kind'), AgentActionKind.unknown);
       expect(AgentActionKind.fromValue(null), AgentActionKind.unknown);
@@ -232,6 +235,116 @@ void main() {
       expect(action.canTakeAction, isTrue);
     });
 
+    test('an aired-only season search parses and stays actionable', () {
+      final action = AgentAction.fromJson({
+        'id': 35,
+        'issue_id': 4,
+        'kind': 'trigger_search',
+        'params': {
+          'media_type': 'tv',
+          'tmdb_id': 615,
+          'season': 11,
+          'aired_only': true,
+        },
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'issue_media_type': 'tv',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
+      });
+
+      expect(action.params.airedOnly, isTrue);
+      expect(action.params.season, 11);
+      expect(action.params.episode, isNull);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
+    test('a season search without aired_only is unchanged', () {
+      final action = AgentAction.fromJson({
+        'id': 36,
+        'issue_id': 4,
+        'kind': 'trigger_search',
+        'params': {
+          'media_type': 'tv',
+          'tmdb_id': 615,
+          'season': 11,
+        },
+        'status': 'proposed',
+        'can_decide': true,
+        'issue_status': 'awaiting_approval',
+        'issue_media_type': 'tv',
+        'instance_id': 'sonarr-living-room',
+        'instance_name': 'Living Room TV',
+        'instance_service_type': 'sonarr',
+      });
+
+      expect(action.params.airedOnly, isFalse);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
+    test('aired_only is refused wherever air dates cannot decide the set', () {
+      // (params, expected message fragment). Each case is otherwise valid, so
+      // the fragment proves the aired_only rule fired and not another gate.
+      final cases = <(Map<String, dynamic>, String)>[
+        // A movie has no season of episodes to narrow.
+        ({'media_type': 'movie', 'tmdb_id': 615, 'aired_only': true}, 'aired'),
+        // A whole-series search: no season means no set to resolve.
+        ({'media_type': 'tv', 'tmdb_id': 615, 'aired_only': true}, 'aired'),
+        // One exact episode either aired or it didn't — a contradiction.
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episode': 3,
+            'aired_only': true,
+          },
+          'aired'
+        ),
+        // Books have no air dates at all.
+        (
+          {'media_type': 'book', 'book_id': 7, 'aired_only': true},
+          'aired',
+        ),
+        // A non-boolean flag never becomes truthy.
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'aired_only': 'yes',
+          },
+          'malformed'
+        ),
+      ];
+
+      for (final (params, fragment) in cases) {
+        final action = AgentAction.fromJson({
+          'id': 37,
+          'issue_id': 4,
+          'kind': 'trigger_search',
+          'params': params,
+          'status': 'proposed',
+          'can_decide': true,
+          'issue_status': 'awaiting_approval',
+          'issue_media_type': 'tv',
+          'instance_id': 'sonarr-living-room',
+          'instance_name': 'Living Room TV',
+          'instance_service_type': 'sonarr',
+        });
+        expect(
+          action.params.validationProblem(action.kind),
+          contains(fragment),
+          reason: '$params',
+        );
+        expect(action.canTakeAction, isFalse, reason: '$params');
+      }
+    });
+
     test('negative TV season is never actionable', () {
       final action = AgentAction.fromJson({
         'id': 34,
@@ -325,6 +438,208 @@ void main() {
       });
       expect(wrongTypes.canTakeAction, isFalse);
       expect(wrongTypes.decisionBlockedReason, contains('details'));
+    });
+  });
+
+  group('delete_media_files', () {
+    test('a TV deletion parses its exact target and stays actionable', () {
+      final action = _delete({
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        'blocklist': true,
+      });
+
+      expect(action.kind, AgentActionKind.deleteMediaFiles);
+      expect(action.params.mediaType, 'tv');
+      expect(action.params.tmdbId, 615);
+      expect(action.params.season, 11);
+      expect(action.params.episodes, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(action.params.blocklist, isTrue);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
+    test('a files-only deletion and an S00 deletion are both valid', () {
+      final filesOnly = _delete({
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [3],
+      });
+      expect(filesOnly.params.blocklist, isFalse);
+      expect(filesOnly.params.validationProblem(filesOnly.kind), isNull);
+      expect(filesOnly.canTakeAction, isTrue);
+
+      // Season 0 is Sonarr's specials; it must survive as an exact target.
+      final specials = _delete({
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 0,
+        'episodes': [1],
+        'blocklist': true,
+      });
+      expect(specials.params.season, 0);
+      expect(specials.params.validationProblem(specials.kind), isNull);
+      expect(specials.canTakeAction, isTrue);
+    });
+
+    test('a movie deletion carries no episode scope', () {
+      final action = _delete(
+        {'media_type': 'movie', 'tmdb_id': 27205, 'blocklist': true},
+        issueMediaType: 'movie',
+        serviceType: 'radarr',
+      );
+
+      expect(action.params.episodes, isEmpty);
+      expect(action.params.season, isNull);
+      expect(action.params.blocklist, isTrue);
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
+    });
+
+    test('every malformed or under-specified deletion is refused', () {
+      // (params, expected message fragment). One rejection path per row; each
+      // row is otherwise valid so the fragment proves which gate fired.
+      final cases = <(Map<String, dynamic>, String)>[
+        // Chaptarr has no equivalent delete/mark-failed pair.
+        ({'media_type': 'book'}, 'books'),
+        // No title to resolve the library record from.
+        ({'media_type': 'movie'}, 'title'),
+        ({'media_type': 'movie', 'tmdb_id': 0}, 'title'),
+        // A numeric-looking string is never coerced into an identifier.
+        ({'media_type': 'movie', 'tmdb_id': '27205'}, 'title'),
+        // The blocklist choice decides a whole extra consequence: it is a bool
+        // or the proposal is unreadable.
+        (
+          {'media_type': 'movie', 'tmdb_id': 27205, 'blocklist': 'yes'},
+          'options are malformed'
+        ),
+        // Movies address one library file; episode scope is a category error.
+        (
+          {'media_type': 'movie', 'tmdb_id': 27205, 'season': 1},
+          'TV episode details'
+        ),
+        (
+          {'media_type': 'movie', 'tmdb_id': 27205, 'episodes': [1]},
+          'TV episode details'
+        ),
+        // TV requires an exact season…
+        ({'media_type': 'tv', 'tmdb_id': 615, 'episodes': [1]}, 'season'),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': -1,
+            'episodes': [1],
+          },
+          'season'
+        ),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': '11',
+            'episodes': [1],
+          },
+          'season'
+        ),
+        // …and a well-typed, non-empty list of episode numbers.
+        (
+          {'media_type': 'tv', 'tmdb_id': 615, 'season': 11, 'episodes': 3},
+          'malformed'
+        ),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': [1, '2'],
+          },
+          'malformed'
+        ),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': [1.5],
+          },
+          'malformed'
+        ),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': <int>[],
+          },
+          'missing'
+        ),
+        ({'media_type': 'tv', 'tmdb_id': 615, 'season': 11}, 'missing'),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': [0, 1],
+          },
+          'episode numbers are invalid'
+        ),
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': [1, -2],
+          },
+          'episode numbers are invalid'
+        ),
+        // Past the server's own per-proposal bound the card stops being
+        // something an admin can read before authorising a deletion.
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': List<int>.generate(61, (i) => i + 1),
+          },
+          'too many episodes'
+        ),
+        // A field this app does not model could carry an unreviewed effect.
+        (
+          {
+            'media_type': 'tv',
+            'tmdb_id': 615,
+            'season': 11,
+            'episodes': [1],
+            'delete_series': true,
+          },
+          'does not recognize'
+        ),
+      ];
+
+      for (final (params, fragment) in cases) {
+        final action = _delete(params);
+        expect(
+          action.params.validationProblem(action.kind),
+          contains(fragment),
+          reason: '$params',
+        );
+        expect(action.canTakeAction, isFalse, reason: '$params');
+      }
+    });
+
+    test('60 episodes is still reviewable; the bound is exclusive', () {
+      final action = _delete({
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': List<int>.generate(60, (i) => i + 1),
+      });
+      expect(action.params.validationProblem(action.kind), isNull);
+      expect(action.canTakeAction, isTrue);
     });
   });
 
@@ -580,3 +895,25 @@ void main() {
 
 AgentActionBatchResult _r(String status) =>
     AgentActionBatchResult.fromJson({'id': 1, 'status': status});
+
+/// A proposed `delete_media_files` action carrying [params] verbatim, on an
+/// otherwise decidable issue so params validation is the only thing under test.
+AgentAction _delete(
+  Map<String, dynamic> params, {
+  String issueMediaType = 'tv',
+  String serviceType = 'sonarr',
+}) =>
+    AgentAction.fromJson({
+      'id': 40,
+      'issue_id': 6,
+      'kind': 'delete_media_files',
+      'params': params,
+      'rationale': 'Nine files were imported before those episodes aired.',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_status': 'awaiting_approval',
+      'issue_media_type': issueMediaType,
+      'instance_id': serviceType == 'radarr' ? 'radarr-main' : 'sonarr-main',
+      'instance_name': serviceType == 'radarr' ? 'Main Movies' : 'Main TV',
+      'instance_service_type': serviceType,
+    });

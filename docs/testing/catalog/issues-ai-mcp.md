@@ -8,6 +8,7 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `ISS-016` · P0 · LIVE — Have the agent ask a reporter-only question; verify Awaiting your reply, requester-safe prompt, bounded reply, same-run resume, and no duplicate run.
 - [ ] `ISS-024` · P0 · LIVE — Approve every supported action type; confirmation must repeat exact target, one executor call occurs, durable result appears, and issue/run state advances truthfully.
+- [ ] `ISS-043` · P0 · LIVE — On a real Sonarr season holding files the service imported before those episodes aired, report wrong content and approve the agent's delete-and-blocklist fix; verify on the service itself that exactly the named episode files are gone from disk, that each grab that delivered one is marked failed and now appears in that instance's blocklist, and that whether a replacement is searched for is decided by the instance's own failed-download policy rather than by Cantinarr. Repeat with the policy set both ways. Then approve the aired-only season search and confirm only aired episodes still missing a file are searched, with unaired episodes left for the service to grab as they air.
 
 ## AI provider accounts, OAuth, and chat
 

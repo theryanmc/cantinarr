@@ -1030,7 +1030,12 @@ func manualImportCandidateMatchesTVScope(candidate sonarr.ManualImportCandidate,
 // books carry no TMDB id, so tmdbID/seasonNumber are unused on the book path
 // (and authorID/bookIDs are unused on the movie/TV paths). Shared body of the
 // trigger_search tool and the Executor's trigger_search kind.
-func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, authorID int, bookIDs []int) (string, error) {
+// airedOnly narrows a TV season search to the episodes that have already aired
+// and are still missing a file. The set is resolved HERE, at dispatch, and never
+// carried in the proposal: a proposal can wait hours or days for an admin, and
+// in that window the next episode airs. Resolving early would search a week-old
+// answer.
+func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Client, cc *chaptarr.Client, mediaType string, tmdbID int, seasonNumber, episodeNumber *int, airedOnly bool, authorID int, bookIDs []int) (string, error) {
 	switch mediaType {
 	case "movie":
 		if rc == nil {
@@ -1079,6 +1084,9 @@ func TriggerSearchHelper(bridge *tmdb.Bridge, rc *radarr.Client, sc *sonarr.Clie
 			return mutationNotStarted(fmt.Sprintf("episode S%02dE%02d was not found in %s", *seasonNumber, *episodeNumber, series.Title))
 		}
 		if seasonNumber != nil {
+			if airedOnly {
+				return triggerAiredEpisodeSearch(sc, series, *seasonNumber)
+			}
 			if err := sc.TriggerSeasonSearch(series.ID, *seasonNumber); err != nil {
 				return "", err
 			}

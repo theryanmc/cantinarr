@@ -65,8 +65,13 @@ type Service struct {
 // action against the arr. *Executor satisfies it in production; a fake satisfies
 // it in tests so the approve→execute→resume cycle can be asserted without a
 // network or a live arr.
+//
+// proposedAt is when the agent recorded the proposal, and stands for the moment
+// the arr state this fix was reasoned about was last read. A proposal can wait
+// on a human indefinitely, so a fix that destroys something needs a way to tell
+// the thing it diagnosed apart from whatever happens to be in its place now.
 type actionExecutor interface {
-	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage) (string, error)
+	Execute(ctx context.Context, issueID int64, kind ActionKind, params json.RawMessage, proposedAt time.Time) (string, error)
 }
 
 // NewService constructs the remediation service, mirroring request.NewService.

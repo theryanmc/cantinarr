@@ -37,6 +37,7 @@ var readToolAllowList = []string{
 	"get_history",
 	"get_library",
 	"get_arr_health",
+	"get_episode_timeline",
 }
 
 // readToolAllowSet is readToolAllowList as a set, for O(1) dispatch checks.
@@ -674,8 +675,11 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 		r.db.Exec("UPDATE agent_runs SET step_count = ? WHERE id = ?", st.stepCount, st.runID)
 
 		if escalated {
+			// A read failure here only costs the better wording, never the
+			// escalation itself — the issue reaches an admin either way.
+			fixApplied, _ := r.svc.issueHasExecutedFix(issue.ID)
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-				"I couldn't verify a terminal resolution from live scoped state, so this needs an administrator to review it.")
+				escalatedCloseMessage(issue, fixApplied))
 		}
 
 		if concluded {
@@ -1142,7 +1146,7 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 // responses rather than Go errors.
 func isVerificationRead(name string, result *mcp.ToolResult) bool {
 	switch name {
-	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library":
+	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline":
 	default:
 		return false
 	}
@@ -1329,6 +1333,21 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		}
 		if issue.AuthorID > 0 {
 			params["author_id"] = issue.AuthorID
+		}
+	case "get_episode_timeline":
+		// Season-shaped on purpose: episode_number is deliberately NOT injected,
+		// so an issue naming one episode still sees the whole season around it.
+		// A pre-air fill is only legible across the season — a single episode
+		// looks like an ordinary file. This never widens past the issue's own
+		// series, which is the access boundary that matters.
+		if issue.TmdbID > 0 {
+			params["tmdb_id"] = issue.TmdbID
+		}
+		if issue.TvdbID > 0 {
+			params["tvdb_id"] = issue.TvdbID
+		}
+		if issue.SeasonNumber > 0 {
+			params["season_number"] = issue.SeasonNumber
 		}
 	}
 	return json.Marshal(params)

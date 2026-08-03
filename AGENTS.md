@@ -44,6 +44,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - **Instance URLs resolve only from the server; clients must never dereference arr-origin URLs.** Cluster-internal names (`http://radarr:7878`) are a supported production configuration, so anything handed to a client must be client-reachable: use `images[].remoteUrl` (external CDN) for artwork, resolve arr-relative paths through `/api/instances/{id}/…`, and never surface an arr-origin absolute URL from a proxied body. Server-side, keep hosts out of error strings that can reach non-admins.
 - **Secrets stay server-side and encrypted.** Instance API keys and credentials are AES-256-GCM encrypted at rest; never log them, return them in API responses, or write them into docs/examples.
 - **Requesters and admins speak different languages.** User-facing request UI uses requester vocabulary (Available / Requested / Downloading), not arr jargon (monitored, cutoff, unmet).
+- **A complaint about content arrives after the queue is empty.** "Wrong episode", "bad copy", "wrong audio" are only visible once a download finished and imported — sometimes weeks earlier — so queue state answers none of them and an empty queue is the expected reading, not a dead end. Diagnose those from the library and the arr's history, and repair them by acting on the imported file, not on a queue row.
 
 ## Documentation
 

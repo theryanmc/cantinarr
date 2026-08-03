@@ -22,6 +22,7 @@ enum AgentActionKind {
   manualImport('manual_import'),
   triggerSearch('trigger_search'),
   rescan('rescan'),
+  deleteMediaFiles('delete_media_files'),
   unknown('');
 
   const AgentActionKind(this.value);
@@ -380,6 +381,12 @@ class _ParsedParams {
   const _ParsedParams(this.map, this.wellFormed);
 }
 
+/// The most episodes one delete_media_files proposal may cover. Mirrors
+/// `maxDeleteEpisodes` in `server/internal/remediation/actions.go`: a wrong-file
+/// report is one season-shaped incident, and past this the approval card stops
+/// being something an admin can actually read before authorising a deletion.
+const int _maxDeleteEpisodes = 60;
+
 /// A small read-only view over a proposal's `params` JSON object. Every getter
 /// returns UNTRUSTED data that callers render quoted and non-editable; the view
 /// never interprets a value as a command. Unknown keys are simply absent.
@@ -414,6 +421,17 @@ class AgentActionParams {
     if (!_raw.containsKey(key)) return optional;
     final value = _raw[key];
     return value is num && value.isFinite && value == value.toInt();
+  }
+
+  /// True when [key] holds a JSON array whose every member is a whole number.
+  /// A numeric-looking string is rejected, matching the server's strict decode:
+  /// an episode list is the target of an irreversible deletion, so it is never
+  /// coerced.
+  bool _isIntList(String key, {bool optional = false}) {
+    if (!_raw.containsKey(key)) return optional;
+    final value = _raw[key];
+    if (value is! List) return false;
+    return value.every((v) => v is num && v.isFinite && v == v.toInt());
   }
 
   String? get mediaType => _str('media_type');
@@ -462,6 +480,30 @@ class AgentActionParams {
     return (v != null && v > 0) ? v : null;
   }
 
+  /// trigger_search: narrows a TV season search to the episodes that have
+  /// already aired and are still missing. The set itself is deliberately not in
+  /// the params — episodes air while a proposal waits for an admin, so the
+  /// server resolves it from live air dates at execution time.
+  bool get airedOnly => _bool('aired_only');
+
+  /// delete_media_files: the exact episode numbers whose already-imported files
+  /// would be deleted. Only whole numbers survive parsing; [validationProblem]
+  /// refuses the whole proposal when the list holds anything else, so a
+  /// partially parsed list can never become the target of a deletion.
+  List<int> get episodes {
+    final value = _raw['episodes'];
+    if (value is! List) return const [];
+    return value
+        .whereType<num>()
+        .where((n) => n.isFinite && n == n.toInt())
+        .map((n) => n.toInt())
+        .toList(growable: false);
+  }
+
+  /// delete_media_files: whether the releases that delivered the deleted files
+  /// are also blocked, so the same ones are not downloaded again.
+  bool get blocklist => _bool('blocklist');
+
   int? get authorId => _int('author_id');
   int? get bookId => _int('book_id');
 
@@ -498,6 +540,7 @@ class AgentActionParams {
           'tmdb_id',
           'season',
           'episode',
+          'aired_only',
           'author_id',
           'book_id',
         },
@@ -505,6 +548,13 @@ class AgentActionParams {
           'media_type',
           'tmdb_id',
           'author_id',
+        },
+      AgentActionKind.deleteMediaFiles => const {
+          'media_type',
+          'tmdb_id',
+          'season',
+          'episodes',
+          'blocklist',
         },
       AgentActionKind.unknown => const <String>{},
     };
@@ -571,8 +621,18 @@ class AgentActionParams {
             !_isInt('season', optional: true) ||
             !_isInt('episode', optional: true) ||
             !_isInt('author_id', optional: true) ||
-            !_isInt('book_id', optional: true)) {
+            !_isInt('book_id', optional: true) ||
+            (_raw.containsKey('aired_only') && _raw['aired_only'] is! bool)) {
           return 'The proposed search details are malformed.';
+        }
+        // "Only what has aired" is a whole-season variant: it needs a TV season
+        // and no single episode. Pairing it with one episode is a contradiction
+        // (that episode either aired or it didn't), and books have no air dates.
+        if (airedOnly &&
+            (media != 'tv' ||
+                !_raw.containsKey('season') ||
+                _raw.containsKey('episode'))) {
+          return 'The proposed search cannot be limited to aired episodes.';
         }
         if (media == 'book') {
           if ((authorId ?? 0) <= 0 && (bookId ?? 0) <= 0) {
@@ -610,6 +670,41 @@ class AgentActionParams {
           }
         } else if ((tmdbId ?? 0) <= 0) {
           return 'The title needed for this rescan is missing.';
+        }
+      case AgentActionKind.deleteMediaFiles:
+        // Deleting is irreversible, so every part of the target is required and
+        // strictly typed here — an under-specified proposal stays readable as
+        // history but must never reach an Approve button.
+        if (media == 'book') {
+          return 'Deleting library files is not supported for books.';
+        }
+        if (!_isInt('tmdb_id') || (tmdbId ?? 0) <= 0) {
+          return 'The title whose files would be deleted is missing.';
+        }
+        if (_raw.containsKey('blocklist') && _raw['blocklist'] is! bool) {
+          return 'The proposed deletion options are malformed.';
+        }
+        if (media == 'movie') {
+          if (_raw.containsKey('season') || _raw.containsKey('episodes')) {
+            return 'The proposed movie deletion contains TV episode details.';
+          }
+        } else {
+          if (!_isInt('season') || season == null) {
+            return 'The proposed TV season is invalid.';
+          }
+          if (!_isIntList('episodes', optional: true)) {
+            return 'The list of episodes to delete is malformed.';
+          }
+          final numbers = episodes;
+          if (numbers.isEmpty) {
+            return 'The episodes whose files would be deleted are missing.';
+          }
+          if (numbers.any((n) => n <= 0)) {
+            return 'The proposed episode numbers are invalid.';
+          }
+          if (numbers.length > _maxDeleteEpisodes) {
+            return 'The proposed deletion covers too many episodes to review.';
+          }
         }
       case AgentActionKind.unknown:
         return 'This app does not recognize the proposed fix type.';
