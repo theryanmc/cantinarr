@@ -683,7 +683,27 @@ func (s *ToolServer) getCustomFormats(input json.RawMessage) (*ToolResult, error
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\nScores that make these formats matter live in each quality profile's formatItems (see get_quality_profiles). Pass format_id for one format's full stored JSON.")
-	return &ToolResult{Text: sb.String()}, nil
+	return &ToolResult{Text: capCustomFormatSummary(sb.String(), len(raws))}, nil
+}
+
+// maxCustomFormatSummaryBytes bounds the whole rendering, not just the per-format
+// detail. Dropping to id-and-name above 40 formats caps the width of each line
+// but not their number: a full TRaSH set still renders a couple of hundred of
+// them, which is a real slice of a step-budgeted remediation agent's context for
+// a read that was only ever meant to explain one refusal.
+const maxCustomFormatSummaryBytes = 8 << 10
+
+// capCustomFormatSummary truncates at a line boundary and says so, rather than
+// leaving a reader to guess whether the list ended or ran out.
+func capCustomFormatSummary(text string, total int) string {
+	if len(text) <= maxCustomFormatSummaryBytes {
+		return text
+	}
+	cut := strings.LastIndex(text[:maxCustomFormatSummaryBytes], "\n")
+	if cut <= 0 {
+		cut = maxCustomFormatSummaryBytes
+	}
+	return text[:cut] + fmt.Sprintf("\n…list truncated; this instance has %d custom formats in total. Ask for one by name if you need its detail.", total)
 }
 
 // --- upsert_custom_format ---

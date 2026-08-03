@@ -332,3 +332,77 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+// A settings read is about the INSTANCE the issue belongs to, never about a
+// title — so it is scoped by instance and pinned to the bounded summary form.
+func TestSettingsReadsAreScopedToTheIssuesOwnInstance(t *testing.T) {
+	for _, tc := range []struct {
+		media   string
+		service string
+	}{{"movie", "radarr"}, {"tv", "sonarr"}, {"book", "chaptarr"}} {
+		for _, tool := range []string{"get_quality_profiles", "get_custom_formats"} {
+			issue := &Issue{MediaType: tc.media, InstanceID: "inst-7", TmdbID: 615, BookID: 3}
+			scoped, err := scopeReadToolInput(issue, tool,
+				json.RawMessage(`{"service":"sonarr","instance_id":"someone-elses","profile_id":4,"format_id":9,"include_languages":true,"language_name":"English"}`))
+			if err != nil {
+				t.Fatalf("%s/%s: %v", tc.media, tool, err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(scoped, &got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got["service"] != tc.service {
+				t.Errorf("%s/%s service = %v, want %q", tc.media, tool, got["service"], tc.service)
+			}
+			if got["instance_id"] != "inst-7" {
+				t.Errorf("%s/%s instance_id = %v — a model-chosen instance survived scoping", tc.media, tool, got["instance_id"])
+			}
+			// Each of these selects the header+raw-JSON form or the full language
+			// catalog. The agent only ever gets the bounded summary.
+			for _, key := range []string{"profile_id", "format_id", "include_languages", "language_name", "media_type"} {
+				if _, present := got[key]; present {
+					t.Errorf("%s/%s leaked %q: %v", tc.media, tool, key, got)
+				}
+			}
+		}
+	}
+}
+
+// Without an instance these tools fall back to the service's DEFAULT instance,
+// so an instance-less issue would silently read someone else's configuration.
+// Refusing is the only safe answer.
+func TestSettingsReadsRefuseAnInstancelessIssue(t *testing.T) {
+	for _, tool := range []string{"get_quality_profiles", "get_custom_formats"} {
+		issue := &Issue{MediaType: "tv", TmdbID: 615}
+		if _, err := scopeReadToolInput(issue, tool, json.RawMessage(`{}`)); err == nil {
+			t.Errorf("%s accepted an issue with no instance", tool)
+		}
+	}
+}
+
+// A settings read needs no media identity — it is a question about the instance
+// — so the guard that refuses a title-less issue must not apply to it.
+func TestSettingsReadsDoNotNeedAMediaIdentity(t *testing.T) {
+	issue := &Issue{MediaType: "movie", InstanceID: "inst-7"} // no TmdbID at all
+	if _, err := scopeReadToolInput(issue, "get_quality_profiles", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("refused a settings read for want of a media identity: %v", err)
+	}
+	// The contrast: a media-scoped read on the same issue still fails closed.
+	if _, err := scopeReadToolInput(issue, "get_history", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("get_history accepted an issue with no movie identity")
+	}
+}
+
+func TestSettingsReadsAreOnTheAgentsAllowList(t *testing.T) {
+	for _, tool := range []string{"get_quality_profiles", "get_custom_formats"} {
+		if !readToolAllowSet[tool] {
+			t.Errorf("the agent cannot call %s", tool)
+		}
+	}
+	// The write side stays unreachable.
+	for _, tool := range []string{"upsert_custom_format", "preview_profile_change", "apply_profile_change"} {
+		if readToolAllowSet[tool] {
+			t.Errorf("%s is reachable from the remediation agent", tool)
+		}
+	}
+}
