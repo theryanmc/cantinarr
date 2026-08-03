@@ -631,7 +631,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 				return nil, err
 			}
 			if len(items) == 0 {
-				sections = append(sections, "Movie queue: empty.")
+				sections = append(sections, emptyQueueText("Movie queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -664,7 +664,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 				return nil, err
 			}
 			if len(items) == 0 {
-				sections = append(sections, "TV queue: empty.")
+				sections = append(sections, emptyQueueText("TV queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -694,7 +694,7 @@ func (s *ToolServer) getQueue(input json.RawMessage, instanceID string) (*ToolRe
 			}
 			items = filterChaptarrQueue(items, scope)
 			if len(items) == 0 {
-				sections = append(sections, "Book queue: empty.")
+				sections = append(sections, emptyQueueText("Book queue", scope))
 			} else {
 				matchedTargets += len(items)
 				shown := items
@@ -1181,7 +1181,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if radarrClient == nil {
 			return &ToolResult{Text: "Radarr is not configured."}, nil
 		}
-		records, err := scopedRadarrHistory(radarrClient, scope, fetchLimit)
+		records, perTitle, err := scopedRadarrHistory(radarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1193,7 +1193,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No movie history found."}, nil
+			return &ToolResult{Text: noHistoryText("movie", scope, perTitle, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent movie history (%d records):", len(records))
@@ -1216,7 +1216,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 		if sonarrClient == nil {
 			return &ToolResult{Text: "Sonarr is not configured."}, nil
 		}
-		records, err := scopedSonarrHistory(s.bridge, sonarrClient, scope, fetchLimit)
+		records, perTitle, err := scopedSonarrHistory(s.bridge, sonarrClient, scope, fetchLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -1228,7 +1228,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No TV history found."}, nil
+			return &ToolResult{Text: noHistoryText("TV", scope, perTitle, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent TV history (%d records):", len(records))
@@ -1266,7 +1266,7 @@ func (s *ToolServer) getHistory(input json.RawMessage, instanceID string) (*Tool
 			records = records[:limit]
 		}
 		if len(records) == 0 {
-			return &ToolResult{Text: "No book history found."}, nil
+			return &ToolResult{Text: noHistoryText("book", scope, false, fetchLimit)}, nil
 		}
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Recent book history (%d records):", len(records))

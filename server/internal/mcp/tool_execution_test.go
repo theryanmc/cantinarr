@@ -1178,7 +1178,12 @@ func TestGetQueueRendersProgressErrorsAndExactScopeVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("absent-target get_queue: %v", err)
 	}
-	if !strings.Contains(result.Text, "Movie queue: empty.") {
+	// Empty, and explicit about what that does and does not rule out: the
+	// typed Verification below is the machine answer, this is the one the
+	// model reads.
+	if !strings.Contains(result.Text, "Movie queue: empty") ||
+		!strings.Contains(result.Text, "queue item 41") ||
+		!strings.Contains(result.Text, "already in the library") {
 		t.Fatalf("absent-target render = %q", result.Text)
 	}
 	if result.Verification == nil || !result.Verification.ExactScope || result.Verification.TargetPresent {
