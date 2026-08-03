@@ -188,6 +188,11 @@ func unverifiedCloseMessage(attempts []remediationAttempt) string {
 // escalatedCloseMessage renders the thread copy for a run the server would not
 // let close itself.
 //
+// The "tap This is fixed" half is not a figure of speech: the reporter has that
+// control, and using it closes the issue as ResolutionReporterConfirmed. Before
+// it existed this message was a dead end — it asked for something the person
+// reading it had no way to do.
+//
 // The default text is written for the case it was built for: the agent believes
 // it is done and Cantinarr cannot prove it. But a user-reported issue can NEVER
 // self-close — a person's judgment that content is wrong is only a person's to
@@ -198,7 +203,7 @@ func unverifiedCloseMessage(attempts []remediationAttempt) string {
 // for the one thing that actually closes it.
 func escalatedCloseMessage(issue *Issue, fixApplied bool) string {
 	if fixApplied && issue.Source == SourceUser {
-		return "I applied the approved fix. Whether it's right now is your call rather than something I can prove — have a look, and close this out if the content is what you expected."
+		return "I applied the approved fix. Whether it's right now is your call rather than something I can prove — have a look, and tap \"This is fixed\" if the content is what you expected. If it still isn't, reply and tell me what you see."
 	}
 	return "I couldn't verify a terminal resolution from live scoped state, so this needs an administrator to review it."
 }

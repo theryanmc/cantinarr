@@ -84,9 +84,12 @@ enum IssueResolutionKind {
   agentConcluded('agent_concluded', 'Review completed'),
   arrStateCleared('arr_state_cleared', 'Media became available'),
   reporterTimeout('reporter_timeout', 'Closed after no reply'),
+  reporterConfirmed('reporter_confirmed', 'Confirmed fixed'),
   adminDismissed('admin_dismissed', 'Closed after review'),
   adminCompleted('admin_completed', 'Completed after review'),
   aiHealthRestored('ai_health_restored', 'Shared AI recovered'),
+  pushDeliveryRestored('push_delivery_restored', 'Notifications recovered'),
+  bookImportCleared('book_import_cleared', 'Book imports cleared'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 
@@ -139,6 +142,13 @@ class Issue {
   final DateTime? updatedAt;
   final DateTime? closedAt;
 
+  /// Whether THIS reader is the reporter and may close the issue with their own
+  /// "this is fixed" verdict. The server answers it per read because it depends
+  /// on live dispatch state (a fix must have been applied, and none may be
+  /// executing), and it deliberately stays false on list reads — only the
+  /// single-issue fetch that renders the control computes it.
+  final bool canConfirmFixed;
+
   const Issue({
     required this.id,
     required this.source,
@@ -160,6 +170,7 @@ class Issue {
     required this.createdAt,
     required this.updatedAt,
     required this.closedAt,
+    required this.canConfirmFixed,
   });
 
   bool get isTv => mediaType == 'tv';
@@ -222,6 +233,10 @@ class Issue {
             DateTime.tryParse(json['updated_at'] as String? ?? '')?.toLocal(),
         closedAt:
             DateTime.tryParse(json['closed_at'] as String? ?? '')?.toLocal(),
+        // Absent on an older server and on every list read — default false so a
+        // missing field never offers an irreversible close the server would
+        // refuse.
+        canConfirmFixed: json['can_confirm_fixed'] as bool? ?? false,
       );
 }
 

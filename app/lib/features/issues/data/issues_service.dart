@@ -92,6 +92,19 @@ class IssuesService {
     await _dio.post('/api/issues/$id/reply', data: {'body': body});
   }
 
+  /// Record the reporter's own verdict that the applied fix worked, closing the
+  /// issue. Only the reporter may call it — an admin's verdict goes through
+  /// [resolveIssue] so the audit trail never attributes one to the other — and
+  /// it is irreversible: the thread stops accepting replies.
+  ///
+  /// A refusal (the issue closed meanwhile, or a fix started executing) arrives
+  /// as a 409 whose body carries the server's explanation; the thrown
+  /// [DioException] keeps that response so the caller can show it verbatim
+  /// instead of a generic failure.
+  Future<void> confirmFixed(int issueId) async {
+    await _dio.post('/api/issues/$issueId/confirm-fixed');
+  }
+
   // ---- Admin ---------------------------------------------------------------
 
   /// List issues for the admin queue, optionally filtered by [status].

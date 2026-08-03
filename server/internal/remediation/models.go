@@ -69,9 +69,13 @@ const ResolutionUserUnresponsive = "user_unresponsive"
 // seeing a queue signal disappear proves only that the original incident is no
 // longer present, not who fixed it.
 const (
-	ResolutionAgentConcluded       = "agent_concluded"
-	ResolutionArrStateCleared      = "arr_state_cleared"
-	ResolutionReporterTimeout      = "reporter_timeout"
+	ResolutionAgentConcluded  = "agent_concluded"
+	ResolutionArrStateCleared = "arr_state_cleared"
+	ResolutionReporterTimeout = "reporter_timeout"
+	// ResolutionReporterConfirmed is the reporter's own verdict that the applied
+	// fix worked. It is the only closure the server accepts on a subjective
+	// judgment, because it comes from the one person whose judgment it was.
+	ResolutionReporterConfirmed    = "reporter_confirmed"
 	ResolutionAdminDismissed       = "admin_dismissed"
 	ResolutionAdminCompleted       = "admin_completed"
 	ResolutionAIHealthRestored     = "ai_health_restored"
@@ -146,6 +150,12 @@ type Issue struct {
 	// instance that owns the affected media so investigation cannot drift to a
 	// different Radarr/Sonarr/Chaptarr installation. AuthorID/BookID are the
 	// Chaptarr record ids that stand in for TMDB/TVDB identity on book issues.
+	// CanConfirmFixed tells the reporter's own client whether the "this is
+	// fixed" action is available. Computed only on the single-issue read the
+	// thread screen uses; a list read leaves it false rather than paying a
+	// per-row query for a control no list renders.
+	CanConfirmFixed bool `json:"can_confirm_fixed"`
+
 	InstanceID string `json:"instance_id"`
 	DownloadID string `json:"-"`
 	ArrQueueID int    `json:"-"`

@@ -105,11 +105,14 @@ func (s *Service) concludeIssueCAS(ctx context.Context, issueID int64, status, r
 }
 
 type issueClosureOptions struct {
-	expectedStatus      string
-	expectedRunID       int64
-	ageModifier         string
-	conflictIfClosed    bool
-	adminID             int64
+	expectedStatus   string
+	expectedRunID    int64
+	ageModifier      string
+	conflictIfClosed bool
+	adminID          int64
+	// reporterID attributes the closing thread message to the person who filed
+	// the issue, for the one closure kind that is their own judgment.
+	reporterID          int64
 	silentNotifications bool
 }
 
@@ -153,7 +156,8 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// preference overrides it. Explicit admin completion and dismissal are human
 	// decisions already seen by an admin, so they close read.
 	read := 0
-	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
+	if status == IssueDismissed || resolutionKind == ResolutionAdminCompleted ||
+		resolutionKind == ResolutionReporterConfirmed || (status == IssueResolved && s.Settings().MarkResolvedAsRead) {
 		read = 1
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -161,7 +165,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		return false, fmt.Errorf("begin conclude issue: %w", err)
 	}
 	defer tx.Rollback()
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		var executing int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -280,7 +284,8 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	if len(autoRuleIDs) > 0 {
 		switch {
 		case status == IssueResolved &&
-			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded):
+			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded ||
+				resolutionKind == ResolutionReporterConfirmed):
 			for _, ruleID := range autoRuleIDs {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE agent_approval_rules
@@ -310,7 +315,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// An external observation/admin close can race a running or parked agent.
 	// Terminalize those runs here; an agent-concluded run is finalized by the
 	// Runner immediately after this transaction and must not be mislabeled.
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		stopReason := "external_resolution"
 		if resolutionKind == ResolutionAdminDismissed {
 			stopReason = "admin_dismissed"
@@ -336,6 +341,20 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			issueID, AuthorAdmin, opts.adminID, resolution,
 		); err != nil {
 			return false, fmt.Errorf("record admin resolution note: %w", err)
+		}
+	}
+	if resolutionKind == ResolutionReporterConfirmed {
+		// Written HERE rather than by the caller so the reporter's word and the
+		// close are one transaction. Outside it, a double tap could thread the
+		// confirmation twice before one lost the CAS, and a confirmation that
+		// lost a race with a starting dispatch would leave its message sitting
+		// on a still-open issue.
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO issue_messages (issue_id, author_kind, author_id, body)
+			 VALUES (?, ?, ?, ?)`,
+			issueID, AuthorUser, opts.reporterID, reporterConfirmedMessage,
+		); err != nil {
+			return false, fmt.Errorf("record reporter confirmation: %w", err)
 		}
 	}
 	if resolutionKind == ResolutionReporterTimeout {

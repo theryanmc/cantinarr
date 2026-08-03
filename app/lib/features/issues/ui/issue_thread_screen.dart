@@ -52,6 +52,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
   bool _sending = false;
   bool _dismissing = false;
   bool _completing = false;
+  bool _confirming = false;
   int _loadEpoch = 0;
 
   /// A short REST re-poll while the issue is still being worked, so steps that
@@ -89,6 +90,18 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
   }
 
   String _friendlyError(Object e) {
+    // A DioException stringifies to its transport summary only — the body is
+    // never in it — so read the server's own explanation off the response
+    // before falling back to scraping the text.
+    if (e is DioException) {
+      final data = e.response?.data;
+      if (data is Map) {
+        final message = data['error'];
+        if (message is String && message.trim().isNotEmpty) {
+          return message.trim();
+        }
+      }
+    }
     final m = RegExp(r'"error":"([^"]+)"').firstMatch(e.toString());
     return m != null ? m.group(1)! : 'Something went wrong';
   }
@@ -184,6 +197,63 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       );
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// The reporter's own "yes, that's sorted". Irreversible: there is no reopen
+  /// anywhere in this product, and the server refuses a reply on a closed
+  /// issue — so the dialog says so before anything is sent.
+  Future<void> _confirmFixed() async {
+    final issue = _thread?.issue;
+    if (issue == null || !issue.canConfirmFixed || _confirming) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text(
+          'Close this as fixed?',
+          style: TextStyle(color: AppTheme.textPrimary),
+        ),
+        content: const Text(
+          'This ends the conversation for good — it can’t be reopened, and you '
+          'won’t be able to reply here afterwards. If it turns out to still be '
+          'wrong, report the problem again and we’ll take another look.',
+          style: TextStyle(color: AppTheme.textSecondary, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Not yet'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.available,
+              foregroundColor: AppTheme.background,
+            ),
+            child: const Text('Yes, it’s fixed'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _confirming = true);
+    try {
+      await ref.read(issuesServiceProvider).confirmFixed(widget.issueId);
+      await _load();
+      if (!mounted) return;
+      ref.read(issueQueueCountsProvider.notifier).refresh();
+      _showSnack('Thanks for checking. This is closed.');
+    } catch (e) {
+      // The window can shut under us: another fix may have started executing,
+      // or an admin may have completed the issue first. Say what the server
+      // said and reload, so a control it no longer honours doesn't linger.
+      await _load();
+      if (!mounted) return;
+      _showSnack(_friendlyError(e));
+    } finally {
+      if (mounted) setState(() => _confirming = false);
     }
   }
 
@@ -439,6 +509,17 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                           : () => context.push('/agent-runs/${action.runId}'),
                     ),
                   if (issue.status.isActive) const _WorkingIndicator(),
+                  // Last in the transcript on purpose: it answers the message
+                  // right above it, and the open-on-bottom scroll lands on it.
+                  // Tracking states stay passive, so a fix whose replacement is
+                  // still downloading offers nothing to judge yet.
+                  if (issue.canConfirmFixed && !issue.status.isTracking) ...[
+                    const SizedBox(height: 12),
+                    _ReporterConfirmPanel(
+                      busy: _confirming,
+                      onConfirm: _confirmFixed,
+                    ),
+                  ],
                 ],
               );
             }),
@@ -508,6 +589,76 @@ class _PassiveTrackingBanner extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The reporter's own answer to the question the agent asked them: is the
+/// content right now?
+///
+/// This is NOT a completion control. Whether the fix worked is a judgment only
+/// the person who complained can make, so the copy asks rather than instructs,
+/// and it keeps the "no" answer — a plain reply — visible right beside the
+/// "yes". The server decides when it appears at all (a fix must actually have
+/// been applied), and it never appears for anyone but the reporter.
+class _ReporterConfirmPanel extends StatelessWidget {
+  final bool busy;
+  final VoidCallback onConfirm;
+
+  const _ReporterConfirmPanel({required this.busy, required this.onConfirm});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.available, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Is it right now?',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'You’re the one who can tell — have a look, and if the content is '
+            'what you expected, close this out. Still not right? Reply below '
+            'instead and we’ll keep looking.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: busy ? null : onConfirm,
+            icon: busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.background,
+                    ),
+                  )
+                : const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text('This is fixed'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.available,
+              foregroundColor: AppTheme.background,
             ),
           ),
         ],
