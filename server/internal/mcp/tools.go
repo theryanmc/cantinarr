@@ -331,6 +331,13 @@ type ToolVerification struct {
 
 const VerificationQueueTarget = "queue_target"
 
+// VerificationSeasonClean is the typed witness for a season that was filled
+// before it aired: TargetPresent reports whether the impossible content is STILL
+// there. A queue-shaped incident proves recovery by its queue row disappearing;
+// this one has no queue row and never did, so its recovery is the season no
+// longer holding files for episodes that have not aired.
+const VerificationSeasonClean = "season_clean"
+
 // ToolsWithUI is the set of externally exposed MCP tools backed by the bundled
 // MCP App resource. Do not add in-app-only receipt payloads here: mcpserver
 // uses this map to attach the media-results resource URI to tool metadata.

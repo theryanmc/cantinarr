@@ -43,6 +43,16 @@ type AvailabilityInvalidator interface {
 	InvalidateBookDigests(instanceID string)
 }
 
+// PreAirImportWitness is told when an import lands on an episode that has not
+// aired yet. *remediation.Service satisfies it.
+//
+// The witness, not this handler, decides whether that is a problem: one early
+// file is an everyday air-date slip, and the threshold that separates a slip
+// from a season of content that does not exist lives with the detector.
+type PreAirImportWitness interface {
+	RecordPreAirImport(instanceID string, tvdbID, tmdbID, seasonNumber int, title string)
+}
+
 // Handler terminates the arr webhook callbacks.
 type Handler struct {
 	store    *instance.Store
@@ -50,12 +60,17 @@ type Handler struct {
 	hub      Broadcaster
 	requests AvailabilityInvalidator
 	content  ws.ContentNotifier
+	preAir   PreAirImportWitness
 }
 
 // NewHandler builds the webhook handler. content may be nil (push disabled).
 func NewHandler(store *instance.Store, registry *instance.Registry, hub Broadcaster, requests AvailabilityInvalidator, content ws.ContentNotifier) *Handler {
 	return &Handler{store: store, registry: registry, hub: hub, requests: requests, content: content}
 }
+
+// SetPreAirImportWitness wires the pre-air detector after construction, matching
+// how the other optional dependencies are attached in main.
+func (h *Handler) SetPreAirImportWitness(w PreAirImportWitness) { h.preAir = w }
 
 // arrPayload is the superset of the Sonarr and Radarr webhook fields this
 // handler acts on. Both apps send eventType plus a movie or series object;
@@ -73,6 +88,16 @@ type arrPayload struct {
 		TvdbID int    `json:"tvdbId"`
 		TmdbID int    `json:"tmdbId"`
 	} `json:"series"`
+	// Episodes is what Sonarr already sends on every Download and Grab, and
+	// what Cantinarr threw away until the pre-air detector needed it: an
+	// episode's own air date is the only thing that can say a file claiming to
+	// be it cannot possibly be it.
+	Episodes []struct {
+		ID            int        `json:"id"`
+		EpisodeNumber int        `json:"episodeNumber"`
+		SeasonNumber  int        `json:"seasonNumber"`
+		AirDateUtc    *time.Time `json:"airDateUtc"`
+	} `json:"episodes"`
 	// Chaptarr sends a singular book on import and a plural list on grab. Only
 	// the record id is read; identity comes from a live lookup.
 	Book *struct {
@@ -81,6 +106,31 @@ type arrPayload struct {
 	Books []struct {
 		ID int `json:"id"`
 	} `json:"books"`
+}
+
+// checkPreAirImport hands an import that landed on an unaired episode to the
+// witness, and does nothing at all otherwise.
+//
+// The test is deliberately free: it reads air dates the payload already carries
+// and touches no network, so the overwhelmingly normal case — a file arriving
+// for an episode that has aired — costs one comparison per episode. Only the
+// impossible case pays for a library read, and it pays for it in the witness.
+func (h *Handler) checkPreAirImport(instanceID string, payload arrPayload) {
+	if h.preAir == nil || payload.Series == nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, ep := range payload.Episodes {
+		if ep.AirDateUtc == nil || !ep.AirDateUtc.After(now) {
+			continue
+		}
+		h.preAir.RecordPreAirImport(instanceID, payload.Series.TvdbID, payload.Series.TmdbID,
+			ep.SeasonNumber, payload.Series.Title)
+		// One report per season is enough: the witness reads the whole season
+		// anyway, and a pack that imports as ten episodes must not open ten
+		// investigations of one problem.
+		return
+	}
 }
 
 // bookIDs returns the usable Chaptarr record ids in the payload, deduplicated
@@ -171,6 +221,7 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 		}
 		if payload.Series != nil {
 			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true)
+			h.checkPreAirImport(instanceID, payload)
 		}
 
 	case "MovieAdded", "SeriesAdd":

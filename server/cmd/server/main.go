@@ -285,6 +285,10 @@ func main() {
 	// out-of-band library changes (manual imports, deletes) into the same WS
 	// events and content pushes the queue-poll witness emits.
 	webhookHandler := webhooks.NewHandler(instanceStore, registry, wsHub, requestService, contentNotifier)
+	// An import that lands on an episode which has not aired yet is the one
+	// arr event Cantinarr can act on before anyone notices; see
+	// remediation.RecordPreAirImport.
+	webhookHandler.SetPreAirImportWitness(remediationService)
 
 	// Update checker (GitHub release comparison).
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)

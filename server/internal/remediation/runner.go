@@ -696,8 +696,17 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 				// the exact queue target is gone.
 				abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
 				if abandonErr != nil || !abandoned {
-					return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-						unverifiedCloseMessage(attempts))
+					// Both proofs above read issue_observations and both call
+					// exactIssueFileState, which fails closed on a season-scoped
+					// TV issue. A season the service filled before it aired is
+					// exactly that shape and has no queue row to begin with, so
+					// it carries its own proof: nothing unaired still holds a
+					// file.
+					repaired, repairErr := r.svc.preAirRepairProven(issue)
+					if repairErr != nil || !repaired {
+						return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+							unverifiedCloseMessage(attempts))
+					}
 				}
 			}
 			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
@@ -1123,7 +1132,8 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 			res.Text, res.ReleaseCandidates = prepareReleaseCandidatesForAgent(res.ReleaseCandidates)
 		}
 		ctrl.readEvidence = isVerificationRead(tu.Name, res)
-		if res.Verification != nil && res.Verification.Kind == mcp.VerificationQueueTarget && res.Verification.ExactScope {
+		if res.Verification != nil && res.Verification.ExactScope &&
+			(res.Verification.Kind == mcp.VerificationQueueTarget || res.Verification.Kind == mcp.VerificationSeasonClean) {
 			present := res.Verification.TargetPresent
 			ctrl.targetPresent = &present
 		}

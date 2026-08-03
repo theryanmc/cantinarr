@@ -610,6 +610,155 @@ func TestGetEpisodeTimelineAnswersInPlainLanguage(t *testing.T) {
 	}
 }
 
+// --- the typed verdict the runner closes on ---
+
+// seasonCleanVerification is the server's own answer to "is the impossible
+// content still there", carried out of band so the conclusion gate never has to
+// believe the model's reading of the prose above it. Everything below is about
+// when it refuses to answer: this verdict can close an issue, and a wrong
+// "clean" closes one that was never repaired.
+
+// repairedS11States is season 11 after the fix: the same ten episodes, none of
+// them holding a file any more.
+func repairedS11States(t *testing.T) []arr.EpisodeState {
+	t.Helper()
+	states := futuramaS11States(t)
+	for i := range states {
+		states[i].HasFile = false
+		states[i].FileID = 0
+	}
+	return states
+}
+
+func TestSeasonCleanVerificationReportsWhetherTheFindingStillTrips(t *testing.T) {
+	files := futuramaS11Files(t)
+
+	still := seasonCleanVerification(map[int][]arr.EpisodeState{11: futuramaS11States(t)}, files, 11, futuramaNow)
+	if still == nil {
+		t.Fatal("a season in scope produced no verdict")
+	}
+	if still.Kind != VerificationSeasonClean {
+		t.Errorf("kind = %q, want %q", still.Kind, VerificationSeasonClean)
+	}
+	if !still.ExactScope {
+		t.Error("a season-scoped read is exact scope; without it the runner ignores the verdict")
+	}
+	if !still.TargetPresent {
+		t.Error("nine impossible files still on disk read as repaired")
+	}
+
+	repaired := seasonCleanVerification(map[int][]arr.EpisodeState{11: repairedS11States(t)}, files, 11, futuramaNow)
+	if repaired == nil {
+		t.Fatal("a repaired season in scope produced no verdict")
+	}
+	if repaired.Kind != VerificationSeasonClean || !repaired.ExactScope {
+		t.Errorf("repaired verdict = %+v, want the same kind and scope", repaired)
+	}
+	if repaired.TargetPresent {
+		t.Error("a season holding no impossible files still reports the target present")
+	}
+}
+
+// TestSeasonCleanVerificationOnlyAnswersForOneSeason. A series-wide read rolls
+// up every season, and a rollup cannot say whether THIS incident's season is
+// clean — it would answer a question nobody asked, on evidence about other
+// seasons. No verdict at all leaves the issue exactly where a run that proved
+// nothing should leave it.
+func TestSeasonCleanVerificationOnlyAnswersForOneSeason(t *testing.T) {
+	bySeason := map[int][]arr.EpisodeState{11: futuramaS11States(t)}
+	files := futuramaS11Files(t)
+
+	for _, season := range []int{0, -1} {
+		if v := seasonCleanVerification(bySeason, files, season, futuramaNow); v != nil {
+			t.Fatalf("unscoped read (season %d) produced verdict %+v, want none", season, v)
+		}
+	}
+}
+
+// TestSeasonCleanVerificationRefusesASeasonSonarrDoesNotHold is the sharpest
+// edge of the whole mechanism: an ABSENT season holds no impossible files, so
+// anything that read absence as cleanliness would close the incident the moment
+// the agent asked about the wrong season number.
+func TestSeasonCleanVerificationRefusesASeasonSonarrDoesNotHold(t *testing.T) {
+	files := futuramaS11Files(t)
+
+	if v := seasonCleanVerification(map[int][]arr.EpisodeState{11: futuramaS11States(t)}, files, 12, futuramaNow); v != nil {
+		t.Fatalf("a season the library does not hold produced verdict %+v, want none", v)
+	}
+	if v := seasonCleanVerification(map[int][]arr.EpisodeState{12: {}}, files, 12, futuramaNow); v != nil {
+		t.Fatalf("an empty season produced verdict %+v, want none", v)
+	}
+	if v := seasonCleanVerification(map[int][]arr.EpisodeState{}, nil, 11, futuramaNow); v != nil {
+		t.Fatalf("a series with no episodes produced verdict %+v, want none", v)
+	}
+}
+
+// TestSeasonCleanVerificationFollowsTheDetectorNotItsOwnRule: the verdict is
+// the detector's PreAirFill, threshold and all. One file left behind therefore
+// reads as clean here — which is exactly why the service's own recovery proof
+// re-reads the season and requires that NOTHING unaired still holds a file,
+// rather than trusting this flag alone.
+func TestSeasonCleanVerificationFollowsTheDetectorNotItsOwnRule(t *testing.T) {
+	unaired := futuramaNow.Add(48 * time.Hour)
+	nearMiss := []arr.EpisodeState{
+		{Number: 1, Title: "Aired", AirsAt: ptrTime(futuramaNow.Add(-72 * time.Hour)), HasFile: true, FileID: 8001},
+		{Number: 2, Title: "Unaired, has a file", AirsAt: &unaired, HasFile: true, FileID: 8002},
+	}
+	files := map[int]sonarr.EpisodeFile{
+		8001: {ID: 8001, DateAdded: ptrTime(futuramaNow.Add(-71 * time.Hour))},
+		8002: {ID: 8002, DateAdded: ptrTime(futuramaImportedAt)},
+	}
+
+	v := seasonCleanVerification(map[int][]arr.EpisodeState{5: nearMiss}, files, 5, futuramaNow)
+	if v == nil {
+		t.Fatal("a season in scope produced no verdict")
+	}
+	if v.TargetPresent {
+		t.Error("one unaired episode holding a file tripped the finding; the detector says it is a near miss")
+	}
+}
+
+// TestGetEpisodeTimelineEmitsTheVerdictThroughTheTool proves the verification
+// actually rides out on the tool result the runner inspects, not just out of
+// the helper.
+func TestGetEpisodeTimelineEmitsTheVerdictThroughTheTool(t *testing.T) {
+	now := time.Now().UTC()
+	imported := now.Add(-13 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	episodes := []map[string]any{
+		{"id": 1101, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 1, "title": "Beef",
+			"airDateUtc": now.Add(10 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
+		{"id": 1102, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 2, "title": "The Cure for Boredom",
+			"airDateUtc": now.Add(11 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
+	}
+	files := []map[string]any{
+		{"id": 5101, "seriesId": 28, "seasonNumber": 11, "dateAdded": imported},
+		{"id": 5102, "seriesId": 28, "seasonNumber": 11, "dateAdded": imported},
+	}
+	fake := &sonarrFileFake{t: t, series: futuramaSeries(), episodes: episodes, files: files}
+	server := newDefaultInstanceToolServer(t, map[string]string{"sonarr": fake.start().URL})
+
+	scoped, err := server.ExecuteTool(context.Background(), "get_episode_timeline",
+		json.RawMessage(`{"media_type":"tv","tmdb_id":615,"season_number":11}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("get_episode_timeline: %v", err)
+	}
+	if scoped.Verification == nil {
+		t.Fatal("a season-scoped read carried no verification")
+	}
+	if scoped.Verification.Kind != VerificationSeasonClean || !scoped.Verification.ExactScope || !scoped.Verification.TargetPresent {
+		t.Fatalf("verification = %+v, want season_clean / exact / present", scoped.Verification)
+	}
+
+	unscoped, err := server.ExecuteTool(context.Background(), "get_episode_timeline",
+		json.RawMessage(`{"media_type":"tv","tmdb_id":615}`), adminCallContext())
+	if err != nil {
+		t.Fatalf("get_episode_timeline unscoped: %v", err)
+	}
+	if unscoped.Verification != nil {
+		t.Fatalf("a series-wide read carried verification %+v, want none", unscoped.Verification)
+	}
+}
+
 func ptrTime(v time.Time) *time.Time { return &v }
 
 func containsRequest(f *sonarrFileFake, uri string) bool {

@@ -101,6 +101,14 @@ func (e EpisodeState) Unaired(now time.Time) bool {
 	return e.AirsAt != nil && e.AirsAt.After(now)
 }
 
+// ProblemPreAirSeasonFill is the problem label for a season holding files the
+// service imported before those episodes aired.
+//
+// Like every label in doctor.go it is persisted verbatim as issues.problem_kind
+// and becomes an agent_approval_rules key, so renaming it silently orphans any
+// standing rule armed on it. Only display copy may change.
+const ProblemPreAirSeasonFill = "Content that has not aired yet"
+
 // preAirFillThreshold is how many unaired episodes must already hold files
 // before a season is called impossible.
 //
