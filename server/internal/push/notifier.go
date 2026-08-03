@@ -217,9 +217,21 @@ func issueAlertText(source string, count int) (title, body string) {
 		return "Problem needs attention",
 			"Cantinarr found a media problem that did not recover automatically"
 	case "system":
-		// Shared-AI health is a single server-wide condition; it never batches.
-		return "Shared AI needs attention",
-			"Cantinarr's shared AI model failed its daily response test"
+		// A system issue is a condition on the SERVER rather than on a piece of
+		// media, and there are several distinct ones: the shared AI model, push
+		// delivery, a stalled book-metadata import. This copy was written when
+		// shared-AI health was the only one and named it outright, which has been
+		// wrong on the lock screen for every other kind ever since — and there is
+		// nothing safe to say more specifically, because the only fields that
+		// would distinguish them are the issue's own untrusted title and detail.
+		// So it stays deliberately generic, and counted like the auto branch: two
+		// server conditions clearing the hold-down together really do coalesce.
+		if count > 1 {
+			return "Cantinarr needs attention",
+				fmt.Sprintf("%d server conditions need an administrator", count)
+		}
+		return "Cantinarr needs attention",
+			"Something on the server needs an administrator"
 	default:
 		if count > 1 {
 			return "New problems reported",
