@@ -480,12 +480,6 @@ class AgentActionParams {
     return (v != null && v > 0) ? v : null;
   }
 
-  /// trigger_search: narrows a TV season search to the episodes that have
-  /// already aired and are still missing. The set itself is deliberately not in
-  /// the params — episodes air while a proposal waits for an admin, so the
-  /// server resolves it from live air dates at execution time.
-  bool get airedOnly => _bool('aired_only');
-
   /// delete_media_files: the exact episode numbers whose already-imported files
   /// would be deleted. Only whole numbers survive parsing; [validationProblem]
   /// refuses the whole proposal when the list holds anything else, so a
@@ -535,12 +529,14 @@ class AgentActionParams {
           'queue_id',
           'force',
         },
+      // No aired-only variant: replacing what a bad import destroyed is part of
+      // delete_media_files, not a search of its own. A proposal still carrying
+      // `aired_only` is therefore an unrecognized field, and falls out below.
       AgentActionKind.triggerSearch => const {
           'media_type',
           'tmdb_id',
           'season',
           'episode',
-          'aired_only',
           'author_id',
           'book_id',
         },
@@ -621,18 +617,8 @@ class AgentActionParams {
             !_isInt('season', optional: true) ||
             !_isInt('episode', optional: true) ||
             !_isInt('author_id', optional: true) ||
-            !_isInt('book_id', optional: true) ||
-            (_raw.containsKey('aired_only') && _raw['aired_only'] is! bool)) {
+            !_isInt('book_id', optional: true)) {
           return 'The proposed search details are malformed.';
-        }
-        // "Only what has aired" is a whole-season variant: it needs a TV season
-        // and no single episode. Pairing it with one episode is a contradiction
-        // (that episode either aired or it didn't), and books have no air dates.
-        if (airedOnly &&
-            (media != 'tv' ||
-                !_raw.containsKey('season') ||
-                _raw.containsKey('episode'))) {
-          return 'The proposed search cannot be limited to aired episodes.';
         }
         if (media == 'book') {
           if ((authorId ?? 0) <= 0 && (bookId ?? 0) <= 0) {

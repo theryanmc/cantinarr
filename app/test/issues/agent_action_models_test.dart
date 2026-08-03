@@ -235,34 +235,7 @@ void main() {
       expect(action.canTakeAction, isTrue);
     });
 
-    test('an aired-only season search parses and stays actionable', () {
-      final action = AgentAction.fromJson({
-        'id': 35,
-        'issue_id': 4,
-        'kind': 'trigger_search',
-        'params': {
-          'media_type': 'tv',
-          'tmdb_id': 615,
-          'season': 11,
-          'aired_only': true,
-        },
-        'status': 'proposed',
-        'can_decide': true,
-        'issue_status': 'awaiting_approval',
-        'issue_media_type': 'tv',
-        'instance_id': 'sonarr-living-room',
-        'instance_name': 'Living Room TV',
-        'instance_service_type': 'sonarr',
-      });
-
-      expect(action.params.airedOnly, isTrue);
-      expect(action.params.season, 11);
-      expect(action.params.episode, isNull);
-      expect(action.params.validationProblem(action.kind), isNull);
-      expect(action.canTakeAction, isTrue);
-    });
-
-    test('a season search without aired_only is unchanged', () {
+    test('a whole-season search is recognized and validated', () {
       final action = AgentAction.fromJson({
         'id': 36,
         'issue_id': 4,
@@ -281,48 +254,27 @@ void main() {
         'instance_service_type': 'sonarr',
       });
 
-      expect(action.params.airedOnly, isFalse);
+      expect(action.params.season, 11);
+      expect(action.params.episode, isNull);
       expect(action.params.validationProblem(action.kind), isNull);
       expect(action.canTakeAction, isTrue);
     });
 
-    test('aired_only is refused wherever air dates cannot decide the set', () {
-      // (params, expected message fragment). Each case is otherwise valid, so
-      // the fragment proves the aired_only rule fired and not another gate.
-      final cases = <(Map<String, dynamic>, String)>[
-        // A movie has no season of episodes to narrow.
-        ({'media_type': 'movie', 'tmdb_id': 615, 'aired_only': true}, 'aired'),
-        // A whole-series search: no season means no set to resolve.
-        ({'media_type': 'tv', 'tmdb_id': 615, 'aired_only': true}, 'aired'),
-        // One exact episode either aired or it didn't — a contradiction.
-        (
-          {
-            'media_type': 'tv',
-            'tmdb_id': 615,
-            'season': 11,
-            'episode': 3,
-            'aired_only': true,
-          },
-          'aired'
-        ),
-        // Books have no air dates at all.
-        (
-          {'media_type': 'book', 'book_id': 7, 'aired_only': true},
-          'aired',
-        ),
-        // A non-boolean flag never becomes truthy.
-        (
-          {
-            'media_type': 'tv',
-            'tmdb_id': 615,
-            'season': 11,
-            'aired_only': 'yes',
-          },
-          'malformed'
-        ),
+    test('a search still carrying aired_only is refused as unrecognized', () {
+      // Replacing what a bad import destroyed is part of delete_media_files
+      // now, not a search of its own, so the server cannot emit this field at
+      // all. Anything that still does is stale or forged — it must fail the
+      // allowlist, not be quietly accepted and then ignored. Every case below
+      // is otherwise valid, so only the extra key can be doing the blocking.
+      final cases = <Map<String, dynamic>>[
+        {'media_type': 'tv', 'tmdb_id': 615, 'season': 11, 'aired_only': true},
+        // A false flag is no more recognized than a true one.
+        {'media_type': 'tv', 'tmdb_id': 615, 'season': 11, 'aired_only': false},
+        {'media_type': 'movie', 'tmdb_id': 615, 'aired_only': true},
+        {'media_type': 'book', 'book_id': 7, 'aired_only': true},
       ];
 
-      for (final (params, fragment) in cases) {
+      for (final params in cases) {
         final action = AgentAction.fromJson({
           'id': 37,
           'issue_id': 4,
@@ -338,7 +290,7 @@ void main() {
         });
         expect(
           action.params.validationProblem(action.kind),
-          contains(fragment),
+          contains('does not recognize'),
           reason: '$params',
         );
         expect(action.canTakeAction, isFalse, reason: '$params');

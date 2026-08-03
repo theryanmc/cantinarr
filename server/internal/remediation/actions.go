@@ -60,18 +60,17 @@ type ManualImportParams struct {
 // by author_id. The book fields are omitempty so a movie/TV action's canonical
 // JSON (and therefore its fingerprint) is unchanged by their addition.
 //
-// AiredOnly narrows a TV season search to the episodes that have actually aired
-// and are missing a file. The set is deliberately NOT modelled as an episode
-// list: episodes air while a proposal waits for an admin, so the only correct
-// answer is the one the server computes from live air dates at DISPATCH time.
-// omitempty keeps every already-stored action's canonical JSON — and therefore
-// its fingerprint — byte-identical to what it was before this field existed.
+// There is deliberately no aired-only variant here. Replacing what a bad import
+// destroyed is part of delete_media_files, not a fix of its own: one problem
+// gets one proposal, and an admin who approved "delete the wrong files and get
+// the right ones" is not asked to approve the second half of that sentence.
+// Leaving the option in this vocabulary would let the agent split the repair
+// back apart, so the guarantee is structural rather than a line of prompt.
 type TriggerSearchParams struct {
 	MediaType string `json:"media_type"`
 	TmdbID    int    `json:"tmdb_id,omitempty"`
 	Season    *int   `json:"season,omitempty"`
 	Episode   *int   `json:"episode,omitempty"`
-	AiredOnly bool   `json:"aired_only,omitempty"`
 	AuthorID  int    `json:"author_id,omitempty"`
 	BookID    int    `json:"book_id,omitempty"`
 }
@@ -201,9 +200,6 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			if p.TmdbID != 0 || p.Season != nil || p.Episode != nil {
 				return nil, fmt.Errorf("trigger_search for a book must not set tmdb_id")
 			}
-			if p.AiredOnly {
-				return nil, fmt.Errorf("aired_only applies only to a TV season search")
-			}
 			if p.AuthorID <= 0 && p.BookID <= 0 {
 				return nil, fmt.Errorf("trigger_search for a book requires a positive author_id or book_id")
 			}
@@ -223,13 +219,6 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 			}
 			if p.Episode != nil && (*p.Episode <= 0 || p.Season == nil) {
 				return nil, fmt.Errorf("an episode search requires a positive episode and a season")
-			}
-			// aired_only is the season-wide "search whatever has actually come out"
-			// variant. Pairing it with an exact episode would be a contradiction:
-			// that episode either aired or it didn't, and the server would rather
-			// say so than silently search nothing.
-			if p.AiredOnly && (p.MediaType != "tv" || p.Season == nil || p.Episode != nil) {
-				return nil, fmt.Errorf("aired_only requires a TV season search with no episode")
 			}
 		}
 		return canonicalJSON(p)

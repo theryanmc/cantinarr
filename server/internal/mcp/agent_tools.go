@@ -136,11 +136,13 @@ var AgentToolProposeAction = Tool{
 		"\"remove\", \"blocklist_search\" (remove + blocklist; the service's own failed-download settings decide whether it looks for a replacement), \"blocklist_only\" (remove + blocklist AND suppress that replacement search — correct only when the library already has a copy and nobody asked for this download, i.e. the service picked it up on its own), or \"change_category\".\n" +
 		"- manual_import: import a download's files. params: {media_type, queue_id, force} (force imports despite " +
 		"permanent rejections — only when a rejection is known-safe/temporary).\n" +
-		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?, aired_only?}; for an episode-scoped TV issue include both authoritative values. " +
-		"Set aired_only on a TV season search (season set, no episode) to search ONLY the episodes that have already aired and are missing a file; the server resolves that set from live air dates when the admin approves, so a season still airing week to week is not searched for episodes that do not exist yet. " +
+		"- trigger_search: start an automatic search. params: {media_type, tmdb_id, season?, episode?}; for an episode-scoped TV issue include both authoritative values. " +
 		"Book issues have no tmdb_id: pass {media_type: \"book\", book_id} (or author_id to search all of the author's monitored books) using the issue's authoritative ids.\n" +
 		"- delete_media_files: delete files the service ALREADY IMPORTED, for content that is wrong rather than stuck — there is no queue item left to act on. params: {media_type, tmdb_id, season, episodes: [numbers], blocklist?} for TV, or {media_type, tmdb_id, blocklist?} for a movie. " +
-		"Set blocklist to also stand the releases that delivered those files down so they cannot come back; what gets searched afterwards is then the service's own failed-download setting, not something you choose. Books are not supported. This destroys files on disk — propose it only with evidence a reader can check, such as get_episode_timeline reporting files imported before their episodes aired.\n" +
+		"Set blocklist to also stand the releases that delivered those files down so they cannot come back. " +
+		"This is the WHOLE repair in one approval: the server deletes the files, blocklists the releases, and then searches for replacements — for TV, only the episodes that have already aired, leaving the rest of the season for the service to grab as it comes out. " +
+		"Do NOT follow it with a trigger_search for the same media: that asks the admin to approve one decision twice. " +
+		"Books are not supported. This destroys files on disk — propose it only with evidence a reader can check, such as get_episode_timeline reporting files imported before their episodes aired.\n" +
 		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}; for a book issue pass {media_type: \"book\", author_id} instead.\n" +
 		"Always include a clear 'rationale' explaining why this fix is correct (the admin reads it).",
 	InputSchema: map[string]interface{}{
