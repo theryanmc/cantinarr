@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,6 +352,73 @@ func TestNotifyAdminsUsesAutomaticIssueCopy(t *testing.T) {
 	}
 }
 
+// A system issue is a condition on the server, and there are several distinct
+// ones. This copy used to name shared-AI health outright, which was wrong on
+// every push-delivery and book-import-stall alert it ever sent. It must stay
+// generic: the only fields that could tell them apart are the issue's own
+// untrusted title and detail, which never reach a lock screen.
+func TestNotifyAdminsUsesGenericSystemIssueCopy(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"issue_id":   7,
+		"source":     "system",
+		"open_count": 1,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Cantinarr needs attention" {
+		t.Errorf("title = %v, want generic server-condition copy", notif["title"])
+	}
+	text, _ := notif["body"].(string)
+	if text != "Something on the server needs an administrator" {
+		t.Errorf("body = %v, want generic server-condition copy", text)
+	}
+	// The specific regression: a push-delivery or book-import issue must never
+	// announce itself as a shared-AI failure.
+	if strings.Contains(strings.ToLower(text), "ai") {
+		t.Errorf("system copy still names one particular condition: %q", text)
+	}
+}
+
+// Two server conditions clearing the hold-down on the same tick really do
+// coalesce, so the system branch has to carry the count the way the auto branch
+// does. It used to discard it and send the singular shared-AI line twice over.
+func TestNotifyAdminsCoalescesSystemConditions(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("issue_created", map[string]interface{}{
+		"source":     "system",
+		"count":      2,
+		"open_count": 2,
+	})
+
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["body"] != "2 server conditions need an administrator" {
+		t.Errorf("body = %v, want the counted system copy", notif["body"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "issue_created:system" {
+		t.Errorf("collapse_id = %v, want a per-source summary collapse", opts["collapse_id"])
+	}
+}
+
 // A batch cause produces one incident per exact media scope, so a coalesced
 // alert has to say how many rather than fan out one identical line per episode.
 // It also collapses by source: the summary is a state, and a later summary
@@ -476,30 +544,6 @@ func TestNotifyAdminsKeepsSingleApprovalPushUncollapsed(t *testing.T) {
 	opts, _ := body["options"].(map[string]any)
 	if _, ok := opts["collapse_id"]; ok {
 		t.Errorf("single approval push collapsed: %v", opts["collapse_id"])
-	}
-}
-
-func TestNotifyAdminsUsesSharedAIHealthIssueCopy(t *testing.T) {
-	database, err := dbOpen(t)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
-
-	mgr, capture := newNotifierTestGateway(t, database)
-	notifier := NewNotifier(database, mgr, nil)
-	notifier.NotifyAdmins("issue_created", map[string]interface{}{
-		"issue_id": 51,
-		"source":   "system",
-	})
-
-	body := capture.waitForNotification(t)
-	notification, _ := body["notification"].(map[string]any)
-	if notification["title"] != "Shared AI needs attention" {
-		t.Fatalf("title=%v", notification["title"])
-	}
-	if notification["body"] != "Cantinarr's shared AI model failed its daily response test" {
-		t.Fatalf("body=%v", notification["body"])
 	}
 }
 
