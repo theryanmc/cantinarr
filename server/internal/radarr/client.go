@@ -65,6 +65,29 @@ type MovieFile struct {
 	// field reads as "unknown" rather than the zero time, which a caller
 	// comparing timestamps would otherwise treat as impossibly old.
 	DateAdded *time.Time `json:"dateAdded"`
+	SceneName string     `json:"sceneName"`
+	Quality   struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
+	// MediaInfo mirrors sonarr.FileMediaInfo: the arr's ffprobe-derived truth
+	// about the file on disk. Pointer-typed: older records may not carry it.
+	MediaInfo *MovieFileMediaInfo `json:"mediaInfo"`
+}
+
+// MovieFileMediaInfo is the media-property block Radarr serves on a file record.
+type MovieFileMediaInfo struct {
+	AudioChannels     float64 `json:"audioChannels"`
+	AudioCodec        string  `json:"audioCodec"`
+	AudioLanguages    string  `json:"audioLanguages"`
+	Height            int     `json:"height"`
+	Width             int     `json:"width"`
+	Resolution        string  `json:"resolution"`
+	RunTime           string  `json:"runTime"`
+	VideoCodec        string  `json:"videoCodec"`
+	VideoDynamicRange string  `json:"videoDynamicRange"`
+	Subtitles         string  `json:"subtitles"`
 }
 
 type QualityProfile struct {
