@@ -565,3 +565,41 @@ func TestPipelineStandingRuleAutoApproveThenRepeatGuard(t *testing.T) {
 		t.Fatalf("rule after repeat = (%q, %v), want paused with a reason", pausedStatus, pausedReason)
 	}
 }
+
+// TestPipelineOutcomeUnknownIsAHardStop: the arr answers 500 AFTER the
+// mutating request was sent, so the remote outcome is unknowable. That is a
+// human-verification boundary: the action lands outcome_unknown, is never
+// retried, and the model is never resumed over state the first attempt may
+// already have changed — the parked run stays parked for an admin.
+func TestPipelineOutcomeUnknownIsAHardStop(t *testing.T) {
+	h := newPipelineHarness(t)
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+	issueID, actionID := runStalledUpgradeToProposal(t, h, 44, "TORRENT-CCC")
+	h.fake.setQueueDeleteStatus(500)
+
+	if _, err := h.svc.ApproveAction(1, actionID, nil); err != nil {
+		t.Logf("approve surfaced error (durable outcome still recorded): %v", err)
+	}
+	var status string
+	if err := h.svc.db.QueryRow("SELECT status FROM agent_actions WHERE id = ?", actionID).Scan(&status); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if status != ActionOutcomeUnknown {
+		t.Fatalf("action after mid-mutation 500 = %q, want %q", status, ActionOutcomeUnknown)
+	}
+	if _, last := agentRunRows(t, h.svc, issueID); last == "resume_pending" || last == "running" {
+		t.Fatalf("run after outcome_unknown = %q; the model must never be resumed over unknown remote state", last)
+	}
+	// A repeat approval returns the durable outcome without a second dispatch.
+	before := len(h.fake.queueDeletesSeen())
+	act, err := h.svc.ApproveAction(1, actionID, nil)
+	if err != nil || act.Status != ActionOutcomeUnknown {
+		t.Fatalf("repeat approve = (%v, %v), want the durable outcome_unknown", act, err)
+	}
+	if after := len(h.fake.queueDeletesSeen()); after != before {
+		t.Fatalf("repeat approval dispatched again (%d -> %d deletes); outcome_unknown must never retry", before, after)
+	}
+}
