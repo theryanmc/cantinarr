@@ -1,0 +1,228 @@
+package remediation
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/mcp"
+)
+
+// The real-pipeline harness: detection through typed verification with no test
+// seams in the path. The fake is an HTTP Sonarr; everything between it and the
+// assertions is production code — fetchQueueSnapshot's parse and Import Doctor
+// verdict, observation promotion windows, every recovery preflight, the REAL
+// mcp.ToolServer (scope injection, typed verification), ProposeAction's
+// validation, the approvals decision core, the REAL Executor's arr mutations,
+// resume, and the server-side recovery proofs. The runner-level stubs
+// (recoveryProbe, fakeToolHost) exist for focused unit tests; this file exists
+// because those seams are exactly where the pre-air preflight defect hid.
+
+// pipelineHarness bundles the service, the fake Sonarr, and a Runner factory
+// that shares one scripted-turn sequence across Run and Resume — the script
+// simply continues where the previous segment stopped, the way a real model
+// transcript does.
+type pipelineHarness struct {
+	svc  *Service
+	fake *preAirFake
+}
+
+func newPipelineHarness(t *testing.T) *pipelineHarness {
+	t.Helper()
+	svc, _, fake := setupPreAirService(t)
+	if _, err := svc.SetSettings(Settings{
+		Enabled: true, AutoDispatch: true, Mode: ModeSupervised,
+		MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50,
+	}); err != nil {
+		t.Fatalf("set settings: %v", err)
+	}
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	return &pipelineHarness{svc: svc, fake: fake}
+}
+
+// runner builds a Runner over the REAL tool server — reads and agent tools
+// dispatch into production mcp code wired to the harness service and registry.
+func (h *pipelineHarness) runner(script *scriptedTurn) *Runner {
+	toolServer := mcp.NewToolServer(nil, nil, h.svc.registry, nil)
+	toolServer.SetIssueStore(h.svc)
+	return &Runner{
+		db:         h.svc.db,
+		svc:        h.svc,
+		toolServer: toolServer,
+		turns:      scriptedTurnResolver(script),
+		procToken:  "test",
+	}
+}
+
+// observe ingests the fake's CURRENT queue through the production fetch+parse
+// path at an explicit clock, exactly as the poller/sweeper feed production.
+func (h *pipelineHarness) observe(t *testing.T, at time.Time) {
+	t.Helper()
+	items, err := h.svc.fetchQueueSnapshot("sonarr", preAirSonarrID)
+	if err != nil {
+		t.Fatalf("fetch queue snapshot: %v", err)
+	}
+	if err := h.svc.observeQueueSnapshot("sonarr", preAirSonarrID, items, at); err != nil {
+		t.Fatalf("observe queue snapshot: %v", err)
+	}
+}
+
+func toolCall(id, name, input string) ai.TranscriptMessage {
+	return ai.TranscriptMessage{Role: ai.RoleAssistant, Content: []ai.TranscriptBlock{{
+		Type: ai.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(input),
+	}}}
+}
+
+// stalledUpgradeQueueRow is a Sonarr queue row for a stalled torrent that is an
+// UPGRADE: the episode already holds a file, which is what makes the abandoned
+// repair provable later (the unchanged library file IS the success).
+func stalledUpgradeQueueRow(queueID int, downloadID string, added time.Time) map[string]any {
+	return map[string]any{
+		"id":        queueID,
+		"seriesId":  28,
+		"episodeId": 28203,
+		"series":    map[string]any{"id": 28, "title": "Futurama", "tvdbId": 73871, "tmdbId": 615},
+		"episode": map[string]any{
+			"id": 28203, "seriesId": 28, "seasonNumber": 2, "episodeNumber": 3,
+			"episodeFileId": 50203, "hasFile": true, "title": "S02E03",
+		},
+		"episodeHasFile":        true,
+		"title":                 "Futurama.S02E03.1080p.WEB-DL",
+		"status":                "queued",
+		"trackedDownloadStatus": "warning",
+		"trackedDownloadState":  "downloading",
+		"errorMessage":          "stalled with no connections",
+		"downloadId":            downloadID,
+		"protocol":              "torrent",
+		"size":                  1000000000.0,
+		"sizeleft":              500000000.0,
+		"added":                 added.Format(time.RFC3339),
+	}
+}
+
+// TestPipelineStalledUpgradeFullLoop drives the complete production loop for a
+// stalled upgrade: HTTP intake + Doctor verdict → silent observation →
+// promotion → real preflight → real tool reads → real proposal → real approval
+// core → real Executor mutation against the fake arr → resume → typed
+// queue-target verification → upgradeAbandonProven → resolved. One incident,
+// one approval, zero test seams.
+func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
+	h := newPipelineHarness(t)
+
+	// Season 2 is ordinary: E3 aired three weeks ago and holds file 50203
+	// (imported after air). The queue holds a stalled upgrade for that episode.
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+	base := time.Now().UTC().Add(-30 * time.Minute)
+	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(41, "TORRENTABC123", base)})
+
+	// Intake twice through the production path: first sighting starts the quiet
+	// observation; the second, past the min/quiet windows, promotes it.
+	h.observe(t, base)
+	h.observe(t, base.Add(11*time.Minute))
+
+	issue := soleIssue(t, h.svc)
+	if issue.Status != IssueOpen {
+		t.Fatalf("issue after promotion = %q, want %q", issue.Status, IssueOpen)
+	}
+	problemKind := issueProblemKind(t, h.svc, issue.ID)
+	if problemKind == "" {
+		t.Fatalf("promoted issue has no problem_kind; the Doctor verdict was lost")
+	}
+
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r1", "get_queue", `{}`),
+		toolCall("p1", mcp.ToolProposeAction, `{"issue_id":0,"kind":"remediate_queue","params":{"media_type":"tv","queue_id":41,"action":"blocklist_only"},"rationale":"Stalled with no seeders; the library already holds a copy nobody asked to replace."}`),
+		toolCall("r2", "get_queue", `{}`),
+		toolCall("c1", mcp.ToolConcludeIssue, `{"issue_id":0,"status":"resolved","resolution":"The stalled upgrade was removed and blocklisted; the existing copy is intact."}`),
+	}}
+	r := h.runner(script)
+
+	if err := r.Run(context.Background(), issue.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	after := soleIssue(t, h.svc)
+	if after.Status != IssueAwaitingApproval {
+		t.Fatalf("issue after run = %q, want %q", after.Status, IssueAwaitingApproval)
+	}
+
+	var actionID int64
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issue.ID, ActionProposed,
+	).Scan(&actionID); err != nil {
+		t.Fatalf("find proposed action: %v", err)
+	}
+
+	act, err := h.svc.ApproveAction(1, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if act.Status != ActionExecuted {
+		t.Fatalf("approved action status = %q (result %v), want %q", act.Status, act.ResultText, ActionExecuted)
+	}
+	deletes := h.fake.queueDeletesSeen()
+	if len(deletes) != 1 || !strings.HasPrefix(deletes[0], "/api/v3/queue/41?") ||
+		!strings.Contains(deletes[0], "blocklist=true") || !strings.Contains(deletes[0], "skipRedownload=true") {
+		t.Fatalf("arr queue mutations = %v, want one blocklist_only delete of row 41", deletes)
+	}
+	var targetDownload string
+	if err := h.svc.db.QueryRow(
+		"SELECT COALESCE(target_download_id,'') FROM agent_actions WHERE id = ?", actionID,
+	).Scan(&targetDownload); err != nil {
+		t.Fatalf("read target_download_id: %v", err)
+	}
+	if targetDownload != "TORRENTABC123" {
+		t.Fatalf("target_download_id = %q, want the dispatched download identity", targetDownload)
+	}
+
+	// The executor emptied the queue, and production deliberately waits out the
+	// absence settle window before any conclusion — the first complete no-match
+	// snapshot is never permission to close. Drive that real timeline: the first
+	// absent snapshot starts settling (suspending the issue back to recovering),
+	// the timer is backdated past the window, and the next snapshot re-promotes
+	// the issue for the staged resume.
+	h.observe(t, time.Now().UTC())
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET settling_since = ? WHERE issue_id = ?",
+		time.Now().UTC().Add(-3*time.Minute), issue.ID,
+	); err != nil {
+		t.Fatalf("backdate settle window: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	if mid := soleIssue(t, h.svc); mid.Status != IssueOpen {
+		t.Fatalf("issue after settled absence = %q, want re-promoted %q", mid.Status, IssueOpen)
+	}
+
+	// Current production truth, surfaced by this harness: the staged resume is
+	// ORPHANED here. Its claim requires the issue at `investigating`, but the
+	// settle dance above re-promoted it to `open`, so the close arrives via a
+	// FRESH run that recoverWork enqueues for the open issue — reading the same
+	// script continuation (scoped read, then conclude). upgradeAbandonProven
+	// supplies the server-side proof: the library file is unchanged and the
+	// server itself dispatched blocklist_only. (A later wave may teach the
+	// resume claim to accept a re-promoted issue; this assertion is the pin
+	// that documents today's two-run shape until then.)
+	if err := r.Resume(context.Background(), issue.ID); err != nil {
+		t.Fatalf("orphaned Resume attempt errored (want quiet no-op): %v", err)
+	}
+	if err := r.Run(context.Background(), issue.ID); err != nil {
+		t.Fatalf("fresh Run after settle: %v", err)
+	}
+
+	final := soleIssue(t, h.svc)
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionArrStateCleared {
+		t.Fatalf("final issue = status %q / kind %q, want %q / %q",
+			final.Status, final.ResolutionKind, IssueResolved, ResolutionArrStateCleared)
+	}
+	count, runStatus := agentRunRows(t, h.svc, issue.ID)
+	if count != 2 || runStatus != "succeeded" {
+		t.Fatalf("agent_runs = %d rows (last %q), want the orphaned-resume + succeeded fresh-run pair", count, runStatus)
+	}
+}
