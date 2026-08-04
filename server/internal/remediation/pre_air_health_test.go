@@ -41,8 +41,9 @@ type preAirFake struct {
 	episodes      []map[string]any
 	files         []map[string]any
 	history       []map[string]any
-	queue         []map[string]any
-	queueDeletes  []string
+	queue             []map[string]any
+	queueDeletes      []string
+	queueDeleteStatus int
 	seriesHistory []map[string]any
 	failedGrabs   []string
 	fileDeletes   []string
@@ -132,6 +133,12 @@ func (f *preAirFake) start() *httptest.Server {
 		case strings.HasPrefix(r.URL.Path, "/api/v3/queue/") && r.Method == http.MethodDelete:
 			id := strings.TrimPrefix(r.URL.Path, "/api/v3/queue/")
 			f.mu.Lock()
+			if f.queueDeleteStatus != 0 {
+				status := f.queueDeleteStatus
+				f.mu.Unlock()
+				w.WriteHeader(status)
+				return
+			}
 			f.queueDeletes = append(f.queueDeletes, r.URL.RequestURI())
 			kept := f.queue[:0]
 			for _, row := range f.queue {
@@ -194,6 +201,12 @@ func (f *preAirFake) setQueue(records []map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queue = records
+}
+
+func (f *preAirFake) setQueueDeleteStatus(code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queueDeleteStatus = code
 }
 
 func (f *preAirFake) queueDeletesSeen() []string {
