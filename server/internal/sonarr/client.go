@@ -41,11 +41,14 @@ func NewClient(baseURL, apiKey string) *Client {
 }
 
 type Series struct {
-	ID             int               `json:"id"`
-	Title          string            `json:"title"`
-	TvdbID         int               `json:"tvdbId"`
-	TmdbID         int               `json:"tmdbId"`
-	Year           int               `json:"year"`
+	ID     int    `json:"id"`
+	Title  string `json:"title"`
+	TvdbID int    `json:"tvdbId"`
+	TmdbID int    `json:"tmdbId"`
+	Year   int    `json:"year"`
+	// Runtime is the show's own per-episode runtime in minutes — the honest
+	// baseline the truncated-import sentinel judges an imported file against.
+	Runtime        int               `json:"runtime"`
 	Monitored      bool              `json:"monitored"`
 	RootFolderPath string            `json:"rootFolderPath,omitempty"`
 	Statistics     *SeriesStatistics `json:"statistics,omitempty"`

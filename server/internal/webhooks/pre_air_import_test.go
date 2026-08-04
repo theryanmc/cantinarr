@@ -277,3 +277,6 @@ func TestPreAirGateOnlyLooksAtImports(t *testing.T) {
 		t.Fatalf("a non-import event reached the witness: %+v", calls)
 	}
 }
+
+func (f *fakePreAirWitness) RecordSuspectImport(instanceID string, tvdbID, tmdbID, seasonNumber, episodeNumber int, title string) {
+}
