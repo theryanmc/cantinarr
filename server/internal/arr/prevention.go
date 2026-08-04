@@ -150,6 +150,12 @@ var preventionCatalog = map[string]Prevention{
 		Steps: []string{
 			"Settings > Indexers — identify the source and lower its priority, or remove it.",
 			"Settings > Profiles — a minimum size on the quality profile rejects a sample before it is ever grabbed.",
+			// The one cause in this catalog Cantinarr can already change — through
+			// the assistant's existing previewed, one-turn, restorable apply flow.
+			// Deliberately a pointer rather than a second apply mechanism: the
+			// profile write's one-use handoff depends on authenticated in-app
+			// chat-turn provenance, and that boundary is not forked for a notice.
+			"Or ask the in-app AI assistant to raise that profile's minimum size — it previews the exact change and applies it in the same turn, recorded in Configuration history with a one-time restore.",
 		},
 	},
 	ProblemPreAirSeasonFill: {
