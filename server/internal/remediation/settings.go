@@ -233,6 +233,14 @@ func (s *Service) Settings() Settings {
 	return g
 }
 
+// SettingsDecided reports whether an admin has ever SAVED remediation
+// settings — the setup checklist grades "did you decide", never which answer.
+func (s *Service) SettingsDecided() bool {
+	var one int
+	err := s.db.QueryRow("SELECT 1 FROM settings WHERE key = ?", remediationSettingsKey).Scan(&one)
+	return err == nil
+}
+
 // SetSettings persists the global remediation settings (written exactly like
 // request.SetGlobalSettings) and returns the normalized value that was stored.
 func (s *Service) SetSettings(g Settings) (Settings, error) {
