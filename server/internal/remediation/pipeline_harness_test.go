@@ -312,3 +312,115 @@ func TestPipelinePreAirSeasonRepairFullLoop(t *testing.T) {
 		t.Fatalf("agent_runs = %d rows (last %q), want one investigation aborted by its own proof", count, last)
 	}
 }
+
+// TestPipelineUserComplaintReporterCloseFullLoop drives the reported path: a
+// household member reports wrong content on an episode whose download finished
+// weeks ago (the queue is EMPTY — the expected reading for a content
+// complaint, never a dead end), the agent diagnoses from the library, ONE
+// approval deletes the file and stands its grab down, and the REPORTER — never
+// an admin adjudicating content they haven't watched — closes their own
+// report. A user issue can never machine-close: the typed proofs are refused
+// for subjective reports, so reporter_confirmed is the only terminal this
+// test's happy path may reach.
+func TestPipelineUserComplaintReporterCloseFullLoop(t *testing.T) {
+	h := newPipelineHarness(t)
+	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
+		t.Fatalf("seed reporter: %v", err)
+	}
+
+	// S02E03 aired three weeks ago and holds file 50203, imported post-air —
+	// a perfectly healthy-looking library entry that happens to be the wrong
+	// content. Only the person who watched it can know that.
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+	h.fake.setSeriesHistory([]map[string]any{
+		{"id": 9203, "eventType": "downloadFolderImported", "episodeId": 28203, "downloadId": "NZB-WRONG"},
+		{"id": 8203, "eventType": "grabbed", "episodeId": 28203, "downloadId": "NZB-WRONG"},
+	})
+
+	resp, err := h.svc.CreateUserIssue(2, &CreateIssueRequest{
+		InstanceID: preAirSonarrID, MediaType: "tv", TmdbID: 615, TvdbID: 73871,
+		SeasonNumber: 2, EpisodeNumber: 3, Category: CategoryWrongContent,
+		Reason: "This is a different episode entirely.", Title: "Futurama",
+	})
+	if err != nil {
+		t.Fatalf("CreateUserIssue: %v", err)
+	}
+	issueID := resp.IssueID
+
+	// A content complaint starts in the same quiet observation every report
+	// does. Its scope was never in the queue, so promotion runs the absence
+	// path: backdate the report's clock past the min window, let one empty
+	// snapshot start settling, backdate the settle, and the next promotes.
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET first_seen_at = ?, updated_at = ? WHERE issue_id = ?",
+		time.Now().UTC().Add(-30*time.Minute), time.Now().UTC(), issueID,
+	); err != nil {
+		t.Fatalf("backdate observation: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET settling_since = ? WHERE issue_id = ?",
+		time.Now().UTC().Add(-3*time.Minute), issueID,
+	); err != nil {
+		t.Fatalf("backdate settle: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	promoted, err := h.svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("load promoted issue: %v", err)
+	}
+	if promoted.Status != IssueOpen {
+		t.Fatalf("user issue after absence settle = %q, want promoted %q", promoted.Status, IssueOpen)
+	}
+
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r1", "get_history", `{}`),
+		toolCall("p1", mcp.ToolProposeAction, `{"issue_id":0,"kind":"delete_media_files","params":{"media_type":"tv","tmdb_id":615,"season":2,"episodes":[3],"blocklist":true},"rationale":"The reporter watched it; the file is the wrong episode. Delete it and stand the release down."}`),
+	}}
+	r := h.runner(script)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var actionID int64
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issueID, ActionProposed,
+	).Scan(&actionID); err != nil {
+		t.Fatalf("find proposed action: %v", err)
+	}
+	act, err := h.svc.ApproveAction(1, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if act.Status != ActionExecuted {
+		t.Fatalf("approved action = %q (result %v), want %q", act.Status, act.ResultText, ActionExecuted)
+	}
+	fileDeletes, failedGrabs := h.fake.mutationsSeen()
+	if len(fileDeletes) != 1 || len(failedGrabs) != 1 {
+		t.Fatalf("arr mutations = %d deletes / %d failed grabs, want 1 / 1", len(fileDeletes), len(failedGrabs))
+	}
+
+	// The reporter's verdict is the only closure a subjective report accepts.
+	loaded, err := h.svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("reload issue: %v", err)
+	}
+	canConfirm, err := h.svc.CanReporterConfirmFix(loaded)
+	if err != nil || !canConfirm {
+		t.Fatalf("CanReporterConfirmFix = (%v, %v), want (true, nil) after an executed fix", canConfirm, err)
+	}
+	if err := h.svc.ReporterConfirmFix(context.Background(), issueID, 2); err != nil {
+		t.Fatalf("ReporterConfirmFix: %v", err)
+	}
+	final, err := h.svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("load final issue: %v", err)
+	}
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionReporterConfirmed {
+		t.Fatalf("final issue = status %q / kind %q, want %q / %q",
+			final.Status, final.ResolutionKind, IssueResolved, ResolutionReporterConfirmed)
+	}
+}
