@@ -166,6 +166,32 @@ var preventionCatalog = map[string]Prevention{
 
 // PreventionFor returns the guidance for a problem label, if there is any
 // honest guidance to give.
+// PreventionLiveSection maps the problem labels whose named settings the
+// server can now READ (via each client's secret-free GetConfigSummary) to
+// their config section. The advice Steps stay fixed code constants — the
+// live values join the notice's measurement side, never its instructions —
+// and a label absent here simply keeps its advice-only notice.
+func PreventionLiveSection(problem string) (string, bool) {
+	switch problem {
+	case ProblemRemotePathMapping:
+		return ConfigRemotePathMappings, true
+	case ProblemDownloadStalled:
+		return ConfigIndexers, true
+	case ProblemClientUnreachable, ProblemClientError:
+		return ConfigDownloadClients, true
+	}
+	return "", false
+}
+
+// PreventionProblems lists every problem label the catalog advises on.
+func PreventionProblems() []string {
+	out := make([]string, 0, len(preventionCatalog))
+	for problem := range preventionCatalog {
+		out = append(out, problem)
+	}
+	return out
+}
+
 func PreventionFor(problem string) (Prevention, bool) {
 	p, ok := preventionCatalog[problem]
 	return p, ok

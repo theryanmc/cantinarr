@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
+	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
 // Telling an admin that a problem keeps happening, and what setting would stop
@@ -86,6 +87,7 @@ func preventionScopeKey(instanceID, problemKind string) string {
 // SweepPreventionNotices looks for problems that keep coming back on one
 // instance and, where there is honest advice to give, tells the admin once.
 func (s *Service) SweepPreventionNotices() {
+	s.sweepPreventionLiveChanges(time.Now().UTC())
 	now := time.Now().UTC()
 	candidates, err := s.preventionCandidates(now)
 	if err != nil {
@@ -387,10 +389,116 @@ func (s *Service) preventionIssueStillOpen(issueID sql.NullInt64) (bool, error) 
 // of the very problem it describes, and the alert goes through the hold-down
 // queue rather than pushing immediately — none of this is urgent, and an issue
 // closed inside the window should never have paged at all.
+// sweepPreventionLiveChanges auto-resolves open recurrence notices whose
+// NAMED settings changed since the notice was raised — advice that notices
+// being taken. The problem label is deliberately not stored on the row (its
+// NULL problem_kind is what keeps a notice from matching rules or counting as
+// its own occurrence), so it is recovered by matching each live-section
+// catalog label's scope key against the row's dedupe key. Resolution happens
+// only on CHANGE from a baseline the notice actually captured: a notice
+// raised while the service was unreadable has no baseline and never resolves
+// on first sight.
+func (s *Service) sweepPreventionLiveChanges(now time.Time) {
+	rows, err := s.db.Query(
+		`SELECT id, instance_id, dedupe_key, COALESCE(detail, '')
+		 FROM issues WHERE closed_at IS NULL AND source = ? AND dedupe_key LIKE ?`,
+		SourceSystem, preventionDedupePrefix+"%",
+	)
+	if err != nil {
+		return
+	}
+	type openNotice struct {
+		id         int64
+		instanceID string
+		dedupeKey  string
+		detail     string
+	}
+	var notices []openNotice
+	for rows.Next() {
+		var n openNotice
+		if err := rows.Scan(&n.id, &n.instanceID, &n.dedupeKey, &n.detail); err == nil {
+			notices = append(notices, n)
+		}
+	}
+	rows.Close()
+	for _, n := range notices {
+		problem := ""
+		for _, candidate := range arr.PreventionProblems() {
+			if _, live := arr.PreventionLiveSection(candidate); !live {
+				continue
+			}
+			if preventionScopeKey(n.instanceID, candidate) == n.dedupeKey {
+				problem = candidate
+				break
+			}
+		}
+		if problem == "" {
+			continue
+		}
+		if !strings.Contains(n.detail, "Current ") {
+			continue // no baseline captured at raise; nothing to compare.
+		}
+		current := s.preventionLiveBlock(n.instanceID, problem)
+		if current == "" || strings.Contains(n.detail, current) {
+			continue // unreadable now, or unchanged.
+		}
+		resolution := "The settings this notice pointed at have changed since it was raised. If the problem re-forms from newer incidents, a fresh notice will say so."
+		if _, err := s.db.Exec(
+			`UPDATE issues SET status = ?, read = 0, resolution = ?, resolution_kind = ?,
+			 updated_at = ?, closed_at = ? WHERE id = ? AND closed_at IS NULL`,
+			IssueResolved, resolution, ResolutionPreventionSettingChanged, now, now, n.id,
+		); err != nil {
+			continue
+		}
+		_, _ = s.db.Exec(
+			"INSERT INTO issue_messages (issue_id, author_kind, body) VALUES (?, ?, ?)",
+			n.id, AuthorSystem, resolution,
+		)
+		s.pingIssueUpdated(n.id)
+	}
+}
+
+// preventionLiveBlock renders the CURRENT values of the settings a notice
+// names, when the problem maps to a readable config section. This is the
+// difference between "check your indexer's minimum seeders" and "NZBgeek min
+// seeders 0". Secret-free by construction (the client's GetConfigSummary
+// allowlist), redacted anyway, and best-effort: an unreadable service costs
+// the quote, never the notice. The fixed Steps stay untouched — live values
+// join the measurement, never the instructions.
+func (s *Service) preventionLiveBlock(instanceID, problemKind string) string {
+	section, ok := arr.PreventionLiveSection(problemKind)
+	if !ok || s.registry == nil || instanceID == "" {
+		return ""
+	}
+	var entries []arr.ConfigEntry
+	var err error
+	if client, cerr := s.registry.GetSonarrClient(instanceID); cerr == nil {
+		entries, err = client.GetConfigSummary(section)
+	} else if client, cerr := s.registry.GetRadarrClient(instanceID); cerr == nil {
+		entries, err = client.GetConfigSummary(section)
+	} else if client, cerr := s.registry.GetChaptarrClient(instanceID); cerr == nil {
+		entries, err = client.GetConfigSummary(section)
+	} else {
+		return ""
+	}
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Current %s:", strings.ReplaceAll(section, "_", " "))
+	for _, e := range entries {
+		fmt.Fprintf(&sb, "\n- %s: %s", e.Name, e.Detail)
+	}
+	return secrets.RedactText(sb.String())
+}
+
 func (s *Service) openPreventionIssue(c preventionCandidate, advice arr.Prevention, instanceName string, now time.Time) (int64, error) {
 	key := preventionScopeKey(c.instanceID, c.problemKind)
 	title := preventionTitle(c.problemKind, instanceName)
 	detail := preventionDetail(c, advice)
+	if live := s.preventionLiveBlock(c.instanceID, c.problemKind); live != "" {
+		detail = detail + "\n\n" + live
+	}
 	steps := preventionSteps(advice)
 
 	var issueID int64
