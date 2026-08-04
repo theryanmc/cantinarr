@@ -808,6 +808,19 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 	item := selectObservation(group, record.issue.DownloadID)
 	signature := observationSignature(group.items)
 	recovering := groupIsRecovery(group, record.issue.DownloadID)
+	// D2: a user report attached to a DIAGNOSED queue row earns the same
+	// persisted problem label an auto incident gets — it is the Doctor's
+	// verdict about the row, not anyone's opinion — which is what lets a
+	// standing rule cover the dispatch while the reporter keeps the close.
+	// First verdict wins; a label is never overwritten.
+	if record.issue.Source == SourceUser && item.Diagnosis.Problem != "" &&
+		item.Diagnosis.Severity != arr.SeverityOK {
+		_, _ = s.db.Exec(
+			`UPDATE issues SET problem_kind = ? WHERE id = ? AND source = ?
+			   AND (problem_kind IS NULL OR problem_kind = '')`,
+			item.Diagnosis.Problem, record.issue.ID, SourceUser,
+		)
+	}
 	state := observationStateObserving
 	if recovering {
 		state = observationStateRecovering

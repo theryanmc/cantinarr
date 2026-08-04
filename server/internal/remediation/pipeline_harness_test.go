@@ -107,6 +107,20 @@ func stalledUpgradeQueueRow(queueID int, downloadID string, added time.Time) map
 	}
 }
 
+// stalledUpgradeQueueRowFor is stalledUpgradeQueueRow with a chosen episode,
+// for scenarios needing two incidents of the same problem class.
+func stalledUpgradeQueueRowFor(queueID int, downloadID string, episode int, added time.Time) map[string]any {
+	row := stalledUpgradeQueueRow(queueID, downloadID, added)
+	epID := 28200 + episode
+	fileID := 50200 + episode
+	row["episodeId"] = epID
+	row["episode"] = map[string]any{
+		"id": epID, "seriesId": 28, "seasonNumber": 2, "episodeNumber": episode,
+		"episodeFileId": fileID, "hasFile": true, "title": fmt.Sprintf("S02E%02d", episode),
+	}
+	return row
+}
+
 // TestPipelineStalledUpgradeFullLoop drives the complete production loop for a
 // stalled upgrade: HTTP intake + Doctor verdict → silent observation →
 // promotion → real preflight → real tool reads → real proposal → real approval
@@ -773,4 +787,105 @@ func dumpSteps(t *testing.T, svc *Service, issueID int64) {
 	var res string
 	svc.db.QueryRow("SELECT COALESCE(resolution,'') FROM issues WHERE id = ?", issueID).Scan(&res)
 	t.Logf("issue resolution: %s", res)
+}
+
+// TestPipelineUserReportSelfServiceLoop is the plan's end state, proven with
+// zero seams: a household member's report rides the earned-autonomy lane. The
+// FIRST user report of a diagnosed class is fixed with one admin approval
+// (remember arms the rule — now offered on user issues whose diagnosis landed
+// on a persisted label); the SECOND report of the same class dispatches with
+// NO human decision at all, and the reporter still owns the close.
+func TestPipelineUserReportSelfServiceLoop(t *testing.T) {
+	h := newPipelineHarness(t)
+	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
+		t.Fatalf("seed reporter: %v", err)
+	}
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+		{number: 4, airsIn: -14 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+
+	reportAndPropose := func(queueID, episode int, downloadID string) (issueID, actionID int64) {
+		t.Helper()
+		now := time.Now().UTC()
+		h.fake.setQueue([]map[string]any{stalledUpgradeQueueRowFor(queueID, downloadID, episode, now.Add(-30*time.Minute))})
+		h.observe(t, now)
+		resp, err := h.svc.CreateUserIssue(2, &CreateIssueRequest{
+			InstanceID: preAirSonarrID, MediaType: "tv", TmdbID: 615, TvdbID: 73871,
+			SeasonNumber: 2, EpisodeNumber: episode, Category: CategoryOther,
+			Reason: "This download has been stuck forever.", Title: "Futurama",
+		})
+		if err != nil {
+			t.Fatalf("CreateUserIssue: %v", err)
+		}
+		issueID = resp.IssueID
+		if _, err := h.svc.db.Exec(
+			`UPDATE issue_observations SET first_seen_at = ?, problem_since_at = ?, last_activity_at = ? WHERE issue_id = ?`,
+			now.Add(-30*time.Minute), now.Add(-30*time.Minute), now.Add(-11*time.Minute), issueID,
+		); err != nil {
+			t.Fatalf("age observation: %v", err)
+		}
+		h.observe(t, time.Now().UTC())
+
+		var kind string
+		if err := h.svc.db.QueryRow("SELECT COALESCE(problem_kind,'') FROM issues WHERE id = ?", issueID).Scan(&kind); err != nil || kind == "" {
+			t.Fatalf("user issue problem_kind = %q err %v; the Doctor's verdict was not stamped", kind, err)
+		}
+		script := &scriptedTurn{turns: []ai.TranscriptMessage{
+			toolCall("r1", "get_queue", `{}`),
+			toolCall("p1", mcp.ToolProposeAction, fmt.Sprintf(`{"issue_id":0,"kind":"remediate_queue","params":{"media_type":"tv","queue_id":%d,"action":"blocklist_only"},"rationale":"Stalled; the library copy stays."}`, queueID)),
+		}}
+		if err := h.runner(script).Run(context.Background(), issueID); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if err := h.svc.db.QueryRow(
+			"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issueID, ActionProposed,
+		).Scan(&actionID); err != nil {
+			t.Fatalf("find proposal: %v", err)
+		}
+		return issueID, actionID
+	}
+
+	// Report 1: one admin approval, remembered — the rule is born from a USER
+	// report's diagnosis.
+	_, action1 := reportAndPropose(41, 3, "TORRENT-AAA")
+	act, err := h.svc.ApproveActionRemembering(1, action1, nil)
+	if err != nil || act.Status != ActionExecuted {
+		t.Fatalf("remembering approve on a user report = (%v, %v), want executed", act, err)
+	}
+	var ruleID int64
+	if err := h.svc.db.QueryRow("SELECT id FROM agent_approval_rules WHERE status = 'active'").Scan(&ruleID); err != nil {
+		t.Fatalf("no rule armed from the user report's approval: %v", err)
+	}
+
+	// Report 2, same class: the sweep dispatches with NO human decision.
+	issue2, action2 := reportAndPropose(42, 4, "TORRENT-BBB")
+	h.svc.sweepAutoApprovals(time.Now().UTC())
+	var status string
+	var decidedBy, autoRule *int64
+	if err := h.svc.db.QueryRow(
+		"SELECT status, decided_by, auto_rule_id FROM agent_actions WHERE id = ?", action2,
+	).Scan(&status, &decidedBy, &autoRule); err != nil {
+		t.Fatalf("read auto decision: %v", err)
+	}
+	if status != ActionExecuted || decidedBy != nil || autoRule == nil || *autoRule != ruleID {
+		t.Fatalf("second user report = status %q decided_by %v rule %v, want rule-executed with no human", status, decidedBy, autoRule)
+	}
+
+	// The reporter still owns the close — the machine never does.
+	loaded, err := h.svc.GetIssue(issue2)
+	if err != nil {
+		t.Fatalf("load issue 2: %v", err)
+	}
+	if canConfirm, err := h.svc.CanReporterConfirmFix(loaded); err != nil || !canConfirm {
+		t.Fatalf("CanReporterConfirmFix = (%v, %v) after the rule's fix", canConfirm, err)
+	}
+	if err := h.svc.ReporterConfirmFix(context.Background(), issue2, 2); err != nil {
+		t.Fatalf("ReporterConfirmFix: %v", err)
+	}
+	final, _ := h.svc.GetIssue(issue2)
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionReporterConfirmed {
+		t.Fatalf("final = %q/%q, want resolved/reporter_confirmed — zero admin touches end to end", final.Status, final.ResolutionKind)
+	}
 }

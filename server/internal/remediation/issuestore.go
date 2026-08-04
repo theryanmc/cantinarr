@@ -642,6 +642,15 @@ func (s *Service) ProposeAction(ctx context.Context, issueID int64, kindStr stri
 	if verr != nil {
 		return 0, false, verr
 	}
+	// The moment a label first matters for rule matching: a season-scoped user
+	// wrong-content report earns the typed pre-air label here when the server's
+	// own season check trips. Best-effort and outside the proposal tx — the
+	// stamp is a rule-matching fact, never a proposal precondition.
+	if kind == ActionDeleteMediaFiles {
+		if issue, ierr := s.GetIssue(issueID); ierr == nil {
+			s.stampUserContentLabel(issue)
+		}
+	}
 	if toolUseID == "" {
 		return 0, false, fmt.Errorf("proposal requires its model tool gate id")
 	}
