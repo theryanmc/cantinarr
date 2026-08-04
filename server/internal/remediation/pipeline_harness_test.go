@@ -424,3 +424,144 @@ func TestPipelineUserComplaintReporterCloseFullLoop(t *testing.T) {
 			final.Status, final.ResolutionKind, IssueResolved, ResolutionReporterConfirmed)
 	}
 }
+
+// runStalledUpgradeToProposal drives one stalled-upgrade incident from HTTP
+// intake to a parked proposal: the reusable front half of the rule scenarios.
+func runStalledUpgradeToProposal(t *testing.T, h *pipelineHarness, queueID int, downloadID string) (issueID, actionID int64) {
+	t.Helper()
+	// Intake at the real clock (an approval preflight may have stored a fresher
+	// watermark moments ago), then age the observation ROW past the promotion
+	// windows and let the next snapshot promote it.
+	now := time.Now().UTC()
+	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(queueID, downloadID, now.Add(-30*time.Minute))})
+	h.observe(t, now)
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM issues WHERE closed_at IS NULL AND source = ? ORDER BY id DESC LIMIT 1", SourceAuto,
+	).Scan(&issueID); err != nil {
+		t.Fatalf("find observed auto issue: %v", err)
+	}
+	if _, err := h.svc.db.Exec(
+		`UPDATE issue_observations SET first_seen_at = ?, problem_since_at = ?, last_activity_at = ? WHERE issue_id = ?`,
+		now.Add(-30*time.Minute), now.Add(-30*time.Minute), now.Add(-11*time.Minute), issueID,
+	); err != nil {
+		t.Fatalf("age observation: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r1", "get_queue", `{}`),
+		toolCall("p1", mcp.ToolProposeAction, fmt.Sprintf(`{"issue_id":0,"kind":"remediate_queue","params":{"media_type":"tv","queue_id":%d,"action":"blocklist_only"},"rationale":"Stalled upgrade; the library copy stays."}`, queueID)),
+	}}
+	if err := h.runner(script).Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run to proposal: %v", err)
+	}
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issueID, ActionProposed,
+	).Scan(&actionID); err != nil {
+		t.Fatalf("find proposed action: %v", err)
+	}
+	return issueID, actionID
+}
+
+// TestPipelineStandingRuleAutoApproveThenRepeatGuard proves the earned-autonomy
+// lane end to end, then its safety valve. Incident 1: the admin approves with
+// remember, arming the (problem, remediate_queue, blocklist_only) rule.
+// Incident 2 (a DIFFERENT release, same problem): the sweeper approves it with
+// no human — decided_by null, auto_rule_id set — and the real Executor
+// dispatches. Incident 3: the arr re-adds the SAME download the rule already
+// acted on; the repeat guard refuses to replay the remedy unattended, pauses
+// the rule, and leaves the proposal for a human.
+func TestPipelineStandingRuleAutoApproveThenRepeatGuard(t *testing.T) {
+	h := newPipelineHarness(t)
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+
+	// Incident 1: manual approve with remember arms the rule.
+	issue1, action1 := runStalledUpgradeToProposal(t, h, 41, "TORRENT-AAA")
+	act, err := h.svc.ApproveActionRemembering(1, action1, nil)
+	if err != nil || act.Status != ActionExecuted {
+		t.Fatalf("remembering approve = (%v, %v), want executed", act, err)
+	}
+	var ruleID int64
+	var ruleStatus string
+	if err := h.svc.db.QueryRow(
+		"SELECT id, status FROM agent_approval_rules ORDER BY id DESC LIMIT 1",
+	).Scan(&ruleID, &ruleStatus); err != nil || ruleStatus != "active" {
+		t.Fatalf("armed rule = (%d, %q, %v), want an active rule", ruleID, ruleStatus, err)
+	}
+	if _, err := h.svc.db.Exec(
+		"UPDATE issues SET status = ?, resolution_kind = ?, closed_at = CURRENT_TIMESTAMP WHERE id = ?",
+		IssueResolved, ResolutionArrStateCleared, issue1,
+	); err != nil {
+		t.Fatalf("close incident 1: %v", err)
+	}
+
+	// Incident 2: same problem, different release. The sweep, not a human,
+	// approves — and the real Executor dispatches against the fake arr.
+	_, action2 := runStalledUpgradeToProposal(t, h, 42, "TORRENT-BBB")
+	h.svc.sweepAutoApprovals(time.Now().UTC())
+	var status2 string
+	var decidedBy, autoRule *int64
+	if err := h.svc.db.QueryRow(
+		"SELECT status, decided_by, auto_rule_id FROM agent_actions WHERE id = ?", action2,
+	).Scan(&status2, &decidedBy, &autoRule); err != nil {
+		t.Fatalf("read auto-approved action: %v", err)
+	}
+	if status2 != ActionExecuted || decidedBy != nil || autoRule == nil || *autoRule != ruleID {
+		t.Fatalf("auto approval = status %q decided_by %v rule %v, want executed by rule %d with no human", status2, decidedBy, autoRule, ruleID)
+	}
+	if deletes := h.fake.queueDeletesSeen(); len(deletes) != 2 {
+		t.Fatalf("queue deletes after auto-dispatch = %d, want 2", len(deletes))
+	}
+	var issue2 int64
+	if err := h.svc.db.QueryRow("SELECT issue_id FROM agent_actions WHERE id = ?", action2).Scan(&issue2); err != nil {
+		t.Fatalf("read issue 2 id: %v", err)
+	}
+
+	// The arr re-adds the EXACT download the rule just acted on — the original
+	// #359 loop: a title-matched blocklist misses the release and it is back in
+	// the queue in seconds, on the SAME still-open issue. Re-attach it, age the
+	// activity windows, re-promote, and let the agent propose the same fix.
+	now := time.Now().UTC()
+	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(43, "TORRENT-BBB", now)})
+	h.observe(t, now)
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET last_activity_at = ? WHERE issue_id = ?",
+		now.Add(-11*time.Minute), issue2,
+	); err != nil {
+		t.Fatalf("age re-added observation: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	script3 := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r3", "get_queue", `{}`),
+		toolCall("p3", mcp.ToolProposeAction, `{"issue_id":0,"kind":"remediate_queue","params":{"media_type":"tv","queue_id":43,"action":"blocklist_only"},"rationale":"Same stall, back again."}`),
+	}}
+	if err := h.runner(script3).Run(context.Background(), issue2); err != nil {
+		t.Fatalf("Run on re-added download: %v", err)
+	}
+	var action3 int64
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issue2, ActionProposed,
+	).Scan(&action3); err != nil {
+		t.Fatalf("find repeat proposal: %v", err)
+	}
+	h.svc.sweepAutoApprovals(time.Now().UTC())
+	var status3 string
+	if err := h.svc.db.QueryRow("SELECT status FROM agent_actions WHERE id = ?", action3).Scan(&status3); err != nil {
+		t.Fatalf("read repeat proposal: %v", err)
+	}
+	if status3 != ActionProposed {
+		t.Fatalf("repeat proposal = %q, want left %q for a human", status3, ActionProposed)
+	}
+	var pausedStatus string
+	var pausedReason *string
+	if err := h.svc.db.QueryRow(
+		"SELECT status, paused_reason FROM agent_approval_rules WHERE id = ?", ruleID,
+	).Scan(&pausedStatus, &pausedReason); err != nil {
+		t.Fatalf("read rule after repeat: %v", err)
+	}
+	if pausedStatus != "paused" || pausedReason == nil {
+		t.Fatalf("rule after repeat = (%q, %v), want paused with a reason", pausedStatus, pausedReason)
+	}
+}
