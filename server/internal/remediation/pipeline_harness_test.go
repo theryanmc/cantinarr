@@ -216,20 +216,14 @@ func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
 		t.Fatalf("issue after settled absence = %q, want re-promoted %q", mid.Status, IssueOpen)
 	}
 
-	// Current production truth, surfaced by this harness: the staged resume is
-	// ORPHANED here. Its claim requires the issue at `investigating`, but the
-	// settle dance above re-promoted it to `open`, so the close arrives via a
-	// FRESH run that recoverWork enqueues for the open issue — reading the same
-	// script continuation (scoped read, then conclude). upgradeAbandonProven
-	// supplies the server-side proof: the library file is unchanged and the
-	// server itself dispatched blocklist_only. (A later wave may teach the
-	// resume claim to accept a re-promoted issue; this assertion is the pin
-	// that documents today's two-run shape until then.)
+	// The staged resume survives its own fix's success: re-promotion lands the
+	// issue at `open`, and the resume claim accepts it — the preserved
+	// transcript continues (scoped read, then conclude), and
+	// upgradeAbandonProven supplies the server-side proof: the library file is
+	// unchanged and the server itself dispatched blocklist_only. One incident,
+	// one approval, ONE run.
 	if err := r.Resume(context.Background(), issue.ID); err != nil {
-		t.Fatalf("orphaned Resume attempt errored (want quiet no-op): %v", err)
-	}
-	if err := r.Run(context.Background(), issue.ID); err != nil {
-		t.Fatalf("fresh Run after settle: %v", err)
+		t.Fatalf("Resume after settle: %v", err)
 	}
 
 	final := soleIssue(t, h.svc)
@@ -238,8 +232,8 @@ func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
 			final.Status, final.ResolutionKind, IssueResolved, ResolutionArrStateCleared)
 	}
 	count, runStatus := agentRunRows(t, h.svc, issue.ID)
-	if count != 2 || runStatus != "succeeded" {
-		t.Fatalf("agent_runs = %d rows (last %q), want the orphaned-resume + succeeded fresh-run pair", count, runStatus)
+	if count != 1 || runStatus != "succeeded" {
+		t.Fatalf("agent_runs = %d rows (last %q), want the ONE resumed, succeeded run", count, runStatus)
 	}
 }
 

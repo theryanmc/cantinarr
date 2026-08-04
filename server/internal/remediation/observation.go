@@ -1140,10 +1140,17 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 		return false, err
 	}
 	superseded, _ := actionRes.RowsAffected()
+	// resume_pending deliberately SURVIVES suspension: it is a decision already
+	// made (approved and executed, or denied) whose continuation is pure
+	// follow-up, and the commonest trigger for this suspend is the fix's OWN
+	// success emptying the queue — aborting the very handoff that success just
+	// staged burned its transcript and forced a second fresh run. Live agent
+	// states are still cancelled; the surviving handoff is consumed when the
+	// issue re-promotes (claimResume accepts open) or finalized if it closes.
 	if _, err := tx.Exec(
 		`UPDATE agent_runs SET status='aborted', stop_reason='arr_recovery_in_flight',
 		 deadline_at=NULL, finished_at=COALESCE(finished_at, ?)
-		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
+		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval')`,
 		now, issueID,
 	); err != nil {
 		return false, err
