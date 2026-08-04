@@ -148,6 +148,9 @@ class _FakeIssuesService extends IssuesService {
   /// the dialog checkbox (and only the checkbox) arms a standing rule.
   bool? lastRemember;
 
+  /// The `override` of the last approveAction call — the episode-sparing edit.
+  Object? lastOverride;
+
   @override
   Future<AgentAction> denyAction(int id, {String? note}) async {
     final error = denyError;
@@ -163,6 +166,7 @@ class _FakeIssuesService extends IssuesService {
     bool remember = false,
   }) async {
     lastRemember = remember;
+    lastOverride = override;
     final error = approveError;
     if (error != null) throw error;
     final base = _proposed();
@@ -390,6 +394,7 @@ void main() {
     // An irreversible fix is still an approvable one.
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(
@@ -447,6 +452,7 @@ void main() {
     expect(find.text('no'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsOneWidget);
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(
@@ -529,6 +535,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(find.text('Approve this change?'), findsOneWidget);
@@ -578,6 +585,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
@@ -600,6 +608,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve and apply'));
@@ -721,6 +730,7 @@ void main() {
       action: _proposed(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     expect(find.byType(CheckboxListTile), findsNothing);
@@ -742,6 +752,7 @@ void main() {
       action: _proposedWithOffer(),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     // The checkbox and its server-typed label render only because the server
@@ -775,6 +786,7 @@ void main() {
       action: _proposedWithOffer(reactivates: true),
     );
 
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
     // A paused rule's offer says checking the box re-arms it.
@@ -820,6 +832,52 @@ void main() {
       findsOneWidget,
     );
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
+  });
+
+  // The one edit with no wrong answer: unchecking an episode on a destructive
+  // delete sends an approval override that spares it — never an empty delete.
+  testWidgets('delete card episode chips build a sparing override',
+      (tester) async {
+    final service = _FakeIssuesService();
+    final action = AgentAction.fromJson(<String, dynamic>{
+      'id': 14,
+      'issue_id': 5,
+      'run_id': 9,
+      'kind': 'delete_media_files',
+      'params': {
+        'media_type': 'tv',
+        'tmdb_id': 615,
+        'season': 11,
+        'episodes': [1, 2, 3],
+        'blocklist': true,
+      },
+      'rationale': 'impossible files',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_title': 'Futurama',
+      'issue_media_type': 'tv',
+      'issue_status': 'awaiting_approval',
+      'instance_id': 'inst-1',
+      'instance_name': 'TV',
+      'instance_service_type': 'sonarr',
+      'created_at': '2026-06-23T10:00:00Z',
+    });
+    await _pump(tester, auth: _adminState, service: service, action: action);
+
+    expect(find.text('E1'), findsOneWidget);
+    await tester.tap(find.text('E2'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
+    await tester.pumpAndSettle();
+    // Confirm dialog: press its approve button.
+    await tester.tap(find.byType(ElevatedButton).last);
+    await tester.pumpAndSettle();
+
+    final override = service.lastOverride as Map<String, dynamic>?;
+    expect(override, isNotNull, reason: 'a shrunk selection must override');
+    expect(override!['episodes'], [1, 3]);
+    await _drainSnackBar(tester);
   });
 
   // The approver must never decide with less evidence than the model: the

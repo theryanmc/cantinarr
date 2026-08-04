@@ -51,6 +51,36 @@ class ProposedActionCard extends ConsumerStatefulWidget {
 }
 
 class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
+  /// For a decidable TV delete: which of the proposed episodes stay selected.
+  /// Starts as the full proposal; unchecking builds an approval override so
+  /// the admin can spare an episode without denying the whole repair — the
+  /// only editing this card offers, because shrinking a destructive fix is
+  /// the one edit with no wrong answer.
+  Set<int>? _deleteEpisodeSelection;
+
+  List<int> get _proposedDeleteEpisodes {
+    final raw = _action.params.raw['episodes'];
+    if (raw is List) {
+      return raw.whereType<num>().map((e) => e.toInt()).toList()..sort();
+    }
+    return const [];
+  }
+
+  bool get _deleteSelectionActive =>
+      _action.kind == AgentActionKind.deleteMediaFiles &&
+      _action.canTakeAction &&
+      _proposedDeleteEpisodes.length > 1;
+
+  Object? _deleteOverride() {
+    final selection = _deleteEpisodeSelection;
+    final proposed = _proposedDeleteEpisodes;
+    if (selection == null || proposed.isEmpty) return null;
+    if (selection.length == proposed.length) return null; // as proposed
+    final params = Map<String, dynamic>.from(_action.params.raw);
+    params['episodes'] = (selection.toList()..sort());
+    return params;
+  }
+
   /// The authoritative action shown. Starts from the prop and is replaced by
   /// the server's response after a decision so the frozen footer is accurate.
   late AgentAction _action;
@@ -107,6 +137,7 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
     try {
       final updated = await service.approveAction(
         _action.id,
+        override: _deleteOverride(),
         remember: confirmation.remember,
       );
       if (!mounted) return;
@@ -431,6 +462,48 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
 
           // The quoted, non-editable params (release / quality / queue id …).
           ..._buildParamRows(action),
+
+          // The one edit with no wrong answer: shrink a destructive delete.
+          if (_deleteSelectionActive) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Episodes to delete (uncheck to spare)',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final ep in _proposedDeleteEpisodes)
+                  FilterChip(
+                    label: Text('E$ep'),
+                    selected: (_deleteEpisodeSelection ??
+                            _proposedDeleteEpisodes.toSet())
+                        .contains(ep),
+                    onSelected: (selected) {
+                      setState(() {
+                        final current = _deleteEpisodeSelection ??
+                            _proposedDeleteEpisodes.toSet();
+                        final next = Set<int>.from(current);
+                        if (selected) {
+                          next.add(ep);
+                        } else if (next.length > 1) {
+                          // Never allow an empty delete: sparing everything
+                          // is what Deny is for.
+                          next.remove(ep);
+                        }
+                        _deleteEpisodeSelection = next;
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ],
 
           if (action.approvedParams != null &&
               !mapEquals(
