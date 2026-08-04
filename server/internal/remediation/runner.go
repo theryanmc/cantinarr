@@ -53,6 +53,12 @@ var readToolAllowList = []string{
 	// instance and to their bounded summary form.
 	"get_quality_profiles",
 	"get_custom_formats",
+	// The sections recurring problems trace back to — indexer min seeders,
+	// delay windows, download-client categories, remote path mappings —
+	// summarized secret-free inside the arr client. Same rationale as the two
+	// profile reads: without these the agent sees the recurrence but never
+	// the setting causing it.
+	"get_service_config",
 }
 
 // readToolAllowSet is readToolAllowList as a set, for O(1) dispatch checks.
@@ -1301,7 +1307,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 	queueScopedTool := toolName == "get_queue" || toolName == "diagnose_queue" || toolName == "get_manual_import_candidates"
 	// A settings read is about the INSTANCE, not about a title, so requiring a
 	// media identity for it would refuse a read that never needed one.
-	if toolName != "get_arr_health" && toolName != "get_quality_profiles" && toolName != "get_custom_formats" {
+	if toolName != "get_arr_health" && toolName != "get_quality_profiles" && toolName != "get_custom_formats" && toolName != "get_service_config" {
 		switch issue.MediaType {
 		case "movie":
 			if issue.TmdbID <= 0 && !(queueScopedTool && issue.ArrQueueID > 0 && issue.DownloadID != "") {
@@ -1394,7 +1400,7 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		if issue.AuthorID > 0 {
 			params["author_id"] = issue.AuthorID
 		}
-	case "get_quality_profiles", "get_custom_formats":
+	case "get_quality_profiles", "get_custom_formats", "get_service_config":
 		// Refusing an issue with no instance is MANDATORY, not defensive. Unlike
 		// every other read tool these two are not handed callCtx.InstanceID, and
 		// their own resolver falls back to the service's DEFAULT instance when
