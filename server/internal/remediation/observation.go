@@ -19,6 +19,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
+	"sync"
 )
 
 const (
@@ -27,6 +28,11 @@ const (
 	observationStateSettling   = "settling"
 	queueSnapshotFreshness     = 90 * time.Second
 	observationSweepPeriod     = time.Minute
+	// decisionSweepPeriod paces the rule-approval sweep and the alert flushes —
+	// deliberately independent of the observation sweep so arr latency cannot
+	// hold decisions hostage, and faster than it: a parked proposal a rule
+	// covers should not wait a full observation cycle.
+	decisionSweepPeriod = 30 * time.Second
 	// preAirSweepTicks is how many sweep ticks pass between fallback pre-air
 	// checks. The instant path is a Sonarr webhook; this only covers instances
 	// that never had one configured, and a season filled ahead of its air dates
@@ -1749,18 +1755,29 @@ func (a *AutoDispatcher) StartObservationSweeper(ctx context.Context) {
 						a.svc.SweepPreAirImports()
 					}
 					// Recurrence is measured in days, so an hourly pass is
-					// already far finer than the thing it looks at. It runs
-					// after the rule sweep and before the alert flushes for the
-					// same reason everything else here does: a notice raised on
-					// this tick starts its hold-down immediately.
+					// already far finer than the thing it looks at.
 					if preventionTicks++; preventionTicks >= preventionSweepTicks {
 						preventionTicks = 0
 						a.svc.SweepPreventionNotices()
 					}
-					// Owed admin pushes advance on the same clock that moves
-					// incidents in and out of tracking, so a hold-down is
-					// always measured against fresh state. Rule approvals stay
-					// ahead of the flushes for the same reason as at boot.
+				}
+			}
+		}()
+		// Decisions and owed pushes run on their OWN clock, so a slow arr on
+		// one instance can never delay a standing rule's approval or an
+		// admin's page for every other instance. The load-bearing ordering is
+		// INTRA-tick and preserved verbatim: rule approvals strictly before
+		// the flushes, so a proposal a rule approves this tick drops its owed
+		// push instead of paging for work no admin needs to do. All DB-only —
+		// the single-writer discipline stays with the reconciler.
+		go func() {
+			ticker := time.NewTicker(decisionSweepPeriod)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
 					a.svc.sweepAutoApprovals(time.Now().UTC())
 					a.svc.flushIssueAlerts(time.Now().UTC())
 					a.svc.flushActionAlerts(time.Now().UTC())
@@ -1788,25 +1805,39 @@ func (a *AutoDispatcher) sweepObservedInstances() {
 		}
 	}
 	rows.Close()
+	// The arr I/O fans out with bounded concurrency; reconciliation is
+	// untouched — every result still lands as a snapshot job the single
+	// reconciler goroutine drains, so one slow instance delays only itself.
+	const maxConcurrentSweepFetches = 4
+	sem := make(chan struct{}, maxConcurrentSweepFetches)
+	var wg sync.WaitGroup
 	for _, target := range targets {
+		target := target
 		observedAt := time.Now().UTC()
 		if a.now != nil {
 			observedAt = a.now().UTC()
 		}
-		items, err := a.svc.fetchQueueSnapshot(target.serviceType, target.instanceID)
-		if err != nil {
-			log.Printf("remediation: observation sweep %s %s: %v", target.serviceType, target.instanceID, err)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			items, err := a.svc.fetchQueueSnapshot(target.serviceType, target.instanceID)
+			if err != nil {
+				log.Printf("remediation: observation sweep %s %s: %v", target.serviceType, target.instanceID, err)
+				a.enqueueSnapshotJob(queueSnapshotJob{
+					serviceType: target.serviceType, instanceID: target.instanceID,
+					failure: err, observedAt: observedAt,
+				})
+				return
+			}
 			a.enqueueSnapshotJob(queueSnapshotJob{
 				serviceType: target.serviceType, instanceID: target.instanceID,
-				failure: err, observedAt: observedAt,
+				items: items, observedAt: observedAt,
 			})
-			continue
-		}
-		a.enqueueSnapshotJob(queueSnapshotJob{
-			serviceType: target.serviceType, instanceID: target.instanceID,
-			items: items, observedAt: observedAt,
-		})
+		}()
 	}
+	wg.Wait()
 }
 
 func (s *Service) fetchQueueSnapshot(serviceType, instanceID string) ([]arr.QueueObservation, error) {
