@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -188,11 +189,21 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 
 	turn, model, err := r.resolveTurn(ctx, settings)
 	if err != nil {
-		// No key / provider setup failed: cannot run. Park the issue with a clear
-		// admin-facing note.
+		if errors.Is(err, ai.ErrSharedAIUnavailable) {
+			// A standing configuration gap, not a failed investigation: leave the
+			// issue exactly where it is (recoverWork re-enqueues open issues until
+			// a provider exists), say so once via the deduped system issue, and
+			// feed the circuit breaker nothing — the agent did not fail, it was
+			// never given a provider.
+			_ = r.svc.RecordRemediationProviderHealth(false)
+			return nil
+		}
+		// Resolver wired but broken (nil runner, unsupported provider): park the
+		// issue with a clear admin-facing note.
 		return r.giveUp(ctx, issueID, 0, model, stopModelError,
 			"I couldn't investigate this automatically because the AI provider isn't configured. Flagging for an admin.")
 	}
+	_ = r.svc.RecordRemediationProviderHealth(true)
 
 	// CAS-claim the issue and create the run row.
 	runID, claimed, err := r.claim(issue, model)
@@ -298,6 +309,16 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		}
 		return fmt.Errorf("defer issue %d resume while arr recovery cannot be verified: %w", issueID, preflightErr)
 	} else if recovering {
+		return nil
+	}
+
+	// Probe the provider BEFORE claiming the handoff: an unavailable shared
+	// provider is a standing condition, not a failure of this resume, and a
+	// claim taken first would burn the durable handoff into a give-up over a
+	// missing configuration. The staged decision stays exactly where it is;
+	// recoverWork re-enqueues it once a provider exists.
+	if _, _, err := r.resolveTurn(ctx, settings); err != nil && errors.Is(err, ai.ErrSharedAIUnavailable) {
+		_ = r.svc.RecordRemediationProviderHealth(false)
 		return nil
 	}
 

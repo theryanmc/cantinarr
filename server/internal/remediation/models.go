@@ -81,7 +81,11 @@ const (
 	ResolutionAIHealthRestored     = "ai_health_restored"
 	ResolutionPushDeliveryRestored = "push_delivery_restored"
 	ResolutionBookImportCleared    = "book_import_cleared"
-	ResolutionLegacyUnknown        = "legacy_unknown"
+	// ResolutionRemediationProviderConfigured closes the "remediation is on but
+	// has no AI provider" system issue when the runner first resolves a shared
+	// turn again.
+	ResolutionRemediationProviderConfigured = "remediation_provider_configured"
+	ResolutionLegacyUnknown                 = "legacy_unknown"
 )
 
 // AdminIssueDisposition is the explicit human judgment recorded by the admin
@@ -121,6 +125,17 @@ const (
 	// content" report, because by the time anyone watches it the queue is empty.
 	ActionDeleteMediaFiles ActionKind = "delete_media_files"
 )
+
+// ProposableActionKinds is the canonical proposal vocabulary. It is
+// load-bearing, not documentation: validateActionParams admits only members, so
+// a kind added to the consts above but not here fails its own feature tests
+// immediately — and the vocabulary-parity test pins mcp's wire copy (schema
+// enum, validator, correction text) equal to this list, so neither package can
+// gain a kind the other silently lacks.
+var ProposableActionKinds = []ActionKind{
+	ActionGrabRelease, ActionRemediateQueue, ActionManualImport,
+	ActionTriggerSearch, ActionRescan, ActionDeleteMediaFiles,
+}
 
 // Issue is one row of the issues table as returned to clients. Nullable columns
 // (category, reporter) are exposed as pointers so the JSON carries null, matching
