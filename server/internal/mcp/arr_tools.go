@@ -364,6 +364,26 @@ var arrToolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:        "get_book_timeline",
+		Permission:  auth.PermissionArrRead,
+		Description: "Join what the library HOLDS for one book (its files, with import dates) to what HAPPENED (grab and import history with download identities, newest first). Use this for any \"wrong book\", \"wrong edition\", or \"bad copy\" book report — it is the receipts, where a title string proves nothing — and after a fix to confirm the record is clean. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"book"},
+					"description": "Only books have a book timeline",
+				},
+				"book_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The issue's durable Chaptarr book record id",
+				},
+			},
+			"required": []string{"media_type", "book_id"},
+		},
+	},
+	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
 		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
