@@ -180,6 +180,13 @@ type Issue struct {
 	// per-row query for a control no list renders.
 	CanConfirmFixed bool `json:"can_confirm_fixed"`
 
+	// IsPrevention marks a recurrence notice — advice about a setting, not an
+	// incident. Computed at read from the dedupe namespace so clients render
+	// the dedicated tile and disclose the closure verbs' mute durations
+	// (resolve 60d / dismiss 180d / close-without-fix 365d) at the point of
+	// decision instead of hiding a 12-month choice behind a generic button.
+	IsPrevention bool `json:"is_prevention"`
+
 	InstanceID string `json:"instance_id"`
 	DownloadID string `json:"-"`
 	ArrQueueID int    `json:"-"`

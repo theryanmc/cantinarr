@@ -149,6 +149,7 @@ class Issue {
   /// executing), and it deliberately stays false on list reads — only the
   /// single-issue fetch that renders the control computes it.
   final bool canConfirmFixed;
+  final bool isPrevention;
 
   const Issue({
     required this.id,
@@ -172,6 +173,7 @@ class Issue {
     required this.updatedAt,
     required this.closedAt,
     required this.canConfirmFixed,
+    this.isPrevention = false,
   });
 
   bool get isTv => mediaType == 'tv';
@@ -189,6 +191,7 @@ class Issue {
   /// A short scope label for list/thread subtitles:
   /// "S2·E4" / "Season 2" / "Movie".
   String get scopeLabel {
+    if (isPrevention) return 'Prevention';
     if (isTv) {
       // A positive episode disambiguates Sonarr Specials (season zero) from
       // the season=0/episode=0 whole-series sentinel.
@@ -238,6 +241,7 @@ class Issue {
         // missing field never offers an irreversible close the server would
         // refuse.
         canConfirmFixed: json['can_confirm_fixed'] as bool? ?? false,
+        isPrevention: json['is_prevention'] as bool? ?? false,
       );
 }
 
