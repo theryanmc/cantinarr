@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +13,11 @@ import '../logic/issues_provider.dart';
 /// checkbox. Each card shows the rule's fixed server-authored label, its
 /// active/paused state (with the server's pause reason), and its track record,
 /// with explicit Pause / Resume / Delete actions.
+String _dayLabel(DateTime when) {
+  final local = when.toLocal();
+  return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
+}
+
 class AgentApprovalRulesScreen extends ConsumerStatefulWidget {
   const AgentApprovalRulesScreen({super.key});
 
@@ -294,13 +300,42 @@ class _RuleCard extends StatelessWidget {
           if (rule.isPaused && (rule.pausedReason?.isNotEmpty ?? false)) ...[
             const SizedBox(height: 6),
             Text(
-              rule.pausedReason!,
+              rule.pausedAt != null
+                  ? '${rule.pausedReason!} (since ${_dayLabel(rule.pausedAt!)})'
+                  : rule.pausedReason!,
               style: const TextStyle(
                 color: AppTheme.requested,
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
+            if (rule.pausedByIssueId != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: InkWell(
+                  onTap: () => context.push('/issues/${rule.pausedByIssueId}'),
+                  child: const Text(
+                    'See the issue that paused it →',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ),
+            if (rule.approvedSincePause > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  "You've approved this exact fix ${rule.approvedSincePause} time(s) by hand since it paused — Resume puts it back on autopilot.",
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
           ],
           const SizedBox(height: 8),
           Text(

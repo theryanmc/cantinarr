@@ -738,3 +738,51 @@ func TestProblemKindPersistedForAutoIssues(t *testing.T) {
 		t.Fatalf("problem_kind after refresh = %q (%v)", stored, err)
 	}
 }
+
+// A paused rule carries its evidence: WHICH issue stood it down, and how many
+// times the admin has approved the same triple by hand since — the
+// server-computed argument for resuming.
+func TestPausedRuleCarriesEvidenceAndSincePauseCount(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (problem_kind, action_kind, action_facet, status, paused_reason, paused_at, paused_by_issue_id, created_at, updated_at)
+		 VALUES ('Download stalled', 'remediate_queue', 'blocklist_search', 'paused', 'failed once', datetime('now', '-2 days'), 41, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed paused rule: %v", err)
+	}
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, category, media_type, tmdb_id, title, detail, problem_kind)
+		 VALUES ('auto', 'resolved', NULL, 'movie', 9, 'M', 'stalled', 'Download stalled')`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (3, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	// One matching MANUAL approval since the pause, one non-matching facet.
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, decided_by, decided_at, executed_at, fingerprint, tool_use_id)
+		 VALUES (?, 'remediate_queue', '{"media_type":"movie","queue_id":1,"action":"blocklist_search"}', 'r', 'mutating', 'executed', 3, datetime('now','-1 day'), datetime('now','-1 day'), 'fp-a', 'tu-a'),
+		        (?, 'remediate_queue', '{"media_type":"movie","queue_id":2,"action":"remove"}', 'r', 'mutating', 'executed', 3, datetime('now','-1 day'), datetime('now','-1 day'), 'fp-b', 'tu-b')`,
+		issueID, issueID,
+	); err != nil {
+		t.Fatalf("seed manual approvals: %v", err)
+	}
+
+	rules, err := svc.ListApprovalRules()
+	if err != nil {
+		t.Fatalf("ListApprovalRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(rules))
+	}
+	rule := rules[0]
+	if rule.PausedByIssueID == nil || *rule.PausedByIssueID != 41 {
+		t.Fatalf("paused_by_issue_id = %v, want the pausing issue", rule.PausedByIssueID)
+	}
+	if rule.ApprovedSincePause != 1 {
+		t.Fatalf("approved_since_pause = %d, want exactly the matching-facet manual approval", rule.ApprovedSincePause)
+	}
+}

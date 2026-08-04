@@ -827,6 +827,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// One gentle re-ask before an unanswered confirm-wait is handed to an
 		// admin; the stamp is what makes the nudge happen exactly once.
 		{alter: "ALTER TABLE issues ADD COLUMN confirm_nudged_at DATETIME"},
+		// The evidence link a paused rule was missing: WHICH issue's outcome
+		// stood it down. Written by every failure pause; the rules screen
+		// deep-links it.
+		{alter: "ALTER TABLE agent_approval_rules ADD COLUMN paused_by_issue_id INTEGER"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
