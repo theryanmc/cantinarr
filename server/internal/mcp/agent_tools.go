@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -47,14 +49,26 @@ const (
 	ActionKindDeleteMediaFiles = "delete_media_files"
 )
 
+// ProposableActionKinds returns the wire vocabulary for propose_action, in the
+// order the kinds are described to the model. The schema enum, isProposableKind,
+// and the unknown-kind correction text all derive from this one list, and
+// remediation's vocabulary-parity test pins it equal to
+// remediation.ProposableActionKinds — one list per package, provably in sync,
+// so a kind added on either side cannot be silently unproposable.
+func ProposableActionKinds() []string {
+	return []string{ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport,
+		ActionKindTriggerSearch, ActionKindRescan, ActionKindDeleteMediaFiles}
+}
+
 // isProposableKind reports whether k is one of the known action kinds.
 func isProposableKind(k string) bool {
-	switch k {
-	case ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport,
-		ActionKindTriggerSearch, ActionKindRescan, ActionKindDeleteMediaFiles:
-		return true
-	}
-	return false
+	return slices.Contains(ProposableActionKinds(), k)
+}
+
+// proposableKindsSentence is the correction a model reads after proposing an
+// unknown kind; derived so it can never drift behind the vocabulary again.
+func proposableKindsSentence() string {
+	return "Unknown action kind. Valid kinds: " + strings.Join(ProposableActionKinds(), ", ") + "."
 }
 
 // Conclusion statuses accepted by conclude_issue (terminal issue states the
@@ -153,9 +167,8 @@ var AgentToolProposeAction = Tool{
 				"description": "The id of the issue being investigated.",
 			},
 			"kind": map[string]interface{}{
-				"type": "string",
-				"enum": []string{ActionKindGrabRelease, ActionKindRemediateQueue, ActionKindManualImport,
-					ActionKindTriggerSearch, ActionKindRescan, ActionKindDeleteMediaFiles},
+				"type":        "string",
+				"enum":        ProposableActionKinds(),
 				"description": "Which kind of fix to propose.",
 			},
 			"params": map[string]interface{}{
@@ -323,7 +336,7 @@ func (s *ToolServer) ExecuteAgentTool(ctx context.Context, name string, input js
 		if !isProposableKind(args.Kind) {
 			// A benign, non-error result so the model can correct itself within its
 			// remaining budget rather than the run failing on a typo.
-			return &AgentToolResult{Text: "Unknown action kind. Valid kinds: grab_release, remediate_queue, manual_import, trigger_search, rescan."}, nil
+			return &AgentToolResult{Text: proposableKindsSentence()}, nil
 		}
 		if len(args.Params) == 0 || string(args.Params) == "null" {
 			return &AgentToolResult{Text: "params is required for propose_action and must be a JSON object for the chosen kind."}, nil

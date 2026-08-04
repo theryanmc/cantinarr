@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -133,6 +134,13 @@ func sortedUniqueEpisodes(in []int) []int {
 // order the model sent. It rejects unknown fields and out-of-range values so only
 // well-formed, replayable actions are ever recorded.
 func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.RawMessage, err error) {
+	// Membership in ProposableActionKinds is checked FIRST so the slice stays
+	// load-bearing: a kind with a case below but missing from the canonical list
+	// is rejected here and fails its feature tests, instead of shipping a
+	// vocabulary the schema enum and correction text don't know about.
+	if !slices.Contains(ProposableActionKinds, kind) {
+		return nil, fmt.Errorf("unknown action kind: %s", kind)
+	}
 	switch kind {
 	case ActionGrabRelease:
 		var p GrabReleaseParams
