@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"time"
 )
 
@@ -705,4 +706,114 @@ func (s *Service) announceBootPausedRules() {
 	for _, ruleID := range ruleIDs {
 		s.notifyAutoApprovalPaused(ruleID, 0)
 	}
+}
+
+// RuleCandidate is one (problem, fix, facet) triple the admin has actually
+// approved by hand and could automate — the arm-from-catalog surface, so
+// trusting a repeat fix no longer waits for the next proposal's checkbox.
+type RuleCandidate struct {
+	ProblemKind   string     `json:"problem_kind"`
+	ActionKind    string     `json:"action_kind"`
+	ActionFacet   string     `json:"action_facet"`
+	Label         string     `json:"label"`
+	ApprovedCount int64      `json:"approved_count"`
+	LastApproved  *time.Time `json:"last_approved_at"`
+}
+
+// ListRuleCandidates aggregates every triple with at least one HUMAN-approved
+// execution and no active rule. Grounded by construction: a triple nobody has
+// approved by hand cannot appear, so arming from here is "remember, later" —
+// never inventing a rule from thin air.
+func (s *Service) ListRuleCandidates() ([]RuleCandidate, error) {
+	rows, err := s.db.Query(
+		`SELECT i.problem_kind, a.kind, COALESCE(NULLIF(a.approved_params, ''), a.params), a.decided_at
+		 FROM agent_actions a JOIN issues i ON i.id = a.issue_id
+		 WHERE a.decided_by IS NOT NULL AND a.executed_at IS NOT NULL AND a.status = ?
+		   AND i.problem_kind IS NOT NULL AND i.problem_kind != ''`,
+		ActionExecuted,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query rule candidates: %w", err)
+	}
+	defer rows.Close()
+	type agg struct {
+		count int64
+		last  *time.Time
+	}
+	byKey := map[string]*agg{}
+	meta := map[string]RuleCandidate{}
+	for rows.Next() {
+		var problem, kind, params string
+		var decidedAt sql.NullTime
+		if err := rows.Scan(&problem, &kind, &params, &decidedAt); err != nil {
+			return nil, err
+		}
+		facet, ok := actionAutoFacet(ActionKind(kind), json.RawMessage(params))
+		if !ok {
+			continue
+		}
+		key := approvalRuleKey(problem, kind, facet)
+		if _, seen := byKey[key]; !seen {
+			byKey[key] = &agg{}
+			meta[key] = RuleCandidate{
+				ProblemKind: problem, ActionKind: kind, ActionFacet: facet,
+				Label: approvalRuleLabel(problem, ActionKind(kind), facet),
+			}
+		}
+		byKey[key].count++
+		if decidedAt.Valid && (byKey[key].last == nil || decidedAt.Time.After(*byKey[key].last)) {
+			v := decidedAt.Time
+			byKey[key].last = &v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Subtract triples that already have an ACTIVE rule (paused ones stay
+	// listed — arming from the catalog reactivates, same as remember).
+	ruleRows, err := s.db.Query(
+		"SELECT problem_kind, action_kind, action_facet FROM agent_approval_rules WHERE status = ?",
+		ApprovalRuleActive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query active rules: %w", err)
+	}
+	defer ruleRows.Close()
+	for ruleRows.Next() {
+		var problem, kind, facet string
+		if err := ruleRows.Scan(&problem, &kind, &facet); err != nil {
+			return nil, err
+		}
+		delete(byKey, approvalRuleKey(problem, kind, facet))
+	}
+	out := make([]RuleCandidate, 0, len(byKey))
+	for key, a := range byKey {
+		c := meta[key]
+		c.ApprovedCount = a.count
+		c.LastApproved = a.last
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ApprovedCount > out[j].ApprovedCount })
+	return out, nil
+}
+
+// ArmRuleFromCatalog creates (or reactivates) a rule for a triple the admin
+// has actually approved by hand — the grounding is re-checked here, server
+// side, whatever the client claimed.
+func (s *Service) ArmRuleFromCatalog(adminID int64, problemKind, actionKind, actionFacet string) (int64, error) {
+	candidates, err := s.ListRuleCandidates()
+	if err != nil {
+		return 0, err
+	}
+	grounded := false
+	for _, c := range candidates {
+		if c.ProblemKind == problemKind && c.ActionKind == actionKind && c.ActionFacet == actionFacet {
+			grounded = true
+			break
+		}
+	}
+	if !grounded {
+		return 0, fmt.Errorf("this exact fix has never been approved by hand; approve it once on a real proposal first")
+	}
+	return s.createOrReactivateApprovalRule(adminID, 0, problemKind, ActionKind(actionKind), actionFacet)
 }

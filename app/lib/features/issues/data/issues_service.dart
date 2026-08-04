@@ -108,6 +108,23 @@ class IssuesService {
   // ---- Admin ---------------------------------------------------------------
 
   /// List issues for the admin queue, optionally filtered by [status].
+  /// Triples the admin has hand-approved and could automate.
+  Future<List<Map<String, dynamic>>> listRuleCandidates() async {
+    final resp = await _dio.get('/api/admin/agent-approval-rules/candidates');
+    return ((resp.data['candidates'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  /// Arm a rule from the catalog (server re-checks the grounding).
+  Future<void> armRule(String problemKind, String actionKind, String actionFacet) async {
+    await _dio.post('/api/admin/agent-approval-rules', data: {
+      'problem_kind': problemKind,
+      'action_kind': actionKind,
+      'action_facet': actionFacet,
+    });
+  }
+
   /// The agent scoreboard: what the pipeline did over the trailing window.
   Future<Map<String, dynamic>> agentDigest({int days = 7}) async {
     final resp = await _dio

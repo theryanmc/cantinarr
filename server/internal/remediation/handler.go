@@ -75,6 +75,41 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// ListRuleCandidates handles GET /api/admin/agent-approval-rules/candidates.
+func (h *Handler) ListRuleCandidates(w http.ResponseWriter, r *http.Request) {
+	candidates, err := h.service.ListRuleCandidates()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})
+}
+
+// ArmRule handles POST /api/admin/agent-approval-rules — grounded server-side:
+// only triples the admin has actually hand-approved can be armed.
+func (h *Handler) ArmRule(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body struct {
+		ProblemKind string `json:"problem_kind"`
+		ActionKind  string `json:"action_kind"`
+		ActionFacet string `json:"action_facet"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	ruleID, err := h.service.ArmRuleFromCatalog(claims.UserID, body.ProblemKind, body.ActionKind, body.ActionFacet)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule_id": ruleID})
+}
+
 // Digest handles GET /api/admin/agent-digest?days=7 — the agent scoreboard.
 func (h *Handler) Digest(w http.ResponseWriter, r *http.Request) {
 	days := 7
