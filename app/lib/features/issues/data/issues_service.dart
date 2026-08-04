@@ -108,6 +108,13 @@ class IssuesService {
   // ---- Admin ---------------------------------------------------------------
 
   /// List issues for the admin queue, optionally filtered by [status].
+  /// The agent scoreboard: what the pipeline did over the trailing window.
+  Future<Map<String, dynamic>> agentDigest({int days = 7}) async {
+    final resp = await _dio
+        .get('/api/admin/agent-digest', queryParameters: {'days': days});
+    return (resp.data as Map).cast<String, dynamic>();
+  }
+
   /// The reporter inbox: the caller's OWN reports, requester copy applied
   /// server-side. Non-admin accessible.
   Future<List<Issue>> listMyIssues() async {

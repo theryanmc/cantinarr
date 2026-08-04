@@ -75,6 +75,20 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// Digest handles GET /api/admin/agent-digest?days=7 — the agent scoreboard.
+func (h *Handler) Digest(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if v, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && v > 0 {
+		days = v
+	}
+	digest, err := h.service.Digest(days)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
 // ListMine handles GET /api/issues — the reporter inbox: the caller's OWN
 // reports, newest first. Reporter-visible copy only: the requester-copy
 // boundary rewrites admin-facing resolution text before it leaves the server.
