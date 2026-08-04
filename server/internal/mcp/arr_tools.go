@@ -315,6 +315,30 @@ var arrToolDefinitions = []Tool{
 		},
 	},
 	{
+		Name:       "get_media_file_details",
+		Permission: auth.PermissionArrRead,
+		Description: "Inspect the file(s) the library actually holds for one movie or one TV season: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk. Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"media_type": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"movie", "tv"},
+					"description": "Book files carry no media-property analysis in Chaptarr",
+				},
+				"tmdb_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "The title's TMDB id, from get_library",
+				},
+				"season_number": map[string]interface{}{
+					"type":        "integer",
+					"description": "TV: which season's files to inspect",
+				},
+			},
+			"required": []string{"media_type", "tmdb_id"},
+		},
+	},
+	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
 		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",

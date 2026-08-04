@@ -984,6 +984,25 @@ type EpisodeFile struct {
 			Name string `json:"name"`
 		} `json:"quality"`
 	} `json:"quality"`
+	// MediaInfo is the arr's ffprobe-derived truth about the file on disk —
+	// the only place resolution, codecs, audio languages, and subtitles are
+	// knowable without scanning anything ourselves. Pointer-typed: older
+	// records may not carry it.
+	MediaInfo *FileMediaInfo `json:"mediaInfo"`
+}
+
+// FileMediaInfo is the media-property block Sonarr serves on a file record.
+type FileMediaInfo struct {
+	AudioChannels     float64 `json:"audioChannels"`
+	AudioCodec        string  `json:"audioCodec"`
+	AudioLanguages    string  `json:"audioLanguages"`
+	Height            int     `json:"height"`
+	Width             int     `json:"width"`
+	Resolution        string  `json:"resolution"`
+	RunTime           string  `json:"runTime"`
+	VideoCodec        string  `json:"videoCodec"`
+	VideoDynamicRange string  `json:"videoDynamicRange"`
+	Subtitles         string  `json:"subtitles"`
 }
 
 // GetEpisodeFile returns live metadata for one completed file in Sonarr.
