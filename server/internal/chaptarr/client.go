@@ -1365,3 +1365,48 @@ func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, erro
 	}
 	return arrcommon.SummarizeConfigSection(section, raws), nil
 }
+
+// GetBookGrabs returns the grab history for one book, newest first (eventType=1
+// — grabbed in the Readarr-lineage enum), from one bounded page.
+func (c *Client) GetBookGrabs(bookID, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=1&bookId=%d",
+		pageSize, bookID)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("chaptarr book grabs: %w", err)
+	}
+	return hp.Records, nil
+}
+
+// DeleteBookFile removes one imported book file from disk and the library —
+// the Readarr-lineage DELETE /bookfile/{id} the wrong-book repair needs.
+func (c *Client) DeleteBookFile(id int) error {
+	path := fmt.Sprintf("/api/v1/bookfile/%d", id)
+	if err := c.do("DELETE", path, nil, nil); err != nil {
+		return fmt.Errorf("chaptarr delete book file: %w", err)
+	}
+	return nil
+}
+
+// MarkHistoryFailed marks one grab record as a failed download — the only
+// route to blocklist a release that already imported, exactly as on
+// Sonarr/Radarr.
+func (c *Client) MarkHistoryFailed(historyID int64) error {
+	path := fmt.Sprintf("/api/v1/history/failed/%d", historyID)
+	if err := c.do("POST", path, nil, nil); err != nil {
+		return fmt.Errorf("chaptarr mark history failed: %w", err)
+	}
+	return nil
+}
+
+// GetFailedDownloadPolicy reports autoRedownloadFailed: whether the service
+// itself searches for a replacement when a grab is marked failed.
+func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error) {
+	var config struct {
+		AutoRedownloadFailed bool `json:"autoRedownloadFailed"`
+	}
+	if err := c.do("GET", "/api/v1/config/downloadclient", nil, &config); err != nil {
+		return false, fmt.Errorf("chaptarr download client config: %w", err)
+	}
+	return config.AutoRedownloadFailed, nil
+}

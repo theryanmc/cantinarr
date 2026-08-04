@@ -85,10 +85,15 @@ type TriggerSearchParams struct {
 // failed-download policy, not Cantinarr's choice (see PR #363).
 type DeleteMediaFilesParams struct {
 	MediaType string `json:"media_type"`
-	TmdbID    int    `json:"tmdb_id"`
-	Season    *int   `json:"season,omitempty"`
-	Episodes  []int  `json:"episodes,omitempty"`
-	Blocklist bool   `json:"blocklist,omitempty"`
+	// TmdbID addresses movies/TV; books carry no TMDB id and are addressed by
+	// the issue's durable Chaptarr book_id instead. Both omitempty-adjacent
+	// rules hold: a movie/TV action's canonical JSON is unchanged by BookID's
+	// addition, and vice versa.
+	TmdbID    int   `json:"tmdb_id,omitempty"`
+	BookID    int   `json:"book_id,omitempty"`
+	Season    *int  `json:"season,omitempty"`
+	Episodes  []int `json:"episodes,omitempty"`
+	Blocklist bool  `json:"blocklist,omitempty"`
 }
 
 // RescanParams rescans the media on disk and runs the import pass. Movies/TV are
@@ -236,10 +241,22 @@ func validateActionParams(kind ActionKind, raw json.RawMessage) (canonical json.
 		if err := strictUnmarshal(raw, &p); err != nil {
 			return nil, err
 		}
-		// Chaptarr models a book's files differently and has no equivalent
-		// mark-as-failed, so a book issue has no safe replay for this kind.
-		if p.MediaType != "movie" && p.MediaType != "tv" {
-			return nil, fmt.Errorf("delete_media_files supports media_type \"movie\" or \"tv\"")
+		if p.MediaType != "movie" && p.MediaType != "tv" && p.MediaType != "book" {
+			return nil, fmt.Errorf("delete_media_files supports media_type \"movie\", \"tv\", or \"book\"")
+		}
+		if p.MediaType == "book" {
+			// Books are addressed by the durable Chaptarr record id; the wrong-book
+			// repair deletes the record's file(s) and stands its grabs down.
+			if p.BookID <= 0 {
+				return nil, fmt.Errorf("delete_media_files for a book requires the issue's book_id")
+			}
+			if p.TmdbID != 0 || p.Season != nil || len(p.Episodes) > 0 {
+				return nil, fmt.Errorf("book deletes take only book_id and blocklist")
+			}
+			return canonicalJSON(p)
+		}
+		if p.BookID != 0 {
+			return nil, fmt.Errorf("book_id applies only to media_type book")
 		}
 		if p.TmdbID <= 0 {
 			return nil, fmt.Errorf("delete_media_files requires a positive tmdb_id")
@@ -336,7 +353,19 @@ func validateActionScopeWith(q actionScopeQuerier, issueID int64, kind ActionKin
 	if mediaType == "book" {
 		switch kind {
 		case ActionDeleteMediaFiles:
-			return fmt.Errorf("%s is not available for book issues", kind)
+			// The wrong-book repair: bound to the issue's own durable record id,
+			// exactly like the other book-scoped kinds.
+			if bookID <= 0 {
+				return fmt.Errorf("%s is unavailable for book issues until an authoritative book id is stored", kind)
+			}
+			var p DeleteMediaFilesParams
+			if err := json.Unmarshal(canonical, &p); err != nil {
+				return fmt.Errorf("decode delete_media_files params: %w", err)
+			}
+			if p.MediaType != "book" || p.BookID != bookID {
+				return fmt.Errorf("delete_media_files must target this issue's own book record")
+			}
+			return nil
 		case ActionGrabRelease, ActionTriggerSearch:
 			// Without a stored book record id, accepting one from the model would
 			// let a book incident mutate a wholly unrelated title. Queue/manual-

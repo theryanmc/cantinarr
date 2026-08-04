@@ -165,8 +165,12 @@ func (e *Executor) Execute(ctx context.Context, issueID int64, kind ActionKind, 
 		}
 		// There is no queue row to re-validate here — the download this is
 		// cleaning up finished successfully, possibly weeks ago. The identity gate
-		// is the library lookup itself: the helper resolves the series/movie from
-		// the issue's own tmdb id and deletes only files hanging off that record.
+		// is the library lookup itself: the helper resolves the series/movie/book
+		// from the issue's own authoritative id and deletes only files hanging
+		// off that record.
+		if p.MediaType == "book" {
+			return mcp.DeleteBookFilesHelper(cc, p.BookID, p.Blocklist, proposedAt)
+		}
 		return mcp.DeleteMediaFilesHelper(e.bridge, rc, sc, p.MediaType, p.TmdbID, p.Season, p.Episodes, p.Blocklist, proposedAt)
 
 	case ActionRescan:

@@ -156,7 +156,7 @@ var AgentToolProposeAction = Tool{
 		"Set blocklist to also stand the releases that delivered those files down so they cannot come back. " +
 		"This is the WHOLE repair in one approval: the server deletes the files, blocklists the releases, and then searches for replacements — for TV, only the episodes that have already aired, leaving the rest of the season for the service to grab as it comes out. " +
 		"Do NOT follow it with a trigger_search for the same media: that asks the admin to approve one decision twice. " +
-		"Books are not supported. This destroys files on disk — propose it only with evidence a reader can check, such as get_episode_timeline reporting files imported before their episodes aired.\n" +
+		"For a WRONG BOOK, pass {media_type: \"book\", book_id, blocklist?} using the issue's authoritative book id: the server deletes the record's file(s), stands the delivering grabs down, and leaves the replacement to Chaptarr's own failed-download handling when that is on. This destroys files on disk — propose it only with evidence a reader can check, such as get_episode_timeline reporting files imported before their episodes aired.\n" +
 		"- rescan: rescan the media on disk and run the import pass. params: {media_type, tmdb_id}; for a book issue pass {media_type: \"book\", author_id} instead.\n" +
 		"Always include a clear 'rationale' explaining why this fix is correct (the admin reads it).",
 	InputSchema: map[string]interface{}{

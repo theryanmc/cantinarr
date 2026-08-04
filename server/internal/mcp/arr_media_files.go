@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -110,6 +111,94 @@ func replacedSinceDiagnosis(importedAt, airsAt *time.Time, proposedAt time.Time)
 		return false
 	}
 	return airsAt == nil || !importedAt.Before(*airsAt)
+}
+
+// DeleteBookFilesHelper is the wrong-book repair: delete the imported file(s)
+// for one Chaptarr book record and, with blocklist, mark the grabs that
+// delivered them failed so they cannot come back. Books have no air dates, so
+// there is no aired-only replacement half — the staleness gate spares only
+// files that arrived AFTER the fix was proposed (a replacement someone else
+// already made), and the replacement search follows the same standdown rule
+// as TV/movies: when autoRedownloadFailed is on, marking the grabs failed IS
+// the search trigger and Cantinarr adds none of its own.
+func DeleteBookFilesHelper(cc *chaptarr.Client, bookID int, blocklist bool, proposedAt time.Time) (string, error) {
+	if cc == nil {
+		return mutationNotStarted("Chaptarr is not configured")
+	}
+	if bookID <= 0 {
+		return mutationNotStarted("delete_media_files for a book requires the issue's book id")
+	}
+	files, err := cc.GetBookFilesForBook(bookID)
+	if err != nil {
+		return "", fmt.Errorf("read book files: %w", err)
+	}
+	if len(files) == 0 {
+		return mutationNotStarted("this book holds no file to delete")
+	}
+	var deleted, skipped, failures []string
+	for _, f := range files {
+		label := f.Path
+		if label == "" {
+			label = fmt.Sprintf("file %d", f.ID)
+		}
+		if f.DateAdded != nil && f.DateAdded.After(proposedAt.Add(2*time.Minute)) {
+			skipped = append(skipped, label+" (arrived after this fix was proposed)")
+			continue
+		}
+		if err := cc.DeleteBookFile(f.ID); err != nil {
+			failures = append(failures, fmt.Sprintf("%s (%v)", label, err))
+			continue
+		}
+		deleted = append(deleted, label)
+	}
+	if len(deleted) == 0 {
+		if len(failures) > 0 {
+			return "", fmt.Errorf("could not delete any file: %s", strings.Join(failures, "; "))
+		}
+		return mutationNotStarted("nothing to delete: " + strings.Join(skipped, ", "))
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Deleted %d book file(s).", len(deleted))
+	serviceWillReplace := false
+	if blocklist {
+		grabs, gerr := cc.GetBookGrabs(bookID, 50)
+		if gerr != nil {
+			sb.WriteString(" The releases could NOT be blocklisted (reading history failed); an admin should mark them failed in Chaptarr.")
+		} else {
+			blocked := 0
+			seen := map[string]struct{}{}
+			for _, grab := range grabs {
+				if grab.DownloadID == "" {
+					continue
+				}
+				if _, dup := seen[grab.DownloadID]; dup {
+					continue
+				}
+				seen[grab.DownloadID] = struct{}{}
+				if err := cc.MarkHistoryFailed(int64(grab.ID)); err == nil {
+					blocked++
+				}
+			}
+			fmt.Fprintf(&sb, " Blocklisted %d release(s).", blocked)
+			if blocked > 0 {
+				if auto, perr := cc.GetFailedDownloadPolicy(); perr == nil && auto {
+					serviceWillReplace = true
+					sb.WriteString(" Chaptarr's failed-download handling is on, so it searches for the replacement itself.")
+				}
+			}
+		}
+	}
+	if !serviceWillReplace {
+		if err := cc.TriggerBookSearch([]int{bookID}); err == nil {
+			sb.WriteString(" Started a search for a replacement.")
+		} else {
+			sb.WriteString(" A replacement search could not be started; monitor the book or search manually.")
+		}
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(&sb, " Skipped: %s.", strings.Join(skipped, ", "))
+	}
+	return sb.String(), nil
 }
 
 func deleteSonarrEpisodeFiles(bridge *tmdb.Bridge, sc *sonarr.Client, tmdbID int, season *int, episodes []int, blocklist bool, proposedAt time.Time) (string, error) {

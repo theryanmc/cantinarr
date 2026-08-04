@@ -44,7 +44,9 @@ func TestDeleteMediaFilesParamsValidation(t *testing.T) {
 			params: `{"media_type":"tv","tmdb_id":615,"season":0,"episodes":[4]}`,
 			want:   `{"media_type":"tv","tmdb_id":615,"season":0,"episodes":[4]}`,
 		},
-		{name: "books are rejected", params: `{"media_type":"book","tmdb_id":1}`, wantErr: "movie"},
+		{name: "books need the record id", params: `{"media_type":"book","tmdb_id":1}`, wantErr: "book_id"},
+		{name: "book shape is exact", params: `{"media_type":"book","book_id":5,"season":1}`, wantErr: "only book_id"},
+		{name: "books validate with their id", params: `{"media_type":"book","book_id":5,"blocklist":true}`, want: `{"media_type":"book","book_id":5,"blocklist":true}`},
 		{name: "tmdb id is required", params: `{"media_type":"tv","tmdb_id":0,"season":11,"episodes":[1]}`, wantErr: "positive tmdb_id"},
 		{name: "tv needs a season", params: `{"media_type":"tv","tmdb_id":615,"episodes":[1]}`, wantErr: "requires a season"},
 		{name: "tv needs episodes", params: `{"media_type":"tv","tmdb_id":615,"season":11}`, wantErr: "at least one episode"},
@@ -187,7 +189,9 @@ func TestDeleteMediaFilesScopeBinding(t *testing.T) {
 	}
 }
 
-func TestBookIssueRejectsDeleteMediaFiles(t *testing.T) {
+// The wrong-book repair is bound to the issue's OWN durable record: params
+// naming any other book are refused, and the issue's exact id passes.
+func TestBookDeleteScopeBoundToOwnRecord(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -200,13 +204,14 @@ func TestBookIssueRejectsDeleteMediaFiles(t *testing.T) {
 		t.Fatalf("seed issue: %v", err)
 	}
 	issueID, _ := res.LastInsertId()
-	// Params validation already refuses media_type book, so the scope gate is
-	// checked against a hand-built canonical: the point is that a book issue
-	// cannot reach this kind by any route, not just by the obvious one.
 	err = validateActionScopeWith(database, issueID, ActionDeleteMediaFiles,
-		json.RawMessage(`{"media_type":"book","tmdb_id":1}`))
-	if err == nil || !strings.Contains(err.Error(), "not available for book issues") {
-		t.Fatalf("scope error = %v", err)
+		json.RawMessage(`{"media_type":"book","book_id":999,"blocklist":true}`))
+	if err == nil || !strings.Contains(err.Error(), "own book record") {
+		t.Fatalf("wrong-record scope error = %v", err)
+	}
+	if err := validateActionScopeWith(database, issueID, ActionDeleteMediaFiles,
+		json.RawMessage(`{"media_type":"book","book_id":123,"blocklist":true}`)); err != nil {
+		t.Fatalf("own-record delete refused: %v", err)
 	}
 }
 
