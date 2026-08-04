@@ -10,6 +10,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
+	"github.com/windoze95/cantinarr-server/internal/remediation"
 )
 
 // setupItem is one entry in the admin setup checklist. The list is DERIVED
@@ -41,6 +42,13 @@ type setupFacts struct {
 	AI                bool
 	Push              bool
 	PlexInvites       bool
+	// RemediationDecided is whether an admin has ever saved remediation
+	// settings; like discovery, on and off are both correct answers and the
+	// checklist only asks that the decision was made.
+	RemediationDecided bool
+	// RemediationEnabled + AI together surface the one genuinely broken shape:
+	// detection switched on with no shared provider to investigate.
+	RemediationEnabled bool
 	// DiscoveryChosen is whether an admin has ever saved a discovery
 	// preference. Unlike the rest of the checklist there is no "correct"
 	// answer to grade against — every source and either language setting is
@@ -49,6 +57,16 @@ type setupFacts struct {
 	// DiscoverySource is the feed currently backing the headline rows, used
 	// only to describe the state back to the admin.
 	DiscoverySource string
+}
+
+// remediationDescription grades the decision, then calls out the one
+// genuinely broken shape: detection switched on with nothing configured to
+// investigate — the issues it opens would only ever wait.
+func remediationDescription(f setupFacts) string {
+	if f.RemediationEnabled && !f.AI {
+		return "Remediation is ON but no shared AI provider is configured — detected problems wait instead of being investigated. Add a provider under Providers & Credentials."
+	}
+	return "Decide whether Cantinarr should detect and investigate stuck downloads on its own. On or off — deciding is the step."
 }
 
 // discoveryDescription explains the discovery-rows step in terms of what is
@@ -149,12 +167,19 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Configured:  f.AI,
 			Optional:    true,
 		},
+		{
+			Key:         "remediation",
+			Title:       "Automatic problem detection",
+			Description: remediationDescription(f),
+			Configured:  f.RemediationDecided,
+			Optional:    true,
+		},
 	}
 }
 
 // setupStatusHandler answers the admin setup checklist: which features are
 // configured right now. Everything is re-derived per request.
-func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service, serverSettings *serversettings.Service) http.HandlerFunc {
+func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *credentials.Registry, aiHandler *ai.Handler, plexService *plex.Service, serverSettings *serversettings.Service, remediationSvc *remediation.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var facts setupFacts
 		if instances, err := store.ListAll(); err == nil {
@@ -179,6 +204,10 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 		facts.TMDB = creds.IsConfigured(credentials.KeyTMDBAccessToken)
 		facts.Trakt = creds.IsConfigured(credentials.KeyTraktClientID)
 		facts.AI = creds.IsAIConfigured()
+		if remediationSvc != nil {
+			facts.RemediationDecided = remediationSvc.SettingsDecided()
+			facts.RemediationEnabled = remediationSvc.Settings().Enabled
+		}
 		if aiHandler != nil {
 			facts.AI = aiHandler.ProviderConfigured()
 		}
