@@ -75,6 +75,62 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// ListMine handles GET /api/issues — the reporter inbox: the caller's OWN
+// reports, newest first. Reporter-visible copy only: the requester-copy
+// boundary rewrites admin-facing resolution text before it leaves the server.
+func (h *Handler) ListMine(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	issues, err := h.service.ListIssuesForReporter(claims.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for i := range issues {
+		applyRequesterCopy(&issues[i])
+	}
+	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues})
+}
+
+// applyRequesterCopy is the requester-copy boundary: an issue leaving the
+// server to its REPORTER carries only server-authored requester vocabulary.
+// The resolution column accumulates admin-facing diagnostics — executor result
+// text, give-up reasons, "verify the current arr state" — which are the right
+// words for the admin queue and the wrong words for the person who reported a
+// wrong episode. Every (status, resolution_kind) pair maps to fixed copy here;
+// the admin surfaces keep the raw fields. Rewriting at the read boundary,
+// rather than at each write site, means a new admin-side message can never
+// leak by default.
+func applyRequesterCopy(issue *Issue) {
+	switch issue.Status {
+	case IssueNeedsAdmin:
+		issue.Resolution = "An administrator is taking a closer look at this."
+	case IssueAwaitingConfirmation:
+		issue.Resolution = "A fix was applied — please open the report and confirm whether it's right now."
+	case IssueWontFix:
+		switch issue.ResolutionKind {
+		case ResolutionReporterTimeout:
+			issue.Resolution = "Closed after no reply. If this is still a problem, report it again."
+		default:
+			issue.Resolution = "This was closed without a fix. If it still looks wrong, report it again."
+		}
+	case IssueFailed:
+		issue.Resolution = "This couldn't be resolved automatically. If it still looks wrong, report it again."
+	case IssueResolved:
+		switch issue.ResolutionKind {
+		case ResolutionReporterConfirmed:
+			issue.Resolution = "You confirmed this is fixed."
+		default:
+			issue.Resolution = "This was resolved. If it still looks wrong, report it again."
+		}
+	case IssueDismissed:
+		issue.Resolution = "An administrator closed this report."
+	}
+}
+
 // Get handles GET /api/issues/{id} (the issue's reporter or an admin). Returns
 // the issue plus its thread.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +162,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		if allowed, err := h.service.CanReporterConfirmFix(issue); err == nil {
 			issue.CanConfirmFixed = allowed
 		}
+	}
+	// The requester-copy boundary: a non-admin reader never sees admin-facing
+	// resolution diagnostics.
+	if !auth.HasPermission(claims.Role, auth.PermissionRemediationManage) {
+		applyRequesterCopy(issue)
 	}
 
 	// An admin opening the thread marks the issue read (clears the unread dot);

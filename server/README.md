@@ -215,6 +215,7 @@ Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `de
 ### Issues & AI remediation
 ```
 POST   /api/issues                         # user: report a problem; requires instance_id plus media scope — tmdb/tvdb ids
+GET    /api/issues                         # reporter inbox: the caller's OWN reports, newest first, requester copy applied
                                            #   for movie/tv, foreign_id (+book_format when both formats exist) for book
                                            #   (instance must be Radarr for movie, Sonarr for tv, Chaptarr for book;
                                            #   gated by allow_reporting); returns {issue_id,status}; initial status is

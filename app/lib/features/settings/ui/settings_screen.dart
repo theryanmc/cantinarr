@@ -212,6 +212,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         )
                     : null,
               )),
+          if (user?.isAdmin != true)
+            _SettingsTile(
+              icon: Icons.flag_outlined,
+              title: 'My reports',
+              subtitle: 'Problems you reported and how they ended',
+              onTap: () => context.push('/issues'),
+            ),
           _SettingsTile(
             icon: Icons.smart_toy_outlined,
             title: 'AI Assistant',

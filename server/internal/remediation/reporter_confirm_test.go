@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/db"
+	"strings"
 )
 
 // confirmFixture is the shape the reporter-confirmation feature exists for: a
@@ -681,5 +682,46 @@ func TestGetIssueExposesCanConfirmFixed(t *testing.T) {
 	midDispatch := getIssueDetail(t, h, fx.issueID, &auth.Claims{UserID: fx.reporterID, Role: auth.RoleUser})
 	if midDispatch.Issue.CanConfirmFixed {
 		t.Fatal("the confirmation was offered while a fix was mid-dispatch")
+	}
+}
+
+// The reporter inbox returns only the caller's own reports, and the
+// requester-copy boundary guarantees a non-admin reader never sees admin-facing
+// resolution diagnostics — executor text and give-up reasons are the right
+// words for the admin queue and the wrong words for the person who reported a
+// wrong episode.
+func TestReporterInboxScopeAndCopyBoundary(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (7, 'me', '', 'user'), (8, 'them', '', 'user')"); err != nil {
+		t.Fatalf("seed users: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, category, reporter_id, media_type, tmdb_id, title, detail, resolution)
+		 VALUES ('user', 'needs_admin', 'wrong_content', 7, 'movie', 1, 'Mine', 'wrong', 'Executor said: sonarr DELETE /api/v3/queue/41 returned 500'),
+		        ('user', 'open', 'bad_copy', 8, 'movie', 2, 'Theirs', 'grainy', '')`,
+	); err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+
+	mine, err := svc.ListIssuesForReporter(7)
+	if err != nil {
+		t.Fatalf("ListIssuesForReporter: %v", err)
+	}
+	if len(mine) != 1 || mine[0].Title != "Mine" {
+		t.Fatalf("inbox = %+v, want exactly the caller's own report", mine)
+	}
+
+	applyRequesterCopy(&mine[0])
+	if strings.Contains(mine[0].Resolution, "Executor") || strings.Contains(mine[0].Resolution, "sonarr") {
+		t.Fatalf("requester copy leaked admin diagnostics: %q", mine[0].Resolution)
+	}
+	if mine[0].Resolution != "An administrator is taking a closer look at this." {
+		t.Fatalf("needs_admin requester copy = %q", mine[0].Resolution)
+	}
+
+	confirm := Issue{Status: IssueAwaitingConfirmation}
+	applyRequesterCopy(&confirm)
+	if !strings.Contains(confirm.Resolution, "confirm") {
+		t.Fatalf("awaiting_confirmation requester copy = %q", confirm.Resolution)
 	}
 }

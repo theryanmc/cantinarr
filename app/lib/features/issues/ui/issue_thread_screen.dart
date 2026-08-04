@@ -457,6 +457,12 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
                     const SizedBox(height: 10),
                     _PassiveTrackingBanner(status: issue.status),
                   ],
+                  if (!isAdmin &&
+                      (issue.status == IssueStatus.awaitingApproval ||
+                          issue.status == IssueStatus.needsAdmin)) ...[
+                    const SizedBox(height: 10),
+                    _ReporterWaitBanner(status: issue.status),
+                  ],
                   if (isAdmin && issue.status.needsAttention) ...[
                     const SizedBox(height: 10),
                     _AdminCompletionPanel(
@@ -536,6 +542,45 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
             onSend: _sendReply,
           ),
       ],
+    );
+  }
+}
+
+/// Fixed, non-interactive explanation for the REPORTER while their issue
+/// waits on someone else. "Fix ready for review" used to be a dead end for the
+/// person who reported it — this says whose turn it is and that nothing is
+/// needed from them.
+class _ReporterWaitBanner extends StatelessWidget {
+  final IssueStatus status;
+
+  const _ReporterWaitBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = status == IssueStatus.awaitingApproval
+        ? "A fix is ready and waiting for an administrator's approval. Nothing is needed from you right now."
+        : 'An administrator is taking a closer look at this.';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.hourglass_top_rounded,
+              size: 18, color: AppTheme.textSecondary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                  fontSize: 13, color: AppTheme.textSecondary, height: 1.35),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

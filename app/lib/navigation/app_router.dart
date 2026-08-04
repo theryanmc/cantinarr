@@ -702,8 +702,9 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/instance',
   ];
 
-  return path == '/issues' ||
-      adminRoots.any((route) => _isWithinRoute(path, route));
+  // '/issues' is deliberately NOT admin-gated any more: for non-admins the
+  // same route is the reporter inbox ("My reports"), scoped server-side.
+  return adminRoots.any((route) => _isWithinRoute(path, route));
 }
 
 int? _positiveIntParameter(GoRouterState state, String name) {
