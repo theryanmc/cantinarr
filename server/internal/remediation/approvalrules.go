@@ -130,7 +130,7 @@ func approvalRuleLabel(problemKind string, kind ActionKind, facet string) string
 func (s *Service) ListApprovalRules() ([]AgentApprovalRule, error) {
 	rows, err := s.db.Query(
 		`SELECT r.id, r.problem_kind, r.action_kind, r.action_facet, r.status,
-		        r.paused_reason, r.paused_at, r.created_by, u.username, r.seed_action_id,
+		        r.paused_reason, r.paused_at, r.paused_by_issue_id, r.created_by, u.username, r.seed_action_id,
 		        r.approved_count, r.resolved_count, r.last_approved_at, r.last_resolved_at,
 		        r.created_at, r.updated_at
 		 FROM agent_approval_rules r
@@ -149,14 +149,54 @@ func (s *Service) ListApprovalRules() ([]AgentApprovalRule, error) {
 		}
 		out = append(out, *rule)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Status == ApprovalRulePaused && out[i].PausedAt != nil {
+			out[i].ApprovedSincePause = s.manualApprovalsSince(&out[i])
+		}
+	}
+	return out, nil
+}
+
+// manualApprovalsSince counts HUMAN approvals of a paused rule's exact triple
+// since the pause — the server-computed argument for resuming ("you have
+// automated this and keep doing it by hand"). Best-effort: zero on any read
+// error, facet derived by the same function the sweep matches with.
+func (s *Service) manualApprovalsSince(rule *AgentApprovalRule) int64 {
+	rows, err := s.db.Query(
+		`SELECT COALESCE(NULLIF(a.approved_params, ''), a.params)
+		 FROM agent_actions a
+		 JOIN issues i ON i.id = a.issue_id
+		 WHERE a.kind = ? AND i.problem_kind = ?
+		   AND a.decided_by IS NOT NULL AND a.executed_at IS NOT NULL
+		   AND a.decided_at >= ?`,
+		rule.ActionKind, rule.ProblemKind, rule.PausedAt.UTC(),
+	)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var n int64
+	for rows.Next() {
+		var params string
+		if err := rows.Scan(&params); err != nil {
+			continue
+		}
+		facet, ok := actionAutoFacet(ActionKind(rule.ActionKind), json.RawMessage(params))
+		if ok && facet == rule.ActionFacet {
+			n++
+		}
+	}
+	return n
 }
 
 // GetApprovalRule loads one rule with its creator name.
 func (s *Service) GetApprovalRule(ruleID int64) (*AgentApprovalRule, error) {
 	row := s.db.QueryRow(
 		`SELECT r.id, r.problem_kind, r.action_kind, r.action_facet, r.status,
-		        r.paused_reason, r.paused_at, r.created_by, u.username, r.seed_action_id,
+		        r.paused_reason, r.paused_at, r.paused_by_issue_id, r.created_by, u.username, r.seed_action_id,
 		        r.approved_count, r.resolved_count, r.last_approved_at, r.last_resolved_at,
 		        r.created_at, r.updated_at
 		 FROM agent_approval_rules r
@@ -179,6 +219,7 @@ func scanApprovalRule(row rowScanner) (*AgentApprovalRule, error) {
 		rule           AgentApprovalRule
 		pausedReason   sql.NullString
 		pausedAt       sql.NullTime
+		pausedByIssue  sql.NullInt64
 		createdBy      sql.NullInt64
 		createdByName  sql.NullString
 		seedActionID   sql.NullInt64
@@ -187,11 +228,15 @@ func scanApprovalRule(row rowScanner) (*AgentApprovalRule, error) {
 	)
 	if err := row.Scan(
 		&rule.ID, &rule.ProblemKind, &rule.ActionKind, &rule.ActionFacet, &rule.Status,
-		&pausedReason, &pausedAt, &createdBy, &createdByName, &seedActionID,
+		&pausedReason, &pausedAt, &pausedByIssue, &createdBy, &createdByName, &seedActionID,
 		&rule.ApprovedCount, &rule.ResolvedCount, &lastApprovedAt, &lastResolvedAt,
 		&rule.CreatedAt, &rule.UpdatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if pausedByIssue.Valid {
+		v := pausedByIssue.Int64
+		rule.PausedByIssueID = &v
 	}
 	if pausedReason.Valid && pausedReason.String != "" {
 		v := pausedReason.String
@@ -300,11 +345,19 @@ func (s *Service) DeleteApprovalRule(ruleID int64) error {
 // transitioned the rule so callers notify exactly once. One failure pauses
 // today; a future N-strikes policy changes only this helper's body.
 func pauseApprovalRuleTx(tx *sql.Tx, ruleID int64, reason string) (bool, error) {
+	return pauseApprovalRuleForIssueTx(tx, ruleID, 0, reason)
+}
+
+// pauseApprovalRuleForIssueTx records WHICH issue's outcome stood the rule
+// down beside the pause itself — the evidence link the rules screen renders.
+func pauseApprovalRuleForIssueTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bool, error) {
 	res, err := tx.Exec(
 		`UPDATE agent_approval_rules
-		 SET status = ?, paused_reason = ?, paused_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		 SET status = ?, paused_reason = ?, paused_at = CURRENT_TIMESTAMP,
+		     paused_by_issue_id = CASE WHEN ? > 0 THEN ? ELSE paused_by_issue_id END,
+		     updated_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status = ?`,
-		ApprovalRulePaused, reason, ruleID, ApprovalRuleActive,
+		ApprovalRulePaused, reason, issueID, issueID, ruleID, ApprovalRuleActive,
 	)
 	if err != nil {
 		return false, fmt.Errorf("pause approval rule %d: %w", ruleID, err)
@@ -332,7 +385,7 @@ func approvalRuleLabelTx(tx *sql.Tx, ruleID int64) (string, error) {
 // transitioned the rule (false = it was already paused or deleted), so callers
 // notify post-commit exactly once per real transition.
 func pauseRuleForFailureTx(tx *sql.Tx, ruleID, issueID int64, reason string) (bool, error) {
-	paused, err := pauseApprovalRuleTx(tx, ruleID, reason)
+	paused, err := pauseApprovalRuleForIssueTx(tx, ruleID, issueID, reason)
 	if err != nil || !paused {
 		return false, err
 	}

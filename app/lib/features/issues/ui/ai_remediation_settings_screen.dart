@@ -1,3 +1,4 @@
+import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -201,6 +202,31 @@ class _AiRemediationSettingsScreenState
             'access switches are never used.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
+        ),
+        // The pipeline's other two surfaces, one tap away — the queue, its
+        // governing rules, and this config are one system, not three
+        // destinations an admin must already know about.
+        ListTile(
+          leading:
+              const Icon(Icons.rule_folder_outlined, color: AppTheme.accent),
+          title: const Text('Standing auto-approvals',
+              style: TextStyle(color: AppTheme.textPrimary)),
+          subtitle: const Text('The fixes approved without paging you',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right,
+              color: AppTheme.textSecondary, size: 18),
+          onTap: () => context.push('/settings/agent-approval-rules'),
+        ),
+        ListTile(
+          leading: const Icon(Icons.build_circle_outlined,
+              color: AppTheme.accent),
+          title: const Text('Agent fixes',
+              style: TextStyle(color: AppTheme.textPrimary)),
+          subtitle: const Text('Awaiting review, and everything already done',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right,
+              color: AppTheme.textSecondary, size: 18),
+          onTap: () => context.push('/agent-actions'),
         ),
         const _SectionLabel('General'),
         SwitchListTile(

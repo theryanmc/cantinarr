@@ -335,6 +335,14 @@ type AgentApprovalRule struct {
 	Status         string     `json:"status"` // active | paused
 	PausedReason   *string    `json:"paused_reason"`
 	PausedAt       *time.Time `json:"paused_at"`
+	// PausedByIssueID deep-links the issue whose outcome stood the rule down —
+	// the evidence, not just the verdict.
+	PausedByIssueID *int64 `json:"paused_by_issue_id"`
+	// ApprovedSincePause counts MANUAL approvals of this rule's exact triple
+	// since it paused: "you have automated this and keep doing it by hand" is
+	// the argument for resuming, computed by the server so clients never
+	// re-derive facets.
+	ApprovedSincePause int64 `json:"approved_since_pause"`
 	CreatedBy      *int64     `json:"created_by"`
 	CreatedByName  *string    `json:"created_by_name"`
 	SeedActionID   *int64     `json:"seed_action_id"`
