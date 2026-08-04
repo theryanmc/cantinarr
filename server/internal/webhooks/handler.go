@@ -51,6 +51,10 @@ type AvailabilityInvalidator interface {
 // from a season of content that does not exist lives with the detector.
 type PreAirImportWitness interface {
 	RecordPreAirImport(instanceID string, tvdbID, tmdbID, seasonNumber int, title string)
+	// RecordSuspectImport is told about every completed Sonarr import so the
+	// truncated-file sentinel can judge it against the arr's own analysis.
+	// Advisory-only in this wave: the witness opens admin notices, never runs.
+	RecordSuspectImport(instanceID string, tvdbID, tmdbID, seasonNumber, episodeNumber int, title string)
 }
 
 // Handler terminates the arr webhook callbacks.
@@ -130,6 +134,20 @@ func (h *Handler) checkPreAirImport(instanceID string, payload arrPayload) {
 		// anyway, and a pack that imports as ten episodes must not open ten
 		// investigations of one problem.
 		return
+	}
+}
+
+// checkSuspectImport hands every completed import to the truncated-file
+// sentinel. Unlike the pre-air gate there is no free payload test — the
+// evidence (the arr's ffprobe runtime for the imported file) needs a library
+// read — so the witness owns the whole judgment and its cost.
+func (h *Handler) checkSuspectImport(instanceID string, payload arrPayload) {
+	if h.preAir == nil || payload.Series == nil {
+		return
+	}
+	for _, ep := range payload.Episodes {
+		h.preAir.RecordSuspectImport(instanceID, payload.Series.TvdbID, payload.Series.TmdbID,
+			ep.SeasonNumber, ep.EpisodeNumber, payload.Series.Title)
 	}
 }
 
@@ -222,6 +240,7 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 		if payload.Series != nil {
 			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true)
 			h.checkPreAirImport(instanceID, payload)
+			h.checkSuspectImport(instanceID, payload)
 		}
 
 	case "MovieAdded", "SeriesAdd":

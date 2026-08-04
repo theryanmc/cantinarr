@@ -1031,3 +1031,54 @@ func TestPreAirRepairProvenIsScopedToItsOwnProblemKind(t *testing.T) {
 		t.Fatalf("the pre-air issue on a clean season proven = %v (err %v), want true", proven, err)
 	}
 }
+
+// The truncated-import sentinel: a file that IMPORTS at a fraction of the
+// show's own runtime is invisible to every queue-shaped detector — the queue
+// looks healthy and the library looks full. The arr's ffprobe runtime is the
+// evidence; no analysis, no verdict; one notice per episode-file, advisory.
+func TestSuspectImportSentinel(t *testing.T) {
+	svc, _, fake := setupPreAirService(t)
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	fake.mu.Lock()
+	fake.series = []map[string]any{{"id": 28, "title": "Futurama", "tvdbId": 73871, "tmdbId": 615, "runtime": 42}}
+	fake.mu.Unlock()
+	episodes := []map[string]any{
+		{"id": 28203, "seriesId": 28, "seasonNumber": 2, "episodeNumber": 3, "hasFile": true, "episodeFileId": 50203, "airDateUtc": "2026-07-01T00:00:00Z"},
+		{"id": 28204, "seriesId": 28, "seasonNumber": 2, "episodeNumber": 4, "hasFile": true, "episodeFileId": 50204, "airDateUtc": "2026-07-08T00:00:00Z"},
+		{"id": 28205, "seriesId": 28, "seasonNumber": 2, "episodeNumber": 5, "hasFile": true, "episodeFileId": 50205, "airDateUtc": "2026-07-15T00:00:00Z"},
+	}
+	files := []map[string]any{
+		{"id": 50203, "seriesId": 28, "seasonNumber": 2, "dateAdded": "2026-08-01T00:00:00Z",
+			"mediaInfo": map[string]any{"runTime": "12:00", "resolution": "1080p"}},
+		{"id": 50204, "seriesId": 28, "seasonNumber": 2, "dateAdded": "2026-08-01T00:00:00Z",
+			"mediaInfo": map[string]any{"runTime": "41:30", "resolution": "1080p"}},
+		{"id": 50205, "seriesId": 28, "seasonNumber": 2, "dateAdded": "2026-08-01T00:00:00Z"},
+	}
+	fake.setLibrary(episodes, files)
+
+	// 12 minutes of a 42-minute show: flagged, once, with the SAMPLE label.
+	svc.RecordSuspectImport(preAirSonarrID, 73871, 615, 2, 3, "Futurama")
+	svc.RecordSuspectImport(preAirSonarrID, 73871, 615, 2, 3, "Futurama")
+	var count int
+	_ = svc.db.QueryRow("SELECT COUNT(1) FROM issues WHERE closed_at IS NULL").Scan(&count)
+	if count != 1 {
+		t.Fatalf("open issues after duplicate reports = %d, want 1", count)
+	}
+	issue := soleIssue(t, svc)
+	if issue.Status != IssueNeedsAdmin || issue.EpisodeNumber != 3 {
+		t.Fatalf("sentinel issue = %q S%dE%d, want advisory needs_admin on E3", issue.Status, issue.SeasonNumber, issue.EpisodeNumber)
+	}
+	if kind := issueProblemKind(t, svc, issue.ID); kind != arr.ProblemSample {
+		t.Fatalf("problem_kind = %q, want the sample label (one cause, one label)", kind)
+	}
+
+	// A healthy runtime and an unanalyzed file each produce nothing.
+	svc.RecordSuspectImport(preAirSonarrID, 73871, 615, 2, 4, "Futurama")
+	svc.RecordSuspectImport(preAirSonarrID, 73871, 615, 2, 5, "Futurama")
+	_ = svc.db.QueryRow("SELECT COUNT(1) FROM issues WHERE closed_at IS NULL").Scan(&count)
+	if count != 1 {
+		t.Fatalf("issues after healthy + unanalyzed = %d, want still 1", count)
+	}
+}
