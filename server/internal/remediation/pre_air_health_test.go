@@ -35,20 +35,21 @@ const preAirSonarrID = "sonarr-pre-air"
 type preAirFake struct {
 	t *testing.T
 
-	mu            sync.Mutex
-	requests      []string
-	series        []map[string]any
-	episodes      []map[string]any
-	files         []map[string]any
-	history       []map[string]any
+	mu                sync.Mutex
+	requests          []string
+	series            []map[string]any
+	episodes          []map[string]any
+	files             []map[string]any
+	history           []map[string]any
 	queue             []map[string]any
 	queueDeletes      []string
 	queueDeleteStatus int
-	seriesHistory []map[string]any
-	failedGrabs   []string
-	fileDeletes   []string
-	episodeStatus int
-	historyStatus int
+	seriesHistory     []map[string]any
+	indexers          []map[string]any
+	failedGrabs       []string
+	fileDeletes       []string
+	episodeStatus     int
+	historyStatus     int
 }
 
 func (f *preAirFake) start() *httptest.Server {
@@ -125,6 +126,11 @@ func (f *preAirFake) start() *httptest.Server {
 			}
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{})
+		case r.URL.Path == "/api/v3/indexer":
+			f.mu.Lock()
+			records := copyPreAirRecords(f.indexers)
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(records)
 		case r.URL.Path == "/api/v3/queue" && r.Method == http.MethodGet:
 			f.mu.Lock()
 			records := copyPreAirRecords(f.queue)
@@ -207,6 +213,12 @@ func (f *preAirFake) setQueueDeleteStatus(code int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queueDeleteStatus = code
+}
+
+func (f *preAirFake) setIndexers(records []map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.indexers = records
 }
 
 func (f *preAirFake) queueDeletesSeen() []string {

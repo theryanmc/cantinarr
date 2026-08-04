@@ -922,3 +922,63 @@ func TestPreventionNamesTheInstanceWithoutARegistry(t *testing.T) {
 		t.Fatalf("title = %q, want %q", issue.Title, want)
 	}
 }
+
+// A recurrence notice quotes the LIVE value of the setting it names, and the
+// admin changing that setting is what resolves it — advice that notices being
+// taken. Unchanged values never resolve; the change is the signal.
+func TestPreventionNoticeQuotesLiveValuesAndSelfResolves(t *testing.T) {
+	svc, _, fake := setupPreAirService(t)
+	fake.setIndexers([]map[string]any{{
+		"name": "NZBgeek", "protocol": "torrent", "enableRss": true, "priority": 25,
+		"fields": []map[string]any{
+			{"name": "apiKey", "value": "SECRET-XYZ"},
+			{"name": "minimumSeeders", "value": 0},
+		},
+	}})
+
+	advice, ok := arr.PreventionFor(arr.ProblemDownloadStalled)
+	if !ok {
+		t.Fatalf("catalog lost its stalled entry")
+	}
+	now := time.Now().UTC()
+	issueID, err := svc.openPreventionIssue(preventionCandidate{
+		instanceID: preAirSonarrID, problemKind: arr.ProblemDownloadStalled,
+		issueCount: 4, distinctMedia: 3, distinctDays: 4,
+	}, advice, "TV", now)
+	if err != nil {
+		t.Fatalf("open prevention issue: %v", err)
+	}
+	var detail string
+	if err := svc.db.QueryRow("SELECT detail FROM issues WHERE id = ?", issueID).Scan(&detail); err != nil {
+		t.Fatalf("read detail: %v", err)
+	}
+	if !strings.Contains(detail, "min seeders 0") || !strings.Contains(detail, "NZBgeek") {
+		t.Fatalf("notice does not quote the live value:\n%s", detail)
+	}
+	if strings.Contains(detail, "SECRET-XYZ") {
+		t.Fatalf("notice leaked a secret:\n%s", detail)
+	}
+
+	// Same values: the sweep must NOT resolve.
+	svc.sweepPreventionLiveChanges(time.Now().UTC())
+	var closed bool
+	_ = svc.db.QueryRow("SELECT closed_at IS NOT NULL FROM issues WHERE id = ?", issueID).Scan(&closed)
+	if closed {
+		t.Fatalf("notice resolved with nothing changed")
+	}
+
+	// The admin raises min seeders: the named setting changed, the notice ends.
+	fake.setIndexers([]map[string]any{{
+		"name": "NZBgeek", "protocol": "torrent", "enableRss": true, "priority": 25,
+		"fields": []map[string]any{
+			{"name": "apiKey", "value": "SECRET-XYZ"},
+			{"name": "minimumSeeders", "value": 25},
+		},
+	}})
+	svc.sweepPreventionLiveChanges(time.Now().UTC())
+	var kind string
+	_ = svc.db.QueryRow("SELECT COALESCE(resolution_kind,''), closed_at IS NOT NULL FROM issues WHERE id = ?", issueID).Scan(&kind, &closed)
+	if !closed || kind != ResolutionPreventionSettingChanged {
+		t.Fatalf("after the setting changed: closed %v kind %q, want auto-resolved %q", closed, kind, ResolutionPreventionSettingChanged)
+	}
+}

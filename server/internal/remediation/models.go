@@ -34,10 +34,10 @@ const (
 	// terminal (the reporter's tap or the confirm-wait sweep ends it).
 	IssueAwaitingConfirmation = "awaiting_confirmation"
 	IssueNeedsAdmin           = "needs_admin"
-	IssueResolved         = "resolved"
-	IssueWontFix          = "wont_fix"
-	IssueFailed           = "failed"
-	IssueDismissed        = "dismissed"
+	IssueResolved             = "resolved"
+	IssueWontFix              = "wont_fix"
+	IssueFailed               = "failed"
+	IssueDismissed            = "dismissed"
 )
 
 // Issue source values.
@@ -90,7 +90,11 @@ const (
 	// has no AI provider" system issue when the runner first resolves a shared
 	// turn again.
 	ResolutionRemediationProviderConfigured = "remediation_provider_configured"
-	ResolutionLegacyUnknown                 = "legacy_unknown"
+	// ResolutionPreventionSettingChanged closes a recurrence notice because the
+	// settings it named CHANGED — advice that notices being taken. If the
+	// pattern re-forms from newer incidents, a fresh notice says so.
+	ResolutionPreventionSettingChanged = "prevention_setting_changed"
+	ResolutionLegacyUnknown            = "legacy_unknown"
 )
 
 // AdminIssueDisposition is the explicit human judgment recorded by the admin
@@ -327,14 +331,14 @@ type AutoApprovalOffer struct {
 // AgentApprovalRule is one standing auto-approval rule as returned to the
 // admin rules surface.
 type AgentApprovalRule struct {
-	ID             int64      `json:"id"`
-	ProblemKind    string     `json:"problem_kind"`
-	ActionKind     string     `json:"action_kind"`
-	ActionFacet    string     `json:"action_facet"`
-	Label          string     `json:"label"`
-	Status         string     `json:"status"` // active | paused
-	PausedReason   *string    `json:"paused_reason"`
-	PausedAt       *time.Time `json:"paused_at"`
+	ID           int64      `json:"id"`
+	ProblemKind  string     `json:"problem_kind"`
+	ActionKind   string     `json:"action_kind"`
+	ActionFacet  string     `json:"action_facet"`
+	Label        string     `json:"label"`
+	Status       string     `json:"status"` // active | paused
+	PausedReason *string    `json:"paused_reason"`
+	PausedAt     *time.Time `json:"paused_at"`
 	// PausedByIssueID deep-links the issue whose outcome stood the rule down —
 	// the evidence, not just the verdict.
 	PausedByIssueID *int64 `json:"paused_by_issue_id"`
@@ -342,16 +346,16 @@ type AgentApprovalRule struct {
 	// since it paused: "you have automated this and keep doing it by hand" is
 	// the argument for resuming, computed by the server so clients never
 	// re-derive facets.
-	ApprovedSincePause int64 `json:"approved_since_pause"`
-	CreatedBy      *int64     `json:"created_by"`
-	CreatedByName  *string    `json:"created_by_name"`
-	SeedActionID   *int64     `json:"seed_action_id"`
-	ApprovedCount  int64      `json:"approved_count"`
-	ResolvedCount  int64      `json:"resolved_count"`
-	LastApprovedAt *time.Time `json:"last_approved_at"`
-	LastResolvedAt *time.Time `json:"last_resolved_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ApprovedSincePause int64      `json:"approved_since_pause"`
+	CreatedBy          *int64     `json:"created_by"`
+	CreatedByName      *string    `json:"created_by_name"`
+	SeedActionID       *int64     `json:"seed_action_id"`
+	ApprovedCount      int64      `json:"approved_count"`
+	ResolvedCount      int64      `json:"resolved_count"`
+	LastApprovedAt     *time.Time `json:"last_approved_at"`
+	LastResolvedAt     *time.Time `json:"last_resolved_at"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // ListApprovalRulesResponse is the GET /api/admin/agent-approval-rules result.
