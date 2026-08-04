@@ -246,14 +246,11 @@ func (s *Service) preAirRepairProven(issue *Issue) (bool, error) {
 	if issue == nil || issue.MediaType != "tv" || issue.SeasonNumber < 0 || issue.InstanceID == "" {
 		return false, nil
 	}
-	// problem_kind is read straight from the row rather than carried on Issue:
-	// it is server-authored, it is not part of the client contract, and the one
-	// consumer is this gate.
-	var problemKind sql.NullString
-	if err := s.db.QueryRow("SELECT problem_kind FROM issues WHERE id = ?", issue.ID).Scan(&problemKind); err != nil {
-		return false, fmt.Errorf("read problem kind: %w", err)
+	problemKind, err := s.storedProblemKind(issue.ID)
+	if err != nil {
+		return false, err
 	}
-	if problemKind.String != arr.ProblemPreAirSeasonFill {
+	if problemKind != arr.ProblemPreAirSeasonFill {
 		return false, nil
 	}
 	if s.registry == nil {
@@ -275,6 +272,35 @@ func (s *Service) preAirRepairProven(issue *Issue) (bool, error) {
 	// impossible file left behind would read as repaired. Nothing that has not
 	// aired may still hold a file.
 	return len(timeline.UnairedWithFile) == 0, nil
+}
+
+// storedProblemKind reads the server-authored detector label straight from the
+// issue row. Deliberately not carried on Issue: it is not part of the client
+// contract, and its consumers are server-side gates (this class's recovery
+// proof and the recovery preflight's class routing).
+func (s *Service) storedProblemKind(issueID int64) (string, error) {
+	var kind sql.NullString
+	if err := s.db.QueryRow("SELECT problem_kind FROM issues WHERE id = ?", issueID).Scan(&kind); err != nil {
+		return "", fmt.Errorf("read problem kind: %w", err)
+	}
+	return kind.String, nil
+}
+
+// probePreAirRecovery is the recovery preflight for the pre-air season class,
+// standing in for the queue-shaped probe that fits every other auto incident.
+// completed carries the queue probe's exact meaning — the incident's own
+// recovery proof holds, so pending work is cancelled or the issue closed
+// instead of dispatching over an already-repaired season. An unreadable season
+// fails closed like every other preflight read: no proof, no conclusion.
+func (s *Service) probePreAirRecovery(issue *Issue) (arrRecoveryProbe, error) {
+	proven, err := s.preAirRepairProven(issue)
+	if err != nil {
+		return arrRecoveryProbe{}, err
+	}
+	if proven {
+		return arrRecoveryProbe{completed: true}, nil
+	}
+	return arrRecoveryProbe{}, nil
 }
 
 // --- fallback for instances whose webhook was never configured ---
