@@ -408,3 +408,68 @@ func TestMissingMediaIsNeverAnAbandonedUpgrade(t *testing.T) {
 		t.Fatal("a library gap was closed as an abandoned upgrade")
 	}
 }
+
+// The approval card carries the same remediation memory the agent's PRIOR
+// ATTEMPTS prompt block reads — the human must never decide with less evidence
+// than the model. Recurrence (the arr re-adding the same download after the
+// fix ran) is the field that matters.
+func TestActionsCarryPriorAttemptsForApprovers(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	res, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, download_id, problem_kind)
+		 VALUES ('auto', 'awaiting_approval', 'movie', 42, 'Loop Movie', 'stalled', 'TORRENT-X', 'Download stalled')`,
+	)
+	if err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_runs (issue_id, trigger, status, model) VALUES (?, 'auto', 'waiting_approval', 'test')`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	var runID int64
+	_ = svc.db.QueryRow("SELECT id FROM agent_runs WHERE issue_id = ?", issueID).Scan(&runID)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, run_id, kind, params, rationale, risk, status, executed_at, target_download_id, fingerprint, tool_use_id)
+		 VALUES (?, ?, 'remediate_queue', '{"media_type":"movie","queue_id":9,"action":"blocklist_search"}', 'first try', 'mutating', 'executed', datetime('now','-1 hour'), 'TORRENT-X', 'fp-exec-1', 'tu-1')`,
+		issueID, runID,
+	); err != nil {
+		t.Fatalf("seed executed action: %v", err)
+	}
+	// The arr re-added the SAME download after the fix ran.
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observation_downloads (issue_id, download_id, first_seen_at, arr_added_at)
+		 VALUES (?, 'TORRENT-X', datetime('now','-2 hours'), datetime('now','-10 minutes'))`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed re-add witness: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, run_id, kind, params, rationale, risk, status, fingerprint, tool_use_id)
+		 VALUES (?, ?, 'remediate_queue', '{"media_type":"movie","queue_id":9,"action":"blocklist_search"}', 'again', 'mutating', 'proposed', 'fp-prop-2', 'tu-2')`,
+		issueID, runID,
+	); err != nil {
+		t.Fatalf("seed proposal: %v", err)
+	}
+
+	actions, err := svc.ListActions(ActionProposed)
+	if err != nil {
+		t.Fatalf("ListActions: %v", err)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("proposed actions = %d, want 1", len(actions))
+	}
+	act := actions[0]
+	if act.IssueTmdbID != 42 || act.IssueOccurrences < 1 {
+		t.Fatalf("card identity = tmdb %d occurrences %d, want the joined issue identity", act.IssueTmdbID, act.IssueOccurrences)
+	}
+	if len(act.PriorAttempts) != 1 {
+		t.Fatalf("prior attempts = %+v, want exactly the executed blocklist_search", act.PriorAttempts)
+	}
+	got := act.PriorAttempts[0]
+	if got.Kind != "remediate_queue" || got.Facet != "blocklist_search" || !got.Recurred {
+		t.Fatalf("prior attempt = %+v, want a recurred blocklist_search", got)
+	}
+}

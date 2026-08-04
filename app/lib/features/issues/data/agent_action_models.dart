@@ -118,6 +118,31 @@ class AutoApprovalOffer {
 /// `GET /api/admin/agent-actions`. The reified [params] are parsed into a
 /// small read-only [AgentActionParams] view for plain-language rendering; the
 /// raw map is retained so an unknown kind still shows its data.
+/// One executed, download-attributed fix on the same issue — the server's own
+/// remediation memory, rendered for the approving human so they never decide
+/// with less evidence than the model. [recurred] means the arr re-added the
+/// SAME download after the fix ran: the fix did not hold.
+class PriorAttempt {
+  final String kind;
+  final String facet;
+  final DateTime? executedAt;
+  final bool recurred;
+
+  const PriorAttempt({
+    required this.kind,
+    this.facet = '',
+    this.executedAt,
+    this.recurred = false,
+  });
+
+  factory PriorAttempt.fromJson(Map<String, dynamic> json) => PriorAttempt(
+        kind: json['kind'] as String? ?? '',
+        facet: json['facet'] as String? ?? '',
+        executedAt: DateTime.tryParse(json['executed_at'] as String? ?? ''),
+        recurred: json['recurred'] as bool? ?? false,
+      );
+}
+
 class AgentAction {
   final int id;
   final int issueId;
@@ -170,6 +195,11 @@ class AgentAction {
   // Joined from the issue for the queue list view.
   final String issueTitle;
   final String issueMediaType;
+  final int issueTmdbId;
+  final int issueSeason;
+  final int issueEpisode;
+  final int issueOccurrences;
+  final List<PriorAttempt> priorAttempts;
   final String? issueCategory;
   final IssueStatus issueStatus;
   final DateTime? issueClosedAt;
@@ -219,6 +249,11 @@ class AgentAction {
     required this.createdAt,
     required this.issueTitle,
     required this.issueMediaType,
+    this.issueTmdbId = 0,
+    this.issueSeason = 0,
+    this.issueEpisode = 0,
+    this.issueOccurrences = 0,
+    this.priorAttempts = const [],
     required this.issueCategory,
     required this.issueStatus,
     required this.issueClosedAt,
@@ -265,6 +300,14 @@ class AgentAction {
           DateTime.tryParse(json['created_at'] as String? ?? '')?.toLocal(),
       issueTitle: json['issue_title'] as String? ?? '',
       issueMediaType: json['issue_media_type'] as String? ?? '',
+      issueTmdbId: (json['issue_tmdb_id'] as num?)?.toInt() ?? 0,
+      issueSeason: (json['issue_season'] as num?)?.toInt() ?? 0,
+      issueEpisode: (json['issue_episode'] as num?)?.toInt() ?? 0,
+      issueOccurrences: (json['issue_occurrences'] as num?)?.toInt() ?? 0,
+      priorAttempts: ((json['prior_attempts'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(PriorAttempt.fromJson)
+          .toList(),
       issueCategory: json['issue_category'] as String?,
       issueStatus: IssueStatus.fromValue(json['issue_status'] as String?),
       issueClosedAt: DateTime.tryParse(json['issue_closed_at'] as String? ?? '')

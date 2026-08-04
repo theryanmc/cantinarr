@@ -821,6 +821,55 @@ void main() {
     );
     expect(find.widgetWithText(ElevatedButton, 'Approve'), findsNothing);
   });
+
+  // The approver must never decide with less evidence than the model: the
+  // card renders the server's remediation memory, recurrence called out, and
+  // the exact media scope.
+  testWidgets('prior attempts render with the recurrence verdict',
+      (tester) async {
+    final action = AgentAction.fromJson(<String, dynamic>{
+      'id': 13,
+      'issue_id': 5,
+      'run_id': 9,
+      'kind': 'remediate_queue',
+      'params': {
+        'media_type': 'tv',
+        'queue_id': 4,
+        'action': 'blocklist_search',
+      },
+      'rationale': 'try again',
+      'status': 'proposed',
+      'can_decide': true,
+      'issue_title': 'Loop Show',
+      'issue_media_type': 'tv',
+      'issue_status': 'awaiting_approval',
+      'instance_id': 'inst-1',
+      'instance_name': 'TV',
+      'instance_service_type': 'sonarr',
+      'created_at': '2026-06-23T10:00:00Z',
+      'issue_season': 2,
+      'issue_episode': 3,
+      'issue_occurrences': 3,
+      'prior_attempts': [
+        {
+          'kind': 'remediate_queue',
+          'facet': 'blocklist_search',
+          'executed_at': '2026-06-23T09:00:00Z',
+          'recurred': true,
+        },
+      ],
+    });
+    await _pump(
+      tester,
+      auth: _adminState,
+      service: _FakeIssuesService(),
+      action: action,
+    );
+    expect(find.textContaining('came back'), findsOneWidget);
+    expect(find.textContaining('did not hold'), findsOneWidget);
+    expect(find.textContaining('S02E03'), findsOneWidget);
+    expect(find.textContaining('seen 3 times'), findsOneWidget);
+  });
 }
 
 /// A manual-import proposal carrying the server's standing-rule offer.
@@ -848,3 +897,8 @@ AgentAction _proposedWithOffer({bool reactivates = false}) =>
         'reactivates_paused_rule': reactivates,
       },
     });
+
+// The approver must never decide with less evidence than the model: the card
+// renders the server's remediation memory, with recurrence called out.
+void main2() {}
+

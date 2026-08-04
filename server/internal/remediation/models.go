@@ -281,9 +281,35 @@ type AgentAction struct {
 	AutoRuleLabel     *string            `json:"auto_rule_label"`
 	AutoApprovalOffer *AutoApprovalOffer `json:"auto_approval_offer,omitempty"`
 
+	// Joined issue identity for the approval card: what the fix is about, in
+	// the reader's own terms — poster identity (media type + tmdb id is the
+	// poster key everywhere in the app), exact season/episode scope, and how
+	// many times this problem has recurred.
+	IssueTmdbID      int `json:"issue_tmdb_id"`
+	IssueSeason      int `json:"issue_season"`
+	IssueEpisode     int `json:"issue_episode"`
+	IssueOccurrences int `json:"issue_occurrences"`
+
+	// PriorAttempts is the same server-recorded memory the agent's PRIOR
+	// ATTEMPTS prompt block reads, rendered for the approving human — the
+	// admin must never decide with less evidence than the model. Populated on
+	// decidable proposals only.
+	PriorAttempts []ActionPriorAttempt `json:"prior_attempts,omitempty"`
+
 	// Joined issue fields used only to compute the offer; not on the wire.
 	IssueSource      string `json:"-"`
 	IssueProblemKind string `json:"-"`
+}
+
+// ActionPriorAttempt is one executed, download-attributed fix on the same
+// issue. Recurred means the arr re-added that SAME download after the fix ran
+// — the machine-checkable proof the fix did not hold, and the strongest reason
+// an approver could have to say no to a repeat.
+type ActionPriorAttempt struct {
+	Kind       string    `json:"kind"`
+	Facet      string    `json:"facet,omitempty"`
+	ExecutedAt time.Time `json:"executed_at"`
+	Recurred   bool      `json:"recurred"`
 }
 
 // AutoApprovalOffer invites the approving admin to arm a standing rule for
