@@ -786,3 +786,46 @@ func TestPausedRuleCarriesEvidenceAndSincePauseCount(t *testing.T) {
 		t.Fatalf("approved_since_pause = %d, want exactly the matching-facet manual approval", rule.ApprovedSincePause)
 	}
 }
+
+// The catalog is grounded by construction: only hand-approved triples appear,
+// active-ruled triples vanish, and arming an unseen triple is refused.
+func TestRuleCatalogGroundedArming(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (3, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	res, _ := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, problem_kind)
+		 VALUES ('user', 'resolved', 'movie', 9, 'M', 'stalled', 'Download stalled')`)
+	issueID, _ := res.LastInsertId()
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, decided_by, decided_at, executed_at, fingerprint, tool_use_id)
+		 VALUES (?, 'remediate_queue', '{"media_type":"movie","queue_id":1,"action":"blocklist_only"}', 'r', 'mutating', 'executed', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'fp-c1', 'tu-c1')`,
+		issueID,
+	); err != nil {
+		t.Fatalf("seed approval: %v", err)
+	}
+
+	candidates, err := svc.ListRuleCandidates()
+	if err != nil {
+		t.Fatalf("ListRuleCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ActionFacet != "blocklist_only" || candidates[0].ApprovedCount != 1 {
+		t.Fatalf("candidates = %+v, want the one hand-approved triple", candidates)
+	}
+
+	if _, err := svc.ArmRuleFromCatalog(3, "Download stalled", "remediate_queue", "remove"); err == nil {
+		t.Fatalf("armed a never-approved facet")
+	}
+	ruleID, err := svc.ArmRuleFromCatalog(3, "Download stalled", "remediate_queue", "blocklist_only")
+	if err != nil || ruleID <= 0 {
+		t.Fatalf("grounded arm = (%d, %v)", ruleID, err)
+	}
+	after, err := svc.ListRuleCandidates()
+	if err != nil {
+		t.Fatalf("ListRuleCandidates after arm: %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("armed triple still listed: %+v", after)
+	}
+}

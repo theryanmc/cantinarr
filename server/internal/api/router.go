@@ -238,6 +238,8 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/issues/{id}/resolve", remediationHandler.ResolveIssue)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/issues/{id}/activity", remediationHandler.GetIssueActivity)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-digest", remediationHandler.Digest)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/agent-approval-rules/candidates", remediationHandler.ListRuleCandidates)
+			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Post("/agent-approval-rules", remediationHandler.ArmRule)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Get("/remediation-settings", remediationHandler.GetSettings)
 			r.With(auth.RequirePermission(auth.PermissionRemediationManage)).Put("/remediation-settings", remediationHandler.UpdateSettings)
 
