@@ -473,3 +473,46 @@ func TestActionsCarryPriorAttemptsForApprovers(t *testing.T) {
 		t.Fatalf("prior attempt = %+v, want a recurred blocklist_search", got)
 	}
 }
+
+// The digest is the scoreboard: zero-touch counts only resolved issues no
+// human decided on, and the rules that did the work are named.
+func TestAgentDigestCountsZeroTouch(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (9, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (id, problem_kind, action_kind, action_facet, status, created_at, updated_at)
+		 VALUES (5, 'Download stalled', 'remediate_queue', 'blocklist_only', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	// Issue A: resolved, its one action rule-approved (zero-touch).
+	// Issue B: resolved, its action human-approved.
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (id, source, status, media_type, tmdb_id, title, detail, resolution_kind, closed_at)
+		 VALUES (101, 'auto', 'resolved', 'movie', 1, 'A', 'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		        (102, 'auto', 'resolved', 'movie', 2, 'B', 'd', 'arr_state_cleared', CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, executed_at, auto_rule_id, decided_by, fingerprint, tool_use_id)
+		 VALUES (101, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, 5, NULL, 'fp-1', 'tu-1'),
+		        (102, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, NULL, 9, 'fp-2', 'tu-2')`,
+	); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+
+	d, err := svc.Digest(7)
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if d.IssuesResolved != 2 || d.ZeroTouch != 1 || d.ActionsExecuted != 2 || d.RuleApproved != 1 {
+		t.Fatalf("digest = resolved %d zeroTouch %d executed %d ruleApproved %d, want 2/1/2/1",
+			d.IssuesResolved, d.ZeroTouch, d.ActionsExecuted, d.RuleApproved)
+	}
+	if len(d.RuleCounts) != 1 || d.RuleCounts[0].Count != 1 {
+		t.Fatalf("rule counts = %+v, want the one rule with one execution", d.RuleCounts)
+	}
+}
