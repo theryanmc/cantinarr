@@ -170,10 +170,26 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyAgentActionPending(client, data)
 	case CategoryAgentAutoApprovalPaused:
 		n.notifyAgentAutoApprovalPaused(client, data)
+	case EventAutoDispatchDisabled:
+		// Autonomy standing down is exactly the "agent pipeline needs your
+		// decision" class, so it shares that preference column — and unlike
+		// the in-app snackbar, this one reaches an admin who was away.
+		users, err := n.prefs.usersOptedInto(CategoryAgentActionPending)
+		if err != nil || len(users) == 0 {
+			return
+		}
+		n.send(client, users, "Automatic problem detection switched off",
+			"Repeated unfinished investigations tripped the safety breaker — open Settings to review and re-enable",
+			passthrough(EventAutoDispatchDisabled, data))
 	case CategoryPlexAccessRequest:
 		n.notifyPlexAccessRequested(client, data)
 	}
 }
+
+// EventAutoDispatchDisabled is the circuit-breaker stand-down. It rides the
+// agent_action_pending preference; the durable record is the breaker's own
+// system issue.
+const EventAutoDispatchDisabled = "remediation_autodispatch_disabled"
 
 // notifyRequestPending pushes a new pending request to opted-in admins, badging
 // the home-screen icon with the live queue depth.

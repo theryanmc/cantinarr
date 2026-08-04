@@ -346,3 +346,68 @@ func TestAutoIssueSchemaSanity(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Autonomy never stands down silently: the breaker trip opens ONE durable
+// admin issue and re-enabling auto-dispatch is what closes it.
+func TestBreakerTripOpensDurableIssueAndReenableResolves(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.SetSettings(Settings{Enabled: true, AutoDispatch: true, Mode: ModeSupervised}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	svc.tripCircuitBreaker(5, 5)
+
+	var issueID int64
+	var status string
+	if err := svc.db.QueryRow(
+		"SELECT id, status FROM issues WHERE dedupe_key = ? AND closed_at IS NULL",
+		autoDispatchBreakerDedupeKey,
+	).Scan(&issueID, &status); err != nil {
+		t.Fatalf("breaker issue missing: %v", err)
+	}
+	if status != IssueNeedsAdmin {
+		t.Fatalf("breaker issue status = %q, want %q", status, IssueNeedsAdmin)
+	}
+	if svc.Settings().AutoDispatch {
+		t.Fatalf("auto-dispatch still on after trip")
+	}
+
+	cur := svc.Settings()
+	cur.AutoDispatch = true
+	if _, err := svc.SetSettings(cur); err != nil {
+		t.Fatalf("re-enable: %v", err)
+	}
+	var kind string
+	var closed bool
+	if err := svc.db.QueryRow(
+		"SELECT resolution_kind, closed_at IS NOT NULL FROM issues WHERE id = ?", issueID,
+	).Scan(&kind, &closed); err != nil {
+		t.Fatalf("read breaker issue: %v", err)
+	}
+	if !closed || kind == "" {
+		t.Fatalf("breaker issue after re-enable = closed %v kind %q, want auto-resolved", closed, kind)
+	}
+}
+
+// The boot repair's rule pause is announced exactly once at worker start —
+// the last silent stand-down.
+func TestBootPausedRulesAnnounceOnce(t *testing.T) {
+	svc, notif, _ := setupTestService(t)
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (problem_kind, action_kind, action_facet, status, paused_reason, paused_at, created_at, updated_at)
+		 VALUES ('Download stalled', 'remediate_queue', 'blocklist_search', 'paused',
+		         'Cantinarr restarted while an auto-approved fix was executing; verify the arr state before re-arming this rule.',
+		         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed boot-paused rule: %v", err)
+	}
+	svc.announceBootPausedRules()
+	found := 0
+	for _, event := range notif.adminEvents {
+		if event == "agent_autoapproval_paused" {
+			found++
+		}
+	}
+	if found != 1 {
+		t.Fatalf("boot pause announcements = %d, want exactly 1", found)
+	}
+}

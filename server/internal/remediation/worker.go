@@ -86,6 +86,7 @@ func (s *Service) StartWorkers(ctx context.Context, runner *Runner, n int) {
 	// budget ceiling deferred them). The DB states are authoritative; duplicate
 	// jobs are harmless because Runner claims with a CAS.
 	s.recoverWork(runner)
+	s.announceBootPausedRules()
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()

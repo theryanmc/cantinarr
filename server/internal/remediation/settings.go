@@ -236,6 +236,7 @@ func (s *Service) Settings() Settings {
 // SetSettings persists the global remediation settings (written exactly like
 // request.SetGlobalSettings) and returns the normalized value that was stored.
 func (s *Service) SetSettings(g Settings) (Settings, error) {
+	wasOff := !s.Settings().AutoDispatch
 	g.normalize()
 	data, err := json.Marshal(g)
 	if err != nil {
@@ -243,6 +244,11 @@ func (s *Service) SetSettings(g Settings) (Settings, error) {
 	}
 	if _, err := s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", remediationSettingsKey, string(data)); err != nil {
 		return Settings{}, fmt.Errorf("save remediation settings: %w", err)
+	}
+	// Re-enabling auto-dispatch is what closes the breaker's durable notice —
+	// the admin acted on exactly what it asked for.
+	if wasOff && g.AutoDispatch {
+		_ = s.RecordAutoDispatchBreaker(false, 0, 0)
 	}
 	return g, nil
 }
