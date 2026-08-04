@@ -215,6 +215,13 @@ class _NotificationPreferencesScreenState
                 _save(prefs.copyWith(agentActionPending: v), prefs),
           ),
           _toggle(
+            title: 'Weekly agent summary',
+            subtitle:
+                'One line a week: what resolved itself, what your rules handled, what needs you',
+            value: prefs.agentDigest,
+            onChanged: (v) => _save(prefs.copyWith(agentDigest: v), prefs),
+          ),
+          _toggle(
             title: 'Plex access requests',
             subtitle: 'When someone shares their Plex email for an invite',
             value: prefs.plexAccessRequest,

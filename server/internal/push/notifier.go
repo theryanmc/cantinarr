@@ -183,7 +183,32 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 			passthrough(EventAutoDispatchDisabled, data))
 	case CategoryPlexAccessRequest:
 		n.notifyPlexAccessRequested(client, data)
+	case CategoryAgentDigest:
+		// The one push that reports success. Counts are server-computed
+		// integers; no free text ever reaches the lock screen (M5).
+		users, err := n.prefs.usersOptedInto(CategoryAgentDigest)
+		if err != nil || len(users) == 0 {
+			return
+		}
+		body := fmt.Sprintf("Last 7 days: %d resolved · %d zero-touch · %d by your rules",
+			intField(data, "issues_resolved"), intField(data, "zero_touch"), intField(data, "rule_approved"))
+		if needs := intField(data, "needs_admin_open") + intField(data, "pending_proposals"); needs > 0 {
+			body += fmt.Sprintf(" · %d need you", needs)
+		}
+		n.send(client, users, "Your media assistant, this week", body, passthrough(CategoryAgentDigest, data))
 	}
+}
+
+func intField(data map[string]interface{}, key string) int {
+	switch v := data[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
 }
 
 // EventAutoDispatchDisabled is the circuit-breaker stand-down. It rides the

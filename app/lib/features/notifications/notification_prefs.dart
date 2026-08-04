@@ -16,6 +16,7 @@ class NotificationPrefs {
   final bool plexAccessRequest;
   final bool plexInviteSent;
   final bool issueReportUpdate;
+  final bool agentDigest;
 
   const NotificationPrefs({
     required this.requestDecision,
@@ -28,6 +29,7 @@ class NotificationPrefs {
     this.plexAccessRequest = true,
     this.plexInviteSent = true,
     this.issueReportUpdate = true,
+    this.agentDigest = true,
   });
 
   factory NotificationPrefs.fromJson(Map<String, dynamic> json) =>
@@ -44,6 +46,7 @@ class NotificationPrefs {
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
         plexInviteSent: json['plex_invite_sent'] as bool? ?? true,
         issueReportUpdate: json['issue_report_update'] as bool? ?? true,
+        agentDigest: json['agent_digest'] as bool? ?? true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -57,6 +60,7 @@ class NotificationPrefs {
         'plex_access_request': plexAccessRequest,
         'plex_invite_sent': plexInviteSent,
         'issue_report_update': issueReportUpdate,
+        'agent_digest': agentDigest,
       };
 
   NotificationPrefs copyWith({
@@ -70,6 +74,7 @@ class NotificationPrefs {
     bool? plexAccessRequest,
     bool? plexInviteSent,
     bool? issueReportUpdate,
+    bool? agentDigest,
   }) =>
       NotificationPrefs(
         requestDecision: requestDecision ?? this.requestDecision,
@@ -82,5 +87,6 @@ class NotificationPrefs {
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,
         plexInviteSent: plexInviteSent ?? this.plexInviteSent,
         issueReportUpdate: issueReportUpdate ?? this.issueReportUpdate,
+        agentDigest: agentDigest ?? this.agentDigest,
       );
 }

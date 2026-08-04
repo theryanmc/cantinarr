@@ -516,3 +516,54 @@ func TestAgentDigestCountsZeroTouch(t *testing.T) {
 		t.Fatalf("rule counts = %+v, want the one rule with one execution", d.RuleCounts)
 	}
 }
+
+// The weekly scoreboard pages once a week, only when the week has something
+// to say — and a quiet week advances the window silently.
+func TestWeeklyDigestPushPacing(t *testing.T) {
+	svc, notif, _ := setupTestService(t)
+	if _, err := svc.SetSettings(Settings{Enabled: true, Mode: ModeSupervised}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	count := func() int {
+		n := 0
+		for _, e := range notif.adminEvents {
+			if e == "agent_digest" {
+				n++
+			}
+		}
+		return n
+	}
+	now := time.Now().UTC()
+
+	// A quiet week: no push, but the stamp advances.
+	svc.SweepWeeklyDigest(now)
+	if count() != 0 {
+		t.Fatalf("quiet week paged")
+	}
+	var stamp string
+	if err := svc.db.QueryRow("SELECT value FROM settings WHERE key = ?", digestPushStampKey).Scan(&stamp); err != nil || stamp == "" {
+		t.Fatalf("quiet week did not advance the stamp: %v", err)
+	}
+
+	// Activity inside the window, but the stamp is fresh: still silent.
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail, resolution_kind, closed_at)
+		 VALUES ('auto', 'resolved', 'movie', 1, 'A', 'd', 'arr_state_cleared', CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed resolved issue: %v", err)
+	}
+	svc.SweepWeeklyDigest(now.Add(time.Hour))
+	if count() != 0 {
+		t.Fatalf("paged inside the weekly window")
+	}
+
+	// A week later, with something to say: exactly one page.
+	svc.SweepWeeklyDigest(now.Add(8 * 24 * time.Hour))
+	if count() != 1 {
+		t.Fatalf("digest pushes = %d, want 1 after the window with activity", count())
+	}
+	svc.SweepWeeklyDigest(now.Add(8*24*time.Hour + time.Hour))
+	if count() != 1 {
+		t.Fatalf("digest re-paged inside the fresh window")
+	}
+}

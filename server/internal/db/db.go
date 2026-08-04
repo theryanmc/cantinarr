@@ -146,7 +146,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
     plex_invite_sent INTEGER NOT NULL DEFAULT 1,
-    issue_report_update INTEGER NOT NULL DEFAULT 1
+    issue_report_update INTEGER NOT NULL DEFAULT 1,
+    agent_digest INTEGER NOT NULL DEFAULT 1
 );
 
 -- Durable replacement for the notifier's in-memory new-content dedupe map. The
@@ -827,6 +828,8 @@ func Open(dbPath string) (*sql.DB, error) {
 		// One gentle re-ask before an unanswered confirm-wait is handed to an
 		// admin; the stamp is what makes the nudge happen exactly once.
 		{alter: "ALTER TABLE issues ADD COLUMN confirm_nudged_at DATETIME"},
+		// The weekly agent scoreboard push — the one push that reports success.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN agent_digest INTEGER NOT NULL DEFAULT 1"},
 		// The evidence link a paused rule was missing: WHICH issue's outcome
 		// stood it down. Written by every failure pause; the rules screen
 		// deep-links it.
