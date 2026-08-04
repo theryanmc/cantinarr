@@ -311,7 +311,16 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 		return fmt.Errorf("load issue %d: %w", issueID, err)
 	}
 	if isTerminalStatus(issue.Status) {
-		return nil // already closed (e.g. admin dismissed while parked).
+		// Already closed (e.g. admin dismissed while parked). The staged
+		// handoff can never be consumed now — finalize it, or recoverWork
+		// re-enqueues a resume nothing will ever claim, every minute, forever.
+		r.db.Exec(
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'issue_closed',
+			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			 WHERE issue_id = ? AND status = ?`,
+			issueID, runStatusResumePending,
+		)
+		return nil
 	}
 	if issue.Status == IssueObserving || issue.Status == IssueRecovering {
 		return nil
@@ -1468,10 +1477,16 @@ func (r *Runner) claimResume(issueID int64) (resumeState, bool, error) {
 		}
 		return resumeState{}, false, err
 	}
+	// `open` is accepted beside `investigating` on purpose: a fix's own
+	// success empties the queue, the preflight suspends the issue for the
+	// absence settle, and re-promotion lands it at open — which used to orphan
+	// this handoff and burn its transcript, closing the issue via a second
+	// fresh run instead. active_run_id is the mutual exclusion either way: a
+	// fresh Run that claims first blocks this CAS, and vice versa.
 	issueRes, err := tx.Exec(
 		`UPDATE issues SET status = ?, active_run_id = ?, updated_at = CURRENT_TIMESTAMP
-		 WHERE id = ? AND status = ? AND active_run_id IS NULL AND closed_at IS NULL`,
-		IssueInvestigating, state.runID, issueID, IssueInvestigating,
+		 WHERE id = ? AND status IN (?, ?) AND active_run_id IS NULL AND closed_at IS NULL`,
+		IssueInvestigating, state.runID, issueID, IssueInvestigating, IssueOpen,
 	)
 	if err != nil {
 		return resumeState{}, false, err
