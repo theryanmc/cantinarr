@@ -274,6 +274,36 @@ func (s *Service) preAirRepairProven(issue *Issue) (bool, error) {
 	return len(timeline.UnairedWithFile) == 0, nil
 }
 
+// stampUserContentLabel gives a season-scoped USER wrong-content report the
+// same typed label the auto detector writes, when the server's own season
+// check trips: files the service imported before their episodes aired. Called
+// at proposal time for delete_media_files — the moment a label first matters
+// for rule matching — and computed entirely from live arr facts, never from
+// the model's narration. First verdict wins.
+func (s *Service) stampUserContentLabel(issue *Issue) {
+	if issue == nil || issue.Source != SourceUser || issue.MediaType != "tv" ||
+		issue.SeasonNumber <= 0 || issue.EpisodeNumber != 0 || s.registry == nil {
+		return
+	}
+	client, err := s.registry.GetSonarrClient(issue.InstanceID)
+	if err != nil {
+		return
+	}
+	series, err := s.resolvePreAirSeries(client, issue.TvdbID, issue.TmdbID)
+	if err != nil || series == nil {
+		return
+	}
+	timeline, err := s.preAirSeasonTimeline(client, series.ID, issue.SeasonNumber)
+	if err != nil || !timeline.PreAirFill {
+		return
+	}
+	_, _ = s.db.Exec(
+		`UPDATE issues SET problem_kind = ? WHERE id = ? AND source = ?
+		   AND (problem_kind IS NULL OR problem_kind = '')`,
+		arr.ProblemPreAirSeasonFill, issue.ID, SourceUser,
+	)
+}
+
 // storedProblemKind reads the server-authored detector label straight from the
 // issue row. Deliberately not carried on Issue: it is not part of the client
 // contract, and its consumers are server-side gates (this class's recovery
