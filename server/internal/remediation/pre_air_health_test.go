@@ -43,6 +43,9 @@ type preAirFake struct {
 	history       []map[string]any
 	queue         []map[string]any
 	queueDeletes  []string
+	seriesHistory []map[string]any
+	failedGrabs   []string
+	fileDeletes   []string
 	episodeStatus int
 	historyStatus int
 }
@@ -89,6 +92,38 @@ func (f *preAirFake) start() *httptest.Server {
 			records := copyPreAirRecords(f.history)
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"totalRecords": len(records), "records": records})
+		case r.URL.Path == "/api/v3/history/series":
+			f.mu.Lock()
+			records := copyPreAirRecords(f.seriesHistory)
+			f.mu.Unlock()
+			// Bare JSON array — /history/series has no records envelope.
+			_ = json.NewEncoder(w).Encode(records)
+		case strings.HasPrefix(r.URL.Path, "/api/v3/history/failed/") && r.Method == http.MethodPost:
+			f.mu.Lock()
+			f.failedGrabs = append(f.failedGrabs, strings.TrimPrefix(r.URL.Path, "/api/v3/history/failed/"))
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		case r.URL.Path == "/api/v3/config/downloadclient":
+			_ = json.NewEncoder(w).Encode(map[string]any{"autoRedownloadFailed": true})
+		case strings.HasPrefix(r.URL.Path, "/api/v3/episodefile/") && r.Method == http.MethodDelete:
+			id := strings.TrimPrefix(r.URL.Path, "/api/v3/episodefile/")
+			f.mu.Lock()
+			f.fileDeletes = append(f.fileDeletes, id)
+			keptFiles := f.files[:0]
+			for _, file := range f.files {
+				if fmt.Sprint(file["id"]) != id {
+					keptFiles = append(keptFiles, file)
+				}
+			}
+			f.files = keptFiles
+			for _, ep := range f.episodes {
+				if fmt.Sprint(ep["episodeFileId"]) == id {
+					ep["hasFile"] = false
+					delete(ep, "episodeFileId")
+				}
+			}
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{})
 		case r.URL.Path == "/api/v3/queue" && r.Method == http.MethodGet:
 			f.mu.Lock()
 			records := copyPreAirRecords(f.queue)
@@ -165,6 +200,18 @@ func (f *preAirFake) queueDeletesSeen() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.queueDeletes...)
+}
+
+func (f *preAirFake) setSeriesHistory(records []map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seriesHistory = records
+}
+
+func (f *preAirFake) mutationsSeen() (fileDeletes, failedGrabs []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.fileDeletes...), append([]string(nil), f.failedGrabs...)
 }
 
 func (f *preAirFake) setEpisodeStatus(code int) {

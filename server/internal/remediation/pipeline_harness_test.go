@@ -3,6 +3,7 @@ package remediation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -224,5 +225,90 @@ func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
 	count, runStatus := agentRunRows(t, h.svc, issue.ID)
 	if count != 2 || runStatus != "succeeded" {
 		t.Fatalf("agent_runs = %d rows (last %q), want the orphaned-resume + succeeded fresh-run pair", count, runStatus)
+	}
+}
+
+// TestPipelinePreAirSeasonRepairFullLoop drives the flagship season repair the
+// way production runs it: the webhook detector opens ONE season issue, the
+// agent investigates and proposes delete_media_files, ONE approval deletes all
+// nine impossible files and marks their grabs failed at the real arr boundary,
+// and — with the failed-download policy ON — the service owns the replacement
+// search, so Cantinarr posts no command of its own (the fake treats any
+// /command call as an unexpected request). The issue then closes through the
+// class's own recovery proof at the resume preflight: nothing unaired holds a
+// file. This is ISS-044's hermetic twin.
+func TestPipelinePreAirSeasonRepairFullLoop(t *testing.T) {
+	h := newPipelineHarness(t)
+
+	// The default library IS the incident: nine files imported thirteen days
+	// before their episodes air. History carries the grab+import pair per file,
+	// which is the join the blocklist walk stands releases down by.
+	var hist []map[string]any
+	for n := 1; n <= 9; n++ {
+		downloadID := fmt.Sprintf("NZB-%d", n)
+		epID := 28*1000 + 11*100 + n
+		hist = append(hist,
+			map[string]any{"id": 9000 + n, "eventType": "downloadFolderImported", "episodeId": epID, "downloadId": downloadID},
+			map[string]any{"id": 8000 + n, "eventType": "grabbed", "episodeId": epID, "downloadId": downloadID},
+		)
+	}
+	h.fake.setSeriesHistory(hist)
+
+	if err := h.svc.recordPreAirSeason(preAirSonarrID, 73871, 615, 11, "Futurama"); err != nil {
+		t.Fatalf("record pre-air season: %v", err)
+	}
+	issue := soleIssue(t, h.svc)
+	if issue.Status != IssueOpen || issueProblemKind(t, h.svc, issue.ID) == "" {
+		t.Fatalf("pre-air issue = status %q kind %q, want open with a problem kind", issue.Status, issueProblemKind(t, h.svc, issue.ID))
+	}
+
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r1", "get_episode_timeline", `{}`),
+		toolCall("p1", mcp.ToolProposeAction, `{"issue_id":0,"kind":"delete_media_files","params":{"media_type":"tv","tmdb_id":615,"season":11,"episodes":[1,2,3,4,5,6,7,8,9],"blocklist":true},"rationale":"Nine files imported thirteen days before their episodes air cannot be those episodes."}`),
+	}}
+	r := h.runner(script)
+
+	if err := r.Run(context.Background(), issue.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if after := soleIssue(t, h.svc); after.Status != IssueAwaitingApproval {
+		t.Fatalf("issue after run = %q, want %q", after.Status, IssueAwaitingApproval)
+	}
+
+	var actionID int64
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issue.ID, ActionProposed,
+	).Scan(&actionID); err != nil {
+		t.Fatalf("find proposed action: %v", err)
+	}
+	act, err := h.svc.ApproveAction(1, actionID, nil)
+	if err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+	if act.Status != ActionExecuted {
+		t.Fatalf("approved action = %q (result %v), want %q", act.Status, act.ResultText, ActionExecuted)
+	}
+
+	fileDeletes, failedGrabs := h.fake.mutationsSeen()
+	if len(fileDeletes) != 9 || len(failedGrabs) != 9 {
+		t.Fatalf("arr mutations = %d file deletes / %d failed grabs, want 9 / 9", len(fileDeletes), len(failedGrabs))
+	}
+
+	// The resume preflight closes the issue through preAirRepairProven: the
+	// live season no longer holds any unaired file. The staged resume itself is
+	// never consumed — this class recovers by its own proof, not by the model
+	// narrating one.
+	if err := r.Resume(context.Background(), issue.ID); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	final := soleIssue(t, h.svc)
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionArrStateCleared {
+		t.Fatalf("final issue = status %q / kind %q, want %q / %q",
+			final.Status, final.ResolutionKind, IssueResolved, ResolutionArrStateCleared)
+	}
+	// The aggregate close aborts the staged resume the proof outran — a truthful
+	// terminal state, not a dangling handoff.
+	if count, last := agentRunRows(t, h.svc, issue.ID); count != 1 || last != "aborted" {
+		t.Fatalf("agent_runs = %d rows (last %q), want one investigation aborted by its own proof", count, last)
 	}
 }
