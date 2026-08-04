@@ -970,23 +970,58 @@ class _IssueSummaryCard extends StatelessWidget {
           if (issue.status == IssueStatus.needsAdmin &&
               issue.resolutionLabel.trim().isNotEmpty) ...[
             const SizedBox(height: 8),
-            const Text(
-              'Needs a closer look',
-              style: TextStyle(
+            Text(
+              issue.isPrevention ? 'What to change' : 'Needs a closer look',
+              style: const TextStyle(
                 color: AppTheme.requested,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 4),
-            SelectableText(
-              issue.resolutionLabel.trim(),
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-                height: 1.35,
+            if (issue.isPrevention)
+              // A notice's remedy is a checklist, not prose: one bullet per
+              // step, straight from the server-authored lines.
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final step in issue.resolutionLabel
+                      .trim()
+                      .split('\n')
+                      .where((line) => line.trim().isNotEmpty))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('•  ',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  fontSize: 13)),
+                          Expanded(
+                            child: SelectableText(
+                              step.trim().replaceFirst(RegExp(r'^[-•]\s*'), ''),
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              )
+            else
+              SelectableText(
+                issue.resolutionLabel.trim(),
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
               ),
-            ),
           ],
           if (issue.detail.isNotEmpty) ...[
             const SizedBox(height: 10),
