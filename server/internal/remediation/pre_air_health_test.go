@@ -41,6 +41,8 @@ type preAirFake struct {
 	episodes      []map[string]any
 	files         []map[string]any
 	history       []map[string]any
+	queue         []map[string]any
+	queueDeletes  []string
 	episodeStatus int
 	historyStatus int
 }
@@ -87,6 +89,24 @@ func (f *preAirFake) start() *httptest.Server {
 			records := copyPreAirRecords(f.history)
 			f.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"totalRecords": len(records), "records": records})
+		case r.URL.Path == "/api/v3/queue" && r.Method == http.MethodGet:
+			f.mu.Lock()
+			records := copyPreAirRecords(f.queue)
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"totalRecords": len(records), "records": records})
+		case strings.HasPrefix(r.URL.Path, "/api/v3/queue/") && r.Method == http.MethodDelete:
+			id := strings.TrimPrefix(r.URL.Path, "/api/v3/queue/")
+			f.mu.Lock()
+			f.queueDeletes = append(f.queueDeletes, r.URL.RequestURI())
+			kept := f.queue[:0]
+			for _, row := range f.queue {
+				if fmt.Sprint(row["id"]) != id {
+					kept = append(kept, row)
+				}
+			}
+			f.queue = kept
+			f.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{})
 		default:
 			f.t.Errorf("unexpected sonarr request %s %s", r.Method, r.URL.RequestURI())
 			http.NotFound(w, r)
@@ -133,6 +153,18 @@ func (f *preAirFake) setHistory(records []map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.history = records
+}
+
+func (f *preAirFake) setQueue(records []map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queue = records
+}
+
+func (f *preAirFake) queueDeletesSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.queueDeletes...)
 }
 
 func (f *preAirFake) setEpisodeStatus(code int) {
