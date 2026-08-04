@@ -97,3 +97,44 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 	}
 	return d, rows.Err()
 }
+
+// digestPushStampKey remembers when the weekly scoreboard last paged, in the
+// settings kv so it survives restarts without a schema change.
+const digestPushStampKey = "remediation_digest_last_push"
+
+// SweepWeeklyDigest pages the weekly scoreboard when a week has passed AND the
+// week has something to say — a digest of zeros is the nag this system exists
+// to avoid, so silence stays honest. Rides the existing hourly worker tick.
+func (s *Service) SweepWeeklyDigest(now time.Time) {
+	if !s.Settings().Enabled || s.notifier == nil {
+		return
+	}
+	var last string
+	_ = s.db.QueryRow("SELECT value FROM settings WHERE key = ?", digestPushStampKey).Scan(&last)
+	if last != "" {
+		if at, err := time.Parse(time.RFC3339, last); err == nil && now.Sub(at) < 7*24*time.Hour {
+			return
+		}
+	}
+	digest, err := s.Digest(7)
+	if err != nil {
+		return
+	}
+	if digest.IssuesResolved+digest.ZeroTouch+digest.RuleApproved+
+		digest.NeedsAdminOpen+digest.PendingProposals == 0 {
+		// Nothing happened and nothing waits: say nothing, but advance the
+		// stamp so a later busy week is measured against a fresh window.
+		_, _ = s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+			digestPushStampKey, now.UTC().Format(time.RFC3339))
+		return
+	}
+	s.notifier.NotifyAdmins("agent_digest", map[string]interface{}{
+		"issues_resolved":   digest.IssuesResolved,
+		"zero_touch":        digest.ZeroTouch,
+		"rule_approved":     digest.RuleApproved,
+		"needs_admin_open":  digest.NeedsAdminOpen,
+		"pending_proposals": digest.PendingProposals,
+	})
+	_, _ = s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+		digestPushStampKey, now.UTC().Format(time.RFC3339))
+}

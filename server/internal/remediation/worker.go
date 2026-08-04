@@ -195,6 +195,7 @@ func (s *Service) StartReplyTTLSweeper(ctx context.Context) {
 				} else if n > 0 {
 					log.Printf("remediation: reply-TTL sweep closed %d unanswered issue(s)", n)
 				}
+				s.SweepWeeklyDigest(time.Now().UTC())
 				if nudged, escalated, err := s.SweepAwaitingConfirmation(ctx); err != nil {
 					log.Printf("remediation: confirm-wait sweep: %v", err)
 				} else if nudged > 0 || escalated > 0 {

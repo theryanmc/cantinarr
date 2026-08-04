@@ -136,6 +136,8 @@ class PushService {
     switch (type) {
       case 'request_pending':
         router.push('/approvals');
+      case 'agent_digest':
+        router.push('/agent-actions');
       case 'agent_action_pending':
         // A fix needs approval — go straight to the agent approval queue.
         router.push('/agent-actions');
