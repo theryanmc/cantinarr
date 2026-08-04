@@ -205,6 +205,11 @@ func (s *Service) tripCircuitBreaker(streak, threshold int) {
 		return
 	}
 	log.Printf("remediation: circuit breaker tripped after %d consecutive auto-dispatch give-ups (threshold %d); auto-dispatch disabled", streak, threshold)
+	// Autonomy never stands down silently: beside the transient event, the trip
+	// opens ONE durable admin issue that re-enabling auto-dispatch resolves.
+	if err := s.RecordAutoDispatchBreaker(true, streak, threshold); err != nil {
+		log.Printf("remediation: record breaker issue: %v", err)
+	}
 	if s.notifier != nil {
 		// Fixed-template event: only structured fields travel, no model text.
 		s.notifier.NotifyAdmins("remediation_autodispatch_disabled", map[string]interface{}{

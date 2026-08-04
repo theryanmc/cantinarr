@@ -619,3 +619,33 @@ func (s *Service) sweepAutoApprovals(now time.Time) {
 		}
 	}
 }
+
+// announceBootPausedRules closes the one silent stand-down left: the schema
+// layer pauses rules whose auto-approved fix a restart interrupted, but the db
+// package has no notifier, so until now the only trace was the rules screen.
+// Called once at worker start (never on the ticker), it announces rules whose
+// pause the boot repair just wrote — recognized by the fixed restart copy and
+// a paused_at within the boot window — through the same thread-message + push
+// path every runtime pause uses. Autonomy never stands down silently.
+func (s *Service) announceBootPausedRules() {
+	rows, err := s.db.Query(
+		`SELECT id FROM agent_approval_rules
+		 WHERE status = 'paused'
+		   AND paused_reason LIKE 'Cantinarr restarted while an auto-approved fix%'
+		   AND paused_at >= datetime('now', '-10 minutes')`,
+	)
+	if err != nil {
+		return
+	}
+	var ruleIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			ruleIDs = append(ruleIDs, id)
+		}
+	}
+	rows.Close()
+	for _, ruleID := range ruleIDs {
+		s.notifyAutoApprovalPaused(ruleID, 0)
+	}
+}
