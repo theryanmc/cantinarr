@@ -175,7 +175,8 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 	// A parked issue (a proposal awaiting approval, or a reporter question) is
 	// owned by the resume path, not a fresh investigation: Run must never start a
 	// second run over a pending proposal. Resume re-enters those.
-	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser {
+	if issue.Status == IssueAwaitingApproval || issue.Status == IssueAwaitingUser ||
+		issue.Status == IssueAwaitingConfirmation {
 		return nil
 	}
 	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
@@ -706,8 +707,17 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 
 		if escalated {
 			// A read failure here only costs the better wording, never the
-			// escalation itself — the issue reaches an admin either way.
+			// escalation itself — the issue reaches a human either way.
 			fixApplied, _ := r.svc.issueHasExecutedFix(issue.ID)
+			if issue.Source == SourceUser && fixApplied {
+				// The fix executed and only the subjective verdict remains.
+				// That verdict belongs to the reporter, not an admin
+				// adjudicating content they haven't watched: park awaiting
+				// their confirmation instead of the needs_admin dead end this
+				// used to be.
+				return r.parkConfirm(ctx, issue.ID, st.runID, stopUnverifiedClose,
+					escalatedCloseMessage(issue, true))
+			}
 			return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
 				escalatedCloseMessage(issue, fixApplied))
 		}
@@ -1008,6 +1018,9 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		// admin decides within the hold-down needs no page at all.
 		r.svc.queueActionAlert(issueID, time.Now().UTC())
 	} else if issueStatus == IssueAwaitingUser && r.svc.notifier != nil {
+		// issue_question is the reporter's page (push + WS); issue_updated stays
+		// the silent refresh for any other open client.
+		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_question", map[string]interface{}{"issue_id": issueID})
 		r.svc.notifier.NotifyUser(reporterID.Int64, "issue_updated", map[string]interface{}{"issue_id": issueID})
 	}
 	r.svc.pingIssueUpdated(issueID)
@@ -1616,6 +1629,21 @@ func (r *Runner) giveUp(ctx context.Context, issueID, runID int64, model, stopRe
 	if _, err := r.svc.GiveUpIssue(ctx, issueID, runID, stopReason, message,
 		"Agent needs administrator review: "+stopReason); err != nil {
 		log.Printf("remediation: giveUp transition for issue %d: %v", issueID, err)
+	}
+	return nil
+}
+
+// parkConfirm finalizes a run whose fix executed but whose subjective verdict
+// remains with the reporter. Same audit shape as giveUp; the issue parks at
+// awaiting_confirmation instead of needs_admin.
+func (r *Runner) parkConfirm(ctx context.Context, issueID, runID int64, stopReason, message string) error {
+	if runID != 0 {
+		var nextSeq int
+		r.db.QueryRow("SELECT COALESCE(MAX(seq),0)+1 FROM agent_steps WHERE run_id = ?", runID).Scan(&nextSeq)
+		r.persistStep(runID, issueID, nextSeq, stepGiveup, "", "", "", "awaiting reporter confirmation: "+stopReason, false)
+	}
+	if _, err := r.svc.ParkAwaitingConfirmation(ctx, issueID, runID, stopReason, message); err != nil {
+		log.Printf("remediation: confirm park transition for issue %d: %v", issueID, err)
 	}
 	return nil
 }

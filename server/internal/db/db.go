@@ -145,7 +145,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
-    plex_invite_sent INTEGER NOT NULL DEFAULT 1
+    plex_invite_sent INTEGER NOT NULL DEFAULT 1,
+    issue_report_update INTEGER NOT NULL DEFAULT 1
 );
 
 -- Durable replacement for the notifier's in-memory new-content dedupe map. The
@@ -820,6 +821,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// NULL for ordinary approval-queue rows, so every existing pending row
 		// keeps meaning "a human decides".
 		{alter: "ALTER TABLE request_log ADD COLUMN park_reason TEXT"},
+		// Reporter-loop pushes (question / fix-confirm / closed) share one
+		// user-scoped preference, on by default. New on existing databases.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN issue_report_update INTEGER NOT NULL DEFAULT 1"},
+		// One gentle re-ask before an unanswered confirm-wait is handed to an
+		// admin; the stamp is what makes the nudge happen exactly once.
+		{alter: "ALTER TABLE issues ADD COLUMN confirm_nudged_at DATETIME"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

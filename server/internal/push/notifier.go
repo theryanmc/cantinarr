@@ -115,6 +115,35 @@ func (n *Notifier) NotifyUser(userID int64, eventType string, data map[string]in
 		n.send(client, []int64{userID}, "Plex invite sent",
 			"Your Plex invite is on its way — check your email",
 			map[string]any{"type": CategoryPlexInviteSent})
+	case EventIssueQuestion, EventIssueFixConfirm, EventIssueClosed:
+		// Reporter-loop beats about the user's OWN report. One shared
+		// preference gates all three; the bodies are FIXED server-authored
+		// copy (M5) — the title, question, and resolution text live in the
+		// thread the tap opens, never in the notification.
+		if !n.prefs.optedIn(userID, CategoryIssueReportUpdate) {
+			return
+		}
+		title, body := issueReportMessage(eventType)
+		n.send(client, []int64{userID}, title, body, passthrough(eventType, data))
+	}
+}
+
+// Reporter-loop event types. All three ride the issue_report_update
+// preference; the client deep-links each to the report's own thread.
+const (
+	EventIssueQuestion   = "issue_question"
+	EventIssueFixConfirm = "issue_fix_confirm"
+	EventIssueClosed     = "issue_closed"
+)
+
+func issueReportMessage(eventType string) (title, body string) {
+	switch eventType {
+	case EventIssueQuestion:
+		return "Question about your report", "The assistant needs one answer from you to keep working on it"
+	case EventIssueFixConfirm:
+		return "A fix was applied", "Open your report and tell us whether it's right now"
+	default:
+		return "Your report was closed", "Open it to see how it ended"
 	}
 }
 

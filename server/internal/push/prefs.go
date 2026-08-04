@@ -17,6 +17,7 @@ type Prefs struct {
 	AgentActionPending bool `json:"agent_action_pending"`
 	PlexAccessRequest  bool `json:"plex_access_request"`
 	PlexInviteSent     bool `json:"plex_invite_sent"`
+	IssueReportUpdate  bool `json:"issue_report_update"`
 }
 
 // Notification categories. These are the wire values used by the preferences
@@ -52,6 +53,12 @@ const (
 	// CategoryPlexInviteSent tells a user their Plex invite went out (one-tap
 	// or auto) so they know to check their inbox. User-scoped, on by default.
 	CategoryPlexInviteSent = "plex_invite_sent"
+	// CategoryIssueReportUpdate covers every reporter-loop push about a user's
+	// OWN report — the agent asked them a question, a fix was applied and
+	// awaits their confirmation, or the report closed. One user-scoped
+	// preference on purpose: they are a single conversation's beats, and a
+	// reporter who wants any of them wants all of them. On by default.
+	CategoryIssueReportUpdate = "issue_report_update"
 )
 
 // defaultPrefs is the preference set applied when a user has no row. It must
@@ -67,6 +74,7 @@ var defaultPrefs = Prefs{
 	AgentActionPending: true,
 	PlexAccessRequest:  true,
 	PlexInviteSent:     true,
+	IssueReportUpdate:  true,
 }
 
 // categoryColumn maps a category to its notification_prefs column and the
@@ -87,6 +95,7 @@ var categoryColumn = map[string]struct {
 	CategoryAgentAutoApprovalPaused: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	CategoryPlexAccessRequest:       {"plex_access_request", defaultPrefs.PlexAccessRequest},
 	CategoryPlexInviteSent:          {"plex_invite_sent", defaultPrefs.PlexInviteSent},
+	CategoryIssueReportUpdate:       {"issue_report_update", defaultPrefs.IssueReportUpdate},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -105,10 +114,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -122,8 +131,8 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
@@ -133,8 +142,9 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 		   issue_created    = excluded.issue_created,
 		   agent_action_pending = excluded.agent_action_pending,
 		   plex_access_request  = excluded.plex_access_request,
-		   plex_invite_sent     = excluded.plex_invite_sent`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent,
+		   plex_invite_sent     = excluded.plex_invite_sent,
+		   issue_report_update  = excluded.issue_report_update`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)

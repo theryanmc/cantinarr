@@ -27,13 +27,14 @@ import (
 // simply continues where the previous segment stopped, the way a real model
 // transcript does.
 type pipelineHarness struct {
-	svc  *Service
-	fake *preAirFake
+	svc      *Service
+	notifier *fakeNotifier
+	fake     *preAirFake
 }
 
 func newPipelineHarness(t *testing.T) *pipelineHarness {
 	t.Helper()
-	svc, _, fake := setupPreAirService(t)
+	svc, notifier, fake := setupPreAirService(t)
 	if _, err := svc.SetSettings(Settings{
 		Enabled: true, AutoDispatch: true, Mode: ModeSupervised,
 		MaxSteps: 12, MaxTurnTokens: 1024, MaxWallClockSecs: 30, DailyRunCap: 50,
@@ -43,7 +44,7 @@ func newPipelineHarness(t *testing.T) *pipelineHarness {
 	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin', '', 'admin')"); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
-	return &pipelineHarness{svc: svc, fake: fake}
+	return &pipelineHarness{svc: svc, notifier: notifier, fake: fake}
 }
 
 // runner builds a Runner over the REAL tool server — reads and agent tools
@@ -602,4 +603,174 @@ func TestPipelineOutcomeUnknownIsAHardStop(t *testing.T) {
 	if after := len(h.fake.queueDeletesSeen()); after != before {
 		t.Fatalf("repeat approval dispatched again (%d -> %d deletes); outcome_unknown must never retry", before, after)
 	}
+}
+
+func countEvents(events []string, want string) int {
+	n := 0
+	for _, e := range events {
+		if e == want {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPipelineConfirmWaitLoop drives the full confirm-wait timeline: after the
+// fix executes and the model cannot type-prove a subjective report, the issue
+// parks at awaiting_confirmation (reporter paged, admin queue untouched, no
+// rule bookkeeping), the day-3 sweep re-asks exactly once, and the reporter's
+// tap still closes it — with no issue_closed push for a close they made
+// themselves.
+func TestPipelineConfirmWaitLoop(t *testing.T) {
+	h := newPipelineHarness(t)
+	if _, err := h.svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (2, 'viewer', '', 'user')"); err != nil {
+		t.Fatalf("seed reporter: %v", err)
+	}
+	episodes, files := buildPreAirSeason(28, 2, []preAirEpisode{
+		{number: 3, airsIn: -21 * 24 * time.Hour, hasFile: true},
+	})
+	h.fake.setLibrary(episodes, files)
+	h.fake.setSeriesHistory([]map[string]any{
+		{"id": 9203, "eventType": "downloadFolderImported", "episodeId": 28203, "downloadId": "NZB-WRONG"},
+		{"id": 8203, "eventType": "grabbed", "episodeId": 28203, "downloadId": "NZB-WRONG"},
+	})
+	resp, err := h.svc.CreateUserIssue(2, &CreateIssueRequest{
+		InstanceID: preAirSonarrID, MediaType: "tv", TmdbID: 615, TvdbID: 73871,
+		SeasonNumber: 2, EpisodeNumber: 3, Category: CategoryWrongContent,
+		Reason: "Wrong episode.", Title: "Futurama",
+	})
+	if err != nil {
+		t.Fatalf("CreateUserIssue: %v", err)
+	}
+	issueID := resp.IssueID
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET first_seen_at = ? WHERE issue_id = ?",
+		time.Now().UTC().Add(-30*time.Minute), issueID,
+	); err != nil {
+		t.Fatalf("backdate observation: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+	if _, err := h.svc.db.Exec(
+		"UPDATE issue_observations SET settling_since = ? WHERE issue_id = ?",
+		time.Now().UTC().Add(-3*time.Minute), issueID,
+	); err != nil {
+		t.Fatalf("backdate settle: %v", err)
+	}
+	h.observe(t, time.Now().UTC())
+
+	script := &scriptedTurn{turns: []ai.TranscriptMessage{
+		toolCall("r1", "get_history", `{}`),
+		toolCall("p1", mcp.ToolProposeAction, `{"issue_id":0,"kind":"delete_media_files","params":{"media_type":"tv","tmdb_id":615,"season":2,"episodes":[3],"blocklist":true},"rationale":"Wrong content per the reporter."}`),
+		toolCall("r2", "get_queue", `{}`),
+		toolCall("c1", mcp.ToolConcludeIssue, `{"issue_id":0,"status":"resolved","resolution":"Deleted and replaced."}`),
+	}}
+	r := h.runner(script)
+	if err := r.Run(context.Background(), issueID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var actionID int64
+	if err := h.svc.db.QueryRow(
+		"SELECT id FROM agent_actions WHERE issue_id = ? AND status = ?", issueID, ActionProposed,
+	).Scan(&actionID); err != nil {
+		t.Fatalf("find proposal: %v", err)
+	}
+	if _, err := h.svc.ApproveAction(1, actionID, nil); err != nil {
+		t.Fatalf("ApproveAction: %v", err)
+	}
+
+	// The resume reads, then tries to conclude a SUBJECTIVE report resolved.
+	// The gate refuses, and with the fix executed the escalation must land at
+	// awaiting_confirmation — reporter paged, admin queue untouched.
+	if err := r.Resume(context.Background(), issueID); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	parked, err := h.svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("load parked issue: %v", err)
+	}
+	if parked.Status != IssueAwaitingConfirmation {
+		dumpSteps(t, h.svc, issueID)
+		t.Fatalf("issue after refused conclude = %q, want %q", parked.Status, IssueAwaitingConfirmation)
+	}
+	if !parked.Read {
+		t.Fatalf("awaiting_confirmation flagged the admin queue (read=false); this state belongs to the reporter")
+	}
+	if got := countEvents(h.notifier.userEvents, "issue_fix_confirm"); got != 1 {
+		t.Fatalf("issue_fix_confirm pushes after park = %d, want exactly 1", got)
+	}
+
+	// Day 3: one nudge, exactly once, without resetting the 7-day clock.
+	if _, err := h.svc.db.Exec(
+		"UPDATE issues SET updated_at = datetime('now', '-80 hours') WHERE id = ?", issueID,
+	); err != nil {
+		t.Fatalf("age confirm wait: %v", err)
+	}
+	nudged, escalated, err := h.svc.SweepAwaitingConfirmation(context.Background())
+	if err != nil || nudged != 1 || escalated != 0 {
+		t.Fatalf("first confirm sweep = (%d, %d, %v), want one nudge", nudged, escalated, err)
+	}
+	nudged, _, err = h.svc.SweepAwaitingConfirmation(context.Background())
+	if err != nil || nudged != 0 {
+		t.Fatalf("second confirm sweep nudged %d (err %v); the stamp must make it exactly once", nudged, err)
+	}
+	if got := countEvents(h.notifier.userEvents, "issue_fix_confirm"); got != 2 {
+		t.Fatalf("issue_fix_confirm pushes after nudge = %d, want 2", got)
+	}
+
+	// The reporter answers late but in time: their tap closes it, and a close
+	// they made themselves sends them no issue_closed page.
+	if err := h.svc.ReporterConfirmFix(context.Background(), issueID, 2); err != nil {
+		t.Fatalf("ReporterConfirmFix from awaiting_confirmation: %v", err)
+	}
+	final, err := h.svc.GetIssue(issueID)
+	if err != nil {
+		t.Fatalf("load final issue: %v", err)
+	}
+	if final.Status != IssueResolved || final.ResolutionKind != ResolutionReporterConfirmed {
+		t.Fatalf("final = %q/%q, want resolved/reporter_confirmed", final.Status, final.ResolutionKind)
+	}
+	if got := countEvents(h.notifier.userEvents, "issue_closed"); got != 0 {
+		t.Fatalf("issue_closed pushes after the reporter's own close = %d, want 0", got)
+	}
+}
+
+// TestConfirmWaitEscalatesToAdminAtSevenDays: an unanswered confirm-wait is
+// handed to an admin — the verdict is never fabricated, and the issue may not
+// stay open forever.
+func TestConfirmWaitEscalatesToAdminAtSevenDays(t *testing.T) {
+	h := newPipelineHarness(t)
+	if _, err := h.svc.db.Exec(
+		`INSERT INTO issues (source, status, category, reporter_id, media_type, tmdb_id, title, detail, read, updated_at)
+		 VALUES ('user', ?, 'wrong_content', 1, 'tv', 615, 'Futurama', 'wrong', 1, datetime('now', '-170 hours'))`,
+		IssueAwaitingConfirmation,
+	); err != nil {
+		t.Fatalf("seed confirm wait: %v", err)
+	}
+	nudged, escalated, err := h.svc.SweepAwaitingConfirmation(context.Background())
+	if err != nil || escalated != 1 {
+		t.Fatalf("sweep = (%d, %d, %v), want one escalation", nudged, escalated, err)
+	}
+	var status string
+	var read bool
+	if err := h.svc.db.QueryRow("SELECT status, read FROM issues ORDER BY id DESC LIMIT 1").Scan(&status, &read); err != nil {
+		t.Fatalf("read escalated issue: %v", err)
+	}
+	if status != IssueNeedsAdmin || read {
+		t.Fatalf("escalated issue = (%q, read=%v), want unread needs_admin", status, read)
+	}
+}
+
+func dumpSteps(t *testing.T, svc *Service, issueID int64) {
+	rows, _ := svc.db.Query("SELECT run_id, seq, kind, COALESCE(tool_name,''), is_error, substr(COALESCE(tool_output,text,''),1,110) FROM agent_steps WHERE issue_id = ? ORDER BY run_id, seq", issueID)
+	defer rows.Close()
+	for rows.Next() {
+		var runID, seq int64
+		var kind, tool, out string
+		var isErr bool
+		rows.Scan(&runID, &seq, &kind, &tool, &isErr, &out)
+		t.Logf("run %d step %d %s %s err=%v: %s", runID, seq, kind, tool, isErr, out)
+	}
+	var res string
+	svc.db.QueryRow("SELECT COALESCE(resolution,'') FROM issues WHERE id = ?", issueID).Scan(&res)
+	t.Logf("issue resolution: %s", res)
 }

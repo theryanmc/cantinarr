@@ -15,6 +15,7 @@ class NotificationPrefs {
   final bool agentActionPending;
   final bool plexAccessRequest;
   final bool plexInviteSent;
+  final bool issueReportUpdate;
 
   const NotificationPrefs({
     required this.requestDecision,
@@ -26,6 +27,7 @@ class NotificationPrefs {
     this.agentActionPending = true,
     this.plexAccessRequest = true,
     this.plexInviteSent = true,
+    this.issueReportUpdate = true,
   });
 
   factory NotificationPrefs.fromJson(Map<String, dynamic> json) =>
@@ -41,6 +43,7 @@ class NotificationPrefs {
         agentActionPending: json['agent_action_pending'] as bool? ?? true,
         plexAccessRequest: json['plex_access_request'] as bool? ?? true,
         plexInviteSent: json['plex_invite_sent'] as bool? ?? true,
+        issueReportUpdate: json['issue_report_update'] as bool? ?? true,
       );
 
   Map<String, dynamic> toJson() => {
@@ -53,6 +56,7 @@ class NotificationPrefs {
         'agent_action_pending': agentActionPending,
         'plex_access_request': plexAccessRequest,
         'plex_invite_sent': plexInviteSent,
+        'issue_report_update': issueReportUpdate,
       };
 
   NotificationPrefs copyWith({
@@ -65,6 +69,7 @@ class NotificationPrefs {
     bool? agentActionPending,
     bool? plexAccessRequest,
     bool? plexInviteSent,
+    bool? issueReportUpdate,
   }) =>
       NotificationPrefs(
         requestDecision: requestDecision ?? this.requestDecision,
@@ -76,5 +81,6 @@ class NotificationPrefs {
         agentActionPending: agentActionPending ?? this.agentActionPending,
         plexAccessRequest: plexAccessRequest ?? this.plexAccessRequest,
         plexInviteSent: plexInviteSent ?? this.plexInviteSent,
+        issueReportUpdate: issueReportUpdate ?? this.issueReportUpdate,
       );
 }

@@ -247,6 +247,13 @@ class _NotificationPreferencesScreenState
           value: prefs.plexInviteSent,
           onChanged: (v) => _save(prefs.copyWith(plexInviteSent: v), prefs),
         ),
+        _toggle(
+          title: 'My report updates',
+          subtitle:
+              'When the assistant has a question about your report, a fix is ready to confirm, or your report closes',
+          value: prefs.issueReportUpdate,
+          onChanged: (v) => _save(prefs.copyWith(issueReportUpdate: v), prefs),
+        ),
         const SizedBox(height: 32),
       ],
     );
