@@ -41,6 +41,7 @@ enum IssueStatus {
   investigating('investigating', 'Checking the problem'),
   awaitingUser('awaiting_user', 'Needs your reply'),
   awaitingApproval('awaiting_approval', 'Fix ready for review'),
+  awaitingConfirmation('awaiting_confirmation', 'Did the fix work?'),
   needsAdmin('needs_admin', 'Needs a closer look'),
   resolved('resolved', 'Resolved'),
   wontFix('wont_fix', 'Closed without a fix'),

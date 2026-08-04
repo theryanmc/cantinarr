@@ -28,7 +28,12 @@ const (
 	IssueInvestigating    = "investigating"
 	IssueAwaitingUser     = "awaiting_user"
 	IssueAwaitingApproval = "awaiting_approval"
-	IssueNeedsAdmin       = "needs_admin"
+	// IssueAwaitingConfirmation is a user report whose fix has EXECUTED and now
+	// waits on the one person whose judgment it was: the reporter. It is not an
+	// admin state (the issue closes read, without paging anyone) and not a
+	// terminal (the reporter's tap or the confirm-wait sweep ends it).
+	IssueAwaitingConfirmation = "awaiting_confirmation"
+	IssueNeedsAdmin           = "needs_admin"
 	IssueResolved         = "resolved"
 	IssueWontFix          = "wont_fix"
 	IssueFailed           = "failed"

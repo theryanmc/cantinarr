@@ -210,6 +210,9 @@ class PushService {
           return;
         }
         router.push('/issues/$createdId');
+      case 'issue_question':
+      case 'issue_fix_confirm':
+      case 'issue_closed':
       case 'issue_updated':
       case 'issue_resolved':
       case 'agent_action_decided':

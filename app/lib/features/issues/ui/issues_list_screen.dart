@@ -368,6 +368,7 @@ class _IssueTile extends StatelessWidget {
         return AppTheme.unavailable;
       case IssueStatus.awaitingApproval:
       case IssueStatus.awaitingUser:
+      case IssueStatus.awaitingConfirmation:
       case IssueStatus.needsAdmin:
         return AppTheme.requested;
       case IssueStatus.open:
