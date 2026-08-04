@@ -269,13 +269,15 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        title: const Text(
-          'Dismiss this issue?',
-          style: TextStyle(color: AppTheme.textPrimary),
+        title: Text(
+          issue.isPrevention ? 'Dismiss this notice?' : 'Dismiss this issue?',
+          style: const TextStyle(color: AppTheme.textPrimary),
         ),
-        content: const Text(
-          'This closes the issue without applying any pending fixes. Pending fixes will no longer be available for approval.',
-          style: TextStyle(color: AppTheme.textSecondary),
+        content: Text(
+          issue.isPrevention
+              ? 'Dismissing silences this notice for about 6 months. It only returns if the problem re-forms from newer incidents.'
+              : 'This closes the issue without applying any pending fixes. Pending fixes will no longer be available for approval.',
+          style: const TextStyle(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
@@ -328,6 +330,7 @@ class _IssueThreadScreenState extends ConsumerState<IssueThreadScreen>
       builder: (_) => _AdminResolutionDialog(
         disposition: disposition,
         needsVerification: issue.status == IssueStatus.needsAdmin,
+        isPrevention: issue.isPrevention,
       ),
     );
     if (note == null || !mounted) return;
@@ -796,10 +799,12 @@ class _AdminCompletionPanel extends StatelessWidget {
 class _AdminResolutionDialog extends StatefulWidget {
   final AdminIssueDisposition disposition;
   final bool needsVerification;
+  final bool isPrevention;
 
   const _AdminResolutionDialog({
     required this.disposition,
     required this.needsVerification,
+    this.isPrevention = false,
   });
 
   @override
@@ -840,6 +845,20 @@ class _AdminResolutionDialogState extends State<_AdminResolutionDialog> {
                 height: 1.35,
               ),
             ),
+            if (widget.isPrevention) ...[
+              const SizedBox(height: 8),
+              Text(
+                resolved
+                    ? 'Closing a notice this way silences it for about 2 months; it returns only if the problem re-forms from newer incidents.'
+                    : 'Closing without a fix tells Cantinarr you are not going to change this — the notice stays silent for 12 months unless the problem re-forms.',
+                style: const TextStyle(
+                  color: AppTheme.requested,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+            ],
             if (widget.needsVerification) ...[
               const SizedBox(height: 8),
               const Text(

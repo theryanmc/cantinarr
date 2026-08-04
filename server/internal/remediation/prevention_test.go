@@ -982,3 +982,33 @@ func TestPreventionNoticeQuotesLiveValuesAndSelfResolves(t *testing.T) {
 		t.Fatalf("after the setting changed: closed %v kind %q, want auto-resolved %q", closed, kind, ResolutionPreventionSettingChanged)
 	}
 }
+
+// The wire flag that makes prevention recognizably first-class client-side.
+func TestIsPreventionFlagOnWire(t *testing.T) {
+	svc, _, fake := setupPreAirService(t)
+	fake.setIndexers(nil)
+	advice, _ := arr.PreventionFor(arr.ProblemDownloadStalled)
+	noticeID, err := svc.openPreventionIssue(preventionCandidate{
+		instanceID: preAirSonarrID, problemKind: arr.ProblemDownloadStalled,
+		issueCount: 3, distinctMedia: 2, distinctDays: 3,
+	}, advice, "TV", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("open notice: %v", err)
+	}
+	notice, err := svc.GetIssue(noticeID)
+	if err != nil {
+		t.Fatalf("load notice: %v", err)
+	}
+	if !notice.IsPrevention {
+		t.Fatalf("prevention notice not flagged on the wire")
+	}
+	res, _ := svc.db.Exec(`INSERT INTO issues (source, status, media_type, tmdb_id, title, detail) VALUES ('auto','open','movie',1,'M','d')`)
+	plainID, _ := res.LastInsertId()
+	plain, err := svc.GetIssue(plainID)
+	if err != nil {
+		t.Fatalf("load plain issue: %v", err)
+	}
+	if plain.IsPrevention {
+		t.Fatalf("ordinary issue flagged as prevention")
+	}
+}
