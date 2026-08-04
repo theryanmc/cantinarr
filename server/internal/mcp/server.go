@@ -377,6 +377,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getMediaFileDetails(input, callCtx.InstanceID)
 	case "get_service_config":
 		return s.getServiceConfig(input, callCtx.InstanceID)
+	case "get_book_timeline":
+		return s.getBookTimeline(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":

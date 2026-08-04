@@ -39,6 +39,7 @@ var readToolAllowList = []string{
 	"get_library",
 	"get_arr_health",
 	"get_episode_timeline",
+	"get_book_timeline",
 	// The file the library actually holds — the arr's own ffprobe truth
 	// (resolution, audio languages, subtitles). "Wrong audio" and "bad copy"
 	// are unjudgeable from a release name; this is the read that makes those

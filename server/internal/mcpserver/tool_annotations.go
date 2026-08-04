@@ -42,6 +42,7 @@ var mcpToolBehaviors = map[string]mcpToolBehavior{
 	"get_episode_timeline":         {readOnly: true, idempotent: true, openWorld: true},
 	"get_media_file_details":       {readOnly: true, idempotent: true, openWorld: true},
 	"get_service_config":           {readOnly: true, idempotent: true, openWorld: true},
+	"get_book_timeline":            {readOnly: true, idempotent: true, openWorld: true},
 	"get_manual_import_candidates": {readOnly: true, idempotent: true, openWorld: true},
 	"execute_manual_import":        {destructive: true, openWorld: true},
 	"remediate_queue_item":         {destructive: true, openWorld: true},
