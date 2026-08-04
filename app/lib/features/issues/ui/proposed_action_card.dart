@@ -192,7 +192,8 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
                     '${offer.label}'
                     '${offer.reactivatesPausedRule ? ' · re-enables a paused rule' : ''}'
                     ' — applies to future auto-detected issues and any already '
-                    'waiting; pauses itself if a fix fails.',
+                    'waiting; pauses itself if a fix fails. Applies on every '
+                    'connected service and media type.',
                     style: const TextStyle(
                       color: AppTheme.textSecondary,
                       fontSize: 12,
