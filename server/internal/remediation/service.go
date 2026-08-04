@@ -979,6 +979,32 @@ func (s *Service) SweepAwaitingConfirmation(ctx context.Context) (int, int, erro
 
 // ListIssues returns issues for the admin queue (newest first), optionally
 // filtered by status. An empty/blank status returns all issues.
+// ListIssuesForReporter returns one user's OWN reports, newest first — the
+// reporter inbox. Same row shape as the admin list; the handler applies the
+// requester-copy boundary before it leaves the server.
+func (s *Service) ListIssuesForReporter(reporterID int64) ([]Issue, error) {
+	rows, err := s.db.Query(`SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
+	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
+	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
+	                 i.created_at, i.updated_at, i.closed_at,
+	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id
+	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id
+	          WHERE i.reporter_id = ? ORDER BY i.updated_at DESC, i.id DESC`, reporterID)
+	if err != nil {
+		return nil, fmt.Errorf("query reporter issues: %w", err)
+	}
+	defer rows.Close()
+	out := []Issue{}
+	for rows.Next() {
+		iss, err := scanIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan reporter issue: %w", err)
+		}
+		out = append(out, *iss)
+	}
+	return out, rows.Err()
+}
+
 func (s *Service) ListIssues(status string) ([]Issue, error) {
 	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
 	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,

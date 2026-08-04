@@ -314,6 +314,7 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.With(auth.RequirePermission(auth.PermissionMediaRequest)).Post("/issues", remediationHandler.Create)
+			r.Get("/issues", remediationHandler.ListMine)
 			r.Get("/issues/{id}", remediationHandler.Get)
 			r.Post("/issues/{id}/reply", remediationHandler.Reply)
 			r.Post("/issues/{id}/confirm-fixed", remediationHandler.ConfirmFixed)

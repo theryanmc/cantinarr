@@ -8,6 +8,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../../auth/logic/auth_provider.dart';
 import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 import 'issue_refresh_banner.dart';
@@ -67,6 +68,15 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     return m != null ? m.group(1)! : 'Something went wrong';
   }
 
+  Future<bool> _viewerIsAdmin() async {
+    try {
+      final auth = await ref.read(authProvider.future);
+      return auth.user?.isAdmin == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _load() async {
     if (!mounted) return;
     final epoch = ++_loadEpoch;
@@ -75,7 +85,14 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
       if (_issues == null) _error = null;
     });
     try {
-      final issues = await ref.read(issuesServiceProvider).listIssues();
+      // Admins see every issue; everyone else sees their OWN reports — the
+      // reporter inbox, served self-scoped with requester copy applied. Await
+      // the auth resolution: a ref.read at first frame races it and would
+      // misroute the very first load.
+      final admin = await _viewerIsAdmin();
+      final service = ref.read(issuesServiceProvider);
+      final issues =
+          admin ? await service.listIssues() : await service.listMyIssues();
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _issues = issues;
@@ -83,12 +100,14 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
         _error = null;
       });
       // Keep both the actionable badge and tracking-aware menu visibility in
-      // sync with the authoritative list we just loaded.
-      ref.read(issueQueueCountsProvider.notifier).setCounts(
-            needsAttention:
-                issues.where((issue) => issue.status.needsAttention).length,
-            tracking: issues.where((issue) => issue.status.isTracking).length,
-          );
+      // sync with the authoritative list we just loaded — admin surfaces only.
+      if (admin) {
+        ref.read(issueQueueCountsProvider.notifier).setCounts(
+              needsAttention:
+                  issues.where((issue) => issue.status.needsAttention).length,
+              tracking: issues.where((issue) => issue.status.isTracking).length,
+            );
+      }
     } catch (e) {
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
@@ -104,7 +123,13 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     ref.listen(issuesChangedProvider, (_, __) => _scheduleLoad());
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Issues')),
+      appBar: AppBar(
+        title: Text(
+          ref.watch(authProvider).valueOrNull?.user?.isAdmin == true
+              ? 'Issues'
+              : 'My reports',
+        ),
+      ),
       body: CenteredContent(
         child: Column(
           children: [

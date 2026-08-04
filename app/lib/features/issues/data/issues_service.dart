@@ -108,6 +108,16 @@ class IssuesService {
   // ---- Admin ---------------------------------------------------------------
 
   /// List issues for the admin queue, optionally filtered by [status].
+  /// The reporter inbox: the caller's OWN reports, requester copy applied
+  /// server-side. Non-admin accessible.
+  Future<List<Issue>> listMyIssues() async {
+    final resp = await _dio.get('/api/issues');
+    final list = (resp.data['issues'] as List?) ?? const [];
+    return list
+        .map((e) => Issue.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<Issue>> listIssues({String? status}) async {
     final resp = await _dio.get(
       '/api/admin/issues',
