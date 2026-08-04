@@ -315,8 +315,8 @@ var arrToolDefinitions = []Tool{
 		},
 	},
 	{
-		Name:       "get_media_file_details",
-		Permission: auth.PermissionArrRead,
+		Name:        "get_media_file_details",
+		Permission:  auth.PermissionArrRead,
 		Description: "Inspect the file(s) the library actually holds for one movie or one TV season: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk. Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
@@ -336,6 +336,31 @@ var arrToolDefinitions = []Tool{
 				},
 			},
 			"required": []string{"media_type", "tmdb_id"},
+		},
+	},
+	{
+		Name:        "get_service_config",
+		Permission:  auth.PermissionArrRead,
+		Description: "Read-only summary of one settings section on Radarr, Sonarr, or Chaptarr: indexers (protocol, rss/auto-search, priority, min seeders), delay_profiles, release_profiles (Sonarr/Chaptarr only), download_clients (protocol, enabled, category), or remote_path_mappings. These are the settings recurring problems trace back to; values are bounded summaries and credentials/URLs are never included. Admin only",
+		InputSchema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"service": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"description": "Which service to read",
+				},
+				"instance_id": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact instance; omit for the default",
+				},
+				"section": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"indexers", "delay_profiles", "release_profiles", "download_clients", "remote_path_mappings"},
+					"description": "Which settings section to summarize",
+				},
+			},
+			"required": []string{"service", "section"},
 		},
 	},
 	{

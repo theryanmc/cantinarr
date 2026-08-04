@@ -1231,3 +1231,25 @@ func (c *Client) ProcessMonitoredDownloads() error {
 func (c *Client) RescanSeries(seriesID int) error {
 	return c.triggerCommand(map[string]any{"name": "RescanSeries", "seriesId": seriesID})
 }
+
+// GetConfigSummary returns a bounded, secret-free summary of one settings
+// section. The raw payloads (which carry API keys and passwords in their
+// dynamic fields) are summarized HERE and never leave the client.
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v3/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v3/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v3/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v3/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v3/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
+}

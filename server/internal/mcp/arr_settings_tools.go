@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -165,6 +166,9 @@ var arrSettingsToolDefinitions = []Tool{
 type settingsReader interface {
 	GetQualityProfilesRaw() ([]json.RawMessage, error)
 	GetCustomFormatsRaw() ([]json.RawMessage, error)
+	// GetConfigSummary returns bounded, secret-free entries for one settings
+	// section; the raw payloads never leave the client (see arr.ConfigEntry).
+	GetConfigSummary(section string) ([]arr.ConfigEntry, error)
 }
 
 func arrServiceLabel(service string) string {

@@ -1343,3 +1343,25 @@ func FormatOf(qualityName string) string {
 	}
 	return FormatUnknown
 }
+
+// GetConfigSummary returns a bounded, secret-free summary of one settings
+// section. The raw payloads (which carry API keys and passwords in their
+// dynamic fields) are summarized HERE and never leave the client.
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v1/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v1/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v1/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v1/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v1/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
+}
