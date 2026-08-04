@@ -895,6 +895,7 @@ func (s *Service) listActions(status string) ([]AgentAction, error) {
 	query := `SELECT a.id, a.issue_id, a.run_id, a.kind, a.params, a.approved_params, a.rationale, a.risk, a.status,
 	                 a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 	                 i.title, i.media_type, i.category, i.status, i.closed_at,
+	                 i.tmdb_id, i.season_number, i.episode_number, i.occurrences,
 	                 COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
 	                 a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 	                 EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
@@ -932,7 +933,43 @@ func (s *Service) listActions(status string) ([]AgentAction, error) {
 		return nil, err
 	}
 	s.decorateActionsAutoApproval(out)
+	s.decorateActionsPriorAttempts(out)
 	return out, nil
+}
+
+// decorateActionsPriorAttempts renders the server's per-issue remediation
+// memory onto decidable proposals — the exact record the agent's PRIOR
+// ATTEMPTS prompt block reads, so the approving human never decides with less
+// evidence than the model. Best-effort: a read failure costs the block, never
+// the queue.
+func (s *Service) decorateActionsPriorAttempts(actions []AgentAction) {
+	cache := map[int64][]ActionPriorAttempt{}
+	for i := range actions {
+		act := &actions[i]
+		if act.Status != ActionProposed || !act.GateValid {
+			continue
+		}
+		attempts, ok := cache[act.IssueID]
+		if !ok {
+			prior, err := s.priorRemediationAttempts(act.IssueID)
+			if err != nil {
+				continue
+			}
+			attempts = make([]ActionPriorAttempt, 0, len(prior))
+			for _, p := range prior {
+				attempts = append(attempts, ActionPriorAttempt{
+					Kind:       string(p.kind),
+					Facet:      p.facet,
+					ExecutedAt: p.executedAt,
+					Recurred:   p.recurred(),
+				})
+			}
+			cache[act.IssueID] = attempts
+		}
+		if len(attempts) > 0 {
+			act.PriorAttempts = attempts
+		}
+	}
 }
 
 // GetIssueActivity returns every action and run linked to one issue, including
@@ -945,6 +982,7 @@ func (s *Service) GetIssueActivity(issueID int64) (*IssueActivity, error) {
 	query := `SELECT a.id, a.issue_id, a.run_id, a.kind, a.params, a.approved_params, a.rationale, a.risk, a.status,
 	                 a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 	                 i.title, i.media_type, i.category, i.status, i.closed_at,
+	                 i.tmdb_id, i.season_number, i.episode_number, i.occurrences,
 	                 COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
 	                 a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 	                 EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
@@ -1011,6 +1049,7 @@ func (s *Service) GetAction(actionID int64) (*AgentAction, error) {
 		`SELECT a.id, a.issue_id, a.run_id, a.kind, a.params, a.approved_params, a.rationale, a.risk, a.status,
 		        a.decided_by, a.decided_at, a.deny_reason, a.executed_at, a.result_text, a.created_at,
 		        i.title, i.media_type, i.category, i.status, i.closed_at,
+		        i.tmdb_id, i.season_number, i.episode_number, i.occurrences,
 		        COALESCE(i.instance_id, ''), COALESCE(si.name, ''), COALESCE(si.service_type, ''),
 		        a.auto_rule_id, i.source, COALESCE(i.problem_kind, ''),
 		        EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = a.run_id AND r.status = 'waiting_approval')
@@ -1028,6 +1067,7 @@ func (s *Service) GetAction(actionID int64) (*AgentAction, error) {
 	}
 	acts := []AgentAction{*act}
 	s.decorateActionsAutoApproval(acts)
+	s.decorateActionsPriorAttempts(acts)
 	return &acts[0], nil
 }
 
@@ -1065,6 +1105,7 @@ func scanAction(row rowScanner) (*AgentAction, error) {
 		&act.ID, &act.IssueID, &runID, &act.Kind, &params, &approvedParams, &act.Rationale, &act.Risk, &act.Status,
 		&decidedBy, &decidedAt, &denyReason, &executedAt, &resultText, &act.CreatedAt,
 		&act.IssueTitle, &act.IssueMediaType, &category, &act.IssueStatus, &issueClosedAt,
+		&act.IssueTmdbID, &act.IssueSeason, &act.IssueEpisode, &act.IssueOccurrences,
 		&act.InstanceID, &act.InstanceName, &act.InstanceServiceType,
 		&autoRuleID, &act.IssueSource, &act.IssueProblemKind, &act.GateValid,
 	); err != nil {

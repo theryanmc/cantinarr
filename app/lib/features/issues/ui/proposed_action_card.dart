@@ -402,6 +402,20 @@ class _ProposedActionCardState extends ConsumerState<ProposedActionCard> {
           _ActionTarget(action: action),
           const SizedBox(height: 12),
 
+          // What the fix is ABOUT, in the reader's own terms: exact scope and
+          // how many times this problem has come back.
+          if (action.issueSeason > 0 || action.issueOccurrences > 1) ...[
+            _MediaScopeLine(action: action),
+            const SizedBox(height: 12),
+          ],
+
+          // The server's own remediation memory, shown BEFORE the proposal:
+          // the approver must never decide with less evidence than the model.
+          if (action.priorAttempts.isNotEmpty) ...[
+            _PriorAttemptsBlock(attempts: action.priorAttempts),
+            const SizedBox(height: 12),
+          ],
+
           // Plain-language summary of the action kind (server-authored copy,
           // chosen by the typed kind enum — never an agent string).
           Text(
@@ -614,6 +628,95 @@ class _ApprovalConfirmation {
   final bool remember;
 
   const _ApprovalConfirmation({required this.remember});
+}
+
+/// Exact media scope + recurrence count for the approval card.
+class _MediaScopeLine extends StatelessWidget {
+  final AgentAction action;
+  const _MediaScopeLine({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[];
+    if (action.issueSeason > 0 && action.issueEpisode > 0) {
+      parts.add(
+          'S${action.issueSeason.toString().padLeft(2, '0')}E${action.issueEpisode.toString().padLeft(2, '0')}');
+    } else if (action.issueSeason > 0) {
+      parts.add('Season ${action.issueSeason}');
+    }
+    if (action.issueOccurrences > 1) {
+      parts.add('seen ${action.issueOccurrences} times');
+    }
+    return Row(
+      children: [
+        const Icon(Icons.movie_outlined,
+            size: 15, color: AppTheme.textSecondary),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            parts.join(' · '),
+            style:
+                const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The PRIOR ATTEMPTS block: fixes that already ran on this issue, with the
+/// recurrence verdict called out. A fix that came back is the strongest reason
+/// an approver has to say no to a repeat — it was previously visible only to
+/// the model.
+class _PriorAttemptsBlock extends StatelessWidget {
+  final List<PriorAttempt> attempts;
+  const _PriorAttemptsBlock({required this.attempts});
+
+  String _label(PriorAttempt a) {
+    final facet = a.facet.isNotEmpty ? ' (${a.facet})' : '';
+    return '${a.kind}$facet';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final anyRecurred = attempts.any((a) => a.recurred);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: anyRecurred ? AppTheme.error : AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            anyRecurred
+                ? 'Already tried — and it came back'
+                : 'Already tried on this problem',
+            style: TextStyle(
+              color: anyRecurred ? AppTheme.error : AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          for (final a in attempts)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(
+                a.recurred
+                    ? '${_label(a)} ran and the same download was re-added afterwards — that fix did not hold.'
+                    : '${_label(a)} ran on this issue.',
+                style: const TextStyle(
+                    color: AppTheme.textPrimary, fontSize: 13, height: 1.35),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ActionTarget extends StatelessWidget {
