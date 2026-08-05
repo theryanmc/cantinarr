@@ -517,6 +517,64 @@ func TestAgentDigestCountsZeroTouch(t *testing.T) {
 	}
 }
 
+// The scoreboard must not count the queue's own churn as agent work. An auto
+// incident that never promoted cleared before anyone was asked to look, and it
+// closed silently by design — so it belongs in self_cleared, never in the
+// "resolved"/"zero-touch" headline. Regression pin: a live instance showed
+// "680 resolved · 667 zero-touch · 1 by your rules", which is the shape of a
+// number counting observation noise. A reporter's own issue can also carry an
+// unpromoted observation row, so the filter is scoped to auto issues.
+func TestAgentDigestExcludesNeverPromotedNoise(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (9, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (id, source, status, media_type, tmdb_id, title, detail, resolution_kind, closed_at)
+		 VALUES (201, 'auto', 'resolved', 'movie', 1, 'noise',    'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		        (202, 'auto', 'resolved', 'movie', 2, 'realfix',  'd', 'agent_concluded',   CURRENT_TIMESTAMP),
+		        (203, 'auto', 'resolved', 'movie', 3, 'watched',  'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		        (204, 'user', 'resolved', 'movie', 4, 'reported', 'd', 'agent_concluded',   CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+	// 201 never promoted (pure noise). 202/203 promoted (real incidents).
+	// 204 is a user report that picked up an unpromoted observation row the way
+	// cancelExecutingForRecovery leaves one — it must still count as real work.
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observations (issue_id, service_type, scope_key, promoted_at) VALUES
+		 (201, 'radarr', 'k1', NULL),
+		 (202, 'radarr', 'k2', CURRENT_TIMESTAMP),
+		 (203, 'radarr', 'k3', CURRENT_TIMESTAMP),
+		 (204, 'radarr', 'k4', NULL)`,
+	); err != nil {
+		t.Fatalf("seed observations: %v", err)
+	}
+	// Only 202 and 204 had a fix actually execute; 203 recovered on its own
+	// after promotion, so it is a real resolved incident but not zero-touch.
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, executed_at, auto_rule_id, decided_by, fingerprint, tool_use_id)
+		 VALUES (202, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, NULL, NULL, 'fp-a', 'tu-a'),
+		        (204, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, NULL, NULL, 'fp-b', 'tu-b')`,
+	); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+
+	d, err := svc.Digest(7)
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if d.SelfCleared != 1 {
+		t.Fatalf("selfCleared = %d, want the 1 never-promoted auto incident", d.SelfCleared)
+	}
+	if d.IssuesResolved != 3 {
+		t.Fatalf("resolved = %d, want 3 (two promoted + the user report), not the noise", d.IssuesResolved)
+	}
+	if d.ZeroTouch != 2 {
+		t.Fatalf("zeroTouch = %d, want 2 — only issues where a fix actually executed", d.ZeroTouch)
+	}
+}
+
 // The weekly scoreboard pages once a week, only when the week has something
 // to say — and a quiet week advances the window silently.
 func TestWeeklyDigestPushPacing(t *testing.T) {
