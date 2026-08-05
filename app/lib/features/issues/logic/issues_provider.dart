@@ -93,7 +93,9 @@ class IssueQueueCountsNotifier extends StateNotifier<IssueQueueCounts> {
       // Resolve the service for every request. The authenticated Dio client is
       // replaced on reconnect/server switch, so caching this provider value
       // would keep calling the old server.
-      final issues = await _ref.read(issuesServiceProvider).listIssues();
+      // Only the non-terminal buckets feed the badge, and those always come
+      // back in full — the server bounds closed history alone.
+      final issues = (await _ref.read(issuesServiceProvider).listIssues()).issues;
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(IssueQueueCounts(
         needsAttention:

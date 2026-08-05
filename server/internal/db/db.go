@@ -331,6 +331,11 @@ CREATE TABLE IF NOT EXISTS issues (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_open_dedupe
     ON issues(dedupe_key) WHERE dedupe_key IS NOT NULL AND closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+-- The admin list reads open issues in full and the most recent slice of closed
+-- ones. Closed history is the half that grows without bound, so both halves are
+-- served newest-first straight from this index instead of sorting the table.
+CREATE INDEX IF NOT EXISTS idx_issues_closed_recent
+    ON issues(closed_at, updated_at DESC, id DESC);
 
 -- Durable retry-aware observation state. An issue can exist here while it is
 -- intentionally invisible to the admin attention queue: the arr still has a

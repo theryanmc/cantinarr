@@ -13,6 +13,11 @@ import '../data/issue_models.dart';
 import '../logic/issues_provider.dart';
 import 'issue_refresh_banner.dart';
 
+// Written as escapes on purpose: an inline literal is invisible in review and
+// one stray normalisation silently turns the glue back into ordinary spaces.
+const String _nbsp = '\u00A0';
+const String _nbHyphen = '\u2011';
+
 /// Admin list of reported / auto-detected problems. Tapping a row opens the
 /// issue thread. Mirrors `PendingRequestsScreen`: a [RefreshIndicator] over a
 /// [ListView.separated] of `_IssueTile`s, kept live by issue/action pings and
@@ -33,6 +38,8 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
   int _loadEpoch = 0;
   Timer? _realtimeDebounce;
   Timer? _poll;
+  int _closedTotal = 0;
+  Map<String, dynamic>? _digest;
 
   static const _pollInterval = Duration(seconds: 30);
 
@@ -91,17 +98,26 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
       // misroute the very first load.
       final admin = await _viewerIsAdmin();
       final service = ref.read(issuesServiceProvider);
-      final issues =
-          admin ? await service.listIssues() : await service.listMyIssues();
+      List<Issue> issues;
+      var closedTotal = 0;
+      if (admin) {
+        final page = await service.listIssues();
+        issues = page.issues;
+        closedTotal = page.closedTotal;
+      } else {
+        issues = await service.listMyIssues();
+      }
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
         _issues = issues;
+        _closedTotal = closedTotal;
         _isLoading = false;
         _error = null;
       });
       // Keep both the actionable badge and tracking-aware menu visibility in
       // sync with the authoritative list we just loaded — admin surfaces only.
       if (admin) {
+        _loadDigest();
         ref.read(issueQueueCountsProvider.notifier).setCounts(
               needsAttention:
                   issues.where((issue) => issue.status.needsAttention).length,
@@ -115,6 +131,83 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _loadDigest() async {
+    try {
+      final digest = await ref.read(issuesServiceProvider).agentDigest();
+      if (mounted) setState(() => _digest = digest);
+    } catch (_) {
+      // The scoreboard is a convenience; the list works without it.
+    }
+  }
+
+  /// Glue one stat into an unbreakable run: a count must never be orphaned from
+  /// the word it counts, and "zero-touch" must not split at its hyphen. What
+  /// remains is a wrap opportunity only at the plain space preceding a "·", so
+  /// the delimiter leads the next line instead of dangling at the end of one.
+  static String _glueStat(String stat) =>
+      stat.replaceAll(' ', _nbsp).replaceAll('-', _nbHyphen);
+
+  /// The week at a glance, at the head of the list it summarises.
+  ///
+  /// This lives here rather than on the approvals queue because a quiet week
+  /// leaves that queue empty — and a scoreboard nobody opens during the quiet
+  /// weeks cannot be what makes them legible. Here the numbers also sit
+  /// alongside the rows they count, so "N cleared on their own" is one tab away
+  /// from the closed incidents it refers to. Admin-only: the digest endpoint is
+  /// gated on PermissionRemediationManage.
+  Widget? _digestCard() {
+    final d = _digest;
+    if (d == null) return null;
+    int n(String key) => (d[key] as num?)?.toInt() ?? 0;
+    final resolved = n('issues_resolved');
+    final zeroTouch = n('zero_touch');
+    final byRules = n('rule_approved');
+    final selfCleared = n('self_cleared');
+    final needsAdmin = n('needs_admin_open');
+    final paused = n('paused_rules');
+    final parts = <String>[
+      '$resolved resolved',
+      if (zeroTouch > 0) '$zeroTouch zero-touch',
+      if (byRules > 0) '$byRules by your rules',
+      if (selfCleared > 0) '$selfCleared cleared on their own',
+      if (needsAdmin > 0) '$needsAdmin need you',
+      if (paused > 0) '$paused rule(s) paused',
+    ].map(_glueStat).toList();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.insights_outlined, size: 18, color: AppTheme.accent),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${_glueStat('Last 7 days:')} ${parts.join(' ·$_nbsp')}',
+              style: const TextStyle(
+                  color: AppTheme.textPrimary, fontSize: 13, height: 1.3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Closed history is bounded server-side, so the Closed tab says what it is
+  /// not showing. An unmarked truncated list is the reason a reader stops
+  /// looking for something that is still there.
+  String? _historyNote() {
+    if (_filter != _IssueFilter.closed) return null;
+    final shown = _visibleIssues.length;
+    if (_closedTotal <= shown) return null;
+    return 'Showing the $shown most recent of $_closedTotal closed issues.';
   }
 
   @override
@@ -133,6 +226,7 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
       body: CenteredContent(
         child: Column(
           children: [
+            if (_digestCard() case final card?) card,
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
               child: SizedBox(
@@ -220,10 +314,24 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
                                       const AlwaysScrollableScrollPhysics(),
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 8),
-                                  itemCount: _visibleIssues.length,
+                                  itemCount:
+                                      _visibleIssues.length + (_historyNote() != null ? 1 : 0),
                                   separatorBuilder: (_, __) => const Divider(
                                       color: AppTheme.border, height: 1),
                                   itemBuilder: (context, index) {
+                                    if (index == _visibleIssues.length) {
+                                      return Padding(
+                                        padding: const EdgeInsets.fromLTRB(
+                                            16, 14, 16, 20),
+                                        child: Text(
+                                          _historyNote()!,
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              color: AppTheme.textSecondary,
+                                              fontSize: 12),
+                                        ),
+                                      );
+                                    }
                                     final issue = _visibleIssues[index];
                                     return _IssueTile(
                                       issue: issue,

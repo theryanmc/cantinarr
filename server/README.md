@@ -226,7 +226,7 @@ POST   /api/admin/agent-approval-rules     # arm a rule from the catalog — ser
 GET    /api/issues/{id}                    # reporter or admin: issue thread (an admin viewing marks it read)
 POST   /api/issues/{id}/reply              # reporter or admin: reply (answers agent questions)
 POST   /api/issues/{id}/confirm-fixed      # reporter ONLY: close their own report as fixed
-GET    /api/admin/issues?status=           # admin: issue queue (user-reported + auto-detected; each row carries read/unread)
+GET    /api/admin/issues?status=&closed_limit=  # admin: issue queue (user-reported + auto-detected; each row carries read/unread). Open issues always complete; closed history bounded (default 200, max 1000) with closed_total for what is not shown
 POST   /api/admin/issues/{id}/dismiss      # admin
 POST   /api/admin/issues/{id}/resolve      # admin: { disposition: resolved|wont_fix, note: required, <=8192 bytes }
                                            #   transactional reviewed completion; races return 409

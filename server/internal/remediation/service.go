@@ -1007,7 +1007,37 @@ func (s *Service) ListIssuesForReporter(reporterID int64) ([]Issue, error) {
 	return out, rows.Err()
 }
 
-func (s *Service) ListIssues(status string) ([]Issue, error) {
+// Closed history is the only part of the issue list that grows without bound.
+// Open issues are self-limiting — they get resolved — but closed ones only
+// accumulate, and the observation pipeline closes incidents that never needed a
+// human at all (a live instance closes hundreds a week that way). So the list
+// read caps HISTORY and never the actionable population: whatever filter a
+// client applies to open issues, it is filtering a complete set.
+const (
+	defaultClosedIssueHistory = 200
+	maxClosedIssueHistory     = 1000
+)
+
+// closedIssueStatus reports whether a status is one an issue only reaches with
+// closed_at set. Every writer of closed_at pairs it with one of these, so
+// "closed" and "terminal" name the same rows from either direction.
+func closedIssueStatus(status string) bool {
+	return status == IssueResolved || status == IssueWontFix ||
+		status == IssueDismissed || status == IssueFailed
+}
+
+// ListIssues returns the admin issue list: every open issue, plus the most
+// recent closedLimit closed ones, newest-updated first within each group. The
+// second return value is the total number of closed issues, so a caller can say
+// how much history it is NOT showing rather than implying it has all of it.
+// closedLimit <= 0 takes the default; it is clamped to maxClosedIssueHistory.
+func (s *Service) ListIssues(status string, closedLimit int) ([]Issue, int64, error) {
+	if closedLimit <= 0 {
+		closedLimit = defaultClosedIssueHistory
+	}
+	if closedLimit > maxClosedIssueHistory {
+		closedLimit = maxClosedIssueHistory
+	}
 	query := `SELECT i.id, i.source, i.status, i.category, i.reporter_id, u.username,
 	                 i.tmdb_id, i.tvdb_id, i.media_type, i.title, i.season_number, i.episode_number,
 	                 i.detail, i.occurrences, i.read, i.resolution, i.resolution_kind,
@@ -1015,29 +1045,52 @@ func (s *Service) ListIssues(status string) ([]Issue, error) {
 	                 i.instance_id, i.download_id, i.arr_queue_id, i.author_id, i.book_id,
 	                 COALESCE(i.dedupe_key, '') LIKE 'system:prevention:%'
 	          FROM issues i LEFT JOIN users u ON u.id = i.reporter_id`
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if status != "" {
-		rows, err = s.db.Query(query+" WHERE i.status = ? ORDER BY i.updated_at DESC, i.id DESC", status)
-	} else {
-		rows, err = s.db.Query(query + " ORDER BY i.updated_at DESC, i.id DESC")
+	const order = " ORDER BY i.updated_at DESC, i.id DESC"
+
+	collect := func(into []Issue, where string, args ...any) ([]Issue, error) {
+		rows, err := s.db.Query(query+where, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query issues: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			iss, err := scanIssue(rows)
+			if err != nil {
+				return nil, fmt.Errorf("scan issue: %w", err)
+			}
+			into = append(into, *iss)
+		}
+		return into, rows.Err()
 	}
-	if err != nil {
-		return nil, fmt.Errorf("query issues: %w", err)
+
+	var closedTotal int64
+	if err := s.db.QueryRow("SELECT COUNT(1) FROM issues WHERE closed_at IS NOT NULL").Scan(&closedTotal); err != nil {
+		return nil, 0, fmt.Errorf("count closed issues: %w", err)
 	}
-	defer rows.Close()
 
 	out := []Issue{}
-	for rows.Next() {
-		iss, err := scanIssue(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan issue: %w", err)
+	if status != "" {
+		// An explicit status read caps only when that status is a closed one;
+		// asking for open work must never come back quietly short.
+		where := " WHERE i.status = ?" + order
+		args := []any{status}
+		if closedIssueStatus(status) {
+			where += " LIMIT ?"
+			args = append(args, closedLimit)
 		}
-		out = append(out, *iss)
+		out, err := collect(out, where, args...)
+		return out, closedTotal, err
 	}
-	return out, rows.Err()
+
+	out, err := collect(out, " WHERE i.closed_at IS NULL"+order)
+	if err != nil {
+		return nil, 0, err
+	}
+	out, err = collect(out, " WHERE i.closed_at IS NOT NULL"+order+" LIMIT ?", closedLimit)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, closedTotal, nil
 }
 
 // DismissIssue marks an open (non-terminal) issue dismissed and closes it. The

@@ -239,6 +239,11 @@ type CreateIssueResponse struct {
 // ListIssuesResponse is the GET /api/admin/issues result.
 type ListIssuesResponse struct {
 	Issues []Issue `json:"issues"`
+	// ClosedTotal is how many closed issues exist, against however many the
+	// payload actually carries. A client that shows history must be able to say
+	// "the most recent N of M" — a truncated list rendered as the whole list is
+	// how a reader stops looking for something that is still there.
+	ClosedTotal int64 `json:"closed_total"`
 }
 
 // AgentAction is one row of the agent_actions table as returned to the admin
