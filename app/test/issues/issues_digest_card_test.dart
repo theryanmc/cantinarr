@@ -14,17 +14,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The scoreboard belongs at the head of the list it summarises, and its
 /// numbers must survive a narrow card: a count may never be orphaned from the
-/// word it counts, so the only place a line may wrap is before a "·".
+/// word it counts, so the only place a line may wrap is before a separator.
+///
+/// "Resolved" is OUTCOME vocabulary — every problem that ended well — with
+/// attribution glued to the number, so both admin readings survive: the total
+/// honors the week, the lanes keep automation from claiming churn.
 void main() {
-  testWidgets('digest card renders on the issues list with unbreakable stats',
+  testWidgets('digest card renders outcome-first with unbreakable stats',
       (tester) async {
     final service = _FakeIssuesService(
       issues: [_issue(1, 'needs_admin')],
       digest: const {
-        'issues_resolved': 13,
-        'zero_touch': 4,
+        'issues_resolved': 4,
+        'self_cleared': 37,
+        'resolved_by_agent': 2,
         'rule_approved': 1,
-        'self_cleared': 667,
+        'resolved_by_admin': 1,
+        'closed_no_fix': 2,
+        'dismissed': 5,
         'needs_admin_open': 2,
         'paused_rules': 1,
       },
@@ -34,62 +41,46 @@ void main() {
     final card = _clauses(tester);
     expect(card.window, isNotEmpty, reason: 'the digest card should render');
 
-    // Every stat is glued: no plain space inside one, and "zero-touch" keeps a
-    // non-breaking hyphen so it cannot split either.
-    expect(card.window, contains('13\u00A0resolved'));
+    // The headline is the outcome total (4 + 37), attribution glued behind an
+    // em dash that follows the separator wrap policy: breakable before, glued
+    // after. Every stat is internally non-breaking.
     expect(
       card.window,
-      contains('667\u00A0cleared\u00A0on\u00A0their\u00A0own'),
+      'Last\u00A07\u00A0days: 41\u00A0resolved'
+      ' \u2014\u00A02\u00A0by\u00A0the\u00A0agent'
+      ' \u00B7\u00A01\u00A0by\u00A0your\u00A0rules'
+      ' \u00B7\u00A01\u00A0by\u00A0you'
+      ' \u00B7\u00A037\u00A0on\u00A0their\u00A0own'
+      ' \u00B7\u00A02\u00A0closed\u00A0by\u00A0you\u00A0(no\u00A0fix)'
+      ' \u00B7\u00A05\u00A0dismissed',
     );
-    expect(card.window, contains('4\u00A0zero\u2011touch'));
-    // The delimiter leads the next line: breakable space BEFORE the dot, glued
-    // space after it.
-    expect(card.window, contains(' ·\u00A0'));
-    expect(card.window, isNot(contains('· ')));
+    // The delimiter leads the next line: breakable space BEFORE dot and dash,
+    // glued space after.
+    expect(card.window, isNot(contains('\u00B7 ')));
+    expect(card.window, isNot(contains('\u2014 ')));
 
-    // Open work is state right now, not something the last 7 days did, so it
-    // reads as its own clause. One paused rule reads "rule", not "rule(s)".
+    // Open work is state right now, not something the last 7 days did.
     expect(card.now, contains('2\u00A0need\u00A0you'));
     expect(card.now, contains('1\u00A0rule\u00A0paused'));
     expect(card.window, isNot(contains('need')));
     expect(card.window, isNot(contains('paused')));
   });
 
-  testWidgets('paused-rule stat pluralises with the count', (tester) async {
-    final service = _FakeIssuesService(
-      issues: [_issue(1, 'needs_admin')],
-      digest: const {
-        'issues_resolved': 2,
-        'paused_rules': 3,
-        'needs_admin_open': 1,
-        'self_cleared': 1,
-      },
-    );
-    await _pump(tester, service);
-
-    final card = _clauses(tester);
-    expect(card.now, contains('3\u00A0rules\u00A0paused'));
-    // "1 needs you", not "1 need you".
-    expect(card.now, contains('1\u00A0needs\u00A0you'));
-    // A lone self-cleared incident cleared on ITS own.
-    expect(card.window, contains('1\u00A0cleared\u00A0on\u00A0its\u00A0own'));
-  });
-
-  // Regression pin for the live card that read "0 resolved · 1 by your rules ·
-  // 529 cleared on their own · 1 rule paused" — four numbers that could not all
-  // be about the same thing. What makes the first three agree is server-side
-  // (zero-touch and by-your-rules are subsets of resolved, same clock); what
-  // this pins is the shape the reader sees: a week that resolved nothing claims
-  // nothing, and the paused rule — true now, not this week — has left the
-  // window clause entirely.
-  testWidgets('a week that resolved nothing claims nothing', (tester) async {
+  // The live week that motivated outcome-first: 438 problems ended well, all
+  // by themselves, and the two hand-closures stay visible without being called
+  // resolved — the closer's own verb was "Close without fix".
+  testWidgets('a self-clearing week is resolved, attributed to no one',
+      (tester) async {
     final service = _FakeIssuesService(
       issues: const [],
       digest: const {
         'issues_resolved': 0,
-        'zero_touch': 0,
+        'self_cleared': 438,
         'rule_approved': 0,
-        'self_cleared': 529,
+        'resolved_by_agent': 0,
+        'resolved_by_admin': 0,
+        'closed_no_fix': 2,
+        'dismissed': 5,
         'needs_admin_open': 0,
         'paused_rules': 1,
       },
@@ -99,20 +90,45 @@ void main() {
     final card = _clauses(tester);
     expect(
       card.window,
-      'Last\u00A07\u00A0days: 0\u00A0resolved'
-      ' ·\u00A0529\u00A0cleared\u00A0on\u00A0their\u00A0own',
+      'Last\u00A07\u00A0days: 438\u00A0resolved'
+      ' \u2014\u00A0all\u00A0on\u00A0their\u00A0own'
+      ' \u00B7\u00A02\u00A0closed\u00A0by\u00A0you\u00A0(no\u00A0fix)'
+      ' \u00B7\u00A05\u00A0dismissed',
     );
     expect(card.now, contains('1\u00A0rule\u00A0paused'));
   });
 
-  testWidgets('the now clause is absent when nothing is open', (tester) async {
+  testWidgets('grammar: lone counts read singular', (tester) async {
     final service = _FakeIssuesService(
-      issues: const [],
-      digest: const {'issues_resolved': 3, 'zero_touch': 3, 'self_cleared': 2},
+      issues: [_issue(1, 'needs_admin')],
+      digest: const {
+        'issues_resolved': 0,
+        'self_cleared': 1,
+        'closed_no_fix': 1,
+        'needs_admin_open': 1,
+        'paused_rules': 3,
+      },
     );
     await _pump(tester, service);
 
-    expect(_clauses(tester).window, contains('3\u00A0resolved'));
+    final card = _clauses(tester);
+    // A lone unattributed resolution resolved on ITS own.
+    expect(card.window, contains('1\u00A0resolved \u2014\u00A0on\u00A0its\u00A0own'));
+    expect(card.window, contains('1\u00A0closed\u00A0by\u00A0you\u00A0(no\u00A0fix)'));
+    // "1 needs you", not "1 need you"; three rules pluralise.
+    expect(card.now, contains('1\u00A0needs\u00A0you'));
+    expect(card.now, contains('3\u00A0rules\u00A0paused'));
+  });
+
+  testWidgets('a truly empty week claims nothing and the now clause is absent',
+      (tester) async {
+    final service = _FakeIssuesService(
+      issues: const [],
+      digest: const {'issues_resolved': 0, 'self_cleared': 0},
+    );
+    await _pump(tester, service);
+
+    expect(_clauses(tester).window, 'Last\u00A07\u00A0days: 0\u00A0resolved');
     expect(find.textContaining('Right'), findsNothing);
   });
 

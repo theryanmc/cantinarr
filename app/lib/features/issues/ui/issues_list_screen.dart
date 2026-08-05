@@ -162,25 +162,51 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
   /// what the window did; the second is state right now. Folding them together
   /// put "1 rule paused" — which may have been paused in March — inside "Last 7
   /// days", and it read as one running total that had to add up.
+  ///
+  /// "Resolved" is OUTCOME vocabulary: every problem that ended well, which is
+  /// how admins read the word — half of one instance's admins called a week of
+  /// self-cleared incidents "resolved" while the card said 0. Attribution is
+  /// glued to the number ("— all on their own", "N by the agent") so automation
+  /// claims only its own work and the headline can never contradict the lanes
+  /// that break it down. Hand closures that the closer's own verb said were NOT
+  /// fixes ("Close without fix", dismiss) stay outside "resolved" but on the
+  /// card — human work is visible, just never mislabeled.
   Widget? _digestCard() {
     final d = _digest;
     if (d == null) return null;
     int n(String key) => (d[key] as num?)?.toInt() ?? 0;
-    final resolved = n('issues_resolved');
-    final zeroTouch = n('zero_touch');
+    final resolved = n('issues_resolved') + n('self_cleared');
+    final byAgent = n('resolved_by_agent');
     final byRules = n('rule_approved');
-    final selfCleared = n('self_cleared');
+    final byAdmin = n('resolved_by_admin');
+    final onOwn = resolved - byAgent - byRules - byAdmin;
+    final closedNoFix = n('closed_no_fix');
+    final dismissed = n('dismissed');
     final needsAdmin = n('needs_admin_open');
     final paused = n('paused_rules');
-    // zero-touch and by-your-rules are subsets of resolved, server-side, on the
-    // same clock — so this list can never contradict its own first number.
-    final window = <String>[
-      '$resolved resolved',
-      if (zeroTouch > 0) '$zeroTouch zero-touch',
+    // The attribution lanes are disjoint server-side and each is a subset of
+    // the resolved total on the same clock, so the sentence always adds up.
+    final lanes = <String>[
+      if (byAgent > 0) '$byAgent by the agent',
       if (byRules > 0) '$byRules by your rules',
-      if (selfCleared > 0)
-        '$selfCleared cleared on ${selfCleared == 1 ? 'its' : 'their'} own',
-    ].map(_glueStat).toList();
+      if (byAdmin > 0) '$byAdmin by you',
+    ];
+    if (onOwn > 0) {
+      lanes.add(lanes.isEmpty
+          ? (onOwn == 1 ? 'on its own' : 'all on their own')
+          : '$onOwn on their own');
+    }
+    // The em dash follows the separator's wrap policy: breakable before, glued
+    // after, so it leads a wrapped line instead of dangling at the end of one.
+    var head = _glueStat('$resolved resolved');
+    if (lanes.isNotEmpty) {
+      head += ' —$_nbsp${lanes.map(_glueStat).join(' ·$_nbsp')}';
+    }
+    final window = <String>[
+      head,
+      if (closedNoFix > 0) _glueStat('$closedNoFix closed by you (no fix)'),
+      if (dismissed > 0) _glueStat('$dismissed dismissed'),
+    ];
     final now = <String>[
       if (needsAdmin > 0) '$needsAdmin need${needsAdmin == 1 ? 's' : ''} you',
       if (paused > 0) '$paused rule${paused == 1 ? '' : 's'} paused',

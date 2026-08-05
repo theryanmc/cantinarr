@@ -888,3 +888,62 @@ func TestNotifyAdminsAutoApprovalPausedFixedTemplateAndSharedPref(t *testing.T) 
 		t.Errorf("collapse_id = %v, want per-rule collapse", opts["collapse_id"])
 	}
 }
+
+// The weekly digest speaks outcome vocabulary: "resolved" is every problem
+// that ended well, with attribution glued to the number so automation claims
+// only its own work. A week where everything cleared on its own says exactly
+// that, and open work stays in its own "Right now" clause.
+func TestNotifyAgentDigestOutcomeBody(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'boss', '', 'admin')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	// The live shape that motivated the change: 438 self-cleared, nothing else.
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved":   0,
+		"self_cleared":      438,
+		"rule_approved":     0,
+		"resolved_by_agent": 0,
+		"resolved_by_admin": 0,
+		"needs_admin_open":  0,
+		"pending_proposals": 0,
+	})
+	body := cap.waitForNotification(t)
+	notif, _ := body["notification"].(map[string]any)
+	if notif["body"] != "Last 7 days: 438 resolved — all on their own" {
+		t.Errorf("self-cleared week body = %q", notif["body"])
+	}
+
+	// A busier week attributes each lane, and one open item reads "needs you".
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved":   4,
+		"self_cleared":      37,
+		"rule_approved":     1,
+		"resolved_by_agent": 2,
+		"resolved_by_admin": 1,
+		"needs_admin_open":  1,
+		"pending_proposals": 0,
+	})
+	body = cap.waitForNotification(t)
+	notif, _ = body["notification"].(map[string]any)
+	want := "Last 7 days: 41 resolved — 2 by the agent · 1 by your rules · 1 by you · 37 on their own. Right now: 1 needs you"
+	if notif["body"] != want {
+		t.Errorf("attributed week body = %q, want %q", notif["body"], want)
+	}
+
+	// A lone self-cleared incident resolved on ITS own.
+	n.NotifyAdmins(CategoryAgentDigest, map[string]interface{}{
+		"issues_resolved": 0,
+		"self_cleared":    1,
+	})
+	body = cap.waitForNotification(t)
+	notif, _ = body["notification"].(map[string]any)
+	if notif["body"] != "Last 7 days: 1 resolved — on its own" {
+		t.Errorf("singular body = %q", notif["body"])
+	}
+}
