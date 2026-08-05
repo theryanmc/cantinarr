@@ -41,11 +41,37 @@ void main() {
     // non-breaking hyphen so it cannot split either.
     expect(line, contains('13\u00A0resolved'));
     expect(line, contains('667\u00A0cleared\u00A0on\u00A0their\u00A0own'));
+    expect(line, contains('2\u00A0need\u00A0you'));
     expect(line, contains('4\u00A0zero\u2011touch'));
     // The delimiter leads the next line: breakable space BEFORE the dot, glued
     // space after it.
     expect(line, contains(' ·\u00A0'));
     expect(line, isNot(contains('· ')));
+    // One paused rule reads "rule", not "rule(s)".
+    expect(line, contains('1\u00A0rule\u00A0paused'));
+  });
+
+  testWidgets('paused-rule stat pluralises with the count', (tester) async {
+    final service = _FakeIssuesService(
+      issues: [_issue(1, 'needs_admin')],
+      digest: const {
+        'issues_resolved': 2,
+        'paused_rules': 3,
+        'needs_admin_open': 1,
+        'self_cleared': 1,
+      },
+    );
+    await _pump(tester, service);
+
+    final line = tester
+        .widgetList<Text>(find.byType(Text))
+        .map((t) => t.data ?? '')
+        .firstWhere((d) => d.contains('Last'), orElse: () => '');
+    expect(line, contains('3\u00A0rules\u00A0paused'));
+    // "1 needs you", not "1 need you".
+    expect(line, contains('1\u00A0needs\u00A0you'));
+    // A lone self-cleared incident cleared on ITS own.
+    expect(line, contains('1\u00A0cleared\u00A0on\u00A0its\u00A0own'));
   });
 
   testWidgets('closed tab says how much history it is not showing',
