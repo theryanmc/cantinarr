@@ -660,7 +660,7 @@ server/
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
 │   ├── downloads/            # Unified download-client queue API across all four clients
 │   ├── instance/             # Instance registry, defaults invariant, per-user pins, safe webhook rotation
-│   ├── mcp/                  # 35 registered tools, toggles, tool server (33 also exposed through external MCP)
+│   ├── mcp/                  # 38 registered tools, toggles, tool server (36 also exposed through external MCP)
 │   ├── mcpserver/            # MCP Streamable HTTP endpoint, prompts, agent guide (mcp-go)
 │   ├── mediafiles/           # Ticketed, instance-mapped + root-confined media streaming
 │   ├── mediapath/            # Cross-platform arr-path validation and local translation
