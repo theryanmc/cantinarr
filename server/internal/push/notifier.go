@@ -192,8 +192,14 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		}
 		body := fmt.Sprintf("Last 7 days: %d resolved · %d zero-touch · %d by your rules",
 			intField(data, "issues_resolved"), intField(data, "zero_touch"), intField(data, "rule_approved"))
+		// Open work is state right now, not something the week did, so it gets
+		// its own clause instead of riding the window's separator list.
 		if needs := intField(data, "needs_admin_open") + intField(data, "pending_proposals"); needs > 0 {
-			body += fmt.Sprintf(" · %d need you", needs)
+			verb := "need"
+			if needs == 1 {
+				verb = "needs"
+			}
+			body += fmt.Sprintf(". Right now: %d %s you", needs, verb)
 		}
 		n.send(client, users, "Your media assistant, this week", body, passthrough(CategoryAgentDigest, data))
 	}

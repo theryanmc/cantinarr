@@ -575,6 +575,82 @@ func TestAgentDigestExcludesNeverPromotedNoise(t *testing.T) {
 	}
 }
 
+// "By your rules" names a resolution, not an attempt. Regression pin: a live
+// card read "0 resolved · 1 by your rules · 529 cleared on their own · 1 rule
+// paused" — arithmetically impossible for anyone reading the stats as one
+// population, and it was: the count was of ACTIONS executed in the window while
+// every neighbouring stat counted ISSUES closed in it. A rule whose fix ran and
+// did not land (the issue closed unresolved, which is exactly what paused the
+// rule) was still being reported as a win.
+func TestAgentDigestCreditsRulesOnlyWhenTheIssueResolved(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (9, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	// The live shape: the rule acted, the outcome was bad, the rule is paused.
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (id, problem_kind, action_kind, action_facet, status, created_at, updated_at)
+		 VALUES (7, 'Download stalled', 'remediate_queue', 'blocklist_only', 'paused', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (id, source, status, media_type, tmdb_id, title, detail, resolution_kind, closed_at) VALUES
+		 (301, 'auto', 'wont_fix',   'movie', 1, 'ran, did not land', 'd', 'user_unresponsive',  CURRENT_TIMESTAMP),
+		 (302, 'auto', 'recovering', 'movie', 2, 'still in flight',   'd', '',                   NULL),
+		 (303, 'auto', 'resolved',   'movie', 3, 'noise',             'd', 'arr_state_cleared',  CURRENT_TIMESTAMP),
+		 (304, 'auto', 'resolved',   'movie', 4, 'the real win',      'd', 'arr_state_cleared',  CURRENT_TIMESTAMP),
+		 (305, 'auto', 'resolved',   'movie', 5, 'you approved it',   'd', 'agent_concluded',    CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observations (issue_id, service_type, scope_key, promoted_at) VALUES
+		 (301, 'radarr', 'k1', CURRENT_TIMESTAMP),
+		 (302, 'radarr', 'k2', CURRENT_TIMESTAMP),
+		 (303, 'radarr', 'k3', NULL),
+		 (304, 'radarr', 'k4', CURRENT_TIMESTAMP),
+		 (305, 'radarr', 'k5', CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed observations: %v", err)
+	}
+	// Three rule-approved fixes executed in the window; only 304's issue resolved.
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, executed_at, auto_rule_id, decided_by, fingerprint, tool_use_id) VALUES
+		 (301, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, 7,    NULL, 'fp-1', 'tu-1'),
+		 (302, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, 7,    NULL, 'fp-2', 'tu-2'),
+		 (304, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, 7,    NULL, 'fp-3', 'tu-3'),
+		 (305, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, NULL, 9,    'fp-4', 'tu-4')`,
+	); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+
+	d, err := svc.Digest(7)
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if d.IssuesResolved != 2 {
+		t.Fatalf("resolved = %d, want 2 (the rule's win and the one you approved)", d.IssuesResolved)
+	}
+	if d.RuleApproved != 1 {
+		t.Fatalf("ruleApproved = %d, want 1 — the fix that ran and did not land, and the one still in flight, are not wins", d.RuleApproved)
+	}
+	if d.RuleApproved > d.IssuesResolved {
+		t.Fatalf("ruleApproved %d > resolved %d: the card reads these as one population, so this can never happen",
+			d.RuleApproved, d.IssuesResolved)
+	}
+	if d.ZeroTouch != 1 {
+		t.Fatalf("zeroTouch = %d, want 1", d.ZeroTouch)
+	}
+	if d.SelfCleared != 1 || d.PausedRules != 1 {
+		t.Fatalf("selfCleared = %d pausedRules = %d, want 1/1", d.SelfCleared, d.PausedRules)
+	}
+	// Activity is still reported — it is just not reported as accomplishment.
+	if d.ActionsExecuted != 4 {
+		t.Fatalf("actionsExecuted = %d, want all 4 — the raw activity count keeps its own meaning", d.ActionsExecuted)
+	}
+}
+
 // The weekly scoreboard pages once a week, only when the week has something
 // to say — and a quiet week advances the window silently.
 func TestWeeklyDigestPushPacing(t *testing.T) {

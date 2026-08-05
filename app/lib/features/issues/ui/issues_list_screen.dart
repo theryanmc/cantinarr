@@ -157,6 +157,11 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
   /// alongside the rows they count, so "N cleared on their own" is one tab away
   /// from the closed incidents it refers to. Admin-only: the digest endpoint is
   /// gated on PermissionRemediationManage.
+  ///
+  /// Two clauses, because there are two kinds of number here. The first counts
+  /// what the window did; the second is state right now. Folding them together
+  /// put "1 rule paused" — which may have been paused in March — inside "Last 7
+  /// days", and it read as one running total that had to add up.
   Widget? _digestCard() {
     final d = _digest;
     if (d == null) return null;
@@ -167,12 +172,16 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
     final selfCleared = n('self_cleared');
     final needsAdmin = n('needs_admin_open');
     final paused = n('paused_rules');
-    final parts = <String>[
+    // zero-touch and by-your-rules are subsets of resolved, server-side, on the
+    // same clock — so this list can never contradict its own first number.
+    final window = <String>[
       '$resolved resolved',
       if (zeroTouch > 0) '$zeroTouch zero-touch',
       if (byRules > 0) '$byRules by your rules',
       if (selfCleared > 0)
         '$selfCleared cleared on ${selfCleared == 1 ? 'its' : 'their'} own',
+    ].map(_glueStat).toList();
+    final now = <String>[
       if (needsAdmin > 0) '$needsAdmin need${needsAdmin == 1 ? 's' : ''} you',
       if (paused > 0) '$paused rule${paused == 1 ? '' : 's'} paused',
     ].map(_glueStat).toList();
@@ -190,10 +199,26 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
           const Icon(Icons.insights_outlined, size: 18, color: AppTheme.accent),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              '${_glueStat('Last 7 days:')} ${parts.join(' ·$_nbsp')}',
-              style: const TextStyle(
-                  color: AppTheme.textPrimary, fontSize: 13, height: 1.3),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_glueStat('Last 7 days:')} ${window.join(' ·$_nbsp')}',
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary, fontSize: 13, height: 1.3),
+                ),
+                if (now.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      '${_glueStat('Right now:')} ${now.join(' ·$_nbsp')}',
+                      style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 13,
+                          height: 1.3),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],

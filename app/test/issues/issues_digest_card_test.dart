@@ -14,7 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// The scoreboard belongs at the head of the list it summarises, and its
 /// numbers must survive a narrow card: a count may never be orphaned from the
-/// word it counts, so the only place the line may wrap is before a "·".
+/// word it counts, so the only place a line may wrap is before a "·".
 void main() {
   testWidgets('digest card renders on the issues list with unbreakable stats',
       (tester) async {
@@ -31,24 +31,28 @@ void main() {
     );
     await _pump(tester, service);
 
-    final line = tester
-        .widgetList<Text>(find.byType(Text))
-        .map((t) => t.data ?? '')
-        .firstWhere((d) => d.contains('Last'), orElse: () => '');
-    expect(line, isNotEmpty, reason: 'the digest card should render');
+    final card = _clauses(tester);
+    expect(card.window, isNotEmpty, reason: 'the digest card should render');
 
     // Every stat is glued: no plain space inside one, and "zero-touch" keeps a
     // non-breaking hyphen so it cannot split either.
-    expect(line, contains('13\u00A0resolved'));
-    expect(line, contains('667\u00A0cleared\u00A0on\u00A0their\u00A0own'));
-    expect(line, contains('2\u00A0need\u00A0you'));
-    expect(line, contains('4\u00A0zero\u2011touch'));
+    expect(card.window, contains('13\u00A0resolved'));
+    expect(
+      card.window,
+      contains('667\u00A0cleared\u00A0on\u00A0their\u00A0own'),
+    );
+    expect(card.window, contains('4\u00A0zero\u2011touch'));
     // The delimiter leads the next line: breakable space BEFORE the dot, glued
     // space after it.
-    expect(line, contains(' ·\u00A0'));
-    expect(line, isNot(contains('· ')));
-    // One paused rule reads "rule", not "rule(s)".
-    expect(line, contains('1\u00A0rule\u00A0paused'));
+    expect(card.window, contains(' ·\u00A0'));
+    expect(card.window, isNot(contains('· ')));
+
+    // Open work is state right now, not something the last 7 days did, so it
+    // reads as its own clause. One paused rule reads "rule", not "rule(s)".
+    expect(card.now, contains('2\u00A0need\u00A0you'));
+    expect(card.now, contains('1\u00A0rule\u00A0paused'));
+    expect(card.window, isNot(contains('need')));
+    expect(card.window, isNot(contains('paused')));
   });
 
   testWidgets('paused-rule stat pluralises with the count', (tester) async {
@@ -63,15 +67,53 @@ void main() {
     );
     await _pump(tester, service);
 
-    final line = tester
-        .widgetList<Text>(find.byType(Text))
-        .map((t) => t.data ?? '')
-        .firstWhere((d) => d.contains('Last'), orElse: () => '');
-    expect(line, contains('3\u00A0rules\u00A0paused'));
+    final card = _clauses(tester);
+    expect(card.now, contains('3\u00A0rules\u00A0paused'));
     // "1 needs you", not "1 need you".
-    expect(line, contains('1\u00A0needs\u00A0you'));
+    expect(card.now, contains('1\u00A0needs\u00A0you'));
     // A lone self-cleared incident cleared on ITS own.
-    expect(line, contains('1\u00A0cleared\u00A0on\u00A0its\u00A0own'));
+    expect(card.window, contains('1\u00A0cleared\u00A0on\u00A0its\u00A0own'));
+  });
+
+  // Regression pin for the live card that read "0 resolved · 1 by your rules ·
+  // 529 cleared on their own · 1 rule paused" — four numbers that could not all
+  // be about the same thing. What makes the first three agree is server-side
+  // (zero-touch and by-your-rules are subsets of resolved, same clock); what
+  // this pins is the shape the reader sees: a week that resolved nothing claims
+  // nothing, and the paused rule — true now, not this week — has left the
+  // window clause entirely.
+  testWidgets('a week that resolved nothing claims nothing', (tester) async {
+    final service = _FakeIssuesService(
+      issues: const [],
+      digest: const {
+        'issues_resolved': 0,
+        'zero_touch': 0,
+        'rule_approved': 0,
+        'self_cleared': 529,
+        'needs_admin_open': 0,
+        'paused_rules': 1,
+      },
+    );
+    await _pump(tester, service);
+
+    final card = _clauses(tester);
+    expect(
+      card.window,
+      'Last\u00A07\u00A0days: 0\u00A0resolved'
+      ' ·\u00A0529\u00A0cleared\u00A0on\u00A0their\u00A0own',
+    );
+    expect(card.now, contains('1\u00A0rule\u00A0paused'));
+  });
+
+  testWidgets('the now clause is absent when nothing is open', (tester) async {
+    final service = _FakeIssuesService(
+      issues: const [],
+      digest: const {'issues_resolved': 3, 'zero_touch': 3, 'self_cleared': 2},
+    );
+    await _pump(tester, service);
+
+    expect(_clauses(tester).window, contains('3\u00A0resolved'));
+    expect(find.textContaining('Right'), findsNothing);
   });
 
   testWidgets('closed tab says how much history it is not showing',
@@ -103,6 +145,17 @@ void main() {
 
     expect(find.textContaining('most recent of'), findsNothing);
   });
+}
+
+/// The card's two clauses: what the window did, and what is true right now.
+({String window, String now}) _clauses(WidgetTester tester) {
+  final lines = tester
+      .widgetList<Text>(find.byType(Text))
+      .map((t) => t.data ?? '')
+      .toList();
+  String clause(String head) =>
+      lines.firstWhere((d) => d.startsWith(head), orElse: () => '');
+  return (window: clause('Last'), now: clause('Right'));
 }
 
 Future<void> _pump(WidgetTester tester, _FakeIssuesService service) async {
