@@ -31,18 +31,34 @@ type AgentDigest struct {
 	// at least one action actually EXECUTED and no human decided any of them.
 	// The executed requirement is what keeps "earned autonomy doing its job end
 	// to end" from silently absorbing every incident that fixed itself.
-	ZeroTouch        int64 `json:"zero_touch"`
-	ActionsExecuted  int64 `json:"actions_executed"`
-	RuleApproved     int64 `json:"rule_approved"`
-	ReporterClosed   int64 `json:"reporter_closed"`
-	TokensIn         int64 `json:"tokens_in"`
-	TokensOut        int64 `json:"tokens_out"`
+	ZeroTouch int64 `json:"zero_touch"`
+	// ActionsExecuted is the one deliberate activity number: fixes that ran in
+	// the window, whatever became of them. It is not an accomplishment count and
+	// the card does not render it beside ones that are.
+	ActionsExecuted int64 `json:"actions_executed"`
+	// RuleApproved counts RESOLVED ISSUES a standing rule saw the whole way —
+	// the rule approved a fix, it executed, no human decided it, and the issue
+	// resolved. Deliberately a subset of IssuesResolved on the same closed_at
+	// clock: it used to count executed actions instead, so a fix that ran and
+	// did not land still read as a win. A live card showed "0 resolved · 1 by
+	// your rules · 1 rule paused" — one number crediting the very rule the next
+	// one had just paused for failing.
+	RuleApproved   int64 `json:"rule_approved"`
+	ReporterClosed int64 `json:"reporter_closed"`
+	TokensIn       int64 `json:"tokens_in"`
+	TokensOut      int64 `json:"tokens_out"`
+
+	// Everything below is state RIGHT NOW, not a fact about the window: what is
+	// still open, still waiting, still stood down. A surface that renders these
+	// must not fold them into its "last N days" clause — a rule paused in March
+	// is not something that happened this week.
 	NeedsAdminOpen   int64 `json:"needs_admin_open"`
 	PendingProposals int64 `json:"pending_proposals"`
 	PausedRules      int64 `json:"paused_rules"`
 
-	// RuleCounts names the rules that did the work: label -> executed count in
-	// the window, newest-heavy rules first in the slice.
+	// RuleCounts names the rules that did the work: label -> count of fixes that
+	// EXECUTED in the window, newest-heavy rules first. An activity count like
+	// ActionsExecuted, not an outcome count like RuleApproved.
 	RuleCounts []DigestRuleCount `json:"rule_counts"`
 
 	GeneratedAt time.Time `json:"generated_at"`
@@ -84,7 +100,10 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed')
 		   AND NOT EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.decided_by IS NOT NULL)),
 		(SELECT COUNT(1) FROM agent_actions WHERE executed_at >= datetime('now', ?1) AND status = 'executed'),
-		(SELECT COUNT(1) FROM agent_actions WHERE executed_at >= datetime('now', ?1) AND status = 'executed' AND auto_rule_id IS NOT NULL AND decided_by IS NULL),
+		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND NOT (`+selfCleared+`)
+		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed'
+		     AND a.auto_rule_id IS NOT NULL AND a.decided_by IS NULL)),
 		(SELECT COUNT(1) FROM issues WHERE closed_at >= datetime('now', ?1) AND resolution_kind = ?2),
 		(SELECT COALESCE(SUM(input_tokens), 0) FROM agent_runs WHERE started_at >= datetime('now', ?1)),
 		(SELECT COALESCE(SUM(output_tokens), 0) FROM agent_runs WHERE started_at >= datetime('now', ?1)),
@@ -146,8 +165,10 @@ func (s *Service) SweepWeeklyDigest(now time.Time) {
 	if err != nil {
 		return
 	}
-	if digest.IssuesResolved+digest.ZeroTouch+digest.RuleApproved+
-		digest.NeedsAdminOpen+digest.PendingProposals == 0 {
+	// ZeroTouch and RuleApproved are subsets of IssuesResolved, so summing them
+	// here would only double-count: a week has something to say when something
+	// resolved or something is still waiting on the admin.
+	if digest.IssuesResolved+digest.NeedsAdminOpen+digest.PendingProposals == 0 {
 		// Nothing happened and nothing waits: say nothing, but advance the
 		// stamp so a later busy week is measured against a fresh window.
 		_, _ = s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
