@@ -60,7 +60,7 @@ func TestObservationStartsSilentAndPromotesExactlyOnce(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", instanceID, []arr.QueueObservation{item}, base); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueObserving || !issues[0].Read {
 		t.Fatalf("initial issue = %+v, want silent observing/read", issues)
 	}
@@ -109,7 +109,7 @@ func TestReplacementStaysOneSilentRecoveringIncident(t *testing.T) {
 	if err := svc.observeQueueSnapshot("radarr", testRadarrInstanceID, []arr.QueueObservation{replacement}, base.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	issues, _ := svc.ListIssues("")
+	issues, _, _ := svc.ListIssues("", 0)
 	if len(issues) != 1 || issues[0].Status != IssueRecovering || issues[0].DownloadID != "replacement" {
 		t.Fatalf("replacement incident = %+v", issues)
 	}

@@ -13,7 +13,7 @@ func TestBookImportStallDedupesPerInstanceSystemIssueAndRecovers(t *testing.T) {
 	if err := service.RecordBookImportStall("chaptarr-abc", "Books", titles, false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestBookImportStallDedupesPerInstanceSystemIssueAndRecovers(t *testing.T) {
 	if err := service.RecordBookImportStall("chaptarr-abc", "Books", titles, false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err = service.ListIssues("")
+	issues, _, err = service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestBookImportStallDedupesPerInstanceSystemIssueAndRecovers(t *testing.T) {
 	if err := service.RecordBookImportStall("chaptarr-def", "Yana's Books", []string{"Another Book"}, false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err = service.ListIssues("")
+	issues, _, err = service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestBookImportStallBoundsTitleList(t *testing.T) {
 	if err := service.RecordBookImportStall("chaptarr-abc", "Books", titles, false); err != nil {
 		t.Fatal(err)
 	}
-	issues, err := service.ListIssues("")
+	issues, _, err := service.ListIssues("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

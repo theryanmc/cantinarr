@@ -41,16 +41,12 @@ class _PendingAgentActionsScreenState
   Timer? _poll;
 
   static const _pollInterval = Duration(seconds: 30);
-  Map<String, dynamic>? _digest;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _load();
-      _loadDigest();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     _poll = Timer.periodic(_pollInterval, (_) => _load());
   }
 
@@ -123,64 +119,6 @@ class _PendingAgentActionsScreenState
   /// before the confirmation dialog, so a proposal that parks while the admin
   /// is reading it is never approved sight-unseen; the server skips anything
   /// that recovered or changed in the meantime and reports it per item.
-  Future<void> _loadDigest() async {
-    try {
-      final digest = await ref.read(issuesServiceProvider).agentDigest();
-      if (mounted) setState(() => _digest = digest);
-    } catch (_) {
-      // The scoreboard is a convenience; the queue works without it.
-    }
-  }
-
-  /// The week at a glance: what ran itself, what the rules did, what needs a
-  /// human. The system deliberately never pages on success — this is where the
-  /// quiet weeks become legible.
-  Widget? _digestCard() {
-    final d = _digest;
-    if (d == null) return null;
-    int n(String key) => (d[key] as num?)?.toInt() ?? 0;
-    final resolved = n('issues_resolved');
-    final zeroTouch = n('zero_touch');
-    final byRules = n('rule_approved');
-    final selfCleared = n('self_cleared');
-    final needsAdmin = n('needs_admin_open');
-    final paused = n('paused_rules');
-    final parts = <String>[
-      '$resolved resolved',
-      if (zeroTouch > 0) '$zeroTouch zero-touch',
-      if (byRules > 0) '$byRules by your rules',
-      // Kept visibly apart from the agent's own numbers: these never reached a
-      // human or the agent, they came right on their own. Informative about the
-      // stack, but claiming them as fixes is what made this card read as 680.
-      if (selfCleared > 0) '$selfCleared cleared on their own',
-      if (needsAdmin > 0) '$needsAdmin need you',
-      if (paused > 0) '$paused rule(s) paused',
-    ];
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.insights_outlined,
-              size: 18, color: AppTheme.accent),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Last 7 days: ${parts.join(' · ')}',
-              style: const TextStyle(
-                  color: AppTheme.textPrimary, fontSize: 13, height: 1.3),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _approveAll() async {
     if (_batchBusy || _error != null) return;
     // D6: deleting imported files never rides a batch — the server refuses it
@@ -310,7 +248,6 @@ class _PendingAgentActionsScreenState
       body: CenteredContent(
         child: Column(
           children: [
-            if (_digestCard() case final card?) card,
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
               child: SizedBox(

@@ -396,7 +396,7 @@ func setupPreAirService(t *testing.T) (*Service, *fakeNotifier, *preAirFake) {
 
 func openIssueCount(t *testing.T, svc *Service) int {
 	t.Helper()
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
@@ -405,7 +405,7 @@ func openIssueCount(t *testing.T, svc *Service) int {
 
 func soleIssue(t *testing.T, svc *Service) Issue {
 	t.Helper()
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestPreAirSeasonCanBeReportedAgainAfterItCloses(t *testing.T) {
 
 	svc.RecordPreAirImport(preAirSonarrID, 73871, 615, 11, "Futurama")
 
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}

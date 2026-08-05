@@ -129,7 +129,7 @@ func seedPreventionAdmin(t *testing.T, svc *Service) {
 // in the table.
 func noticeIssues(t *testing.T, svc *Service) []Issue {
 	t.Helper()
-	all, err := svc.ListIssues("")
+	all, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}

@@ -157,9 +157,9 @@ class _FakeIssuesService extends IssuesService {
   }
 
   @override
-  Future<List<Issue>> listIssues({String? status}) async {
+  Future<IssuePage> listIssues({String? status}) async {
     if (failIssues) throw StateError('issues unavailable');
-    return issues;
+    return IssuePage(issues: issues, closedTotal: issues.length);
   }
 
   @override

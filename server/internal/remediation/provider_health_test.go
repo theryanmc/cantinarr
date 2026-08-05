@@ -23,7 +23,7 @@ func unavailableResolver() autonomousTurnResolver {
 func openProviderIssues(t *testing.T, svc *Service) []Issue {
 	t.Helper()
 	var out []Issue
-	issues, err := svc.ListIssues("")
+	issues, _, err := svc.ListIssues("", 0)
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}

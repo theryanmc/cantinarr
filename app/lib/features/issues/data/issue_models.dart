@@ -498,3 +498,16 @@ class RemediationSettings {
             observationSettleMinutes ?? this.observationSettleMinutes,
       );
 }
+
+/// One page of the admin issue list.
+///
+/// Open issues always arrive complete; only closed history is bounded, because
+/// it is the half that grows forever. [closedTotal] is how many closed issues
+/// exist server-side, so a list showing fewer can say so rather than reading as
+/// the whole record.
+class IssuePage {
+  const IssuePage({required this.issues, required this.closedTotal});
+
+  final List<Issue> issues;
+  final int closedTotal;
+}

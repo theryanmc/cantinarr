@@ -314,15 +314,21 @@ func (h *Handler) ConfirmFixed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// ListAdmin handles GET /api/admin/issues?status= (PermissionRemediationManage).
+// ListAdmin handles GET /api/admin/issues?status=&closed_limit=
+// (PermissionRemediationManage). Open issues always come back in full; the
+// closed tail is bounded, and closed_total says how much history exists.
 func (h *Handler) ListAdmin(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
-	issues, err := h.service.ListIssues(status)
+	closedLimit := 0
+	if v, err := strconv.Atoi(r.URL.Query().Get("closed_limit")); err == nil {
+		closedLimit = v
+	}
+	issues, closedTotal, err := h.service.ListIssues(status, closedLimit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues})
+	writeJSON(w, http.StatusOK, ListIssuesResponse{Issues: issues, ClosedTotal: closedTotal})
 }
 
 // Dismiss handles POST /api/admin/issues/{id}/dismiss (PermissionRemediationManage).

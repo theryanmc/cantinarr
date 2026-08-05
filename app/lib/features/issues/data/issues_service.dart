@@ -142,7 +142,11 @@ class IssuesService {
         .toList();
   }
 
-  Future<List<Issue>> listIssues({String? status}) async {
+  /// The admin issue list. Open issues always arrive in full; the closed tail
+  /// is bounded server-side, and [IssuePage.closedTotal] is how much history
+  /// exists — so the Closed tab can say what it is not showing instead of
+  /// presenting a truncated list as the whole story.
+  Future<IssuePage> listIssues({String? status}) async {
     final resp = await _dio.get(
       '/api/admin/issues',
       queryParameters: {
@@ -150,9 +154,12 @@ class IssuesService {
       },
     );
     final data = resp.data as Map<String, dynamic>?;
-    return ((data?['issues'] as List?) ?? const [])
-        .map((e) => Issue.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return IssuePage(
+      issues: ((data?['issues'] as List?) ?? const [])
+          .map((e) => Issue.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      closedTotal: (data?['closed_total'] as num?)?.toInt() ?? 0,
+    );
   }
 
   /// Dismiss an issue (admin).
