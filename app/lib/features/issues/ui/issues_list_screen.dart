@@ -171,9 +171,10 @@ class _IssuesListScreenState extends ConsumerState<IssuesListScreen>
       '$resolved resolved',
       if (zeroTouch > 0) '$zeroTouch zero-touch',
       if (byRules > 0) '$byRules by your rules',
-      if (selfCleared > 0) '$selfCleared cleared on their own',
-      if (needsAdmin > 0) '$needsAdmin need you',
-      if (paused > 0) '$paused rule(s) paused',
+      if (selfCleared > 0)
+        '$selfCleared cleared on ${selfCleared == 1 ? 'its' : 'their'} own',
+      if (needsAdmin > 0) '$needsAdmin need${needsAdmin == 1 ? 's' : ''} you',
+      if (paused > 0) '$paused rule${paused == 1 ? '' : 's'} paused',
     ].map(_glueStat).toList();
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
