@@ -14,10 +14,23 @@ import (
 type AgentDigest struct {
 	Days int `json:"days"`
 
-	IssuesOpened   int64 `json:"issues_opened"`
+	IssuesOpened int64 `json:"issues_opened"`
+	// IssuesResolved counts resolved issues that were ever real work. An auto
+	// incident that never promoted is deliberately NOT in this population: it
+	// was observed, it cleared on its own before anyone was asked to look, and
+	// it closed silently by design (closeObservedRecovery passes
+	// silentNotifications for exactly these). Counting them made a busy queue
+	// read as agent accomplishment — a live instance reported 680 "resolved"
+	// against a single rule-approved fix.
 	IssuesResolved int64 `json:"issues_resolved"`
-	// ZeroTouch counts resolved issues in the window where no human made any
-	// action decision — the earned-autonomy lane doing its job end to end.
+	// SelfCleared is that excluded population, named rather than hidden: auto
+	// incidents whose arr state came right on its own. Real information about a
+	// stack that heals itself, but it is not something the agent did.
+	SelfCleared int64 `json:"self_cleared"`
+	// ZeroTouch counts resolved issues where automation carried the whole way:
+	// at least one action actually EXECUTED and no human decided any of them.
+	// The executed requirement is what keeps "earned autonomy doing its job end
+	// to end" from silently absorbing every incident that fixed itself.
 	ZeroTouch        int64 `json:"zero_touch"`
 	ActionsExecuted  int64 `json:"actions_executed"`
 	RuleApproved     int64 `json:"rule_approved"`
@@ -52,10 +65,23 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 	cutoff := fmt.Sprintf("-%d days", days)
 	d := &AgentDigest{Days: days, GeneratedAt: time.Now().UTC()}
 
+	// A never-promoted auto incident is observation noise, not work: it cleared
+	// before promotion ever asked for an agent or a human. The source guard
+	// matters — a USER-reported issue can also carry an observation row (see
+	// cancelExecutingForRecovery), and a reporter's issue is real work by
+	// definition, so it must never be filtered out by this clause.
+	const selfCleared = `EXISTS (SELECT 1 FROM issue_observations o
+		WHERE o.issue_id = i.id AND o.promoted_at IS NULL) AND i.source = ?3`
+
 	row := s.db.QueryRow(`SELECT
 		(SELECT COUNT(1) FROM issues WHERE created_at >= datetime('now', ?1)),
-		(SELECT COUNT(1) FROM issues WHERE closed_at >= datetime('now', ?1) AND status = 'resolved'),
 		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND NOT (`+selfCleared+`)),
+		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND `+selfCleared+`),
+		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND NOT (`+selfCleared+`)
+		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed')
 		   AND NOT EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.decided_by IS NOT NULL)),
 		(SELECT COUNT(1) FROM agent_actions WHERE executed_at >= datetime('now', ?1) AND status = 'executed'),
 		(SELECT COUNT(1) FROM agent_actions WHERE executed_at >= datetime('now', ?1) AND status = 'executed' AND auto_rule_id IS NOT NULL AND decided_by IS NULL),
@@ -66,9 +92,9 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 		(SELECT COUNT(1) FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 		   WHERE a.status = 'proposed' AND i.closed_at IS NULL AND i.status = 'awaiting_approval'),
 		(SELECT COUNT(1) FROM agent_approval_rules WHERE status = 'paused')`,
-		cutoff, ResolutionReporterConfirmed,
+		cutoff, ResolutionReporterConfirmed, SourceAuto,
 	)
-	if err := row.Scan(&d.IssuesOpened, &d.IssuesResolved, &d.ZeroTouch, &d.ActionsExecuted,
+	if err := row.Scan(&d.IssuesOpened, &d.IssuesResolved, &d.SelfCleared, &d.ZeroTouch, &d.ActionsExecuted,
 		&d.RuleApproved, &d.ReporterClosed, &d.TokensIn, &d.TokensOut,
 		&d.NeedsAdminOpen, &d.PendingProposals, &d.PausedRules); err != nil {
 		return nil, fmt.Errorf("compute agent digest: %w", err)
