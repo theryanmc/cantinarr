@@ -15,18 +15,42 @@ type AgentDigest struct {
 	Days int `json:"days"`
 
 	IssuesOpened int64 `json:"issues_opened"`
+	// "Resolved" on a rendered surface is OUTCOME vocabulary: the problem ended
+	// well. Live admins read it that way — half of one instance's admins called
+	// a week of self-cleared incidents "resolved" while the card said 0 — so the
+	// card renders IssuesResolved+SelfCleared as its resolved total, with
+	// attribution glued to the number. The fields below keep the two ledgers
+	// separate so attribution can never re-absorb churn (the 680-resolved bug)
+	// and outcome can never be erased by strict bookkeeping (the 0-resolved
+	// complaint).
+	//
 	// IssuesResolved counts resolved issues that were ever real work. An auto
 	// incident that never promoted is deliberately NOT in this population: it
 	// was observed, it cleared on its own before anyone was asked to look, and
 	// it closed silently by design (closeObservedRecovery passes
-	// silentNotifications for exactly these). Counting them made a busy queue
-	// read as agent accomplishment — a live instance reported 680 "resolved"
-	// against a single rule-approved fix.
+	// silentNotifications for exactly these).
 	IssuesResolved int64 `json:"issues_resolved"`
 	// SelfCleared is that excluded population, named rather than hidden: auto
 	// incidents whose arr state came right on its own. Real information about a
 	// stack that heals itself, but it is not something the agent did.
 	SelfCleared int64 `json:"self_cleared"`
+	// ResolvedByAgent / ResolvedByAdmin / RuleApproved partition the resolved
+	// total's ATTRIBUTION, mutually exclusive by construction:
+	//   - RuleApproved: a standing rule carried the fix (below).
+	//   - ResolvedByAgent: an agent fix executed (human-approved or not) and the
+	//     issue resolved, excluding rule-carried ones.
+	//   - ResolvedByAdmin: an admin declared it resolved ("Mark resolved") with
+	//     no executed fix — human work the card would otherwise erase.
+	// Whatever remains of the total — SelfCleared plus promoted incidents that
+	// recovered without any fix executing — renders as "on their own".
+	ResolvedByAgent int64 `json:"resolved_by_agent"`
+	ResolvedByAdmin int64 `json:"resolved_by_admin"`
+	// ClosedNoFix and Dismissed are the closures that did NOT end well: an admin
+	// chose "Close without fix", or dismissed the issue as noise. Named so hand
+	// work is visible without ever being called resolved — the closer's own verb
+	// already said it wasn't.
+	ClosedNoFix int64 `json:"closed_no_fix"`
+	Dismissed   int64 `json:"dismissed"`
 	// ZeroTouch counts resolved issues where automation carried the whole way:
 	// at least one action actually EXECUTED and no human decided any of them.
 	// The executed requirement is what keeps "earned autonomy doing its job end
@@ -104,6 +128,16 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 		   AND NOT (`+selfCleared+`)
 		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed'
 		     AND a.auto_rule_id IS NOT NULL AND a.decided_by IS NULL)),
+		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND NOT (`+selfCleared+`)
+		   AND EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed')
+		   AND NOT EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed'
+		     AND a.auto_rule_id IS NOT NULL AND a.decided_by IS NULL)),
+		(SELECT COUNT(1) FROM issues i WHERE i.closed_at >= datetime('now', ?1) AND i.status = 'resolved'
+		   AND NOT (`+selfCleared+`) AND i.resolution_kind = ?4
+		   AND NOT EXISTS (SELECT 1 FROM agent_actions a WHERE a.issue_id = i.id AND a.status = 'executed')),
+		(SELECT COUNT(1) FROM issues WHERE closed_at >= datetime('now', ?1) AND status = 'wont_fix' AND resolution_kind = ?4),
+		(SELECT COUNT(1) FROM issues WHERE closed_at >= datetime('now', ?1) AND status = 'dismissed'),
 		(SELECT COUNT(1) FROM issues WHERE closed_at >= datetime('now', ?1) AND resolution_kind = ?2),
 		(SELECT COALESCE(SUM(input_tokens), 0) FROM agent_runs WHERE started_at >= datetime('now', ?1)),
 		(SELECT COALESCE(SUM(output_tokens), 0) FROM agent_runs WHERE started_at >= datetime('now', ?1)),
@@ -111,10 +145,11 @@ func (s *Service) Digest(days int) (*AgentDigest, error) {
 		(SELECT COUNT(1) FROM agent_actions a JOIN issues i ON i.id = a.issue_id
 		   WHERE a.status = 'proposed' AND i.closed_at IS NULL AND i.status = 'awaiting_approval'),
 		(SELECT COUNT(1) FROM agent_approval_rules WHERE status = 'paused')`,
-		cutoff, ResolutionReporterConfirmed, SourceAuto,
+		cutoff, ResolutionReporterConfirmed, SourceAuto, ResolutionAdminCompleted,
 	)
 	if err := row.Scan(&d.IssuesOpened, &d.IssuesResolved, &d.SelfCleared, &d.ZeroTouch, &d.ActionsExecuted,
-		&d.RuleApproved, &d.ReporterClosed, &d.TokensIn, &d.TokensOut,
+		&d.RuleApproved, &d.ResolvedByAgent, &d.ResolvedByAdmin, &d.ClosedNoFix, &d.Dismissed,
+		&d.ReporterClosed, &d.TokensIn, &d.TokensOut,
 		&d.NeedsAdminOpen, &d.PendingProposals, &d.PausedRules); err != nil {
 		return nil, fmt.Errorf("compute agent digest: %w", err)
 	}
@@ -165,10 +200,12 @@ func (s *Service) SweepWeeklyDigest(now time.Time) {
 	if err != nil {
 		return
 	}
-	// ZeroTouch and RuleApproved are subsets of IssuesResolved, so summing them
-	// here would only double-count: a week has something to say when something
-	// resolved or something is still waiting on the admin.
-	if digest.IssuesResolved+digest.NeedsAdminOpen+digest.PendingProposals == 0 {
+	// The push speaks outcome vocabulary like the card: a week has something to
+	// say when any problem ended well — including the ones that cleared on their
+	// own, which ARE the quiet-week story — or when something still waits on the
+	// admin. Attribution fields are subsets of that total, never summed here.
+	if digest.IssuesResolved+digest.SelfCleared+
+		digest.NeedsAdminOpen+digest.PendingProposals == 0 {
 		// Nothing happened and nothing waits: say nothing, but advance the
 		// stamp so a later busy week is measured against a fresh window.
 		_, _ = s.db.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
@@ -177,8 +214,10 @@ func (s *Service) SweepWeeklyDigest(now time.Time) {
 	}
 	s.notifier.NotifyAdmins("agent_digest", map[string]interface{}{
 		"issues_resolved":   digest.IssuesResolved,
-		"zero_touch":        digest.ZeroTouch,
+		"self_cleared":      digest.SelfCleared,
 		"rule_approved":     digest.RuleApproved,
+		"resolved_by_agent": digest.ResolvedByAgent,
+		"resolved_by_admin": digest.ResolvedByAdmin,
 		"needs_admin_open":  digest.NeedsAdminOpen,
 		"pending_proposals": digest.PendingProposals,
 	})

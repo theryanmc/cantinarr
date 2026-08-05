@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -186,12 +187,44 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 	case CategoryAgentDigest:
 		// The one push that reports success. Counts are server-computed
 		// integers; no free text ever reaches the lock screen (M5).
+		//
+		// "Resolved" is OUTCOME vocabulary — every problem that ended well,
+		// including the ones that cleared on their own — with attribution glued
+		// to the number so automation claims only its own work (the card renders
+		// the same two-ledger split; see remediation.AgentDigest).
 		users, err := n.prefs.usersOptedInto(CategoryAgentDigest)
 		if err != nil || len(users) == 0 {
 			return
 		}
-		body := fmt.Sprintf("Last 7 days: %d resolved · %d zero-touch · %d by your rules",
-			intField(data, "issues_resolved"), intField(data, "zero_touch"), intField(data, "rule_approved"))
+		resolved := intField(data, "issues_resolved") + intField(data, "self_cleared")
+		byAgent := intField(data, "resolved_by_agent")
+		byRules := intField(data, "rule_approved")
+		byAdmin := intField(data, "resolved_by_admin")
+		onOwn := resolved - byAgent - byRules - byAdmin
+		var lanes []string
+		if byAgent > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by the agent", byAgent))
+		}
+		if byRules > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by your rules", byRules))
+		}
+		if byAdmin > 0 {
+			lanes = append(lanes, fmt.Sprintf("%d by you", byAdmin))
+		}
+		if onOwn > 0 {
+			switch {
+			case len(lanes) > 0:
+				lanes = append(lanes, fmt.Sprintf("%d on their own", onOwn))
+			case onOwn == 1:
+				lanes = append(lanes, "on its own")
+			default:
+				lanes = append(lanes, "all on their own")
+			}
+		}
+		body := fmt.Sprintf("Last 7 days: %d resolved", resolved)
+		if len(lanes) > 0 {
+			body += " — " + strings.Join(lanes, " · ")
+		}
 		// Open work is state right now, not something the week did, so it gets
 		// its own clause instead of riding the window's separator list.
 		if needs := intField(data, "needs_admin_open") + intField(data, "pending_proposals"); needs > 0 {

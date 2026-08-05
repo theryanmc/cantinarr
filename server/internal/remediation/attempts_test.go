@@ -651,6 +651,80 @@ func TestAgentDigestCreditsRulesOnlyWhenTheIssueResolved(t *testing.T) {
 	}
 }
 
+// The card renders "resolved" as OUTCOME (every problem that ended well) with
+// attribution glued to it, so the digest's attribution lanes must partition the
+// resolved total disjointly: rule-carried, agent-executed (human-approved or
+// not, minus rule-carried), admin-declared with no executed fix — and whatever
+// remains renders "on their own". Hand closures the closer's own verb said were
+// not fixes are counted but never inside resolved.
+func TestAgentDigestAttributionLanesPartitionResolved(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	if _, err := svc.db.Exec("INSERT INTO users (id, username, password_hash, role) VALUES (9, 'boss', '', 'admin')"); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_approval_rules (id, problem_kind, action_kind, action_facet, status, created_at, updated_at)
+		 VALUES (5, 'Download stalled', 'remediate_queue', 'blocklist_only', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	// 401 rule-carried · 402 human-approved fix · 403 admin "Mark resolved"
+	// (no fix executed) · 404 promoted, recovered without a fix · 405 never
+	// promoted (self-cleared) · 406 "Close without fix" · 407 dismissed.
+	if _, err := svc.db.Exec(
+		`INSERT INTO issues (id, source, status, media_type, tmdb_id, title, detail, resolution_kind, closed_at) VALUES
+		 (401, 'auto', 'resolved',  'movie', 1, 'rule win',    'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		 (402, 'auto', 'resolved',  'movie', 2, 'you approved','d', 'agent_concluded',   CURRENT_TIMESTAMP),
+		 (403, 'user', 'resolved',  'movie', 3, 'you declared','d', 'admin_completed',   CURRENT_TIMESTAMP),
+		 (404, 'auto', 'resolved',  'movie', 4, 'watched',     'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		 (405, 'auto', 'resolved',  'movie', 5, 'noise',       'd', 'arr_state_cleared', CURRENT_TIMESTAMP),
+		 (406, 'auto', 'wont_fix',  'movie', 6, 'no fix',      'd', 'admin_completed',   CURRENT_TIMESTAMP),
+		 (407, 'auto', 'dismissed', 'movie', 7, 'not real',    'd', 'admin_dismissed',   CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed issues: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_observations (issue_id, service_type, scope_key, promoted_at) VALUES
+		 (401, 'radarr', 'k1', CURRENT_TIMESTAMP),
+		 (402, 'radarr', 'k2', CURRENT_TIMESTAMP),
+		 (404, 'radarr', 'k4', CURRENT_TIMESTAMP),
+		 (405, 'radarr', 'k5', NULL),
+		 (406, 'radarr', 'k6', CURRENT_TIMESTAMP),
+		 (407, 'radarr', 'k7', CURRENT_TIMESTAMP)`,
+	); err != nil {
+		t.Fatalf("seed observations: %v", err)
+	}
+	if _, err := svc.db.Exec(
+		`INSERT INTO agent_actions (issue_id, kind, params, rationale, risk, status, executed_at, auto_rule_id, decided_by, fingerprint, tool_use_id) VALUES
+		 (401, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, 5,    NULL, 'fp-1', 'tu-1'),
+		 (402, 'remediate_queue', '{}', 'r', 'mutating', 'executed', CURRENT_TIMESTAMP, NULL, 9,    'fp-2', 'tu-2')`,
+	); err != nil {
+		t.Fatalf("seed actions: %v", err)
+	}
+
+	d, err := svc.Digest(7)
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if d.RuleApproved != 1 || d.ResolvedByAgent != 1 || d.ResolvedByAdmin != 1 {
+		t.Fatalf("lanes = rules %d agent %d admin %d, want 1/1/1 and disjoint",
+			d.RuleApproved, d.ResolvedByAgent, d.ResolvedByAdmin)
+	}
+	// The card's arithmetic: total = issues_resolved + self_cleared; the lanes
+	// partition it; the remainder renders "on their own".
+	total := d.IssuesResolved + d.SelfCleared
+	if total != 5 {
+		t.Fatalf("outcome total = %d, want the 5 issues that ended well", total)
+	}
+	if onOwn := total - d.RuleApproved - d.ResolvedByAgent - d.ResolvedByAdmin; onOwn != 2 {
+		t.Fatalf("on their own = %d, want 2 (the watched recovery and the noise)", onOwn)
+	}
+	if d.ClosedNoFix != 1 || d.Dismissed != 1 {
+		t.Fatalf("closedNoFix = %d dismissed = %d, want 1/1 — hand work visible, never called resolved",
+			d.ClosedNoFix, d.Dismissed)
+	}
+}
+
 // The weekly scoreboard pages once a week, only when the week has something
 // to say — and a quiet week advances the window silently.
 func TestWeeklyDigestPushPacing(t *testing.T) {
