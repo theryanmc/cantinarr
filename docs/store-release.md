@@ -27,6 +27,21 @@ for a user-facing version change — build numbers/version codes are computed pe
 Runs are serialized (`concurrency: playstore-deploy`) because two concurrent runs would compute
 the same version code.
 
+### Push (Firebase)
+
+Android push needs two Google artifacts, deliberately kept apart:
+
+- **`app/android/app/google-services.json`** — committed in this repo. Firebase project
+  identifiers for the registered Android app (`codes.julian.cantinarr`); not a secret. Self-built
+  APKs against a different backend swap in their own Firebase app's file.
+- **The FCM service-account key** — the send credential. It never lives in this repo: it belongs
+  to the push gateway's deploy secrets (see the push-gateway repo's `docs/FCM-SETUP.md`, which
+  also covers the Firebase-console walkthrough and the Play-key-vs-FCM-key trap).
+
+Store impact: the `firebase-messaging` SDK counts toward the **Data safety** form (device
+identifiers transmitted for push delivery) — fold it into the reassessment below before the next
+console submission.
+
 ### Signing material
 
 | Secret | Contents |

@@ -1,6 +1,6 @@
 # Instances, realtime behavior, and push
 
-Connecting real services, managed-webhook truth against real arrs, end-to-end realtime convergence, and real APNs delivery on physical devices. Instance CRUD contracts, event mapping, WebSocket authorization, and preference logic are proven by the hermetic suites.
+Connecting real services, managed-webhook truth against real arrs, end-to-end realtime convergence, and real APNs/FCM delivery on physical devices. Instance CRUD contracts, event mapping, WebSocket authorization, and preference logic are proven by the hermetic suites.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -17,8 +17,8 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 ## Push delivery and notification taps
 
-- [ ] `PUSH-004` · P0 · LIVE — Register, rotate, and delete APNs tokens for one/multiple devices; verify tokens bind to authenticated device/user and another user cannot alter them.
-- [ ] `PUSH-006` · P0 · LIVE/UI — On iOS, cover not-determined, allowed, denied, settings redirect, and return-to-app; verify permission controls and token registration reflect actual OS state.
+- [ ] `PUSH-004` · P0 · LIVE — Register, rotate, and delete push tokens (APNs and FCM) for one/multiple devices; verify tokens bind to authenticated device/user and another user cannot alter them.
+- [ ] `PUSH-006` · P0 · LIVE/UI — On iOS and Android 13+, cover not-determined, allowed, denied, settings redirect, and return-to-app; verify permission controls and token registration reflect actual OS state (Android: heads-up render with the correct small icon, cold- and warm-tap deep links, uninstall→prune→reinstall re-registration).
 - [ ] `PUSH-013` · P0 · LIVE — Import movie, multiple episodes, and a Chaptarr book format; verify opted-in audiences (a book alert reaches only that instance's assigned users — an admin assigned to a sibling book instance is not paged, an admin with no books assignment is), correct movie/series/book-format copy, collapse keys, no duplicate from poll/webhook overlap, and silence for a failed/removed book download leaving the queue.
 - [ ] `PUSH-025` · P0 · LIVE — Restart the container with a Chaptarr book download in flight and let it import while the server is down; verify the alert arrives on the first poll after boot (books have no webhook, so this is their only witness), arrives once, and carries the right format copy.
 - [ ] `PUSH-026` · P1 · LIVE — Restart with a movie/episode download in flight; verify exactly one alert across the webhook and the resumed poll diff, that a title added directly in the arr and grabbed **and** imported entirely during the downtime still alerts once on the first poll after boot (import-history catch-up), and that a restart more than 6 hours after the import stays silent.

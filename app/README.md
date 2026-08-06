@@ -104,8 +104,10 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 - **Configuration receipts** -- explicit admin requests can update supported connected-app settings in one turn, without copying a confirmation command back into chat. Supported profile and custom-format writes return a trusted review receipt; quality-profile update receipts also lead to a one-time guarded restore when the live state still matches. Assistant prose never creates controls.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 
-### Notifications (iOS)
-- **Native APNs push** via a `MethodChannel` -- no Firebase. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
+### Notifications (iOS & Android)
+- **Native push on both platforms** via the same `MethodChannel` -- no Flutter Firebase plugin. iOS registers with APNs in `AppDelegate.swift`; Android obtains an FCM token natively (`MainActivity.kt`) and renders the gateway's data-only messages itself (`PushMessagingService.kt`), so presentation matches iOS's always-banner behavior. Tokens register with the backend per device; taps deep-link to the right screen (detail page, approvals, issue thread...).
+- `android/app/google-services.json` is committed on purpose: it holds Firebase project identifiers, not secrets (the FCM send credential lives with the push gateway). Self-builders swap it for their own Firebase app's file.
+- The app-icon badge (approvals count) is iOS-only -- Android has no numeric badge API, so `setBadgeCount` is a deliberate native no-op and launchers show their standard notification dot.
 - **Per-category preferences** -- request decisions, new movies, new episodes, new books (shown with Books access), Plex invite sent, my report updates, and admin-only categories (new requests, issues, agent fixes, Plex access requests), plus a test-push diagnostic.
 
 ### Settings
@@ -149,7 +151,7 @@ flutter pub get
 flutter run
 ```
 
-Native iOS passkeys require iOS 16+, the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server publishing an AASA file with the app's `TeamID.BundleID`. Push requires the APNs entitlement (production) and a push-gateway-enabled server. See the [server README](../server/README.md#configuration) for the deployment env vars.
+Native iOS passkeys require iOS 16+, the Associated Domains entitlement for the server domain (`webcredentials:your.domain`), and the server publishing an AASA file with the app's `TeamID.BundleID`. Push requires a push-gateway-enabled server, plus the APNs entitlement (production) on iOS or a registered Firebase Android app (`google-services.json`, with FCM enabled on the gateway) on Android; Android 13+ additionally prompts for the notification runtime permission on first sign-in. See the [server README](../server/README.md#configuration) for the deployment env vars.
 
 ### Build for web (embedded in server)
 ```bash
@@ -174,7 +176,7 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 | AI settings | Backend `/api/ai/settings` + write-only personal credential routes | The app sees provider/model, source, validation errors, and configured booleans, never secret values |
 | OpenAI OAuth | Personal `/api/ai/codex/*` or admin-shared `/api/admin/ai/codex/*` + explicit ChatGPT browser sign-in | Device code and scope-appropriate safe status reach the app; OAuth tokens remain encrypted on the server |
 | Realtime | Backend `/api/ws` | Queue snapshots, status pings, badges |
-| Push | Native APNs token → backend → push gateway | No Firebase |
+| Push | Native APNs/FCM token → backend → push gateway | No Flutter Firebase plugin; Android uses the native `firebase-messaging` SDK |
 
 Realtime consumption is provider-based: a raw event stream fans out into typed, auto-disposing providers (`downloads_queue`, `arr_queue_changed`, `request_status_changed`, `request_decision`, `issue_*`, `agent_action_*`, `remediation_autodispatch_disabled`); screens pair WS pings with silent refetch and a polling fallback, so a dead socket degrades gracefully.
 
@@ -203,7 +205,7 @@ app/lib/
 │   ├── issues/                   # Report-a-problem, threads, agent approvals + audit
 │   ├── media_detail/             # Detail screens, season table, request surface
 │   ├── media_download/           # Short-lived ticket model/service + shared download controls
-│   ├── notifications/            # APNs registration, prefs, deep-link routing
+│   ├── notifications/            # push registration (APNs/FCM), prefs, deep-link routing
 │   ├── person/                   # Cast/crew detail sheet
 │   ├── radarr/                   # Movie management: library/queue/history/wanted/calendar
 │   ├── request/                  # Request buttons, options sheet, status sheet

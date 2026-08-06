@@ -28,8 +28,10 @@ class _NotificationPreferencesScreenState
   String? _error;
   NotificationPrefs? _prefs;
 
-  /// Whether the push status section is shown at all (iOS only).
-  static final bool _pushSupported = !kIsWeb && Platform.isIOS;
+  /// Whether the push status section is shown at all (mobile only — web has
+  /// no push registration, just the in-tab WebSocket updates).
+  static final bool _pushSupported =
+      !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 
   /// Current OS notification authorization status. Mirrors the strings from
   /// [PushService.authorizationStatus]: `authorized`, `denied`,
@@ -286,8 +288,8 @@ class _NotificationPreferencesScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Notifications are turned off. Enable them in iOS Settings to '
-                'receive push notifications.',
+                'Notifications are turned off. Enable them in system settings '
+                'to receive push notifications.',
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -295,7 +297,7 @@ class _NotificationPreferencesScreenState
                 onPressed: () =>
                     ref.read(pushServiceProvider).openSystemSettings(),
                 icon: const Icon(Icons.settings_outlined, size: 18),
-                label: const Text('Open iOS Settings'),
+                label: const Text('Open system settings'),
               ),
             ],
           ),

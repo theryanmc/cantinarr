@@ -248,9 +248,10 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   }
 
   /// Send a test push to a user's devices and report the real outcome — how
-  /// many devices are registered and whether Apple accepted the push. The
-  /// self-only test on the notifications screen can't reach another account, so
-  /// this is how an admin verifies a specific user's delivery.
+  /// many devices are registered and whether the platform's push service
+  /// (APNs/FCM) accepted it. The self-only test on the notifications screen
+  /// can't reach another account, so this is how an admin verifies a specific
+  /// user's delivery.
   Future<void> _sendTestPush(UserSummary user) async {
     try {
       final result =
