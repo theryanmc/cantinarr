@@ -133,7 +133,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### Auth
 - **Connect links** -- open one and the account connects instantly (`cantinarr://connect` deep links on iOS); passwordless by default with a long-lived, auto-refreshing session.
-- **First-run setup** -- the auth screen walks through server URL → admin account creation → an optional passkey offer.
+- **First-run setup** -- the auth screen walks through server URL → admin account creation → an optional passkey offer. The scheme is optional: a bare address is probed over https first and falls back to http only when https is unreachable (a typed scheme is always respected).
 - **Passkeys & passwords** -- native passkey sign-in on associated deployments (iOS/Android/Windows platform plugins, browser fallback), password login where enabled.
 - **Session resilience** -- the session survives transport failures and VPN flaps; only a genuine 401 clears it. There is deliberately no logout button -- admins revoke devices server-side.
 - **Separate OAuth directions** -- ChatGPT device authorization is an explicit outbound sign-in that lets Cantinarr use a personal or admin-shared Codex allowance. Cantinarr's MCP OAuth is a different inbound login that lets an external client access Cantinarr.
