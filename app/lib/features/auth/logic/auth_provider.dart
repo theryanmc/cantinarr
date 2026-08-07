@@ -420,9 +420,48 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
   }
 
   /// Check server status (needs setup, webauthn available).
-  Future<ServerStatus> checkServer(String serverUrl) async {
+  ///
+  /// A bare address (no scheme) is probed over https first; when https is
+  /// unreachable at the transport level the probe retries over http. Returns
+  /// the status together with the URL that actually answered so callers keep
+  /// using that exact scheme. An explicit scheme is never second-guessed.
+  Future<({String serverUrl, ServerStatus status})> checkServer(
+      String serverUrl) async {
+    final schemeProbe = serverUrl.trim().toLowerCase();
+    final hasScheme = schemeProbe.startsWith('http://') ||
+        schemeProbe.startsWith('https://');
     final normalizedUrl = _normalizeUrl(serverUrl);
-    return _authService.getServerStatus(normalizedUrl);
+    try {
+      final status = await _authService.getServerStatus(normalizedUrl);
+      return (serverUrl: normalizedUrl, status: status);
+    } on DioException catch (e) {
+      if (hasScheme || !_httpsUnreachable(e)) rethrow;
+      final httpUrl = 'http://${normalizedUrl.substring('https://'.length)}';
+      final status = await _authService.getServerStatus(httpUrl);
+      return (serverUrl: httpUrl, status: status);
+    }
+  }
+
+  /// True when the https probe failed before any HTTP exchange happened —
+  /// connection refused/timeout, a TLS handshake against a plaintext port, or
+  /// a certificate failure. An answer with any status code means https IS
+  /// available and the real error must surface instead of an http retry.
+  bool _httpsUnreachable(DioException e) {
+    switch (e.type) {
+      case DioExceptionType.connectionError:
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.badCertificate:
+        return true;
+      case DioExceptionType.unknown:
+        // dart:io surfaces TLS/socket failures as `unknown`; match by name
+        // because dart:io types can't be imported in web-compatible code.
+        final err = e.error?.toString() ?? '';
+        return err.contains('HandshakeException') ||
+            err.contains('SocketException') ||
+            err.contains('CERTIFICATE');
+      default:
+        return false;
+    }
   }
 
   /// Create admin account during first-run setup.
