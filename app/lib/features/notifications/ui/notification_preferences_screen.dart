@@ -230,6 +230,13 @@ class _NotificationPreferencesScreenState
             onChanged: (v) =>
                 _save(prefs.copyWith(plexAccessRequest: v), prefs),
           ),
+          _toggle(
+            title: 'Quality upgrades',
+            subtitle:
+                'When an existing movie, episode, or book is replaced with a better version',
+            value: prefs.contentUpgraded,
+            onChanged: (v) => _save(prefs.copyWith(contentUpgraded: v), prefs),
+          ),
         ],
         _toggle(
           title: 'New movie available',

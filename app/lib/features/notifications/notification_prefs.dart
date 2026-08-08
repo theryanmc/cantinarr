@@ -17,6 +17,7 @@ class NotificationPrefs {
   final bool plexInviteSent;
   final bool issueReportUpdate;
   final bool agentDigest;
+  final bool contentUpgraded;
 
   const NotificationPrefs({
     required this.requestDecision,
@@ -30,6 +31,7 @@ class NotificationPrefs {
     this.plexInviteSent = true,
     this.issueReportUpdate = true,
     this.agentDigest = true,
+    this.contentUpgraded = false,
   });
 
   factory NotificationPrefs.fromJson(Map<String, dynamic> json) =>
@@ -47,6 +49,11 @@ class NotificationPrefs {
         plexInviteSent: json['plex_invite_sent'] as bool? ?? true,
         issueReportUpdate: json['issue_report_update'] as bool? ?? true,
         agentDigest: json['agent_digest'] as bool? ?? true,
+        // Unlike the admin categories above, quality-upgrade alerts default
+        // OFF server-side (upgrades are maintenance, not news) — an absent
+        // key must mirror that or saving any toggle would silently opt the
+        // admin in.
+        contentUpgraded: json['content_upgraded'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -61,6 +68,7 @@ class NotificationPrefs {
         'plex_invite_sent': plexInviteSent,
         'issue_report_update': issueReportUpdate,
         'agent_digest': agentDigest,
+        'content_upgraded': contentUpgraded,
       };
 
   NotificationPrefs copyWith({
@@ -75,6 +83,7 @@ class NotificationPrefs {
     bool? plexInviteSent,
     bool? issueReportUpdate,
     bool? agentDigest,
+    bool? contentUpgraded,
   }) =>
       NotificationPrefs(
         requestDecision: requestDecision ?? this.requestDecision,
@@ -88,5 +97,6 @@ class NotificationPrefs {
         plexInviteSent: plexInviteSent ?? this.plexInviteSent,
         issueReportUpdate: issueReportUpdate ?? this.issueReportUpdate,
         agentDigest: agentDigest ?? this.agentDigest,
+        contentUpgraded: contentUpgraded ?? this.contentUpgraded,
       );
 }

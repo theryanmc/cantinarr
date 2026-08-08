@@ -175,6 +175,10 @@ class PushService {
       case 'new_movie':
       case 'new_episode':
       case 'new_book':
+      // An admin's quality-upgrade alert carries the same identity shape as
+      // the new-content payloads (tmdb_id for movie/tv, foreign_id for
+      // books), so it deep-links to the same media detail.
+      case 'content_upgraded':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
         // keyed on its Chaptarr foreignBookId, carried as foreign_id on
         // decision and new_book payloads). With a foreign_id, deep-link to

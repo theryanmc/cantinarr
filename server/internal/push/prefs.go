@@ -19,6 +19,7 @@ type Prefs struct {
 	PlexInviteSent     bool `json:"plex_invite_sent"`
 	IssueReportUpdate  bool `json:"issue_report_update"`
 	AgentDigest        bool `json:"agent_digest"`
+	ContentUpgraded    bool `json:"content_upgraded"`
 }
 
 // Notification categories. These are the wire values used by the preferences
@@ -66,11 +67,20 @@ const (
 	// punctuated by problems; one line a week rebalances that. Admin-scoped,
 	// on by default, and skipped entirely on a week with nothing to say.
 	CategoryAgentDigest = "agent_digest"
+	// CategoryContentUpgraded tells admins an existing movie/episode/book file
+	// was replaced by a quality upgrade. Admin-scoped and OFF by default:
+	// upgrades are library maintenance, not news — a requester already has the
+	// content, and re-paging the household about a better copy is noise. The
+	// broadcast new_movie/new_episode/new_book alert is suppressed only on
+	// positive proof of an upgrade (webhook isUpgrade, or a paired
+	// delete-for-upgrade history record on catch-up); without proof the event
+	// broadcasts as new content, never the other way around.
+	CategoryContentUpgraded = "content_upgraded"
 )
 
 // defaultPrefs is the preference set applied when a user has no row. It must
 // match the notification_prefs column defaults and the documented API
-// defaults: request_decision off, everything else on.
+// defaults: request_decision and content_upgraded off, everything else on.
 var defaultPrefs = Prefs{
 	RequestDecision:    false,
 	RequestPending:     true,
@@ -83,6 +93,7 @@ var defaultPrefs = Prefs{
 	PlexInviteSent:     true,
 	IssueReportUpdate:  true,
 	AgentDigest:        true,
+	ContentUpgraded:    false,
 }
 
 // categoryColumn maps a category to its notification_prefs column and the
@@ -105,6 +116,7 @@ var categoryColumn = map[string]struct {
 	CategoryPlexInviteSent:          {"plex_invite_sent", defaultPrefs.PlexInviteSent},
 	CategoryIssueReportUpdate:       {"issue_report_update", defaultPrefs.IssueReportUpdate},
 	CategoryAgentDigest:             {"agent_digest", defaultPrefs.AgentDigest},
+	CategoryContentUpgraded:         {"content_upgraded", defaultPrefs.ContentUpgraded},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -123,10 +135,10 @@ func NewPrefsStore(db *sql.DB) *PrefsStore {
 func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 	p := defaultPrefs
 	err := s.db.QueryRow(
-		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest
+		`SELECT request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded
 		 FROM notification_prefs WHERE user_id = ?`,
 		userID,
-	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate, &p.AgentDigest)
+	).Scan(&p.RequestDecision, &p.RequestPending, &p.NewMovie, &p.NewEpisode, &p.NewBook, &p.IssueCreated, &p.AgentActionPending, &p.PlexAccessRequest, &p.PlexInviteSent, &p.IssueReportUpdate, &p.AgentDigest, &p.ContentUpgraded)
 	if err == sql.ErrNoRows {
 		return defaultPrefs, nil
 	}
@@ -140,8 +152,8 @@ func (s *PrefsStore) Get(userID int64) (Prefs, error) {
 func (s *PrefsStore) Set(userID int64, p Prefs) error {
 	_, err := s.db.Exec(
 		`INSERT INTO notification_prefs
-		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (user_id, request_decision, request_pending, new_movie, new_episode, new_book, issue_created, agent_action_pending, plex_access_request, plex_invite_sent, issue_report_update, agent_digest, content_upgraded)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   request_decision = excluded.request_decision,
 		   request_pending  = excluded.request_pending,
@@ -153,8 +165,9 @@ func (s *PrefsStore) Set(userID int64, p Prefs) error {
 		   plex_access_request  = excluded.plex_access_request,
 		   plex_invite_sent     = excluded.plex_invite_sent,
 		   issue_report_update  = excluded.issue_report_update,
-		   agent_digest         = excluded.agent_digest`,
-		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate, p.AgentDigest,
+		   agent_digest         = excluded.agent_digest,
+		   content_upgraded     = excluded.content_upgraded`,
+		userID, p.RequestDecision, p.RequestPending, p.NewMovie, p.NewEpisode, p.NewBook, p.IssueCreated, p.AgentActionPending, p.PlexAccessRequest, p.PlexInviteSent, p.IssueReportUpdate, p.AgentDigest, p.ContentUpgraded,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert notification prefs: %w", err)
@@ -189,11 +202,12 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 		col.column, def,
 	)
 	// Admin-scoped categories: only admins act on pending requests, issues,
-	// agent-action approvals, paused auto-approval rules, or Plex access
-	// requests.
+	// agent-action approvals, paused auto-approval rules, Plex access
+	// requests, or care that a file was replaced by a quality upgrade.
 	if category == CategoryRequestPending || category == CategoryIssueCreated ||
 		category == CategoryAgentActionPending || category == CategoryAgentAutoApprovalPaused ||
-		category == CategoryPlexAccessRequest || category == CategoryAgentDigest {
+		category == CategoryPlexAccessRequest || category == CategoryAgentDigest ||
+		category == CategoryContentUpgraded {
 		query += " AND u.role = 'admin'"
 	}
 	return s.queryUserIDs(query)

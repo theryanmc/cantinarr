@@ -141,11 +141,12 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 	if got, _ := captured["onReleaseImport"].(bool); !got {
 		t.Error("onReleaseImport was not enabled, so book imports would never alert")
 	}
-	// The Readarr lineage suppresses the import notification for a book that
-	// replaces an existing file unless onUpgrade is on, so a declared flag must
-	// be enabled.
+	// The Readarr lineage sends no import callback for a book that replaces an
+	// existing file unless onUpgrade is on. The callback must still arrive —
+	// it invalidates availability caches and feeds the admin content_upgraded
+	// alert; the notifier, not this webhook, decides who is paged for it.
 	if got, _ := captured["onUpgrade"].(bool); !got {
-		t.Error("onUpgrade was not enabled, so upgraded books would never alert")
+		t.Error("onUpgrade was not enabled, so upgrade imports would never reach the server")
 	}
 	if _, present := captured["onEpisodeFileDelete"]; present {
 		t.Error("a Sonarr-only event flag leaked onto a Chaptarr resource")

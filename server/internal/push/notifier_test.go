@@ -586,6 +586,137 @@ func TestNotifierDisabledClientIsNoop(t *testing.T) {
 	n.NotifyNewMovie("The Matrix", 603)
 	n.NotifyNewEpisode("Severance", 95396)
 	n.NotifyNewBook("Ahsoka", "29749107", "books-a", "ebook")
+	n.NotifyUpgradedMovie("The Matrix", 603)
+	n.NotifyUpgradedEpisode("Severance", 95396)
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+}
+
+// TestNotifyUpgradedClaimsBroadcastKeyEvenWithNilClient pins the one part of
+// an upgrade alert that must run while the push gateway is unenrolled: the
+// silent claim of the broadcast key. Without it, a boot-resumption hold could
+// later broadcast an upgrade the webhook already proved.
+func TestNotifyUpgradedClaimsBroadcastKeyEvenWithNilClient(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	n := NewNotifier(database, nil, nil)
+
+	n.NotifyUpgradedMovie("The Matrix", 603)
+	if n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
+		t.Error("the broadcast key was not silently claimed, so the poller would page everyone")
+	}
+	n.NotifyUpgradedEpisode("Severance", 95396)
+	if n.claimContentAlert(CategoryNewEpisode, "tv", "95396", "Severance") {
+		t.Error("the episode broadcast key was not silently claimed")
+	}
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+		t.Error("the book broadcast key was not silently claimed")
+	}
+}
+
+// TestNotifyUpgradedMovieReachesOptedInAdminsOnly pins the audience and the
+// payload of the admin upgrade alert: default off, role-scoped in SQL, and a
+// tap payload shaped exactly like new_movie's so the app's existing routing
+// applies.
+func TestNotifyUpgradedMovieReachesOptedInAdminsOnly(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// alice: regular user OPTED IN (must still be excluded). root: admin opted
+	// in. dora: admin with no row (default off, excluded).
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'root', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'dora', '', 'admin')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (1, 1)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUpgradedMovie("The Matrix", 603)
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("content_upgraded recipients = %v, want only the opted-in admin [\"2\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Movie upgraded" {
+		t.Errorf("title = %v, want \"Movie upgraded\"", notif["title"])
+	}
+	if notif["body"] != "The Matrix was replaced with a better version" {
+		t.Errorf("body = %v", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "content_upgraded" || data["media_type"] != "movie" {
+		t.Errorf("data = %v, want type content_upgraded, media_type movie", data)
+	}
+	if num, ok := data["tmdb_id"].(float64); !ok || int(num) != 603 {
+		t.Errorf("data.tmdb_id = %v, want 603", data["tmdb_id"])
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "content_upgraded:603" {
+		t.Errorf("collapse_id = %v, want content_upgraded:603", opts["collapse_id"])
+	}
+
+	// The matching broadcast key was claimed silently: the poller's later
+	// re-witness of this import must not page the household.
+	if n.claimContentAlert(CategoryNewMovie, "movie", "603", "The Matrix") {
+		t.Error("new_movie key was claimable after the upgrade alert — the poller would double-page")
+	}
+}
+
+// TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped pins the deliberate
+// asymmetry with new_book: an upgrade is operational oversight, not a "ready
+// to read" call to action, so it takes the standard admin path — the
+// instance's assigned reader (a regular user) is NOT paged — while the payload
+// still carries the full book deep-link identity.
+func TestNotifyUpgradedBookIsAdminScopedNotInstanceScoped(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// alice: books-a's assigned reader, opted into everything (still excluded
+	// — not an admin). root: admin opted in, no books assignment needed.
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'alice', '', 'user')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'root', '', 'admin')")
+	mustExec(t, database, "INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (1, 'chaptarr', 'books-a')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, new_book, content_upgraded) VALUES (1, 1, 1)")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, content_upgraded) VALUES (2, 1)")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyUpgradedBook("Ahsoka", "29749107", "books-a", "ebook")
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "2" {
+		t.Errorf("book upgrade recipients = %v, want only the admin [\"2\"]", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "Book upgraded" {
+		t.Errorf("title = %v, want \"Book upgraded\"", notif["title"])
+	}
+	if notif["body"] != "Ahsoka eBook was upgraded" {
+		t.Errorf("body = %v, want \"Ahsoka eBook was upgraded\"", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "content_upgraded" || data["media_type"] != "book" ||
+		data["foreign_id"] != "29749107" || data["instance_id"] != "books-a" ||
+		data["title"] != "Ahsoka" || data["book_format"] != "ebook" {
+		t.Errorf("data = %v, want the full book deep-link identity", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "content_upgraded:29749107:ebook" {
+		t.Errorf("collapse_id = %v, want content_upgraded:29749107:ebook", opts["collapse_id"])
+	}
+	if n.claimContentAlert(CategoryNewBook, "book", "29749107|ebook", "Ahsoka") {
+		t.Error("new_book key was claimable after the upgrade alert — the poller would double-page")
+	}
 }
 
 func TestNotifyNewMovieReachesOptedInUsers(t *testing.T) {
