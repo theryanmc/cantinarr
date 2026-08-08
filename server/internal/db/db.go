@@ -147,7 +147,8 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     plex_access_request INTEGER NOT NULL DEFAULT 1,
     plex_invite_sent INTEGER NOT NULL DEFAULT 1,
     issue_report_update INTEGER NOT NULL DEFAULT 1,
-    agent_digest INTEGER NOT NULL DEFAULT 1
+    agent_digest INTEGER NOT NULL DEFAULT 1,
+    content_upgraded INTEGER NOT NULL DEFAULT 0
 );
 
 -- Durable replacement for the notifier's in-memory new-content dedupe map. The
@@ -161,10 +162,16 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
 -- The rows granted inside the window are also counted as the content-alert
 -- storm breaker: past a burst cap the alert is suppressed (and logged) while
 -- the claim stays recorded, so a mass import cannot page the household once
--- per title through either witness.
+-- per title through either witness. storm_scope keeps the breaker honest now
+-- that upgrades ride the same ledger: 'broadcast' rows count toward the
+-- new-content cap, 'upgrade' rows toward the admin content_upgraded cap, and
+-- 'none' rows (a proven upgrade claiming the broadcast key so the poller
+-- stays silent, without any send) toward no cap at all -- a mass cutoff
+-- upgrade sweep must never starve a genuine new-content alert.
 CREATE TABLE IF NOT EXISTS content_alert_claims (
     alert_key  TEXT PRIMARY KEY,
-    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    storm_scope TEXT NOT NULL DEFAULT 'broadcast'
 );
 
 CREATE INDEX IF NOT EXISTS idx_content_alert_claims_claimed_at
@@ -839,6 +846,13 @@ func Open(dbPath string) (*sql.DB, error) {
 		// stood it down. Written by every failure pause; the rules screen
 		// deep-links it.
 		{alter: "ALTER TABLE agent_approval_rules ADD COLUMN paused_by_issue_id INTEGER"},
+		// Quality upgrades stop broadcasting as new content and page only
+		// admins who opt in. Off by default: upgrades are library
+		// maintenance, not news.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN content_upgraded INTEGER NOT NULL DEFAULT 0"},
+		// Which storm cap a claim counts toward ('broadcast', 'upgrade', or
+		// 'none' for a silent claim) -- see the table comment.
+		{alter: "ALTER TABLE content_alert_claims ADD COLUMN storm_scope TEXT NOT NULL DEFAULT 'broadcast'"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

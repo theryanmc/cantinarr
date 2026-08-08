@@ -660,6 +660,35 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 	return inWindow, complete, nil
 }
 
+// GetUpgradeDeleteHistorySince returns the movie-file-deleted history records
+// dated after since, newest first, from one bounded page (eventType=6 —
+// movieFileDeleted). The import-history catch-up pairs these against the same
+// window's imports: a delete with data.reason "Upgrade" is the only durable
+// proof that an import replaced a file rather than filled a gap. Callers must
+// treat an error or incomplete window as "no upgrade proof" (announce as new
+// content), never as "no upgrades happened".
+func (c *Client) GetUpgradeDeleteHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var resp struct {
+		TotalRecords int             `json:"totalRecords"`
+		Records      []HistoryRecord `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=6", pageSize)
+	if err := c.do("GET", path, nil, &resp); err != nil {
+		return nil, false, fmt.Errorf("radarr upgrade-delete history since: %w", err)
+	}
+	complete = resp.TotalRecords <= len(resp.Records)
+	for _, rec := range resp.Records {
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
 // MarkHistoryFailed marks one grab history record as a failed download — the
 // "Mark as Failed" button. It is Radarr's only route to blocklist a release
 // that already finished and imported: the blocklist endpoint has no add

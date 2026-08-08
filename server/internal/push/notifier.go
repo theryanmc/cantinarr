@@ -520,6 +520,113 @@ func bookReadyBody(title, format string) string {
 	}
 }
 
+// NotifyUpgradedMovie pushes a "movie file was upgraded" alert to admins opted
+// into the content_upgraded category (off by default). See
+// notifyUpgradedContent for why the broadcast key is claimed first.
+func (n *Notifier) NotifyUpgradedMovie(title string, tmdbID int) {
+	n.notifyUpgradedContent(CategoryNewMovie, "movie", "Movie upgraded", title+" was replaced with a better version", title, tmdbID)
+}
+
+// NotifyUpgradedEpisode pushes an "episode file was upgraded" alert to admins
+// opted into the content_upgraded category (off by default).
+func (n *Notifier) NotifyUpgradedEpisode(seriesTitle string, tmdbID int) {
+	n.notifyUpgradedContent(CategoryNewEpisode, "tv", "Episode upgraded", "An episode of "+seriesTitle+" was replaced with a better version", seriesTitle, tmdbID)
+}
+
+// NotifyUpgradedBook pushes a "book file was upgraded" alert to admins opted
+// into the content_upgraded category (off by default). Unlike NotifyNewBook
+// the audience is NOT narrowed to the instance's assigned readers: an upgrade
+// is operational oversight (the issue_created class), not a "ready to read"
+// call to action, so it takes the standard admin-scoped path. The payload
+// still carries the same deep-link identity as new_book so the app's existing
+// book tap routing applies unchanged.
+func (n *Notifier) NotifyUpgradedBook(title, foreignID, instanceID, format string) {
+	if title == "" {
+		return
+	}
+	// Absorb the poller before anything else can bail: the silent claim must
+	// land even when the gateway is unenrolled or the admin alert is deduped.
+	n.claimContentAlertSilently(CategoryNewBook, "book", foreignID+"|"+format, title)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, "book", foreignID+"|"+format, title, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":        CategoryContentUpgraded,
+		"media_type":  "book",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	if format != "" {
+		data["book_format"] = format
+	}
+	n.sendWithOptions(client, recipients, "Book upgraded", bookUpgradedBody(title, format), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s:%s", CategoryContentUpgraded, foreignID, format),
+	})
+}
+
+// bookUpgradedBody is bookReadyBody's upgrade twin, keeping the same
+// eBook/Audiobook nomenclature.
+func bookUpgradedBody(title, format string) string {
+	switch format {
+	case "ebook":
+		return title + " eBook was upgraded"
+	case "audiobook":
+		return title + " Audiobook was upgraded"
+	default:
+		return title + " was upgraded"
+	}
+}
+
+// notifyUpgradedContent is the shared body for the movie/TV upgrade alerts.
+// The broadcast category's dedupe key (byte-identical to the one
+// notifyNewContent claims) is claimed silently FIRST: the queue poller
+// re-witnesses the same import as a plain departure and would otherwise page
+// the household with a false "New movie available" — the ledger claim is what
+// keeps it quiet. Only then does the admin content_upgraded alert claim its
+// own key and send under its own storm budget.
+func (n *Notifier) notifyUpgradedContent(broadcastCategory, mediaType, title, body, mediaTitle string, tmdbID int) {
+	if mediaTitle == "" {
+		return
+	}
+	n.claimContentAlertSilently(broadcastCategory, mediaType, strconv.Itoa(tmdbID), mediaTitle)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, mediaType, strconv.Itoa(tmdbID), mediaTitle, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":       CategoryContentUpgraded,
+		"tmdb_id":    tmdbID,
+		"media_type": mediaType,
+	}
+	n.sendWithOptions(client, recipients, title, body, data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%d", CategoryContentUpgraded, tmdbID),
+	})
+}
+
 // notifyNewContent is the shared body for the new-content notifications: it
 // resolves the opted-in audience for the category and dispatches one collapsed
 // push carrying the media identity for tap routing.
@@ -571,6 +678,15 @@ const contentAlertRetention = 24 * time.Hour
 // concurrent organic alert; suppressed alerts are logged, never silent.
 const contentAlertStormCap = 12
 
+// Storm scopes partition content_alert_claims so each alert class is bounded
+// by its own cap and a silent claim is bounded by none: a mass cutoff-upgrade
+// sweep must never spend the broadcast budget of genuine new-content alerts.
+const (
+	stormScopeBroadcast = "broadcast"
+	stormScopeUpgrade   = "upgrade"
+	stormScopeNone      = "none"
+)
+
 // claimContentAlert reports whether this content alert should send, recording it
 // so duplicates within contentAlertWindow are dropped. id is the content's
 // stable identity — the tmdb id for movies/TV, foreignBookId plus format for
@@ -583,6 +699,22 @@ const contentAlertStormCap = 12
 // Durable is not permanent — the window is still a window, so a claim whose send
 // failed is re-claimable once it lapses.
 func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool {
+	return n.claimContentAlertScoped(category, mediaType, id, title, stormScopeBroadcast)
+}
+
+// claimContentAlertSilently records a claim for an alert that deliberately will
+// NOT send: a proven upgrade claims the broadcast key so the queue poller's
+// re-witness of the same import finds the ledger already holding the claim and
+// stays quiet. Scope 'none' keeps the silent claim out of every storm count.
+// It runs even while the push gateway is unenrolled — the suppression must be
+// recorded regardless, or a boot-resumption hold could later broadcast an
+// upgrade the webhook already proved. A database error here is only logged:
+// losing the silent claim errs toward alerting, never toward silence.
+func (n *Notifier) claimContentAlertSilently(category, mediaType, id, title string) {
+	n.claimContentAlertScoped(category, mediaType, id, title, stormScopeNone)
+}
+
+func (n *Notifier) claimContentAlertScoped(category, mediaType, id, title, scope string) bool {
 	key := fmt.Sprintf("%s|%s|%s|%s", category, mediaType, id, title)
 	if n.db == nil {
 		// No ledger must never silence an alert.
@@ -591,12 +723,13 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 	// One statement: the conditional upsert grants the claim only when there is
 	// no row or the existing one has lapsed, and the affected-row count is the
 	// verdict. A SELECT-then-INSERT would race on the shared single-connection
-	// pool without adding anything.
+	// pool without adding anything. A lapsed-window re-claim adopts the new
+	// claim's scope.
 	res, err := n.db.Exec(`
-        INSERT INTO content_alert_claims (alert_key) VALUES (?)
-        ON CONFLICT(alert_key) DO UPDATE SET claimed_at = CURRENT_TIMESTAMP
+        INSERT INTO content_alert_claims (alert_key, storm_scope) VALUES (?, ?)
+        ON CONFLICT(alert_key) DO UPDATE SET claimed_at = CURRENT_TIMESTAMP, storm_scope = excluded.storm_scope
         WHERE content_alert_claims.claimed_at <= datetime('now', ?)`,
-		key, sqliteOffset(-contentAlertWindow))
+		key, scope, sqliteOffset(-contentAlertWindow))
 	if err != nil {
 		// Fail open: a duplicate alert beats silencing the whole content surface
 		// on a transient database error.
@@ -615,14 +748,19 @@ func (n *Notifier) claimContentAlert(category, mediaType, id, title string) bool
 		sqliteOffset(-contentAlertRetention)); err != nil {
 		n.logger.Error("push: sweep content alert claims", "err", err)
 	}
+	if scope == stormScopeNone {
+		// Nothing sends, so there is nothing to cap.
+		return true
+	}
 	// Storm breaker: the claim above stays recorded (so the other witness of
 	// the same import cannot re-try it), but past the burst cap the alert
 	// itself is suppressed. Counting granted claims counts distinct content,
 	// not devices, and the count includes this claim — the first cap-many in a
-	// window deliver, the rest of the burst is dropped and logged.
+	// window deliver, the rest of the burst is dropped and logged. Each scope
+	// spends only its own budget.
 	var inWindow int
-	if err := n.db.QueryRow(`SELECT COUNT(*) FROM content_alert_claims WHERE claimed_at > datetime('now', ?)`,
-		sqliteOffset(-contentAlertWindow)).Scan(&inWindow); err != nil {
+	if err := n.db.QueryRow(`SELECT COUNT(*) FROM content_alert_claims WHERE claimed_at > datetime('now', ?) AND storm_scope = ?`,
+		sqliteOffset(-contentAlertWindow), scope).Scan(&inWindow); err != nil {
 		// Fail open, same as the claim itself: a burst slipping through beats
 		// silencing the surface on a transient database error.
 		n.logger.Error("push: count content alert window", "err", err, "category", category)

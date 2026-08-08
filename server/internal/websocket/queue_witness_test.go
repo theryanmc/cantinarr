@@ -495,6 +495,9 @@ func (p *probeContent) NotifyNewBook(title, foreignID, instanceID, format string
 		p.onBook()
 	}
 }
+func (p *probeContent) NotifyUpgradedMovie(title string, tmdbID int)                   {}
+func (p *probeContent) NotifyUpgradedEpisode(seriesTitle string, tmdbID int)           {}
+func (p *probeContent) NotifyUpgradedBook(title, foreignID, instanceID, format string) {}
 
 func joinComma(parts []string) string {
 	out := ""

@@ -322,8 +322,11 @@ var chaptarrImportToggles = []string{"onReleaseImport", "onDownload"}
 
 // chaptarrOptionalToggles are best-effort: enabling them keeps the app's view
 // fresh when a library changes out-of-band, but none is required to alert.
-// onUpgrade is not cosmetic — the Readarr lineage suppresses the import
-// notification for a book that replaces an existing file unless it is set.
+// onUpgrade is not cosmetic — the Readarr lineage sends no import callback for
+// a book that replaces an existing file unless it is set, and that callback is
+// what invalidates availability caches and feeds the admin content_upgraded
+// alert. Deciding who (if anyone) is paged for an upgrade is the notifier's
+// job, never this webhook's.
 var chaptarrOptionalToggles = []string{"onGrab", "onUpgrade", "onBookDelete", "onAuthorDelete", "onBookFileDelete"}
 
 func configureWebhookResource(resource map[string]any, serviceType, callbackURL, token string) error {

@@ -81,6 +81,13 @@ func (h *Handler) SetPreAirImportWitness(w PreAirImportWitness) { h.preAir = w }
 // everything else is ignored.
 type arrPayload struct {
 	EventType string `json:"eventType"`
+	// IsUpgrade marks a Download event whose import replaced an existing file.
+	// It gates WHO is paged, never whether state refreshes: a proven upgrade
+	// goes to the admin content_upgraded category instead of the household
+	// broadcast. Absent decodes false, so an arr that doesn't send it (or a
+	// drifted payload) broadcasts as new content — suppression requires
+	// positive proof, never the other way around.
+	IsUpgrade bool `json:"isUpgrade"`
 	Movie     *struct {
 		ID     int    `json:"id"`
 		Title  string `json:"title"`
@@ -235,10 +242,10 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	case "Download": // import completed (including manual imports)
 		h.requests.InvalidateAvailabilityDigests(instanceID)
 		if payload.Movie != nil {
-			h.movieImported(instanceID, payload.Movie.ID, payload.Movie.Title, payload.Movie.TmdbID)
+			h.movieImported(instanceID, payload.Movie.ID, payload.Movie.Title, payload.Movie.TmdbID, payload.IsUpgrade)
 		}
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, true, payload.IsUpgrade)
 			h.checkPreAirImport(instanceID, payload)
 			h.checkSuspectImport(instanceID, payload)
 		}
@@ -260,7 +267,7 @@ func (h *Handler) handleVideoEvent(instanceID, serviceType string, payload arrPa
 	case "EpisodeFileDelete":
 		h.requests.InvalidateAvailabilityDigests(instanceID)
 		if payload.Series != nil {
-			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, false)
+			h.seriesChanged(instanceID, payload.Series.ID, payload.Series.Title, payload.Series.TmdbID, false, false)
 		}
 
 	default:
@@ -320,14 +327,15 @@ func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
 		return
 	}
 	for _, id := range ids {
-		h.bookImported(instanceID, id)
+		h.bookImported(instanceID, id, payload.IsUpgrade)
 	}
 }
 
 // bookImported announces a completed book import after confirming it against
 // the live record, applying the same guards as the queue-departure witness so
 // the two witnesses produce an identical alert and dedupe against each other.
-func (h *Handler) bookImported(instanceID string, bookID int) {
+// isUpgrade reroutes the alert to the admin content_upgraded category.
+func (h *Handler) bookImported(instanceID string, bookID int, isUpgrade bool) {
 	if h.content == nil || h.registry == nil {
 		return
 	}
@@ -353,7 +361,11 @@ func (h *Handler) bookImported(instanceID string, bookID int) {
 	}
 	// Raw MediaType, exactly as the poller passes it: any normalization here
 	// would change the dedupe key and produce two pushes for one import.
-	h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	if isUpgrade {
+		h.content.NotifyUpgradedBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	} else {
+		h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
+	}
 }
 
 // tokenMatches checks the Basic Auth password against every credential valid
@@ -373,9 +385,10 @@ func tokenMatches(r *http.Request, accepted []string) bool {
 
 // movieImported reflects a completed movie import: re-reads the movie so the
 // broadcast carries live state (mirrors the hub's queue-departure witness) and
-// pushes the new-content alert. Falls back to the payload identity when the
-// arr can't be reached.
-func (h *Handler) movieImported(instanceID string, movieID int, title string, tmdbID int) {
+// pushes the new-content alert — or, for a proven upgrade, the admin-only
+// upgrade alert. Falls back to the payload identity when the arr can't be
+// reached.
+func (h *Handler) movieImported(instanceID string, movieID int, title string, tmdbID int, isUpgrade bool) {
 	if client, err := h.registry.GetRadarrClient(instanceID); err == nil {
 		if movie, err := client.GetMovie(movieID); err == nil {
 			if !movie.HasFile {
@@ -394,7 +407,11 @@ func (h *Handler) movieImported(instanceID string, movieID int, title string, tm
 		},
 	})
 	if h.content != nil {
-		h.content.NotifyNewMovie(title, tmdbID)
+		if isUpgrade {
+			h.content.NotifyUpgradedMovie(title, tmdbID)
+		} else {
+			h.content.NotifyNewMovie(title, tmdbID)
+		}
 	}
 }
 
@@ -428,8 +445,9 @@ func (h *Handler) movieFileDeleted(instanceID string, movieID, tmdbID int) {
 // seriesChanged recomputes a series' availability from the live episode list
 // (the same aired-aware completion the hub and status endpoint use) and
 // broadcasts it; notify pushes the new-episode alert too (import events only —
-// file deletions change availability but aren't news).
-func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, tmdbID int, notify bool) {
+// file deletions change availability but aren't news). isUpgrade reroutes that
+// alert to the admin content_upgraded category.
+func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, tmdbID int, notify, isUpgrade bool) {
 	status := "partially_available"
 	if client, err := h.registry.GetSonarrClient(instanceID); err == nil {
 		if series, err := client.GetSeries(seriesID); err == nil {
@@ -453,7 +471,11 @@ func (h *Handler) seriesChanged(instanceID string, seriesID int, title string, t
 		},
 	})
 	if notify && h.content != nil {
-		h.content.NotifyNewEpisode(title, tmdbID)
+		if isUpgrade {
+			h.content.NotifyUpgradedEpisode(title, tmdbID)
+		} else {
+			h.content.NotifyNewEpisode(title, tmdbID)
+		}
 	}
 }
 

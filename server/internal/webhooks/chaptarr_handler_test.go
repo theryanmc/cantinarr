@@ -99,6 +99,37 @@ func TestChaptarrImportAlertsFromLiveRecord(t *testing.T) {
 			t.Error("a book event emitted request_status_changed")
 		}
 	}
+	// A payload without isUpgrade IS the fail-open pin: no flag, no upgrade
+	// rerouting.
+	if len(f.content.upgradedBooks) != 0 {
+		t.Errorf("upgrade alerts = %v, want none without isUpgrade", f.content.upgradedBooks)
+	}
+}
+
+// TestChaptarrImportUpgradeReroutesToAdmins pins that isUpgrade:true swaps the
+// audience — the assigned-reader broadcast stays silent, the admin upgrade
+// alert carries the identical live-record identity — while cache invalidation
+// and the queue ping are unchanged.
+func TestChaptarrImportUpgradeReroutesToAdmins(t *testing.T) {
+	f, _, id, token := newBookFixture(t)
+
+	rec := f.postBook(t, id, token, `{"eventType":"Download","isUpgrade":true,"book":{"id":7}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(f.content.books) != 0 {
+		t.Errorf("broadcast alerts = %v, want none for a proven upgrade", f.content.books)
+	}
+	want := "Ahsoka (Star Wars)|29749107|" + id + "|ebook"
+	if len(f.content.upgradedBooks) != 1 || f.content.upgradedBooks[0] != want {
+		t.Errorf("upgrade alerts = %v, want exactly [%s]", f.content.upgradedBooks, want)
+	}
+	if len(f.requests.bookIDs) == 0 {
+		t.Error("book availability caches were not invalidated, so the app would show stale state")
+	}
+	if len(f.hub.events) == 0 || f.hub.events[0].Type != "arr_queue_changed" {
+		t.Errorf("broadcasts = %v, want an arr_queue_changed invalidation ping", f.hub.events)
+	}
 }
 
 // TestChaptarrImportPayloadIsOnlyATrigger pins that a forged or drifted payload

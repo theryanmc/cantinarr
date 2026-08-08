@@ -1127,6 +1127,35 @@ func (c *Client) GetImportHistorySince(since time.Time, pageSize int) (inWindow 
 	return inWindow, complete, nil
 }
 
+// GetUpgradeDeleteHistorySince returns the book-file-deleted history records
+// dated after since, newest first, from one bounded page (eventType=5 —
+// bookFileDeleted in the Readarr-lineage enum). The import-history catch-up
+// pairs these against the same window's imports: a delete with data.reason
+// "Upgrade" is the only durable proof that an import replaced a file rather
+// than filled a gap. Callers must treat an error or incomplete window as "no
+// upgrade proof" (announce as new content), never as "no upgrades happened".
+func (c *Client) GetUpgradeDeleteHistorySince(since time.Time, pageSize int) (inWindow []HistoryRecord, complete bool, err error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=5", pageSize)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, false, fmt.Errorf("chaptarr upgrade-delete history since: %w", err)
+	}
+	complete = hp.TotalRecords <= len(hp.Records)
+	for _, rec := range hp.Records {
+		if rec.Date == nil {
+			continue
+		}
+		if !rec.Date.After(since) {
+			// The page reached past the window boundary, so the window is
+			// fully enumerated even when older records exist beyond the page.
+			complete = true
+			continue
+		}
+		inWindow = append(inWindow, rec)
+	}
+	return inWindow, complete, nil
+}
+
 // GetWantedMissing returns a page of monitored books with no file.
 func (c *Client) GetWantedMissing(page, pageSize int) (*WantedPage, error) {
 	var wp WantedPage
