@@ -79,6 +79,29 @@ void main() {
     );
   });
 
+  testWidgets('Profile Change Approvals is hidden from non-admins',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+    expect(find.text('Profile Change Approvals'), findsNothing);
+  });
+
+  testWidgets('Profile Change Approvals is available from admin settings',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+    );
+    await _dragSettingsUntilFound(
+        tester, find.text('Profile Change Approvals'));
+    expect(find.text('Profile Change Approvals'), findsOneWidget);
+    expect(
+      find.text(
+          'Approve quality-profile changes proposed by external assistants'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('admin settings can restore every conditionally hidden menu item',
       (tester) async {
     SharedPreferences.setMockInitialValues({

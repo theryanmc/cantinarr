@@ -1020,6 +1020,62 @@ func TestNotifyAdminsAutoApprovalPausedFixedTemplateAndSharedPref(t *testing.T) 
 	}
 }
 
+// A parked profile-change proposal pages the same audience as an agent fix
+// awaiting approval — it shares the agent_action_pending preference column —
+// with a fixed body (profile/instance names ride only as data fields) and a
+// per-target collapse so a superseding proposal replaces the stale alert.
+func TestNotifyAdminsProfileChangePendingSharedPrefAndCollapse(t *testing.T) {
+	database, err := dbOpen(t)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	// admin1: default prefs (on). admin2: opted out of agent_action_pending,
+	// which must also silence proposal alerts (shared column). user3: never
+	// paged (admin-scoped category).
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (1, 'admin1', '', 'admin')")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (2, 'admin2', '', 'admin')")
+	mustExec(t, database, "INSERT INTO notification_prefs (user_id, agent_action_pending) VALUES (2, 0)")
+	mustExec(t, database, "INSERT INTO users (id, username, password_hash, role) VALUES (3, 'user3', '', 'user')")
+
+	mgr, cap := newNotifierTestGateway(t, database)
+	n := NewNotifier(database, mgr, nil)
+
+	n.NotifyAdmins("profile_change_pending", map[string]interface{}{
+		"proposal_id":  int64(12),
+		"service":      "radarr",
+		"instance_id":  "movies-a",
+		"profile_id":   6,
+		"profile_name": "HD-1080p",
+	})
+
+	body := cap.waitForNotification(t)
+	ids := userIDsOf(t, body)
+	if len(ids) != 1 || ids[0] != "1" {
+		t.Errorf("user_ids = %v, want only the opted-in admin", ids)
+	}
+	notif, _ := body["notification"].(map[string]any)
+	if notif["title"] != "A settings change needs your approval" {
+		t.Errorf("title = %v", notif["title"])
+	}
+	if notif["body"] != "An external assistant proposed a quality-profile change and needs you to approve it" {
+		t.Errorf("body = %v, want the fixed template", notif["body"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["type"] != "profile_change_pending" {
+		t.Errorf("data.type = %v", data["type"])
+	}
+	if got, ok := data["proposal_id"]; !ok || fmt.Sprint(got) != "12" {
+		t.Errorf("proposal_id = %v, want 12 for the deep link", got)
+	}
+	if _, ok := data["profile_name"]; ok {
+		t.Errorf("profile name leaked into the push payload: %v", data)
+	}
+	opts, _ := body["options"].(map[string]any)
+	if opts["collapse_id"] != "profile_change_pending:radarr:movies-a:6" {
+		t.Errorf("collapse_id = %v, want per-target collapse", opts["collapse_id"])
+	}
+}
+
 // The weekly digest speaks outcome vocabulary: "resolved" is every problem
 // that ended well, with attribution glued to the number so automation claims
 // only its own work. A week where everything cleared on its own says exactly

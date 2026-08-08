@@ -171,6 +171,8 @@ func (n *Notifier) NotifyAdmins(eventType string, data map[string]interface{}) {
 		n.notifyAgentActionPending(client, data)
 	case CategoryAgentAutoApprovalPaused:
 		n.notifyAgentAutoApprovalPaused(client, data)
+	case CategoryProfileChangePending:
+		n.notifyProfileChangePending(client, data)
 	case EventAutoDispatchDisabled:
 		// Autonomy standing down is exactly the "agent pipeline needs your
 		// decision" class, so it shares that preference column — and unlike
@@ -414,6 +416,37 @@ func (n *Notifier) notifyAgentAutoApprovalPaused(client *Client, data map[string
 	var opts SendOptions
 	if ruleID, ok := intval(data["rule_id"]); ok {
 		opts.CollapseID = fmt.Sprintf("%s:%d", CategoryAgentAutoApprovalPaused, ruleID)
+	}
+	n.sendWithOptions(client, recipients, title, body, out, opts)
+}
+
+// notifyProfileChangePending pushes "an external agent parked a
+// quality-profile change" to opted-in admins (it shares the
+// agent_action_pending preference — same "the agent pipeline needs your
+// decision" class). The body is a FIXED template: the profile and instance
+// names are arr-derived text, so like every other admin surface they ride
+// only as structured passthrough fields for the app, never on the lock
+// screen. Collapsing per target (service/instance/profile) means a
+// superseding proposal replaces the stale alert instead of stacking under
+// it; proposal_id rides along for tap deep-linking.
+func (n *Notifier) notifyProfileChangePending(client *Client, data map[string]interface{}) {
+	recipients, err := n.prefs.usersOptedInto(CategoryProfileChangePending)
+	if err != nil {
+		n.logger.Error("push: resolve profile_change_pending recipients", "err", err)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	out := map[string]any{"type": CategoryProfileChangePending}
+	if v, ok := data["proposal_id"]; ok {
+		out["proposal_id"] = v
+	}
+	title := "A settings change needs your approval"
+	body := "An external assistant proposed a quality-profile change and needs you to approve it"
+	var opts SendOptions
+	if profileID, ok := intval(data["profile_id"]); ok {
+		opts.CollapseID = fmt.Sprintf("%s:%s:%s:%d", CategoryProfileChangePending, str(data["service"]), str(data["instance_id"]), profileID)
 	}
 	n.sendWithOptions(client, recipients, title, body, out, opts)
 }

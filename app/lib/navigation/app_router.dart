@@ -18,6 +18,7 @@ import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
 import '../features/config_changes/ui/config_change_detail_screen.dart';
 import '../features/config_changes/ui/config_change_history_screen.dart';
+import '../features/profile_proposals/ui/profile_proposals_screen.dart';
 import '../features/dashboard/ui/dashboard_books_tab.dart';
 import '../features/dashboard/ui/dashboard_movies_tab.dart';
 import '../features/dashboard/ui/dashboard_releases_tab.dart';
@@ -501,6 +502,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ),
           ),
           GoRoute(
+            path: '/settings/profile-approvals',
+            builder: (_, __) => const AppAmbientBackground(
+              child: ProfileProposalsScreen(),
+            ),
+          ),
+          GoRoute(
             path: '/settings/change-history/:id',
             redirect: (_, state) =>
                 _positiveIntParameter(state, 'id') == null
@@ -693,6 +700,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/credentials',
     '/settings/ai-tools',
     '/settings/change-history',
+    '/settings/profile-approvals',
     '/settings/users',
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
