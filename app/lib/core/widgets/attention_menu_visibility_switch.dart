@@ -5,7 +5,7 @@ import '../storage/preferences.dart';
 import '../theme/app_theme.dart';
 
 /// Admin queues that can stay pinned in the menu or appear only while active.
-enum AttentionMenuItem { approvals, issues, agentFixes }
+enum AttentionMenuItem { approvals, issues, agentFixes, profileApprovals }
 
 /// The shared control used both on each queue screen and in Settings.
 ///
@@ -27,6 +27,8 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
       AttentionMenuItem.issues => ref.watch(issuesMenuOnlyWhenActiveProvider),
       AttentionMenuItem.agentFixes =>
         ref.watch(agentFixesMenuOnlyWhenAwaitingReviewProvider),
+      AttentionMenuItem.profileApprovals =>
+        ref.watch(profileApprovalsMenuOnlyWhenPendingProvider),
     };
 
     return SwitchListTile(
@@ -60,6 +62,9 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
         AttentionMenuItem.agentFixes => ref
             .read(agentFixesMenuOnlyWhenAwaitingReviewProvider.notifier)
             .set(value),
+        AttentionMenuItem.profileApprovals => ref
+            .read(profileApprovalsMenuOnlyWhenPendingProvider.notifier)
+            .set(value),
       };
 
   String get _title => switch (item) {
@@ -67,6 +72,8 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
         AttentionMenuItem.issues => 'Only show Issues when active',
         AttentionMenuItem.agentFixes =>
           'Only show Agent fixes when awaiting review',
+        AttentionMenuItem.profileApprovals =>
+          'Only show Profile approvals when pending',
       };
 
   String get _subtitle => switch (item) {
@@ -76,11 +83,14 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
           'Hide Issues when nothing needs attention or tracking.',
         AttentionMenuItem.agentFixes =>
           'Hide Agent fixes when no proposals await review.',
+        AttentionMenuItem.profileApprovals =>
+          'Hide Profile approvals when no external settings changes await a decision.',
       };
 
   IconData get _icon => switch (item) {
         AttentionMenuItem.approvals => Icons.fact_check_outlined,
         AttentionMenuItem.issues => Icons.flag_outlined,
         AttentionMenuItem.agentFixes => Icons.build_circle_outlined,
+        AttentionMenuItem.profileApprovals => Icons.tune,
       };
 }

@@ -140,6 +140,11 @@ func TestExternalPreviewParksProposalAndNotifies(t *testing.T) {
 	if id, ok := datas[0]["proposal_id"].(int64); !ok || id != p.ID {
 		t.Errorf("push proposal_id = %v, want %d", datas[0]["proposal_id"], p.ID)
 	}
+	// The authoritative badge count rides the event so the app applies it
+	// without a refetch.
+	if count, ok := datas[0]["pending_count"].(int); !ok || count != 1 {
+		t.Errorf("push pending_count = %v, want 1", datas[0]["pending_count"])
+	}
 
 	// A second proposal for the same profile supersedes the first: the admin
 	// only ever reviews the latest diff.
@@ -163,12 +168,20 @@ func TestExternalPreviewParksProposalAndNotifies(t *testing.T) {
 }
 
 func TestApproveProfileProposalExecutesVerifiedWrite(t *testing.T) {
-	server, fake, database, _ := newProfileProposalHarness(t)
+	server, fake, database, notifier := newProfileProposalHarness(t)
 	id := parkExternalProposal(t, server, `{"upgrade_allowed":false}`)
 
 	updated, err := server.approveProfileProposal(context.Background(), id, adminApprovalCallContext())
 	if err != nil {
 		t.Fatalf("approve: %v", err)
+	}
+	// The decision broadcasts the drained count so other admins' badges follow.
+	events, datas := notifier.calls()
+	if len(events) != 2 || events[1] != "profile_change_decided" {
+		t.Fatalf("notifier events = %v, want parked then decided", events)
+	}
+	if count, ok := datas[1]["pending_count"].(int); !ok || count != 0 {
+		t.Errorf("decided pending_count = %v, want 0", datas[1]["pending_count"])
 	}
 	if updated.Status != profileProposalStatusApplied || updated.SettingChangeID == nil {
 		t.Fatalf("approved proposal = %+v", updated)

@@ -108,6 +108,7 @@ void main() {
       'approvals_menu_only_when_pending': true,
       'issues_menu_only_when_active': true,
       'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
     });
     final container = await _pumpSettings(
       tester,
@@ -120,12 +121,19 @@ void main() {
       find.text('NEEDS ATTENTION MENU'),
     );
     expect(find.text('NEEDS ATTENTION MENU'), findsOneWidget);
+    // The ListView builds lazily: reach the last switch so all four exist.
+    await _dragSettingsUntilFound(
+      tester,
+      find.byKey(
+        const ValueKey('profileApprovals-conditional-menu-visibility'),
+      ),
+    );
 
     final controls = find.byType(
       AttentionMenuVisibilitySwitch,
       skipOffstage: false,
     );
-    expect(controls, findsNWidgets(3));
+    expect(controls, findsNWidgets(4));
     expect(
       tester
           .widgetList<AttentionMenuVisibilitySwitch>(controls)
@@ -145,11 +153,16 @@ void main() {
       const ValueKey('agentFixes-conditional-menu-visibility'),
       skipOffstage: false,
     );
+    final profileApprovalsToggle = find.byKey(
+      const ValueKey('profileApprovals-conditional-menu-visibility'),
+      skipOffstage: false,
+    );
 
     for (final toggle in [
       approvalsToggle,
       issuesToggle,
       agentFixesToggle,
+      profileApprovalsToggle,
     ]) {
       await tester.ensureVisible(toggle);
       await tester.pumpAndSettle();
@@ -163,6 +176,10 @@ void main() {
     expect(container.read(issuesMenuOnlyWhenActiveProvider), isFalse);
     expect(
       container.read(agentFixesMenuOnlyWhenAwaitingReviewProvider),
+      isFalse,
+    );
+    expect(
+      container.read(profileApprovalsMenuOnlyWhenPendingProvider),
       isFalse,
     );
   });

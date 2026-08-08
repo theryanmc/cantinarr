@@ -634,18 +634,43 @@ const profileChangePendingEvent = "profile_change_pending"
 
 // notifyProfileProposalParked pages admins about a parked proposal. The
 // collapse key is the proposal's target, so a superseding proposal replaces
-// the stale notification on-device instead of stacking under it.
+// the stale notification on-device instead of stacking under it. The
+// authoritative pending_count rides along so the app's attention badge can
+// apply it without a refetch (the agent_action_pending shape).
 func (s *ToolServer) notifyProfileProposalParked(p storedProfileProposal) {
 	if s.adminNotifier == nil {
 		return
 	}
-	s.adminNotifier.NotifyAdmins(profileChangePendingEvent, map[string]interface{}{
+	data := map[string]interface{}{
 		"proposal_id":  p.ID,
 		"service":      p.Service,
 		"instance_id":  p.InstanceID,
 		"profile_id":   p.ProfileID,
 		"profile_name": p.ProfileName,
-	})
+	}
+	if count, err := s.profileProposals.pendingCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.adminNotifier.NotifyAdmins(profileChangePendingEvent, data)
+}
+
+// profileChangeDecidedEvent tells the other admins' badges to drain after a
+// decision (or a supersession/expiry observed by the deciding read). It is
+// WS-only by design: the push notifier has no case for it, exactly like
+// agent_action_decided — nobody needs a lock-screen alert that work
+// disappeared.
+const profileChangeDecidedEvent = "profile_change_decided"
+
+// notifyProfileProposalDecided broadcasts the post-decision pending count.
+func (s *ToolServer) notifyProfileProposalDecided(proposalID int64) {
+	if s.adminNotifier == nil {
+		return
+	}
+	data := map[string]interface{}{"proposal_id": proposalID}
+	if count, err := s.profileProposals.pendingCount(); err == nil {
+		data["pending_count"] = count
+	}
+	s.adminNotifier.NotifyAdmins(profileChangeDecidedEvent, data)
 }
 
 func staleProfileChangeResult() *ToolResult {
