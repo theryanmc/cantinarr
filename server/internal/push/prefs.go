@@ -67,6 +67,14 @@ const (
 	// punctuated by problems; one line a week rebalances that. Admin-scoped,
 	// on by default, and skipped entirely on a week with nothing to say.
 	CategoryAgentDigest = "agent_digest"
+	// CategoryProfileChangePending tells admins an external MCP agent parked
+	// a quality-profile change that applies only if one of them approves it
+	// in the app. It deliberately SHARES the agent_action_pending preference
+	// column (the CategoryAgentAutoApprovalPaused precedent): this too is a
+	// "the agent pipeline needs your decision" alert, and the schema-free
+	// mapping keeps notification_prefs and its full-row PUT contract
+	// untouched.
+	CategoryProfileChangePending = "profile_change_pending"
 	// CategoryContentUpgraded tells admins an existing movie/episode/book file
 	// was replaced by a quality upgrade. Admin-scoped and OFF by default:
 	// upgrades are library maintenance, not news — a requester already has the
@@ -112,11 +120,13 @@ var categoryColumn = map[string]struct {
 	CategoryAgentActionPending: {"agent_action_pending", defaultPrefs.AgentActionPending},
 	// Shares the agent_action_pending column by design (see the category const).
 	CategoryAgentAutoApprovalPaused: {"agent_action_pending", defaultPrefs.AgentActionPending},
-	CategoryPlexAccessRequest:       {"plex_access_request", defaultPrefs.PlexAccessRequest},
-	CategoryPlexInviteSent:          {"plex_invite_sent", defaultPrefs.PlexInviteSent},
-	CategoryIssueReportUpdate:       {"issue_report_update", defaultPrefs.IssueReportUpdate},
-	CategoryAgentDigest:             {"agent_digest", defaultPrefs.AgentDigest},
-	CategoryContentUpgraded:         {"content_upgraded", defaultPrefs.ContentUpgraded},
+	// Shares the agent_action_pending column by design (see the category const).
+	CategoryProfileChangePending: {"agent_action_pending", defaultPrefs.AgentActionPending},
+	CategoryPlexAccessRequest:    {"plex_access_request", defaultPrefs.PlexAccessRequest},
+	CategoryPlexInviteSent:       {"plex_invite_sent", defaultPrefs.PlexInviteSent},
+	CategoryIssueReportUpdate:    {"issue_report_update", defaultPrefs.IssueReportUpdate},
+	CategoryAgentDigest:          {"agent_digest", defaultPrefs.AgentDigest},
+	CategoryContentUpgraded:      {"content_upgraded", defaultPrefs.ContentUpgraded},
 }
 
 // PrefsStore reads and writes per-user notification preferences. It is safe to
@@ -206,6 +216,7 @@ func (s *PrefsStore) usersOptedInto(category string) ([]int64, error) {
 	// requests, or care that a file was replaced by a quality upgrade.
 	if category == CategoryRequestPending || category == CategoryIssueCreated ||
 		category == CategoryAgentActionPending || category == CategoryAgentAutoApprovalPaused ||
+		category == CategoryProfileChangePending ||
 		category == CategoryPlexAccessRequest || category == CategoryAgentDigest ||
 		category == CategoryContentUpgraded {
 		query += " AND u.role = 'admin'"

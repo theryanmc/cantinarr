@@ -278,6 +278,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => context.push('/settings/change-history'),
             ),
             _SettingsTile(
+              icon: Icons.fact_check_outlined,
+              title: 'Profile Change Approvals',
+              subtitle: 'Approve quality-profile changes proposed by external assistants',
+              onTap: () => context.push('/settings/profile-approvals'),
+            ),
+            _SettingsTile(
               icon: Icons.tune,
               title: 'Request Settings',
               subtitle: 'Approval, season, and quality defaults',

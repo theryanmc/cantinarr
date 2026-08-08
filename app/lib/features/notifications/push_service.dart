@@ -150,6 +150,12 @@ class PushService {
       case 'agent_action_pending':
         // A fix needs approval — go straight to the agent approval queue.
         router.push('/agent-actions');
+      case 'profile_change_pending':
+        // An external assistant parked a quality-profile change. The
+        // approvals screen shows every pending proposal with the newest
+        // first, so the list is the right destination whether or not this
+        // particular proposal is still pending on arrival.
+        router.push('/settings/profile-approvals');
       case 'plex_access_request':
         // A user shared their Plex email — the Users screen shows it with the
         // invite actions.

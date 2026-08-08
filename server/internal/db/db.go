@@ -659,6 +659,51 @@ CREATE INDEX IF NOT EXISTS idx_external_setting_changes_created
     ON external_setting_changes(id DESC);
 CREATE INDEX IF NOT EXISTS idx_external_setting_changes_target
     ON external_setting_changes(service_type, instance_id, resource_type, resource_id, id DESC);
+
+-- Parked quality-profile change proposals from external MCP agents. The
+-- in-app preview/apply pair proves admin consent through same-turn chat
+-- provenance; an external agent has no server-witnessed turn, so its
+-- proposal parks here and consent happens in the app: an admin reviews the
+-- stored diff and approves, which re-validates live state (the stored
+-- hashes) and runs the same verified write path, recording the result in
+-- external_setting_changes. plan_json/diff_json and the hashes are
+-- server-only; they never leave the server as raw values. status:
+-- pending -> applied | rejected | superseded | expired | failed, passing
+-- through executing while an approval runs. The partial unique index keeps
+-- at most one pending proposal per profile: a newer proposal supersedes
+-- the older so an admin only ever reviews the latest diff.
+CREATE TABLE IF NOT EXISTS profile_change_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposed_by INTEGER NOT NULL DEFAULT 0,
+    proposer_device_id TEXT NOT NULL DEFAULT '',
+    source_client TEXT NOT NULL DEFAULT '',
+    service_type TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
+    instance_name TEXT NOT NULL DEFAULT '',
+    profile_id INTEGER NOT NULL,
+    profile_name TEXT NOT NULL DEFAULT '',
+    plan_json TEXT NOT NULL,
+    diff_json TEXT NOT NULL DEFAULT '[]',
+    profile_hash TEXT NOT NULL DEFAULT '',
+    desired_profile_hash TEXT NOT NULL DEFAULT '',
+    custom_format_hash TEXT NOT NULL DEFAULT '',
+    language_hash TEXT NOT NULL DEFAULT '',
+    has_language_hash INTEGER NOT NULL DEFAULT 0,
+    instance_binding BLOB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    executing_at DATETIME,
+    decided_by INTEGER NOT NULL DEFAULT 0,
+    decided_at DATETIME,
+    reject_note TEXT NOT NULL DEFAULT '',
+    result_text TEXT NOT NULL DEFAULT '',
+    setting_change_id INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_profile_change_proposals_status
+    ON profile_change_proposals(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_change_proposals_one_pending
+    ON profile_change_proposals(service_type, instance_id, profile_id) WHERE status = 'pending';
 `
 
 type schemaMigration struct {

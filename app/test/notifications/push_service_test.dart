@@ -147,6 +147,10 @@ void main() {
     const directRoutes = {
       'request_pending': '/approvals',
       'agent_action_pending': '/agent-actions',
+      // A parked external profile change routes to the approvals list: it
+      // shows every pending proposal newest-first, so it is right whether or
+      // not this particular proposal is still pending on arrival.
+      'profile_change_pending': '/settings/profile-approvals',
       'plex_access_request': '/settings/users',
       'plex_invite_sent': '/plex-guide',
       'remediation_autodispatch_disabled': '/settings/ai-remediation',

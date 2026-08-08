@@ -223,6 +223,16 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/external-settings-changes/{id}", settingsChangesHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/external-settings-changes/{id}/revert", settingsChangesHandler.Revert)
 
+			// Profile changes parked by external MCP agents: an admin reviews
+			// the stored diff here and approves (which re-validates live state
+			// and executes the same verified write path as the in-app apply)
+			// or rejects without touching the arr.
+			profileProposalsHandler := mcp.NewProfileProposalHandler(toolServer)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/profile-change-proposals", profileProposalsHandler.List)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/profile-change-proposals/{id}", profileProposalsHandler.Get)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/profile-change-proposals/{id}/approve", profileProposalsHandler.Approve)
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Post("/profile-change-proposals/{id}/reject", profileProposalsHandler.Reject)
+
 			// Media request management: approval queue + request defaults
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests", requestHandler.ListPending)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)

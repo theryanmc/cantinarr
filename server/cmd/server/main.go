@@ -214,6 +214,12 @@ func main() {
 	// MCP tool server + AI handler
 	toolServer := mcp.NewToolServer(creds, requestService, registry, bridge)
 	toolServer.SetSettingsChangeDatabase(database)
+	if pushNotifier != nil {
+		// Pages admins when an external MCP agent parks a profile-change
+		// proposal; without push the proposal still parks and the app's
+		// approval screen lists it.
+		toolServer.SetAdminNotifier(pushNotifier)
+	}
 	toolServer.SetCallAuthorizer(func(ctx context.Context, callCtx mcp.CallContext) (string, error) {
 		return authService.AuthorizeInteractiveToolCall(
 			ctx,
