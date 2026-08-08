@@ -23,6 +23,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
+import '../../profile_proposals/logic/profile_proposals_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
 import '../../request/logic/pending_approvals_provider.dart';
@@ -412,10 +413,17 @@ class _AppShellState extends ConsumerState<AppShell>
     // Agent fixes are already represented by their parent open issue, so the
     // hamburger total deliberately does not add the proposal count again. The
     // drawer watches that count for its own dedicated badge.
+    // External profile-change proposals have no parent issue, so unlike agent
+    // fixes they DO count toward the hamburger dot — nothing else represents
+    // them there.
+    final pendingProfileProposals = ref.watch(pendingProfileProposalsProvider);
     // Users waiting for a Plex invite — drives the drawer "Plex invites"
     // entry (only shown while someone waits) and the hamburger dot.
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
-    final menuBadgeCount = pendingApprovals + openIssues + plexInvitesWaiting;
+    final menuBadgeCount = pendingApprovals +
+        openIssues +
+        pendingProfileProposals +
+        plexInvitesWaiting;
     final showSearchResults = searchState.searchMode == SearchMode.search ||
         searchState.searchMode == SearchMode.aiReady;
     final libraryStatus = searchState.isSearching && showSearchResults
@@ -890,9 +898,17 @@ class _AppShellState extends ConsumerState<AppShell>
         !ref.watch(agentFixesMenuOnlyWhenAwaitingReviewProvider) ||
             !agentActionsLoaded ||
             pendingAgentActions > 0;
+    final pendingProfileProposals = ref.watch(pendingProfileProposalsProvider);
+    final profileProposalsLoaded =
+        ref.watch(pendingProfileProposalsLoadedProvider);
+    final showProfileApprovals =
+        !ref.watch(profileApprovalsMenuOnlyWhenPendingProvider) ||
+            !profileProposalsLoaded ||
+            pendingProfileProposals > 0;
     final showNeedsAttentionSection = showApprovals ||
         showIssues ||
         showAgentFixes ||
+        showProfileApprovals ||
         plexInvitesWaiting > 0 ||
         showSetupReminder;
 
@@ -1092,6 +1108,17 @@ class _AppShellState extends ConsumerState<AppShell>
                 onTap: () {
                   if (isOverlay) Navigator.pop(context);
                   context.push('/agent-actions');
+                },
+              ),
+            if (showProfileApprovals)
+              _DrawerItem(
+                icon: Icons.tune,
+                title: 'Profile approvals',
+                semanticsIdentifier: 'nav-action-profile-approvals',
+                badgeCount: pendingProfileProposals,
+                onTap: () {
+                  if (isOverlay) Navigator.pop(context);
+                  context.push('/settings/profile-approvals');
                 },
               ),
             // Appears only while someone is waiting on a Plex invite (e.g.

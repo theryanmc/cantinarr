@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/profile_proposal_models.dart';
 import '../data/profile_proposals_service.dart';
+import '../logic/profile_proposals_provider.dart';
 
 /// Admin approval queue for quality-profile changes parked by external MCP
 /// agents. The server holds the plan and re-validates live settings on
@@ -64,6 +66,11 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
         _loading = false;
         _error = null;
       });
+      // Seed the attention-menu badge from the list this screen already
+      // holds, so a decision made here drains the drawer immediately.
+      ref
+          .read(pendingProfileProposalsProvider.notifier)
+          .setCount(proposals.where((p) => p.isPending).length);
     } catch (e) {
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
@@ -177,19 +184,42 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
     final decided =
         proposals?.where((p) => !p.isPending).toList(growable: false) ??
             const [];
+    // The visibility switch sits outside the scroll region so it survives
+    // the loading, error, and empty states — a hidden drawer entry's only
+    // in-place recovery is this control (Settings has the other copy).
     return Scaffold(
       appBar: AppBar(title: const Text('Profile Change Approvals')),
-      body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.accent),
-            )
-          : proposals == null
-              ? FullScreenError(
-                  title: 'Approvals unavailable',
-                  message: _error ?? 'Could not load profile change proposals.',
-                  onRetry: _load,
-                )
-              : RefreshIndicator(
+      body: Column(
+        children: [
+          Expanded(child: _buildBody(proposals, pending, decided)),
+          const Divider(color: AppTheme.border, height: 1),
+          const SafeArea(
+            top: false,
+            child: AttentionMenuVisibilitySwitch(
+              item: AttentionMenuItem.profileApprovals,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBody(
+    List<ProfileChangeProposal>? proposals,
+    List<ProfileChangeProposal> pending,
+    List<ProfileChangeProposal> decided,
+  ) {
+    return _loading
+        ? const Center(
+            child: CircularProgressIndicator(color: AppTheme.accent),
+          )
+        : proposals == null
+            ? FullScreenError(
+                title: 'Approvals unavailable',
+                message: _error ?? 'Could not load profile change proposals.',
+                onRetry: _load,
+              )
+            : RefreshIndicator(
                   color: AppTheme.accent,
                   onRefresh: _load,
                   child: LayoutBuilder(builder: (context, constraints) {
@@ -237,8 +267,7 @@ class _ProfileProposalsScreenState extends ConsumerState<ProfileProposalsScreen>
                       ],
                     );
                   }),
-                ),
-    );
+                );
   }
 }
 

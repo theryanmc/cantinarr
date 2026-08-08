@@ -537,6 +537,7 @@ void main() {
     expect(find.text('Approvals'), findsOneWidget);
     expect(find.text('Issues'), findsOneWidget);
     expect(find.text('Agent fixes'), findsOneWidget);
+    expect(find.text('Profile approvals'), findsOneWidget);
   });
 
   testWidgets(
@@ -546,6 +547,7 @@ void main() {
       'approvals_menu_only_when_pending': true,
       'issues_menu_only_when_active': true,
       'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
     });
 
     await _pumpAdminDrawer(tester);
@@ -553,6 +555,7 @@ void main() {
     expect(find.text('Approvals'), findsNothing);
     expect(find.text('Issues'), findsNothing);
     expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
     expect(find.text('NEEDS ATTENTION'), findsNothing);
   });
 
@@ -562,6 +565,7 @@ void main() {
       'approvals_menu_only_when_pending': true,
       'issues_menu_only_when_active': true,
       'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
     });
 
     await _pumpAdminDrawer(tester, failAttentionQueues: true);
@@ -570,6 +574,7 @@ void main() {
     expect(find.text('Approvals'), findsOneWidget);
     expect(find.text('Issues'), findsOneWidget);
     expect(find.text('Agent fixes'), findsOneWidget);
+    expect(find.text('Profile approvals'), findsOneWidget);
   });
 
   testWidgets('tracking-only issue restores Issues without an attention badge',
@@ -578,6 +583,7 @@ void main() {
       'approvals_menu_only_when_pending': true,
       'issues_menu_only_when_active': true,
       'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
     });
 
     await _pumpAdminDrawer(
@@ -596,6 +602,7 @@ void main() {
     expect(find.text('NEEDS ATTENTION'), findsOneWidget);
     expect(find.text('Approvals'), findsNothing);
     expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
     expect(find.text('Issues'), findsOneWidget);
 
     final issuesTile = tester.widget<ListTile>(
@@ -799,7 +806,8 @@ class _JsonAdapter implements HttpClientAdapter {
     if (failAttentionQueues &&
         (path == '/api/admin/requests' ||
             path == '/api/admin/issues' ||
-            path == '/api/admin/agent-actions')) {
+            path == '/api/admin/agent-actions' ||
+            path == '/api/admin/profile-change-proposals')) {
       return ResponseBody.fromString(
         '{"error":"temporarily unavailable"}',
         503,
@@ -815,6 +823,8 @@ class _JsonAdapter implements HttpClientAdapter {
       body = {'issues': issues};
     } else if (path == '/api/admin/agent-actions') {
       body = {'actions': []};
+    } else if (path == '/api/admin/profile-change-proposals') {
+      body = {'proposals': []};
     } else {
       body = [];
     }

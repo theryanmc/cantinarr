@@ -317,6 +317,24 @@ func (s *profileProposalStore) reject(id, decidedBy int64, note string) (bool, e
 	return n == 1, nil
 }
 
+// pendingCount reports how many proposals await a decision, after sweeping
+// expiries — it feeds the app's attention-menu badge, so a count that
+// includes already-expired rows would page an admin toward an empty screen.
+func (s *profileProposalStore) pendingCount() (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("profile change proposals are unavailable")
+	}
+	s.sweep()
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM profile_change_proposals WHERE status = ?`,
+		profileProposalStatusPending,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count pending profile change proposals: %w", err)
+	}
+	return count, nil
+}
+
 // sourceClientName reads the proposing device's display name ("MCP: Claude
 // Desktop") for the proposal record. Denormalized on purpose: the parked
 // value documents what proposed the change even if the device row is later

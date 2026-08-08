@@ -1,3 +1,4 @@
+import 'package:cantinarr/core/storage/preferences.dart';
 import 'package:cantinarr/features/profile_proposals/data/profile_proposal_models.dart';
 import 'package:cantinarr/features/profile_proposals/data/profile_proposals_service.dart';
 import 'package:cantinarr/features/profile_proposals/ui/profile_proposals_screen.dart';
@@ -5,6 +6,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 ProfileChangeProposal _proposal({
   int id = 12,
@@ -137,5 +139,38 @@ void main() {
     await _pump(tester, service);
 
     expect(find.text('Nothing awaiting approval'), findsOneWidget);
+  });
+
+  testWidgets('footer switch survives the empty state and flips the pref',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final service = _FakeProposalsService(const []);
+    final container = ProviderContainer(overrides: [
+      profileProposalsServiceProvider.overrideWithValue(service),
+    ]);
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ProfileProposalsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final toggle = find.byKey(
+      const ValueKey('profileApprovals-conditional-menu-visibility'),
+    );
+    expect(toggle, findsOneWidget);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(profileApprovalsMenuOnlyWhenPendingProvider),
+      isTrue,
+    );
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
   });
 }

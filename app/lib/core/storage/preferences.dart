@@ -90,6 +90,8 @@ const _approvalsMenuOnlyWhenPendingKey = 'approvals_menu_only_when_pending';
 const _issuesMenuOnlyWhenActiveKey = 'issues_menu_only_when_active';
 const _agentFixesMenuOnlyWhenAwaitingReviewKey =
     'agent_fixes_menu_only_when_awaiting_review';
+const _profileApprovalsMenuOnlyWhenPendingKey =
+    'profile_approvals_menu_only_when_pending';
 
 /// A device-local preference that hides an admin queue from the navigation
 /// menu while that queue has no active work. The default is false so existing
@@ -133,6 +135,15 @@ final agentFixesMenuOnlyWhenAwaitingReviewProvider =
     StateNotifierProvider<ConditionalMenuVisibilityNotifier, bool>(
   (ref) => ConditionalMenuVisibilityNotifier(
     _agentFixesMenuOnlyWhenAwaitingReviewKey,
+  ),
+);
+
+/// Whether Profile approvals appears only while an external agent's
+/// quality-profile proposal awaits an admin decision.
+final profileApprovalsMenuOnlyWhenPendingProvider =
+    StateNotifierProvider<ConditionalMenuVisibilityNotifier, bool>(
+  (ref) => ConditionalMenuVisibilityNotifier(
+    _profileApprovalsMenuOnlyWhenPendingKey,
   ),
 );
 

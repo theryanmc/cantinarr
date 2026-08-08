@@ -131,6 +131,7 @@ func (h *ProfileProposalHandler) Reject(w http.ResponseWriter, r *http.Request) 
 		writeSettingsChangeJSON(w, http.StatusConflict, map[string]string{"error": "This proposal was already decided, replaced, or expired. Refresh the list."})
 		return
 	}
+	h.server.notifyProfileProposalDecided(id)
 	updated, err := h.server.profileProposals.get(id)
 	if err != nil {
 		writeSettingsChangeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load proposal"})
@@ -233,9 +234,11 @@ func (s *ToolServer) approveProfileProposal(ctx context.Context, id int64, callC
 	proposal := stored.executionProposal()
 	// Best-effort like every other terminal bookkeeping write: if the
 	// transition itself fails the row stays executing and the sweep ages it
-	// out with a pointer at configuration history.
+	// out with a pointer at configuration history. Every terminal transition
+	// broadcasts the drained pending count so other admins' badges follow.
 	terminate := func(text string) {
 		_ = s.profileProposals.markFailed(id, callCtx.UserID, text)
+		s.notifyProfileProposalDecided(id)
 	}
 
 	reader, freshID, _, binding, refusal := s.freshSettingsTargetFor(proposal.Service, proposal.InstanceID)
@@ -376,6 +379,7 @@ func (s *ToolServer) approveProfileProposal(ctx context.Context, id int64, callC
 	if err := s.profileProposals.markApplied(id, callCtx.UserID, historyChange.ID); err != nil {
 		return ProfileChangeProposal{}, fmt.Errorf("the profile update applied and was recorded as change #%d, but the proposal record could not be finished: %s", historyChange.ID, secrets.RedactText(err.Error()))
 	}
+	s.notifyProfileProposalDecided(id)
 	updated, err := s.profileProposals.get(id)
 	if err != nil {
 		return ProfileChangeProposal{}, fmt.Errorf("the profile update applied; reloading the proposal failed: %s", secrets.RedactText(err.Error()))
