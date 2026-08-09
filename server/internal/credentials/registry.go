@@ -44,7 +44,14 @@ const (
 	AIAuthTypeAPIKey    = "api_key"
 	AIAuthTypeUserOAuth = "user_oauth"
 
-	DefaultAIProvider = AIProviderAnthropic
+	// DefaultAIProvider is the zero-config choice for untouched installs:
+	// OAuth needs a ChatGPT login, not a purchased API key.
+	DefaultAIProvider = AIProviderCodex
+
+	// DefaultSharedAIModel pairs with that zero-config default: the fast
+	// GPT-5.6 tier, so an untouched install doesn't spend the admin's ChatGPT
+	// meter on heavyweight turns nobody chose.
+	DefaultSharedAIModel = "gpt-5.6-luna"
 
 	// AIHealthCheckInterval deliberately keeps the default background cost to
 	// one tiny shared-provider turn per day.
@@ -352,7 +359,7 @@ func (r *Registry) AIHealthCheckDue(now time.Time) bool {
 }
 
 // AISelectionConfigured distinguishes an intentionally configured shared
-// provider from the untouched Anthropic fallback used by legacy installs.
+// provider from an untouched install's derived default.
 func (r *Registry) AISelectionConfigured() bool {
 	if strings.TrimSpace(r.GetSetting(KeyAIProvider)) != "" || strings.TrimSpace(r.GetSetting(KeyAIModel)) != "" {
 		return true
@@ -399,6 +406,9 @@ func (r *Registry) GetAIConfig() AIConfig {
 	}
 	if provider == "" {
 		provider = DefaultAIProvider
+		if model == "" {
+			model = DefaultSharedAIModel
+		}
 	}
 	// Preserve an explicitly invalid stored/environment value instead of
 	// presenting a healthy-looking default that the strict runtime resolver
