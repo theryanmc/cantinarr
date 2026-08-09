@@ -514,6 +514,10 @@ class ServerConfig {
 
   /// The running server version, from the `version` field of /api/config.
   final String? serverVersion;
+
+  /// The oldest app build the server still fully supports
+  /// (`min_app_version`). Drives the warn-only skew banner.
+  final String? minAppVersion;
   final AvailableServices services;
   final List<ServiceInstance> instances;
 
@@ -526,6 +530,7 @@ class ServerConfig {
   const ServerConfig({
     required this.serverName,
     this.serverVersion,
+    this.minAppVersion,
     required this.services,
     this.instances = const [],
     this.issuesEnabled = false,
@@ -541,6 +546,7 @@ class ServerConfig {
     return ServerConfig(
       serverName: json['server_name'] as String? ?? 'Cantinarr',
       serverVersion: json['version'] as String?,
+      minAppVersion: json['min_app_version'] as String?,
       services: AvailableServices.fromJson(
           json['services'] as Map<String, dynamic>? ?? {}),
       instances: instancesList,

@@ -644,6 +644,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"server_name":     cfg.ServerName,
 			"version":         version.Version,
+			"min_app_version": version.MinAppVersion,
 			"services":        services,
 			"instances":       instances,
 			"issues_enabled":  remSettings.Enabled,
