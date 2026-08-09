@@ -31,6 +31,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   String? _model;
   bool _saving = false;
   bool _clearing = false;
+  bool _personalExpanded = false;
 
   @override
   void initState() {
@@ -170,6 +171,7 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
     try {
       await ref.read(aiSettingsServiceProvider).useIncluded();
       await _refresh();
+      if (mounted) setState(() => _personalExpanded = false);
       _message('Included AI selected. Your personal credentials were kept.');
     } catch (error) {
       _message(_friendlyError(error, 'Could not select included AI.'));
@@ -232,11 +234,20 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   }
 
   Widget _buildSettings(AiSettings settings) {
+    final includedActive =
+        settings.effective.source == AiAccessSource.shared &&
+            settings.effective.available;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
         _EffectiveSourcePanel(settings: settings),
         const SizedBox(height: 22),
+        _IncludedSourcePanel(
+          settings: settings,
+          clearing: _clearing,
+          onUseIncluded: _useIncluded,
+        ),
+        const SizedBox(height: 16),
         _PersonalSourcePanel(
           settings: settings,
           provider: _provider,
@@ -245,18 +256,16 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
           customModelController: _customModelController,
           apiKeyController: _apiKeyController,
           saving: _saving,
+          collapsed: includedActive && !_personalExpanded,
+          onToggleCollapsed: includedActive
+              ? () => setState(() => _personalExpanded = !_personalExpanded)
+              : null,
           onProviderSelected: (provider) => _selectProvider(settings, provider),
           onModelSelected: (model) => setState(() => _model = model),
           onSaveKeyAndUse: () => _saveAndUse(settings, saveKey: true),
           onUseConfigured: () => _saveAndUse(settings),
           onDeleteKey: (provider) => _deleteKey(settings, provider),
           onOpenChatGPT: _openOpenAIOAuth,
-        ),
-        const SizedBox(height: 16),
-        _IncludedSourcePanel(
-          settings: settings,
-          clearing: _clearing,
-          onUseIncluded: _useIncluded,
         ),
       ],
     );
@@ -376,6 +385,8 @@ class _PersonalSourcePanel extends StatelessWidget {
   final TextEditingController customModelController;
   final TextEditingController apiKeyController;
   final bool saving;
+  final bool collapsed;
+  final VoidCallback? onToggleCollapsed;
   final ValueChanged<String> onProviderSelected;
   final ValueChanged<String> onModelSelected;
   final VoidCallback onSaveKeyAndUse;
@@ -391,6 +402,8 @@ class _PersonalSourcePanel extends StatelessWidget {
     required this.customModelController,
     required this.apiKeyController,
     required this.saving,
+    required this.collapsed,
+    required this.onToggleCollapsed,
     required this.onProviderSelected,
     required this.onModelSelected,
     required this.onSaveKeyAndUse,
@@ -412,18 +425,57 @@ class _PersonalSourcePanel extends StatelessWidget {
         ? model
         : (option?.models.firstOrNull?.id ?? customModelValue);
 
+    final collapsible = onToggleCollapsed != null;
+    final header = _SourceHeader(
+      icon: Icons.person_outline_rounded,
+      eyebrow: 'PERSONAL',
+      title: 'Your provider',
+      status: active ? 'Selected' : 'Optional override',
+      active: active,
+      trailing: collapsible
+          ? Icon(
+              collapsed ? Icons.expand_more_rounded : Icons.expand_less_rounded,
+              color: AppTheme.textMuted,
+            )
+          : null,
+    );
+
+    if (collapsed) {
+      return AppPanel(
+        accentColor: AppTheme.signal,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onToggleCollapsed,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              const SizedBox(height: 7),
+              const Text(
+                'Included AI already powers your assistant, so a personal '
+                'provider is not needed. Tap to set one up anyway.',
+                style:
+                    TextStyle(color: AppTheme.textSecondary, height: 1.42),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return AppPanel(
       accentColor: active ? AppTheme.accent : AppTheme.signal,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _SourceHeader(
-            icon: Icons.person_outline_rounded,
-            eyebrow: 'PERSONAL',
-            title: 'Your provider',
-            status: active ? 'Selected' : 'Optional override',
-            active: active,
-          ),
+          if (collapsible)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onToggleCollapsed,
+              child: header,
+            )
+          else
+            header,
           const SizedBox(height: 7),
           const Text(
             'A personal provider takes priority over included AI. Keys and '
@@ -700,6 +752,7 @@ class _SourceHeader extends StatelessWidget {
   final String title;
   final String status;
   final bool active;
+  final Widget? trailing;
 
   const _SourceHeader({
     required this.icon,
@@ -707,6 +760,7 @@ class _SourceHeader extends StatelessWidget {
     required this.title,
     required this.status,
     required this.active,
+    this.trailing,
   });
 
   @override
@@ -757,6 +811,10 @@ class _SourceHeader extends StatelessWidget {
             ),
           ),
         ),
+        if (trailing != null) ...[
+          const SizedBox(width: 8),
+          trailing!,
+        ],
       ],
     );
   }

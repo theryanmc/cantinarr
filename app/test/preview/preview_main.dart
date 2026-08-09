@@ -215,6 +215,69 @@ class _StubAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path.contains('/requests')) {
       body = {'requests': []};
+    } else if (path.endsWith('/api/ai/settings')) {
+      // Included AI active so the AI Access screen shows its covered state.
+      body = {
+        'providers': [
+          {
+            'id': 'anthropic',
+            'label': 'Anthropic',
+            'credential_key': 'anthropic_key',
+            'models': [
+              {'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6'},
+            ],
+          },
+          {
+            'id': 'openai',
+            'label': 'OpenAI',
+            'credential_key': 'openai_key',
+            'models': [
+              {'id': 'gpt-5.4-mini', 'label': 'GPT-5.4 mini'},
+            ],
+          },
+          {
+            'id': 'gemini',
+            'label': 'Google Gemini',
+            'credential_key': 'gemini_key',
+            'models': [
+              {'id': 'gemini-2.5-flash', 'label': 'Gemini 2.5 Flash'},
+            ],
+          },
+          {
+            'id': 'codex',
+            'label': 'OpenAI (OAuth)',
+            'credential_key': '',
+            'auth_type': 'user_oauth',
+            'models': [
+              {'id': 'gpt-5.6-luna', 'label': 'GPT-5.6 Luna'},
+            ],
+          },
+        ],
+        'default_provider': 'codex',
+        'default_model': 'gpt-5.6-luna',
+        'personal': {
+          'selected': false,
+          'config': null,
+          'credentials': {
+            'anthropic': false,
+            'openai': false,
+            'gemini': false,
+            'codex': false,
+          },
+        },
+        'shared': {
+          'granted': true,
+          'configured': true,
+          'config': {'provider': 'codex', 'model': 'gpt-5.6-luna'},
+        },
+        'effective': {
+          'available': true,
+          'source': 'shared',
+          'provider': 'codex',
+          'model': 'gpt-5.6-luna',
+          'reason': '',
+        },
+      };
     } else {
       body = <Object>[];
     }

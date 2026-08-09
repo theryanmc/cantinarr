@@ -51,10 +51,45 @@ void main() {
     expect(find.textContaining('Personal · OpenAI'), findsOneWidget);
   });
 
+  testWidgets('active included access leads and rolls up the personal panel',
+      (tester) async {
+    final service = _FakeAiSettingsService(_included());
+    await _pump(tester, service);
+
+    // Included sits above personal so the covered-by-default path reads first.
+    expect(
+      tester.getTopLeft(find.text('Provided by this server')).dy,
+      lessThan(tester.getTopLeft(find.text('Your provider')).dy),
+    );
+
+    // Personal is rolled up: no setup controls, an explicit not-needed cue.
+    expect(find.text('Optional override'), findsOneWidget);
+    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.textContaining('provider is not needed'), findsOneWidget);
+
+    // Tapping the panel expands the full personal setup.
+    await tester.tap(find.text('Your provider'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ChoiceChip), findsWidgets);
+  });
+
+  testWidgets('personal panel stays expanded when included AI is not active',
+      (tester) async {
+    final service = _FakeAiSettingsService(_notGrantedGlobalCodex());
+    await _pump(tester, service);
+
+    expect(find.text('Optional override'), findsOneWidget);
+    expect(find.byType(ChoiceChip), findsWidgets);
+  });
+
   testWidgets('personal ChatGPT can be connected while included AI is active',
       (tester) async {
     final service = _FakeAiSettingsService(_included());
     await _pump(tester, service, withChatGptRoute: true);
+
+    // Included AI is active, so the personal panel starts rolled up.
+    await tester.tap(find.text('Your provider'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.widgetWithText(ChoiceChip, 'OpenAI (OAuth)'));
     await tester.pumpAndSettle();
