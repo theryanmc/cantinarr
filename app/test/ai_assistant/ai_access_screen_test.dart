@@ -63,7 +63,7 @@ void main() {
     );
 
     // Personal is rolled up: no setup controls, an explicit not-needed cue.
-    expect(find.text('Not needed'), findsOneWidget);
+    expect(find.text('Optional override'), findsOneWidget);
     expect(find.byType(ChoiceChip), findsNothing);
     expect(find.textContaining('provider is not needed'), findsOneWidget);
 
@@ -71,7 +71,6 @@ void main() {
     await tester.tap(find.text('Your provider'));
     await tester.pumpAndSettle();
     expect(find.byType(ChoiceChip), findsWidgets);
-    expect(find.text('Optional override'), findsNothing);
   });
 
   testWidgets('personal panel stays expanded when included AI is not active',
@@ -80,7 +79,6 @@ void main() {
     await _pump(tester, service);
 
     expect(find.text('Optional override'), findsOneWidget);
-    expect(find.text('Not needed'), findsNothing);
     expect(find.byType(ChoiceChip), findsWidgets);
   });
 

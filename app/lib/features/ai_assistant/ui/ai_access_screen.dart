@@ -430,11 +430,7 @@ class _PersonalSourcePanel extends StatelessWidget {
       icon: Icons.person_outline_rounded,
       eyebrow: 'PERSONAL',
       title: 'Your provider',
-      status: active
-          ? 'Selected'
-          : collapsible
-              ? 'Not needed'
-              : 'Optional override',
+      status: active ? 'Selected' : 'Optional override',
       active: active,
       trailing: collapsible
           ? Icon(
