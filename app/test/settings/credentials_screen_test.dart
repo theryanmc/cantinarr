@@ -102,9 +102,47 @@ void main() {
       'ai_model': 'gpt-4.1-mini',
     });
   });
+
+  testWidgets('TMDB reports the built-in key when no admin token is stored',
+      (tester) async {
+    final adapter = _CredentialsAdapter(tmdbUsingBuiltin: true);
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const CredentialsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The TMDB section sits below the AI block in a lazily built list;
+    // scroll until its badge is actually in the viewport.
+    await tester.scrollUntilVisible(
+      find.text('Built-in key'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Built-in key'), findsOneWidget);
+    expect(
+      find.textContaining('built-in key out of the box'),
+      findsOneWidget,
+    );
+    // Only TMDB has a built-in fallback; the other credentials stay "Not set".
+    expect(find.text('Not set'), findsWidgets);
+  });
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
+  _CredentialsAdapter({this.tmdbUsingBuiltin = false});
+
+  final bool tmdbUsingBuiltin;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -127,6 +165,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
     return ResponseBody.fromString(
       jsonEncode({
         'credentials': const <String, bool>{},
+        'tmdb_using_builtin': tmdbUsingBuiltin,
         'ai': {
           'config': {
             'provider': 'codex',

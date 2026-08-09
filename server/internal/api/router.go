@@ -618,7 +618,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"chaptarr":        false,
 			"media_downloads": false,
 			"ai":              aiAvailable,
-			"tmdb":            creds.IsConfigured(credentials.KeyTMDBAccessToken),
+			"tmdb":            creds.TMDBAvailable(),
 			"trakt":           creds.IsConfigured(credentials.KeyTraktClientID),
 		}
 		for _, inst := range instances {

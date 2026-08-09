@@ -9,10 +9,15 @@ const _aiValidationReceiveTimeout = Duration(seconds: 75);
 
 class CredentialsStatus {
   final Map<String, bool> credentials;
+
+  /// True when TMDB is running on the server's built-in public key rather
+  /// than an admin-supplied token. Older servers never send the field.
+  final bool tmdbUsingBuiltin;
   final AiCredentialConfig ai;
 
   const CredentialsStatus({
     required this.credentials,
+    this.tmdbUsingBuiltin = false,
     required this.ai,
   });
 
@@ -25,6 +30,7 @@ class CredentialsStatus {
     final aiJson = json['ai'];
     return CredentialsStatus(
       credentials: credentials,
+      tmdbUsingBuiltin: json['tmdb_using_builtin'] as bool? ?? false,
       ai: AiCredentialConfig.fromJson(
         aiJson is Map<String, dynamic> ? aiJson : const {},
       ),

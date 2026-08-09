@@ -41,7 +41,7 @@ Discover and request movies, TV shows, and books. Get push notifications. Manage
 ## Why Cantinarr?
 
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.
-- **TMDB + Trakt for discovery** -- The best metadata, images, and trending data, proxied through the server so keys stay off devices. Sonarr's TVDB dependency is invisible.
+- **TMDB + Trakt for discovery** -- The best metadata, images, and trending data, proxied through the server so keys stay off devices -- and TMDB works out of the box on a built-in key, no signup needed. Sonarr's TVDB dependency is invisible.
 - **You choose what "popular" means** -- The headline row on the Movies and TV tabs reads TMDB weekly trending, or Trakt trending (ranked by who is actually watching), or TMDB's all-time popularity ranking. Connect Trakt and the rows switch to it automatically -- no second setting to find. An English-only switch keeps the discovery and recommendation rows to English-language originals; it ships on, and search always finds everything either way.
 - **Automatic ID bridging** -- TMDB-to-TVDB translation with Trakt fallback. The #1 source of failed Sonarr adds, solved.
 - **Books too** -- A Chaptarr (Readarr-API) module with per-format smarts: tap a book's eBook or Audiobook row to request that format; monitored formats read **Requested** until they download; owned-aware search and plain per-format controls stay pinned to the selected, authorized Chaptarr instance. Access is granted per user, and the Books tab opens on a Recently Added row so a book that just landed is visible without searching for it.
@@ -72,7 +72,7 @@ docker compose up -d
 
 Or skip the clone and use the published image: `ghcr.io/windoze95/cantinarr:latest`.
 
-Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Then configure your services (TMDB, Radarr, Sonarr, etc.) from **Settings > Providers & Credentials** and **Settings > Add Instance** in the admin UI. Configure an included AI provider there and grant it per user, or let each person bring a provider under **Settings > AI Access**.
+Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Discovery and search work immediately on the built-in TMDB key. Then connect your services (Radarr, Sonarr, etc.) from **Settings > Providers & Credentials** and **Settings > Add Instance** in the admin UI. Configure an included AI provider there and grant it per user, or let each person bring a provider under **Settings > AI Access**.
 
 ### From Source
 
@@ -132,7 +132,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 
 | Setting | Where | Description |
 |---|---|---|
-| TMDB access token | Admin UI | Required for media discovery and search ([get one here](https://www.themoviedb.org/settings/api)) |
+| TMDB access token | Admin UI | Optional -- discovery and search ship working on Cantinarr's built-in public key; add your own token to use your TMDB account instead ([get one here](https://www.themoviedb.org/settings/api)) |
 | Radarr/Sonarr instances | Admin UI | Add via Settings > Add Instance |
 | Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings -- full walkthrough in [`docs/books-setup.md`](docs/books-setup.md) |
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
@@ -257,6 +257,10 @@ Cantinarr development happens directly by the maintainer, so external pull reque
 ## Support
 
 If Cantinarr is useful to you, you can support its development through [GitHub Sponsors](https://github.com/sponsors/windoze95).
+
+## Attribution
+
+This product uses the TMDB API but is not endorsed or certified by [TMDB](https://www.themoviedb.org/).
 
 ## License
 

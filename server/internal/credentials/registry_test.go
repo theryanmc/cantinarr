@@ -355,3 +355,51 @@ func aiProviderForTest(t *testing.T, id string) AIProviderOption {
 	t.Fatalf("provider %q not found", id)
 	return AIProviderOption{}
 }
+
+func TestTMDBBuiltInDefaultAndOverride(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+
+	// Without the option (every test registry): no token means no client.
+	bare := NewRegistry(database, cipher)
+	if bare.TMDB() != nil || bare.TMDBAvailable() || bare.TMDBUsingBuiltIn() {
+		t.Fatal("registry without a built-in token produced a TMDB client from nothing")
+	}
+
+	registry := NewRegistry(database, cipher, WithDefaultTMDBToken("builtin-public-token"))
+	if registry.TMDB() == nil || !registry.TMDBAvailable() {
+		t.Fatal("built-in token did not produce a TMDB client")
+	}
+	if !registry.TMDBUsingBuiltIn() {
+		t.Fatal("registry running on the built-in token did not report built-in usage")
+	}
+	if registry.IsConfigured(KeyTMDBAccessToken) {
+		t.Fatal("built-in fallback must not report the admin credential as configured")
+	}
+
+	if err := registry.SetCredential(KeyTMDBAccessToken, "admin-token"); err != nil {
+		t.Fatalf("set admin token: %v", err)
+	}
+	registry.Invalidate()
+	if registry.TMDB() == nil || !registry.TMDBAvailable() {
+		t.Fatal("admin token did not produce a TMDB client")
+	}
+	if registry.TMDBUsingBuiltIn() {
+		t.Fatal("admin-supplied token still reported built-in usage")
+	}
+
+	if err := registry.DeleteCredential(KeyTMDBAccessToken); err != nil {
+		t.Fatalf("delete admin token: %v", err)
+	}
+	registry.Invalidate()
+	if registry.TMDB() == nil || !registry.TMDBUsingBuiltIn() {
+		t.Fatal("deleting the admin token did not fall back to the built-in token")
+	}
+}

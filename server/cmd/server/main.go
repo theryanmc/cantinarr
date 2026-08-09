@@ -86,8 +86,9 @@ func main() {
 		}
 	}
 
-	// Credentials registry (lazy-creates TMDB/Trakt clients from DB)
-	creds := credentials.NewRegistry(database, cipher)
+	// Credentials registry (lazy-creates TMDB/Trakt clients from DB). TMDB
+	// falls back to the built-in public token when no admin token is stored.
+	creds := credentials.NewRegistry(database, cipher, credentials.WithDefaultTMDBToken(tmdb.DefaultAccessToken))
 	credHandler := credentials.NewHandler(creds)
 
 	// Auth
