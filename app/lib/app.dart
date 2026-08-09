@@ -575,9 +575,11 @@ class _UpdateBannerBar extends StatelessWidget {
           ),
           IconButton(
             onPressed: onDismiss,
-            icon: const Icon(Icons.close, size: 18),
+            // No tooltip: this bar renders above MaterialApp's Navigator, so
+            // there is no Overlay for one to mount into. The semantic label
+            // keeps the button readable to screen readers.
+            icon: const Icon(Icons.close, size: 18, semanticLabel: 'Dismiss'),
             color: AppTheme.textSecondary,
-            tooltip: 'Dismiss',
             visualDensity: VisualDensity.compact,
           ),
         ],

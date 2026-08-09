@@ -16,6 +16,9 @@ docker compose pull
 docker compose up -d
 ```
 
+(If your checkout predates the image-based compose file, run `git pull` once first so
+`docker compose pull` has a published image to pull instead of a local build.)
+
 ## docker run
 
 ```sh
@@ -50,5 +53,7 @@ your running version against the latest published GitHub release.
 
 ## Turning the check off
 
-The update check is best-effort and only runs on tagged release builds. To disable it
-entirely, set `CANTINARR_DISABLE_UPDATE_CHECK=1` in the container's environment.
+The update check is best-effort and only runs on builds stamped with a comparable
+version (release images, and `latest` images published after the first release). To
+disable it entirely, set `CANTINARR_DISABLE_UPDATE_CHECK=1` in the container's
+environment.
