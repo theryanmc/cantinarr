@@ -49,9 +49,14 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
   void _ensureSelection(AiSettings settings) {
     if (_provider != null) return;
     final configured = settings.personal.config;
+    // Nothing chosen yet: adopt the server-advertised zero-config default
+    // (OpenAI OAuth + the fast tier) before falling back to list order.
+    final fallback = settings.provider(settings.defaultProvider ?? '') != null
+        ? settings.defaultProvider
+        : settings.providers.firstOrNull?.id;
     final provider = configured?.provider.isNotEmpty == true
         ? configured!.provider
-        : settings.providers.firstOrNull?.id;
+        : fallback;
     _provider = provider;
     final option = settings.provider(provider ?? '');
     final configuredModel =
@@ -60,10 +65,17 @@ class _AiAccessScreenState extends ConsumerState<AiAccessScreen> {
         option?.models.any((model) => model.id == configuredModel) != true) {
       _model = _customModel;
       _customModelController.text = configuredModel;
+    } else if (configuredModel.isNotEmpty) {
+      _model = configuredModel;
     } else {
-      _model = configuredModel.isNotEmpty
-          ? configuredModel
-          : option?.models.firstOrNull?.id ?? _customModel;
+      final serverDefaultModel = provider == settings.defaultProvider &&
+              option?.models
+                      .any((model) => model.id == settings.defaultModel) ==
+                  true
+          ? settings.defaultModel
+          : null;
+      _model =
+          serverDefaultModel ?? option?.models.firstOrNull?.id ?? _customModel;
     }
   }
 
