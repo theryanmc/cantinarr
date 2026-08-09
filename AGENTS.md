@@ -28,7 +28,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - iOS signing is manual, via the `IOS_PROVISIONING_PROFILE_BASE64` secret. Changing app capabilities/entitlements invalidates the profile — regenerate it and update the secret.
 - Android release builds happen only in CI too (`playstore.yml`, builds a signed AAB on `main` when Android-relevant `app/**` paths change — web/ios/desktop subdirs, `app/test/**`, `app/tool/**`, markdown files, and store-listing metadata are excluded — and uploads it to the Play **alpha** track by default when `PLAY_SERVICE_ACCOUNT_JSON` is set; manual dispatch can pick `internal`). PRs that touch `app/android/**`, `app/pubspec.yaml`, or the workflow get a build-only check (no upload). No local Android SDK is assumed; let CI prove the build.
 - Android signing uses the `ANDROID_KEYSTORE_*` secrets (the upload keystore lives outside the repo). Store pipelines, secrets, and the one-time console setup are documented in `docs/store-release.md`.
-- Merges to `main` publish `ghcr.io/windoze95/cantinarr` (`latest`; version tags on `v*` releases) once that commit's CI run is green.
+- Merges to `main` publish `ghcr.io/windoze95/cantinarr` (`latest`; version tags on `v*` releases) once that commit's CI run is green. A `v*` tag on a merged `main` commit additionally auto-creates the GitHub Release that the server's update checker and the app's update banner consume. Images are stamped with `git describe` output, so `latest` images know the nearest release they contain and nag admins on release cadence, never per merge.
 - Mention any tests or checks that could not be run.
 
 ## Manual test checklist
