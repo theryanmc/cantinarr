@@ -3,11 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../data/ai_tools_service.dart';
+import '../settings_anchors.dart';
 
 /// Admin screen for enabling/disabling AI assistant tools.
 class AiToolsScreen extends ConsumerStatefulWidget {
-  const AiToolsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const AiToolsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<AiToolsScreen> createState() => _AiToolsScreenState();
@@ -141,6 +146,10 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                       onRefresh: _loadTools,
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
+                        // Build every child while a settings-search highlight
+                        // needs to find its anchor (see SettingsHighlight).
+                        cacheExtent:
+                            SettingsHighlight.cacheExtentFor(widget.highlightId),
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         children: [
                           const Padding(
@@ -151,11 +160,15 @@ class _AiToolsScreenState extends ConsumerState<AiToolsScreen> {
                                   color: AppTheme.textSecondary, fontSize: 13),
                             ),
                           ),
-                          _DebugLoggingTile(
-                            status: _debug,
-                            pending: _debugPending,
-                            onToggle: (enabled) => _setDebug(enabled),
-                            onExtend: () => _setDebug(true),
+                          SettingsHighlight(
+                            anchorId: SettingsAnchors.aiToolsDebugLogging,
+                            highlightId: widget.highlightId,
+                            child: _DebugLoggingTile(
+                              status: _debug,
+                              pending: _debugPending,
+                              onToggle: (enabled) => _setDebug(enabled),
+                              onExtend: () => _setDebug(true),
+                            ),
                           ),
                           const Divider(color: AppTheme.border),
                           if (_tools?.isEmpty ?? false)

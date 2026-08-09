@@ -10,17 +10,22 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
+import '../settings_anchors.dart';
 import 'about_sheet.dart';
 
 /// Simplified settings screen for backend-connected architecture.
 class SettingsScreen extends ConsumerStatefulWidget {
-  const SettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const SettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
@@ -57,6 +62,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       appBar: AppBar(title: const Text('Settings')),
       body: CenteredContent(
           child: ListView(
+        // Build every child while a settings-search highlight needs to find
+        // its anchor (see SettingsHighlight).
+        cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           AppPanel(
@@ -139,17 +147,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             title: connection?.serverName ?? 'Cantinarr',
             subtitle: connection?.serverUrl ?? 'Not connected',
           ),
-          _SettingsTile(
-            icon: Icons.check_circle_outline,
-            title: 'Status',
-            subtitle:
-                auth?.isAuthenticated == true ? 'Connected' : 'Disconnected',
-            trailing: Icon(
-              Icons.circle,
-              size: 12,
-              color: auth?.isAuthenticated == true
-                  ? AppTheme.available
-                  : AppTheme.error,
+          SettingsHighlight(
+            anchorId: SettingsAnchors.rootStatus,
+            highlightId: widget.highlightId,
+            child: _SettingsTile(
+              icon: Icons.check_circle_outline,
+              title: 'Status',
+              subtitle:
+                  auth?.isAuthenticated == true ? 'Connected' : 'Disconnected',
+              trailing: Icon(
+                Icons.circle,
+                size: 12,
+                color: auth?.isAuthenticated == true
+                    ? AppTheme.available
+                    : AppTheme.error,
+              ),
             ),
           ),
 
@@ -219,14 +231,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: 'Problems you reported and how they ended',
               onTap: () => context.push('/issues'),
             ),
-          _SettingsTile(
-            icon: Icons.smart_toy_outlined,
-            title: 'AI Assistant',
-            subtitle: aiAvailable ? 'Available' : 'Not configured',
-            trailing: Icon(
-              Icons.circle,
-              size: 12,
-              color: aiAvailable ? AppTheme.available : AppTheme.unavailable,
+          SettingsHighlight(
+            anchorId: SettingsAnchors.rootAiAssistant,
+            highlightId: widget.highlightId,
+            child: _SettingsTile(
+              icon: Icons.smart_toy_outlined,
+              title: 'AI Assistant',
+              subtitle: aiAvailable ? 'Available' : 'Not configured',
+              trailing: Icon(
+                Icons.circle,
+                size: 12,
+                color: aiAvailable ? AppTheme.available : AppTheme.unavailable,
+              ),
             ),
           ),
           if (user?.isAdmin == true)
@@ -347,17 +363,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (user?.isAdmin == true) ...[
             const SizedBox(height: 16),
             const _SectionHeader(title: 'Needs attention menu'),
-            const AttentionMenuVisibilitySwitch(
-              item: AttentionMenuItem.approvals,
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootAttentionApprovals,
+              highlightId: widget.highlightId,
+              child: const AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.approvals,
+              ),
             ),
-            const AttentionMenuVisibilitySwitch(
-              item: AttentionMenuItem.issues,
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootAttentionIssues,
+              highlightId: widget.highlightId,
+              child: const AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.issues,
+              ),
             ),
-            const AttentionMenuVisibilitySwitch(
-              item: AttentionMenuItem.agentFixes,
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootAttentionAgentFixes,
+              highlightId: widget.highlightId,
+              child: const AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.agentFixes,
+              ),
             ),
-            const AttentionMenuVisibilitySwitch(
-              item: AttentionMenuItem.profileApprovals,
+            SettingsHighlight(
+              anchorId: SettingsAnchors.rootAttentionProfileApprovals,
+              highlightId: widget.highlightId,
+              child: const AttentionMenuVisibilitySwitch(
+                item: AttentionMenuItem.profileApprovals,
+              ),
             ),
           ],
 
@@ -371,19 +403,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             subtitle: 'Choose which push notifications you receive',
             onTap: () => context.push('/settings/notifications'),
           ),
-          SwitchListTile(
-            value: ref.watch(requestNotificationsEnabledProvider),
-            onChanged: (v) =>
-                ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-            activeThumbColor: AppTheme.accent,
-            secondary: const Icon(Icons.notifications_active_outlined,
-                color: AppTheme.textSecondary),
-            title: const Text('Request updates',
-                style: TextStyle(
-                    color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
-            subtitle: const Text(
-                'Show an in-app banner when a request is approved or denied',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          SettingsHighlight(
+            anchorId: SettingsAnchors.rootRequestUpdates,
+            highlightId: widget.highlightId,
+            child: SwitchListTile(
+              value: ref.watch(requestNotificationsEnabledProvider),
+              onChanged: (v) =>
+                  ref.read(requestNotificationsEnabledProvider.notifier).set(v),
+              activeThumbColor: AppTheme.accent,
+              secondary: const Icon(Icons.notifications_active_outlined,
+                  color: AppTheme.textSecondary),
+              title: const Text('Request updates',
+                  style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w500)),
+              subtitle: const Text(
+                  'Show an in-app banner when a request is approved or denied',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            ),
           ),
 
           const SizedBox(height: 16),
@@ -397,19 +435,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               subtitle: 'Install Plex and start watching your requests',
               onTap: () => context.push('/plex-guide'),
             ),
-          SwitchListTile(
-            value: ref.watch(plexGuideEnabledProvider),
-            onChanged: (v) =>
-                ref.read(plexGuideEnabledProvider.notifier).set(v),
-            activeThumbColor: AppTheme.accent,
-            secondary: const Icon(Icons.visibility_outlined,
-                color: AppTheme.textSecondary),
-            title: const Text('Show Plex guide',
-                style: TextStyle(
-                    color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),
-            subtitle: const Text(
-                'Show the Watch on Plex guide in the menu and here',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          SettingsHighlight(
+            anchorId: SettingsAnchors.rootShowPlexGuide,
+            highlightId: widget.highlightId,
+            child: SwitchListTile(
+              value: ref.watch(plexGuideEnabledProvider),
+              onChanged: (v) =>
+                  ref.read(plexGuideEnabledProvider.notifier).set(v),
+              activeThumbColor: AppTheme.accent,
+              secondary: const Icon(Icons.visibility_outlined,
+                  color: AppTheme.textSecondary),
+              title: const Text('Show Plex guide',
+                  style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w500)),
+              subtitle: const Text(
+                  'Show the Watch on Plex guide in the menu and here',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+            ),
           ),
 
           const SizedBox(height: 16),

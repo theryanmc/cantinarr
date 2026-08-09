@@ -6,14 +6,19 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
+import '../settings_anchors.dart';
 
 /// Admin screen for managing API credentials (write-only).
 class CredentialsScreen extends ConsumerStatefulWidget {
-  const CredentialsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const CredentialsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<CredentialsScreen> createState() => _CredentialsScreenState();
@@ -266,6 +271,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
   }
 
+  /// Wraps [child] with the settings-search highlight for [anchorId].
+  Widget _anchor(String anchorId, Widget child) => SettingsHighlight(
+        anchorId: anchorId,
+        highlightId: widget.highlightId,
+        child: child,
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -289,6 +301,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                       ),
                     )
                   : ListView(
+                      // Build every child while a settings-search highlight
+                      // needs to find its anchor (see SettingsHighlight).
+                      cacheExtent:
+                          SettingsHighlight.cacheExtentFor(widget.highlightId),
                       padding: const EdgeInsets.all(16),
                       children: [
                         const Text(
@@ -299,40 +315,46 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               color: AppTheme.textSecondary, fontSize: 13),
                         ),
                         const SizedBox(height: 24),
-                        _AISelectionSection(
-                          providers: _status?.ai.providers ?? const [],
-                          selectedProvider: _selectedProvider,
-                          selectedModel: _selectedModel,
-                          customModelValue: _customModelValue,
-                          customModelController: _customModelController,
-                          isSelectedProviderConfigured: _status?.isConfigured(
-                                _providerFor(
-                                      _selectedProvider,
-                                      _status?.ai.providers ?? const [],
-                                    )?.credentialKey ??
-                                    'anthropic_key',
-                              ) ??
-                              false,
-                          selectedProviderAuthType: _providerFor(
-                                _selectedProvider,
-                                _status?.ai.providers ?? const [],
-                              )?.authType ??
-                              'api_key',
-                          onProviderChanged: _selectProvider,
-                          onModelChanged: (value) =>
-                              setState(() => _selectedModel = value),
+                        _anchor(
+                          SettingsAnchors.credentialsAiModel,
+                          _AISelectionSection(
+                            providers: _status?.ai.providers ?? const [],
+                            selectedProvider: _selectedProvider,
+                            selectedModel: _selectedModel,
+                            customModelValue: _customModelValue,
+                            customModelController: _customModelController,
+                            isSelectedProviderConfigured: _status?.isConfigured(
+                                  _providerFor(
+                                        _selectedProvider,
+                                        _status?.ai.providers ?? const [],
+                                      )?.credentialKey ??
+                                      'anthropic_key',
+                                ) ??
+                                false,
+                            selectedProviderAuthType: _providerFor(
+                                  _selectedProvider,
+                                  _status?.ai.providers ?? const [],
+                                )?.authType ??
+                                'api_key',
+                            onProviderChanged: _selectProvider,
+                            onModelChanged: (value) =>
+                                setState(() => _selectedModel = value),
+                          ),
                         ),
                         const SizedBox(height: 14),
-                        _AIHealthCheckSection(
-                          enabled: _healthCheckEnabled,
-                          intervalHours:
-                              _status?.ai.healthCheckIntervalHours ?? 24,
-                          lastCheckedAt: _status?.ai.healthLastCheckedAt,
-                          onChanged: _isSaving
-                              ? null
-                              : (value) => setState(
-                                    () => _healthCheckEnabled = value,
-                                  ),
+                        _anchor(
+                          SettingsAnchors.credentialsHealthCheck,
+                          _AIHealthCheckSection(
+                            enabled: _healthCheckEnabled,
+                            intervalHours:
+                                _status?.ai.healthCheckIntervalHours ?? 24,
+                            lastCheckedAt: _status?.ai.healthLastCheckedAt,
+                            onChanged: _isSaving
+                                ? null
+                                : (value) => setState(
+                                      () => _healthCheckEnabled = value,
+                                    ),
+                          ),
                         ),
                         const SizedBox(height: 14),
                         if (_selectedProvider == 'codex')
@@ -364,74 +386,90 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 _selectedProvider,
                           ),
                         const SizedBox(height: 24),
-                        _CredentialSection(
-                          title: 'TMDB',
-                          description:
-                              'Discovery and search run on Cantinarr\'s '
-                              'built-in key out of the box. Add your own '
-                              'access token to use your TMDB account instead.',
-                          isConfigured:
-                              _status?.isConfigured('tmdb_access_token') ??
-                                  false,
-                          builtinActive: _status?.tmdbUsingBuiltin ?? false,
-                          controller: _tmdbController,
-                          hint: 'TMDB access token',
-                          onDelete: () => _deleteCredential(
-                            'tmdb_access_token',
-                            'TMDB',
-                            message: 'Your token will be removed and '
-                                'Cantinarr\'s built-in key takes over.',
+                        _anchor(
+                          SettingsAnchors.credentialsTmdb,
+                          _CredentialSection(
+                            title: 'TMDB',
+                            description:
+                                'Discovery and search run on Cantinarr\'s '
+                                'built-in key out of the box. Add your own '
+                                'access token to use your TMDB account instead.',
+                            isConfigured:
+                                _status?.isConfigured('tmdb_access_token') ??
+                                    false,
+                            builtinActive: _status?.tmdbUsingBuiltin ?? false,
+                            controller: _tmdbController,
+                            hint: 'TMDB access token',
+                            onDelete: () => _deleteCredential(
+                              'tmdb_access_token',
+                              'TMDB',
+                              message: 'Your token will be removed and '
+                                  'Cantinarr\'s built-in key takes over.',
+                            ),
                           ),
                         ),
                         const SizedBox(height: 20),
-                        _CredentialSection(
-                          title: 'Anthropic (AI)',
-                          description:
-                              'Shared Claude API key for included AI usage',
-                          isConfigured:
-                              _status?.isConfigured('anthropic_key') ?? false,
-                          controller: _anthropicController,
-                          hint: 'Anthropic API key',
-                          onDelete: () =>
-                              _deleteCredential('anthropic_key', 'Anthropic'),
+                        _anchor(
+                          SettingsAnchors.credentialsAnthropic,
+                          _CredentialSection(
+                            title: 'Anthropic (AI)',
+                            description:
+                                'Shared Claude API key for included AI usage',
+                            isConfigured:
+                                _status?.isConfigured('anthropic_key') ?? false,
+                            controller: _anthropicController,
+                            hint: 'Anthropic API key',
+                            onDelete: () =>
+                                _deleteCredential('anthropic_key', 'Anthropic'),
+                          ),
                         ),
                         if (_status?.ai.providers.isNotEmpty ?? false) ...[
                           const SizedBox(height: 20),
-                          _CredentialSection(
-                            title: 'OpenAI (AI)',
-                            description:
-                                'Shared OpenAI API key for included AI usage',
-                            isConfigured:
-                                _status?.isConfigured('openai_key') ?? false,
-                            controller: _openAIController,
-                            hint: 'OpenAI API key',
-                            onDelete: () =>
-                                _deleteCredential('openai_key', 'OpenAI'),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAi,
+                            _CredentialSection(
+                              title: 'OpenAI (AI)',
+                              description:
+                                  'Shared OpenAI API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('openai_key') ?? false,
+                              controller: _openAIController,
+                              hint: 'OpenAI API key',
+                              onDelete: () =>
+                                  _deleteCredential('openai_key', 'OpenAI'),
+                            ),
                           ),
                           const SizedBox(height: 20),
-                          _CredentialSection(
-                            title: 'Google Gemini (AI)',
-                            description:
-                                'Shared Gemini API key for included AI usage',
-                            isConfigured:
-                                _status?.isConfigured('gemini_key') ?? false,
-                            controller: _geminiController,
-                            hint: 'Gemini API key',
-                            onDelete: () => _deleteCredential(
-                                'gemini_key', 'Google Gemini'),
+                          _anchor(
+                            SettingsAnchors.credentialsGemini,
+                            _CredentialSection(
+                              title: 'Google Gemini (AI)',
+                              description:
+                                  'Shared Gemini API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('gemini_key') ?? false,
+                              controller: _geminiController,
+                              hint: 'Gemini API key',
+                              onDelete: () => _deleteCredential(
+                                  'gemini_key', 'Google Gemini'),
+                            ),
                           ),
                         ],
                         const SizedBox(height: 20),
-                        _CredentialSection(
-                          title: 'Trakt',
-                          description:
-                              'Enhances discovery with trending and popular lists',
-                          isConfigured:
-                              _status?.isConfigured('trakt_client_id') ?? false,
-                          controller: _traktIdController,
-                          hint: 'Trakt client ID',
-                          onDelete: () =>
-                              _deleteCredential('trakt_client_id', 'Trakt'),
+                        _anchor(
+                          SettingsAnchors.credentialsTrakt,
+                          _CredentialSection(
+                            title: 'Trakt',
+                            description:
+                                'Enhances discovery with trending and popular lists',
+                            isConfigured:
+                                _status?.isConfigured('trakt_client_id') ??
+                                    false,
+                            controller: _traktIdController,
+                            hint: 'Trakt client ID',
+                            onDelete: () =>
+                                _deleteCredential('trakt_client_id', 'Trakt'),
+                          ),
                         ),
                         const SizedBox(height: 32),
                         SizedBox(

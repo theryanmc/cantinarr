@@ -3,13 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/settings_highlight.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../data/discovery_settings_service.dart';
+import '../settings_anchors.dart';
 
 /// Admin screen for choosing which feed backs the headline discovery rows and
 /// whether those rows drop non-English titles.
 class DiscoverySettingsScreen extends ConsumerStatefulWidget {
-  const DiscoverySettingsScreen({super.key});
+  /// Settings-search anchor to scroll to and flash on arrival.
+  final String? highlightId;
+
+  const DiscoverySettingsScreen({super.key, this.highlightId});
 
   @override
   ConsumerState<DiscoverySettingsScreen> createState() =>
@@ -169,6 +174,9 @@ class _DiscoverySettingsScreenState
 
   Widget _buildBody(DiscoverySettings edited) {
     return ListView(
+      // Build every child while a settings-search highlight needs to find
+      // its anchor (see SettingsHighlight).
+      cacheExtent: SettingsHighlight.cacheExtentFor(widget.highlightId),
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         const Padding(
@@ -184,20 +192,24 @@ class _DiscoverySettingsScreenState
         for (final source in edited.sources)
           _sourceTile(edited, source),
         const _SectionLabel('Language'),
-        SwitchListTile(
-          value: edited.englishOnly,
-          activeThumbColor: AppTheme.accent,
-          onChanged: (v) =>
-              setState(() => _edited = edited.copyWith(englishOnly: v)),
-          title: const Text(
-            'Only show English-language titles',
-            style: TextStyle(
-                color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
-          ),
-          subtitle: const Text(
-            'Hides titles whose original language is not English from the '
-            'discovery and recommendation rows. Search still finds everything.',
-            style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        SettingsHighlight(
+          anchorId: SettingsAnchors.discoveryEnglishOnly,
+          highlightId: widget.highlightId,
+          child: SwitchListTile(
+            value: edited.englishOnly,
+            activeThumbColor: AppTheme.accent,
+            onChanged: (v) =>
+                setState(() => _edited = edited.copyWith(englishOnly: v)),
+            title: const Text(
+              'Only show English-language titles',
+              style: TextStyle(
+                  color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+            ),
+            subtitle: const Text(
+              'Hides titles whose original language is not English from the '
+              'discovery and recommendation rows. Search still finds everything.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
           ),
         ),
         Padding(
