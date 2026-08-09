@@ -215,6 +215,16 @@ class _StubAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path.contains('/requests')) {
       body = {'requests': []};
+    } else if (path.endsWith('/api/admin/request-settings')) {
+      // Defaults-shaped so the Request Defaults screen (a settings-search
+      // deep-link target) renders its controls instead of the error state.
+      body = {
+        'settings': <String, dynamic>{},
+        'radarr_profiles': <Object>[],
+        'sonarr_profiles': <Object>[],
+      };
+    } else if (path.endsWith('/api/notifications/preferences')) {
+      body = <String, dynamic>{};
     } else if (path.endsWith('/api/ai/settings')) {
       // Included AI active so the AI Access screen shows its covered state.
       body = {
