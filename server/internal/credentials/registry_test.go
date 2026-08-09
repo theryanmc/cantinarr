@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"log"
@@ -354,6 +355,46 @@ func aiProviderForTest(t *testing.T, id string) AIProviderOption {
 	}
 	t.Fatalf("provider %q not found", id)
 	return AIProviderOption{}
+}
+
+func TestAIConfigUntouchedInstallDefaultsToSharedOAuth(t *testing.T) {
+	t.Setenv("CANTINARR_AI_PROVIDER", "")
+	t.Setenv("CANTINARR_AI_MODEL", "")
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x47}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(database, cipher)
+
+	if registry.AISelectionConfigured() {
+		t.Fatal("untouched install reported selection configured")
+	}
+	config := registry.GetAIConfig()
+	if config.Provider != AIProviderCodex || config.Model != DefaultSharedAIModel {
+		t.Fatalf("untouched config = %+v, want %s/%s", config, AIProviderCodex, DefaultSharedAIModel)
+	}
+	profile, err := registry.LoadSharedAIProfile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Config.Provider != AIProviderCodex || profile.Config.Model != DefaultSharedAIModel {
+		t.Fatalf("untouched shared profile = %+v", profile.Config)
+	}
+
+	// A stored API key alone is not a selection: the derived default stays on
+	// the OAuth provider until an admin actually picks one.
+	if err := registry.SetCredential(KeyAnthropicKey, "stored-but-unselected-key"); err != nil {
+		t.Fatal(err)
+	}
+	config = registry.GetAIConfig()
+	if config.Provider != AIProviderCodex || config.Model != DefaultSharedAIModel {
+		t.Fatalf("key-without-selection config = %+v, want %s/%s", config, AIProviderCodex, DefaultSharedAIModel)
+	}
 }
 
 func TestTMDBBuiltInDefaultAndOverride(t *testing.T) {

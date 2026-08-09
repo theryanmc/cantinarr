@@ -335,6 +335,11 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 		}
 		secretSentinels = append(secretSentinels, value)
 	}
+	// A stored key alone is not a selection; pick the API-key provider
+	// explicitly so services.ai reflects a configured install.
+	if err := creds.SetAIConfig(credentials.AIProviderAnthropic, credentials.DefaultAIModel(credentials.AIProviderAnthropic)); err != nil {
+		t.Fatalf("select AI provider: %v", err)
+	}
 
 	cfg := &config.Config{
 		JWTSecret:         "config-jwt-secret",
