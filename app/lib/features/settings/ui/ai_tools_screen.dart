@@ -217,12 +217,16 @@ class _DebugLoggingTile extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppTheme.surfaceVariant,
+      // A Material rather than a decorated Container: the switch tile paints
+      // its ink on the nearest Material, and a colored DecoratedBox between
+      // them would swallow it (newer Flutters assert on that).
+      child: Material(
+        color: AppTheme.surfaceVariant,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.border),
+          side: const BorderSide(color: AppTheme.border),
         ),
+        clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             SwitchListTile(
