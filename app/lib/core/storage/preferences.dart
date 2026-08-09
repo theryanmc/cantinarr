@@ -148,28 +148,49 @@ final profileApprovalsMenuOnlyWhenPendingProvider =
 );
 
 const _dismissedUpdateVersionKey = 'dismissed_update_version';
+const _dismissedAppSkewPairKey = 'dismissed_app_skew_pair';
+const _dismissedServerSkewPairKey = 'dismissed_server_skew_pair';
 
-/// The server version the admin last dismissed the "update available" banner
-/// for. Stored locally per device; the banner reappears once a newer version
-/// than this is offered, so a dismissal only silences the release it was for.
-class DismissedUpdateNotifier extends StateNotifier<String?> {
-  DismissedUpdateNotifier() : super(null) {
+/// A device-local "don't show this exact notice again" slot: one string
+/// holding the identity of the dismissed notice (a release version, or a
+/// `version|floor` pair). The notice resurfaces as soon as its identity
+/// changes, so a dismissal only ever silences the thing it was for.
+class DismissedNoticeNotifier extends StateNotifier<String?> {
+  DismissedNoticeNotifier(this._key) : super(null) {
     _load();
   }
 
+  final String _key;
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getString(_dismissedUpdateVersionKey);
+    state = prefs.getString(_key);
   }
 
-  Future<void> set(String version) async {
-    state = version;
+  Future<void> set(String value) async {
+    state = value;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_dismissedUpdateVersionKey, version);
+    await prefs.setString(_key, value);
   }
 }
 
+/// The server version the admin last dismissed the "update available" banner
+/// for; the banner reappears once a newer version is offered.
 final dismissedUpdateVersionProvider =
-    StateNotifierProvider<DismissedUpdateNotifier, String?>(
-  (ref) => DismissedUpdateNotifier(),
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedUpdateVersionKey),
+);
+
+/// The `appVersion|serverFloor` pair whose "update this app" skew warning was
+/// dismissed; either side changing brings the warning back.
+final dismissedAppSkewPairProvider =
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedAppSkewPairKey),
+);
+
+/// The `serverVersion|appFloor` pair whose "update the server" skew warning
+/// was dismissed; either side changing brings the warning back.
+final dismissedServerSkewPairProvider =
+    StateNotifierProvider<DismissedNoticeNotifier, String?>(
+  (ref) => DismissedNoticeNotifier(_dismissedServerSkewPairKey),
 );
