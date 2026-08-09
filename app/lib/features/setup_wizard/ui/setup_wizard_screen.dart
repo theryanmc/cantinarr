@@ -50,6 +50,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return '/settings/discovery';
       case 'plex_invites':
         return '/settings/plex';
+      case 'remediation':
+        return '/settings/ai-remediation';
       default:
         return null; // push = server env var; unknown keys = newer server
     }
@@ -81,6 +83,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.menu_book;
       case 'ai':
         return Icons.smart_toy_outlined;
+      case 'remediation':
+        return Icons.auto_fix_high_outlined;
       default:
         return Icons.tune;
     }
