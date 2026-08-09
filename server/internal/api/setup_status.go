@@ -101,7 +101,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "tmdb",
 			Title:       "Discovery (TMDB)",
-			Description: "Browsing, search, and artwork are powered by TMDB.",
+			Description: "Browsing, search, and artwork are powered by TMDB. The built-in key works out of the box; add your own under Providers & Credentials to use your account instead.",
 			Configured:  f.TMDB,
 		},
 		{
@@ -201,7 +201,7 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 				}
 			}
 		}
-		facts.TMDB = creds.IsConfigured(credentials.KeyTMDBAccessToken)
+		facts.TMDB = creds.TMDBAvailable()
 		facts.Trakt = creds.IsConfigured(credentials.KeyTraktClientID)
 		facts.AI = creds.IsAIConfigured()
 		if remediationSvc != nil {

@@ -377,7 +377,7 @@ func truncateLog(value string, max int) string {
 // configuredServices reports which backends are available, for system-prompt context.
 func (h *Handler) configuredServices() []string {
 	var services []string
-	if h.creds.IsConfigured(credentials.KeyTMDBAccessToken) {
+	if h.creds.TMDBAvailable() {
 		services = append(services, "TMDB (discovery)")
 	}
 	if h.creds.IsConfigured(credentials.KeyTraktClientID) {

@@ -165,12 +165,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     }
   }
 
-  Future<void> _deleteCredential(String key, String label) async {
+  Future<void> _deleteCredential(String key, String label,
+      {String? message}) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Remove $label?'),
-        content: Text('This will disable the $label integration.'),
+        content: Text(message ?? 'This will disable the $label integration.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -366,14 +367,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                         _CredentialSection(
                           title: 'TMDB',
                           description:
-                              'Required for media discovery and search',
+                              'Discovery and search run on Cantinarr\'s '
+                              'built-in key out of the box. Add your own '
+                              'access token to use your TMDB account instead.',
                           isConfigured:
                               _status?.isConfigured('tmdb_access_token') ??
                                   false,
+                          builtinActive: _status?.tmdbUsingBuiltin ?? false,
                           controller: _tmdbController,
                           hint: 'TMDB access token',
-                          onDelete: () =>
-                              _deleteCredential('tmdb_access_token', 'TMDB'),
+                          onDelete: () => _deleteCredential(
+                            'tmdb_access_token',
+                            'TMDB',
+                            message: 'Your token will be removed and '
+                                'Cantinarr\'s built-in key takes over.',
+                          ),
                         ),
                         const SizedBox(height: 20),
                         _CredentialSection(
@@ -802,6 +810,10 @@ class _CredentialSection extends StatelessWidget {
   final String title;
   final String description;
   final bool isConfigured;
+
+  /// True when the integration is running on a built-in public key instead of
+  /// an admin credential — working, but nothing stored to delete.
+  final bool builtinActive;
   final TextEditingController controller;
   final String hint;
   final VoidCallback onDelete;
@@ -810,6 +822,7 @@ class _CredentialSection extends StatelessWidget {
     required this.title,
     required this.description,
     required this.isConfigured,
+    this.builtinActive = false,
     required this.controller,
     required this.hint,
     required this.onDelete,
@@ -835,16 +848,19 @@ class _CredentialSection extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                color: isConfigured
+                color: isConfigured || builtinActive
                     ? AppTheme.available.withValues(alpha: 0.15)
                     : AppTheme.unavailable.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                isConfigured ? 'Configured' : 'Not set',
+                isConfigured
+                    ? 'Configured'
+                    : (builtinActive ? 'Built-in key' : 'Not set'),
                 style: TextStyle(
-                  color:
-                      isConfigured ? AppTheme.available : AppTheme.unavailable,
+                  color: isConfigured || builtinActive
+                      ? AppTheme.available
+                      : AppTheme.unavailable,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),

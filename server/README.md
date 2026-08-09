@@ -76,7 +76,7 @@ go build -o cantinarr ./cmd/server
 
 ## Configuration
 
-Service credentials (TMDB, Trakt), the admin's included AI profile, and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Tautulli) are managed through the admin UI. The included AI profile and each user's optional personal override can use Anthropic/OpenAI/Gemini API keys or OpenAI OAuth backed by a ChatGPT account. No environment variables are needed for credentials.
+Service credentials (TMDB, Trakt), the admin's included AI profile, and all service instances (Radarr, Sonarr, Chaptarr, SABnzbd, qBittorrent, NZBGet, Transmission, Tautulli) are managed through the admin UI. TMDB needs no credential to start: the server ships a built-in public read token (`internal/tmdb/default_token.go` -- deliberately public, the Overseerr model; TMDB throttles per source IP, not per key), and a stored admin token overrides it. `GET /api/admin/credentials` reports the fallback as `tmdb_using_builtin`. The included AI profile and each user's optional personal override can use Anthropic/OpenAI/Gemini API keys or OpenAI OAuth backed by a ChatGPT account. No environment variables are needed for credentials.
 
 Optional env vars for deployment tuning (a `.env` file next to the binary is auto-loaded):
 
@@ -305,7 +305,7 @@ Resolution is deterministic: a personal selection row is the explicit override; 
 
 ### Included AI profile (admin)
 ```
-GET|PUT /api/admin/credentials                  # shared profile + daily-check state; AI writes test before commit
+GET|PUT /api/admin/credentials                  # shared profile + daily-check state (incl. tmdb_using_builtin); AI writes test before commit
 DELETE  /api/admin/credentials/{key}            # erase one shared API key
 GET     /api/admin/ai/codex/status              # shared OpenAI OAuth status + admin-only usage metadata
 POST    /api/admin/ai/codex/device/begin        # begin shared OpenAI OAuth device authorization

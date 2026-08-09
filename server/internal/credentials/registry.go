@@ -198,15 +198,35 @@ type Registry struct {
 	db     *sql.DB
 	cipher *secrets.Cipher
 
+	// defaultTMDBToken is the built-in public TMDB token
+	// (tmdb.DefaultAccessToken in production). Empty means no fallback: TMDB
+	// stays unconfigured until an admin stores a token.
+	defaultTMDBToken string
+
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
 	cachedTrakt *trakt.Client
 	loaded      bool // true once we've attempted to load from DB
 }
 
+// Option customizes a Registry at construction.
+type Option func(*Registry)
+
+// WithDefaultTMDBToken supplies the built-in public TMDB token used whenever
+// no admin-supplied token is stored. Only the server binary wires it, so
+// registries built in tests stay TMDB-less (and network-less) unless a test
+// opts in.
+func WithDefaultTMDBToken(token string) Option {
+	return func(r *Registry) { r.defaultTMDBToken = token }
+}
+
 // NewRegistry creates a new credentials registry.
-func NewRegistry(db *sql.DB, cipher *secrets.Cipher) *Registry {
-	return &Registry{db: db, cipher: cipher}
+func NewRegistry(db *sql.DB, cipher *secrets.Cipher, opts ...Option) *Registry {
+	r := &Registry{db: db, cipher: cipher}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // TMDB returns the cached TMDB client, creating it lazily from the DB credential.
@@ -227,6 +247,18 @@ func (r *Registry) TMDB() *tmdb.Client {
 	}
 	r.load()
 	return r.cachedTMDB
+}
+
+// TMDBAvailable reports whether TMDB calls can be made at all — via an
+// admin-supplied token or the built-in public one.
+func (r *Registry) TMDBAvailable() bool {
+	return r.TMDB() != nil
+}
+
+// TMDBUsingBuiltIn reports whether TMDB is running on the built-in public
+// token rather than an admin-supplied credential.
+func (r *Registry) TMDBUsingBuiltIn() bool {
+	return r.defaultTMDBToken != "" && !r.IsConfigured(KeyTMDBAccessToken)
 }
 
 // Trakt returns the cached Trakt client, creating it lazily from the DB credential.
@@ -440,6 +472,10 @@ func (r *Registry) load() {
 
 	if token := r.getSettingLocked(KeyTMDBAccessToken); token != "" {
 		r.cachedTMDB = tmdb.NewClient(token)
+	} else if r.defaultTMDBToken != "" {
+		// No admin token stored (or it failed to decrypt): run on the built-in
+		// public token so discovery works without any TMDB signup.
+		r.cachedTMDB = tmdb.NewClient(r.defaultTMDBToken)
 	}
 	if clientID := r.getSettingLocked(KeyTraktClientID); clientID != "" {
 		r.cachedTrakt = trakt.NewClient(clientID)
