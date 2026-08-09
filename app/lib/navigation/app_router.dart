@@ -464,13 +464,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: SettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: SettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: AiAccessScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiAccessScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/chatgpt',
@@ -487,13 +487,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/credentials',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: CredentialsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: CredentialsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai-tools',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: AiToolsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiToolsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/change-history',
@@ -586,8 +586,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/ai-remediation',
-            builder: (_, __) => const AppAmbientBackground(
-                child: AiRemediationSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: AiRemediationSettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/agent-approval-rules',
@@ -596,13 +597,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/request-settings',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: RequestSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: RequestSettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/discovery',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: DiscoverySettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: DiscoverySettingsScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/devices',
@@ -611,13 +614,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/plex',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: PlexSettingsScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child:
+                    PlexSettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/notifications',
-            builder: (_, __) => const AppAmbientBackground(
-                child: NotificationPreferencesScreen()),
+            builder: (_, state) => AppAmbientBackground(
+                child: NotificationPreferencesScreen(
+                    highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/passkeys',
@@ -671,6 +676,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+/// The settings-search anchor requested via `?highlight=<anchorId>`, passed
+/// through to screens that support scroll-to-and-flash on arrival.
+String? _highlightParam(GoRouterState state) =>
+    state.uri.queryParameters['highlight'];
 
 bool _isInternalReturnLocation(Uri uri) {
   return !uri.hasScheme &&
