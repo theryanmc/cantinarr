@@ -432,6 +432,10 @@ func NewRouter(
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
+				// Live webhook state, derived from the arr itself on every
+				// call — a stored flag would drift the moment an admin edited
+				// the arr's Connect list.
+				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only

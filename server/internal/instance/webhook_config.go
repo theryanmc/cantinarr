@@ -96,6 +96,97 @@ func (h *Handler) ConfigureWebhook(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Webhook status states, in the vocabulary the app renders. "stale" means a
+// managed record exists but targets a different callback than the server now
+// expects; "credential_missing" means the record looks right but this server
+// holds no accepted callback credential (e.g. a restored database), so
+// deliveries would be rejected until the webhook is reconfigured.
+const (
+	webhookStateOK                = "ok"
+	webhookStateMissing           = "missing"
+	webhookStateStale             = "stale"
+	webhookStateCredentialMissing = "credential_missing"
+	webhookStateNoPublicURL       = "no_public_url"
+	webhookStateUnsupported       = "unsupported"
+)
+
+// WebhookStatus reports whether instant updates are actually on for this
+// instance. Admins edit the arr's Connect list directly, so the answer is
+// derived live from the arr on every call — never from a stored flag, which
+// would keep claiming "configured" after the record was deleted or the public
+// URL changed. An arr that cannot be read is a 502, not "missing": blindness
+// and absence must never render the same.
+func (h *Handler) WebhookStatus(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	inst, err := h.store.Get(instanceID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to get instance"}`, http.StatusInternalServerError)
+		return
+	}
+	if inst == nil {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	if !SupportsManagedWebhook(inst.ServiceType) {
+		writeWebhookStatus(w, false, webhookStateUnsupported)
+		return
+	}
+
+	callbackURL, err := h.arrWebhookCallbackURL(r, instanceID)
+	if err != nil {
+		writeWebhookStatus(w, false, webhookStateNoPublicURL)
+		return
+	}
+
+	client := newArrConfigurationClient(inst.URL, inst.APIKey)
+	base := "/api/" + arrNotificationAPIVersion(inst.ServiceType) + "/notification"
+	var existing []map[string]any
+	if err := client.doJSON(r.Context(), http.MethodGet, base, nil, &existing); err != nil {
+		log.Printf("instance: webhook status for %s failed: %v", instanceID, err)
+		errorBody, encodeErr := json.Marshal(map[string]string{
+			"error": fmt.Sprintf("could not read the %s notification settings: %s", inst.ServiceType, err),
+		})
+		if encodeErr != nil {
+			errorBody = []byte(`{"error":"could not read the notification settings"}`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write(errorBody)
+		return
+	}
+
+	current := findManagedWebhook(existing, callbackURL)
+	if current == nil {
+		writeWebhookStatus(w, false, webhookStateMissing)
+		return
+	}
+	if configuredURL, ok := webhookResourceFieldString(current, "url"); !ok || configuredURL != callbackURL {
+		writeWebhookStatus(w, false, webhookStateStale)
+		return
+	}
+	// The arr never returns the password it holds in a comparable way, but a
+	// server with no accepted credential at all would reject every delivery.
+	tokens, err := h.store.WebhookTokens(instanceID)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read webhook credentials"}`, http.StatusInternalServerError)
+		return
+	}
+	if len(tokens) == 0 {
+		writeWebhookStatus(w, false, webhookStateCredentialMissing)
+		return
+	}
+	writeWebhookStatus(w, true, webhookStateOK)
+}
+
+func writeWebhookStatus(w http.ResponseWriter, configured bool, state string) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"supported":  state != webhookStateUnsupported,
+		"configured": configured,
+		"state":      state,
+	})
+}
+
 func (h *Handler) arrWebhookCallbackURL(r *http.Request, instanceID string) (string, error) {
 	if h.publicURL != "" {
 		base, err := url.Parse(h.publicURL)
