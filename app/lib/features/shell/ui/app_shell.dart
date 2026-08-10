@@ -876,34 +876,37 @@ class _AppShellState extends ConsumerState<AppShell>
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
             false;
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
-    final approvalsLoaded = ref.watch(pendingApprovalsLoadedProvider);
+    final approvalsStale = ref.watch(pendingApprovalsStaleProvider);
     final openIssues = ref.watch(openIssuesProvider);
     final activeIssues = ref.watch(activeIssuesProvider);
-    final issuesLoaded = ref.watch(issueQueueCountsLoadedProvider);
+    final issuesStale = ref.watch(issueQueueCountsStaleProvider);
     final pendingAgentActions = ref.watch(pendingAgentActionsProvider);
-    final agentActionsLoaded = ref.watch(pendingAgentActionsLoadedProvider);
+    final agentActionsStale = ref.watch(pendingAgentActionsStaleProvider);
     final plexInvitesWaiting = ref.watch(plexInvitesWaitingProvider);
     // Setup reminder: unconfigured-feature count, shown while the admin
     // hasn't muted it from the checklist screen.
     final setupRemaining = ref.watch(setupStatusProvider)?.remaining ?? 0;
     final showSetupReminder =
         setupRemaining > 0 && ref.watch(setupReminderEnabledProvider);
+    // Conditional entries assume an in-flight first load will land empty and
+    // stay hidden — flashing every entry on cold start taught nothing. They
+    // fail open only when a queue is genuinely unknowable (refresh failed).
     final showApprovals = !ref.watch(approvalsMenuOnlyWhenPendingProvider) ||
-        !approvalsLoaded ||
+        approvalsStale ||
         pendingApprovals > 0;
     final showIssues = !ref.watch(issuesMenuOnlyWhenActiveProvider) ||
-        !issuesLoaded ||
+        issuesStale ||
         activeIssues > 0;
     final showAgentFixes =
         !ref.watch(agentFixesMenuOnlyWhenAwaitingReviewProvider) ||
-            !agentActionsLoaded ||
+            agentActionsStale ||
             pendingAgentActions > 0;
     final pendingProfileProposals = ref.watch(pendingProfileProposalsProvider);
-    final profileProposalsLoaded =
-        ref.watch(pendingProfileProposalsLoadedProvider);
+    final profileProposalsStale =
+        ref.watch(pendingProfileProposalsStaleProvider);
     final showProfileApprovals =
         !ref.watch(profileApprovalsMenuOnlyWhenPendingProvider) ||
-            !profileProposalsLoaded ||
+            profileProposalsStale ||
             pendingProfileProposals > 0;
     final showNeedsAttentionSection = showApprovals ||
         showIssues ||
