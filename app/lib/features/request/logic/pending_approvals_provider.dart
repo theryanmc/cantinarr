@@ -35,13 +35,17 @@ class PendingApprovalsNotifier extends StateNotifier<int> {
     if (!force && admin == _isAdmin) return;
     _refreshEpoch++;
     _isAdmin = admin;
-    _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
     _sub?.cancel();
     _sub = null;
     if (!admin) {
+      _ref.read(pendingApprovalsLoadedProvider.notifier).state = false;
       _set(0);
       return;
     }
+    // An admin-to-admin re-bind (token refresh, resume, client swap) keeps
+    // the last count authoritative while refresh() re-reads it. Resetting
+    // the loaded flag here would flash every conditional menu entry
+    // fail-open on each auth emission.
     refresh();
     _sub = _ref
         .read(realtimeEventsProvider)
