@@ -33,11 +33,11 @@ Pin from either side: the instance editor, or **Settings → Users** for one per
 
 Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
 
-## 4. Turn on instant updates
+## 4. Check instant updates
 
-Open the instance and tap **Configure instant updates**. The server rotates a per-instance credential and installs its own authenticated webhook in Chaptarr; the secret moves server-to-server and never reaches a device.
+Adding the instance already turned these on: the server rotates a per-instance credential and installs its own authenticated webhook in Chaptarr the moment the instance is created; the secret moves server-to-server and never reaches a device. The create confirmation says whether it worked.
 
-Set `CANTINARR_PUBLIC_URL` first if Cantinarr sits behind a reverse proxy. The callback has to be resolvable **from inside the Chaptarr container**, so in Docker or Kubernetes a cluster-internal origin like `http://cantinarr:8585` is usually the right value.
+If it couldn't — most commonly because the callback wasn't reachable — open the instance: the **Instant updates** section shows the live state, read from Chaptarr itself, and **Configure instant updates** re-runs the install. Set `CANTINARR_PUBLIC_URL` first if Cantinarr sits behind a reverse proxy. The callback has to be resolvable **from inside the Chaptarr container**, so in Docker or Kubernetes a cluster-internal origin like `http://cantinarr:8585` is usually the right value.
 
 Without this, Cantinarr falls back to polling, and a fast ebook grab can land and be announced late — or, if it imports and finishes between two polls, look like nothing happened.
 
