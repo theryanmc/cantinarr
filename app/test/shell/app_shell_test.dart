@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -577,6 +578,28 @@ void main() {
     expect(find.text('Profile approvals'), findsOneWidget);
   });
 
+  testWidgets(
+      'conditional attention entries stay hidden while queues first load',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': true,
+      'issues_menu_only_when_active': true,
+      'agent_fixes_menu_only_when_awaiting_review': true,
+      'profile_approvals_menu_only_when_pending': true,
+    });
+
+    // An in-flight first load must not flash the entries fail-open: the
+    // cold-start assumption is empty-until-proven, and only a FAILED
+    // refresh makes a queue unknowable enough to show them.
+    await _pumpAdminDrawer(tester, hangAttentionQueues: true);
+
+    expect(find.text('NEEDS ATTENTION'), findsNothing);
+    expect(find.text('Approvals'), findsNothing);
+    expect(find.text('Issues'), findsNothing);
+    expect(find.text('Agent fixes'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
+  });
+
   testWidgets('tracking-only issue restores Issues without an attention badge',
       (tester) async {
     SharedPreferences.setMockInitialValues({
@@ -619,6 +642,7 @@ Future<void> _pumpAdminDrawer(
   WidgetTester tester, {
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
+  bool hangAttentionQueues = false,
 }) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -652,6 +676,7 @@ Future<void> _pumpAdminDrawer(
         backendClientProvider.overrideWithValue(_fakeDio(
           issues: issues,
           failAttentionQueues: failAttentionQueues,
+          hangAttentionQueues: hangAttentionQueues,
         )),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -778,11 +803,13 @@ class _FakeAiChatNotifier extends AiChatNotifier {
 Dio _fakeDio({
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
+  bool hangAttentionQueues = false,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
     issues: issues,
     failAttentionQueues: failAttentionQueues,
+    hangAttentionQueues: hangAttentionQueues,
   );
   return dio;
 }
@@ -791,10 +818,18 @@ class _JsonAdapter implements HttpClientAdapter {
   const _JsonAdapter({
     this.issues = const [],
     this.failAttentionQueues = false,
+    this.hangAttentionQueues = false,
   });
 
   final List<Map<String, dynamic>> issues;
   final bool failAttentionQueues;
+  final bool hangAttentionQueues;
+
+  static bool _isAttentionQueue(String path) =>
+      path == '/api/admin/requests' ||
+      path == '/api/admin/issues' ||
+      path == '/api/admin/agent-actions' ||
+      path == '/api/admin/profile-change-proposals';
 
   @override
   Future<ResponseBody> fetch(
@@ -803,11 +838,11 @@ class _JsonAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     final path = options.path;
-    if (failAttentionQueues &&
-        (path == '/api/admin/requests' ||
-            path == '/api/admin/issues' ||
-            path == '/api/admin/agent-actions' ||
-            path == '/api/admin/profile-change-proposals')) {
+    if (hangAttentionQueues && _isAttentionQueue(path)) {
+      // A first load still in flight: the response simply never arrives.
+      return Completer<ResponseBody>().future;
+    }
+    if (failAttentionQueues && _isAttentionQueue(path)) {
       return ResponseBody.fromString(
         '{"error":"temporarily unavailable"}',
         503,

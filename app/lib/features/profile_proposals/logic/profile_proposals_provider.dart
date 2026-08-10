@@ -35,6 +35,7 @@ class PendingProfileProposalsNotifier extends StateNotifier<int> {
     _sub = null;
     if (!admin) {
       _ref.read(pendingProfileProposalsLoadedProvider.notifier).state = false;
+      _ref.read(pendingProfileProposalsStaleProvider.notifier).state = false;
       _set(0);
       return;
     }
@@ -59,6 +60,7 @@ class PendingProfileProposalsNotifier extends StateNotifier<int> {
       _refreshEpoch++;
       _set(raw.toInt());
       _ref.read(pendingProfileProposalsLoadedProvider.notifier).state = true;
+      _ref.read(pendingProfileProposalsStaleProvider.notifier).state = false;
     } else {
       _refreshDebounce?.cancel();
       _refreshDebounce = Timer(const Duration(milliseconds: 300), refresh);
@@ -77,11 +79,13 @@ class PendingProfileProposalsNotifier extends StateNotifier<int> {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       _set(proposals.where((p) => p.isPending).length);
       _ref.read(pendingProfileProposalsLoadedProvider.notifier).state = true;
+      _ref.read(pendingProfileProposalsStaleProvider.notifier).state = false;
     } catch (_) {
       if (!_isAdmin || epoch != _refreshEpoch) return;
       // Preserve the last badge count while making a conditionally hidden row
       // visible again until an authoritative refresh succeeds.
       _ref.read(pendingProfileProposalsLoadedProvider.notifier).state = false;
+      _ref.read(pendingProfileProposalsStaleProvider.notifier).state = true;
     }
   }
 
@@ -91,6 +95,7 @@ class PendingProfileProposalsNotifier extends StateNotifier<int> {
     _refreshEpoch++;
     _set(value);
     _ref.read(pendingProfileProposalsLoadedProvider.notifier).state = true;
+    _ref.read(pendingProfileProposalsStaleProvider.notifier).state = false;
   }
 
   void _set(int value) {
@@ -113,3 +118,9 @@ final pendingProfileProposalsProvider =
 
 /// Whether the proposal count has been read successfully at least once.
 final pendingProfileProposalsLoadedProvider = StateProvider<bool>((ref) => false);
+
+/// Whether the proposals count is currently unknowable (last refresh failed,
+/// nothing authoritative since). Fail-open signal for the conditional menu
+/// entry; loading alone never sets it.
+final pendingProfileProposalsStaleProvider =
+    StateProvider<bool>((ref) => false);
