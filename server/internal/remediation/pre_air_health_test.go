@@ -44,6 +44,7 @@ type preAirFake struct {
 	queue             []map[string]any
 	queueDeletes      []string
 	queueDeleteStatus int
+	queueGetStatus    int
 	seriesHistory     []map[string]any
 	indexers          []map[string]any
 	failedGrabs       []string
@@ -134,7 +135,12 @@ func (f *preAirFake) start() *httptest.Server {
 		case r.URL.Path == "/api/v3/queue" && r.Method == http.MethodGet:
 			f.mu.Lock()
 			records := copyPreAirRecords(f.queue)
+			queueGetStatus := f.queueGetStatus
 			f.mu.Unlock()
+			if queueGetStatus != 0 {
+				w.WriteHeader(queueGetStatus)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"totalRecords": len(records), "records": records})
 		case strings.HasPrefix(r.URL.Path, "/api/v3/queue/") && r.Method == http.MethodDelete:
 			id := strings.TrimPrefix(r.URL.Path, "/api/v3/queue/")
@@ -213,6 +219,15 @@ func (f *preAirFake) setQueueDeleteStatus(code int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queueDeleteStatus = code
+}
+
+// setQueueGetStatus makes every queue READ answer with an HTTP error — an
+// expired API key (401) or an arr mid-restart (500) — without touching the
+// mutation paths.
+func (f *preAirFake) setQueueGetStatus(code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queueGetStatus = code
 }
 
 func (f *preAirFake) setIndexers(records []map[string]any) {
