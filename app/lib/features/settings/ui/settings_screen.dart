@@ -203,6 +203,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           )
                       : null,
                 )),
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.explore_outlined,
+                title: 'Discover',
+                subtitle: 'Row sources, language filter, TMDB and Trakt',
+                onTap: () => context.push('/settings/discovery'),
+              ),
             if (user?.isAdmin != true)
               _SettingsTile(
                 icon: Icons.flag_outlined,
@@ -234,7 +241,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _SettingsTile(
                 icon: Icons.key_outlined,
                 title: 'Providers & Credentials',
-                subtitle: 'Included AI, TMDB, and Trakt',
+                subtitle: 'Included AI providers and models',
                 onTap: () => context.push('/settings/credentials'),
               ),
               _SettingsTile(
@@ -266,12 +273,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Request Settings',
                 subtitle: 'Approval, season, and quality defaults',
                 onTap: () => context.push('/settings/request-settings'),
-              ),
-              _SettingsTile(
-                icon: Icons.explore_outlined,
-                title: 'Discovery',
-                subtitle: 'What backs the headline rows, and language filtering',
-                onTap: () => context.push('/settings/discovery'),
               ),
               _SettingsTile(
                 icon: Icons.people_outline,

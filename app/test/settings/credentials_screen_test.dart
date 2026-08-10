@@ -104,42 +104,8 @@ void main() {
     });
   });
 
-  testWidgets('TMDB reports the built-in key when no admin token is stored',
-      (tester) async {
-    final adapter = _CredentialsAdapter(tmdbUsingBuiltin: true);
-    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
-      ..httpClientAdapter = adapter;
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [backendClientProvider.overrideWithValue(dio)],
-        child: MaterialApp(
-          theme: AppTheme.dark,
-          home: const CredentialsScreen(),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // The TMDB section sits below the AI block in a lazily built list;
-    // scroll until its badge is actually in the viewport.
-    await tester.scrollUntilVisible(
-      find.text('Built-in key'),
-      120,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Built-in key'), findsOneWidget);
-    expect(
-      find.textContaining('built-in key out of the box'),
-      findsOneWidget,
-    );
-    // Only TMDB has a built-in fallback; the other credentials stay "Not set".
-    expect(find.text('Not set'), findsWidgets);
-  });
-
-  testWidgets('a highlight deep link scrolls to the Trakt section on load',
+  testWidgets(
+      'a highlight deep link scrolls to the Gemini section on load',
       (tester) async {
     final adapter = _CredentialsAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
@@ -151,7 +117,7 @@ void main() {
         child: MaterialApp(
           theme: AppTheme.dark,
           home: const CredentialsScreen(
-            highlightId: SettingsAnchors.credentialsTrakt,
+            highlightId: SettingsAnchors.credentialsGemini,
           ),
         ),
       ),
@@ -167,14 +133,13 @@ void main() {
           .pixels,
       greaterThan(0),
     );
-    expect(find.text('Trakt'), findsOneWidget);
+    expect(find.text('Google Gemini (AI)'), findsOneWidget);
   });
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
-  _CredentialsAdapter({this.tmdbUsingBuiltin = false});
+  _CredentialsAdapter();
 
-  final bool tmdbUsingBuiltin;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -197,7 +162,7 @@ class _CredentialsAdapter implements HttpClientAdapter {
     return ResponseBody.fromString(
       jsonEncode({
         'credentials': const <String, bool>{},
-        'tmdb_using_builtin': tmdbUsingBuiltin,
+        'tmdb_using_builtin': false,
         'ai': {
           'config': {
             'provider': 'codex',

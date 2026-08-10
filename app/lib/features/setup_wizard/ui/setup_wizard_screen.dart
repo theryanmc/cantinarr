@@ -42,10 +42,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return '/settings/instance/new';
       case 'media_downloads':
         return '/settings';
-      case 'tmdb':
-      case 'trakt':
       case 'ai':
         return '/settings/credentials';
+      case 'tmdb':
+      case 'trakt':
       case 'discovery_prefs':
         return '/settings/discovery';
       case 'plex_invites':

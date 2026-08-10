@@ -207,6 +207,14 @@ class _StubAdapter implements HttpClientAdapter {
           {'paused': false, 'speed_bps': 0, 'items': <Object>[]};
     } else if (path.contains('/downloads/') && path.endsWith('/history')) {
       body = {'items': <Object>[]};
+    } else if (path.endsWith('/api/admin/discovery-settings')) {
+      // Must beat the generic '/discover' branch below.
+      body = {
+        'source': 'tmdb_trending',
+        'english_only': true,
+        'sources': ['tmdb_trending', 'trakt_trending', 'tmdb_popular'],
+        'trakt_configured': false,
+      };
     } else if (path.contains('/discover') || path.contains('/search')) {
       body = {'results': [], 'page': 1, 'total_pages': 1, 'total_results': 0};
     } else if (path.contains('/issues')) {
@@ -215,6 +223,14 @@ class _StubAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path.contains('/requests')) {
       body = {'requests': []};
+    } else if (path.endsWith('/api/admin/credentials')) {
+      // Discover hosts the TMDB/Trakt credential sections; built-in TMDB is
+      // the fresh-server truth.
+      body = {
+        'credentials': <String, bool>{},
+        'tmdb_using_builtin': true,
+        'ai': <String, dynamic>{},
+      };
     } else if (path.endsWith('/api/admin/request-settings')) {
       // Defaults-shaped so the Request Defaults screen (a settings-search
       // deep-link target) renders its controls instead of the error state.
