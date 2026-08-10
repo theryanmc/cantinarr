@@ -111,6 +111,15 @@ class SettingsSearchEntry {
 // root's own rows and action tiles, in the root ListView's visual order.
 const List<SettingsSearchEntry> _rootEntries = [
   SettingsSearchEntry(
+    id: 'screen.setup-checklist',
+    title: 'Setup Checklist',
+    icon: Icons.checklist_outlined,
+    route: '/setup',
+    screenTitle: 'Settings',
+    keywords: ['configured', 'features', 'wizard', 'getting started', 'admin'],
+    gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
     id: 'root.status',
     title: 'Status',
     icon: Icons.check_circle_outline,
@@ -199,16 +208,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Modules',
     keywords: ['sign-in', 'security', 'webauthn', 'biometric', 'face id'],
     gate: gatePasskey,
-  ),
-  SettingsSearchEntry(
-    id: 'screen.setup-checklist',
-    title: 'Setup Checklist',
-    icon: Icons.checklist_outlined,
-    route: '/setup',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['configured', 'features', 'wizard', 'getting started'],
-    gate: gateAdmin,
   ),
   SettingsSearchEntry(
     id: 'screen.credentials',

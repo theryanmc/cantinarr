@@ -7,7 +7,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
 import '../../../core/widgets/settings_highlight.dart';
@@ -92,81 +91,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         cacheExtent: SettingsHighlight.cacheExtentFor(_activeHighlight),
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          AppPanel(
-            margin: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-            padding: const EdgeInsets.all(18),
-            accentColor: AppTheme.signal,
-            child: Row(
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        AppTheme.signal.withValues(alpha: 0.2),
-                        AppTheme.accent.withValues(alpha: 0.11),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-                    border: Border.all(
-                      color: AppTheme.signal.withValues(alpha: 0.22),
-                    ),
-                  ),
-                  child: const Icon(
-                    Icons.tune_rounded,
-                    color: AppTheme.signal,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Settings overview',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  color: AppTheme.textPrimary,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        '${user?.username ?? 'Account'}  /  ${connection?.serverName ?? 'Cantinarr'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: auth?.isAuthenticated == true
-                        ? AppTheme.available
-                        : AppTheme.error,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: (auth?.isAuthenticated == true
-                                ? AppTheme.available
-                                : AppTheme.error)
-                            .withValues(alpha: 0.28),
-                        blurRadius: 10,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+          // The one tile with live signal leads the screen: the checklist
+          // count is amber/red/green state, not decoration.
+          if (user?.isAdmin == true) _setupChecklistTile(context, setupStatus),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
             child: ListenableBuilder(
               listenable: _searchController,
               builder: (context, _) => TextField(
@@ -328,7 +257,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Admin'),
-              _setupChecklistTile(context, setupStatus),
               _SettingsTile(
                 icon: Icons.key_outlined,
                 title: 'Providers & Credentials',
