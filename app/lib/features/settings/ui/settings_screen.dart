@@ -75,7 +75,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
-      plexGuideEnabled: ref.watch(plexGuideEnabledProvider),
       donateVisible: _donateVisible,
     );
     final searching = _query.trim().isNotEmpty;
@@ -252,12 +251,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               _SettingsTile(
                 icon: Icons.tune,
-                title: 'Profile Change Approvals',
-                subtitle: 'Approve quality-profile changes proposed by external assistants',
-                onTap: () => context.push('/settings/profile-approvals'),
-              ),
-              _SettingsTile(
-                icon: Icons.tune,
                 title: 'Request Settings',
                 subtitle: 'Approval, season, and quality defaults',
                 onTap: () => context.push('/settings/request-settings'),
@@ -325,6 +318,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 highlightId: _activeHighlight,
                 child: const AttentionMenuVisibilitySwitch(
                   item: AttentionMenuItem.approvals,
+                  opensQueue: true,
                 ),
               ),
               SettingsHighlight(
@@ -332,6 +326,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 highlightId: _activeHighlight,
                 child: const AttentionMenuVisibilitySwitch(
                   item: AttentionMenuItem.issues,
+                  opensQueue: true,
                 ),
               ),
               SettingsHighlight(
@@ -339,6 +334,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 highlightId: _activeHighlight,
                 child: const AttentionMenuVisibilitySwitch(
                   item: AttentionMenuItem.agentFixes,
+                  opensQueue: true,
                 ),
               ),
               SettingsHighlight(
@@ -346,6 +342,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 highlightId: _activeHighlight,
                 child: const AttentionMenuVisibilitySwitch(
                   item: AttentionMenuItem.profileApprovals,
+                  opensQueue: true,
                 ),
               ),
             ],
@@ -385,31 +382,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             // Guides
             const _SectionHeader(title: 'Guides'),
-            if (ref.watch(plexGuideEnabledProvider))
-              _SettingsTile(
-                icon: Icons.play_circle_outline,
-                title: 'Watch on Plex',
-                subtitle: 'Install Plex and start watching your requests',
-                onTap: () => context.push('/plex-guide'),
-              ),
+            // The row opens the guide; its switch governs the menu entry.
             SettingsHighlight(
               anchorId: SettingsAnchors.rootShowPlexGuide,
               highlightId: _activeHighlight,
-              child: SwitchListTile(
-                value: ref.watch(plexGuideEnabledProvider),
-                onChanged: (v) =>
-                    ref.read(plexGuideEnabledProvider.notifier).set(v),
-                activeThumbColor: AppTheme.accent,
-                secondary: const Icon(Icons.visibility_outlined,
+              child: ListTile(
+                leading: const Icon(Icons.play_circle_outline,
                     color: AppTheme.textSecondary),
-                title: const Text('Show Plex guide',
+                title: const Text('Watch on Plex',
                     style: TextStyle(
                         color: AppTheme.textPrimary,
                         fontWeight: FontWeight.w500)),
-                subtitle: const Text(
-                    'Show the Watch on Plex guide in the menu and here',
+                subtitle: const Text('Show the guide in the menu',
                     style:
                         TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                trailing: Switch(
+                  value: ref.watch(plexGuideEnabledProvider),
+                  onChanged: (v) =>
+                      ref.read(plexGuideEnabledProvider.notifier).set(v),
+                  activeThumbColor: AppTheme.accent,
+                ),
+                onTap: () => context.push('/plex-guide'),
               ),
             ),
 

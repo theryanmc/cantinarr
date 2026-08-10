@@ -73,25 +73,23 @@ void main() {
     );
   });
 
-  testWidgets('Profile Change Approvals is hidden from non-admins',
+  testWidgets('Profile approvals row is hidden from non-admins',
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
-    expect(find.text('Profile Change Approvals'), findsNothing);
+    expect(find.text('Profile approvals'), findsNothing);
   });
 
-  testWidgets('Profile Change Approvals is available from admin settings',
+  testWidgets('Profile approvals is reachable from the attention rows',
       (tester) async {
     await _pumpSettings(
       tester,
       _settings(source: AiAccessSource.shared),
       isAdmin: true,
     );
-    await _dragSettingsUntilFound(
-        tester, find.text('Profile Change Approvals'));
-    expect(find.text('Profile Change Approvals'), findsOneWidget);
+    await _dragSettingsUntilFound(tester, find.text('Profile approvals'));
+    expect(find.text('Profile approvals'), findsOneWidget);
     expect(
-      find.text(
-          'Approve quality-profile changes proposed by external assistants'),
+      find.text('Only show in the menu when changes await a decision'),
       findsOneWidget,
     );
   });
@@ -160,10 +158,10 @@ void main() {
     ]) {
       await tester.ensureVisible(toggle);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+      expect(tester.widget<Switch>(toggle).value, isTrue);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+      expect(tester.widget<Switch>(toggle).value, isFalse);
     }
 
     expect(container.read(approvalsMenuOnlyWhenPendingProvider), isFalse);

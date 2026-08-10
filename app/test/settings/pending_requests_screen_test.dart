@@ -214,13 +214,13 @@ void main() {
       const ValueKey('approvals-conditional-menu-visibility'),
     );
     expect(toggle, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(tester.widget<Switch>(toggle).value, isFalse);
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
     expect(container.read(approvalsMenuOnlyWhenPendingProvider), isTrue);
-    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(tester.widget<Switch>(toggle).value, isTrue);
   });
 
   testWidgets('an unknown book format is visible and cannot be approved',
