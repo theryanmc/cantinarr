@@ -170,16 +170,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateNonAdmin,
   ),
   SettingsSearchEntry(
-    id: 'screen.ai-assistant',
-    title: 'AI Assistant',
-    icon: Icons.smart_toy_outlined,
-    route: '/assistant',
-    screenTitle: 'Settings',
-    section: 'Modules',
-    keywords: ['available', 'chat', 'ask', 'configured'],
-    gate: gateEveryone,
-  ),
-  SettingsSearchEntry(
     id: 'screen.add-instance',
     title: 'Add Instance',
     icon: Icons.add,

@@ -38,7 +38,6 @@ const _routableSettingsPaths = {
   '/setup',
   '/issues',
   '/plex-guide',
-  '/assistant',
   '/approvals',
   '/agent-actions',
 };

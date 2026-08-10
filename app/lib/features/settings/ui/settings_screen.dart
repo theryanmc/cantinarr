@@ -72,8 +72,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final updateStatus = ref.watch(updateStatusProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
-    final aiAvailable =
-        aiSettings?.effective.available ?? connection?.services.ai ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
@@ -213,21 +211,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: 'Problems you reported and how they ended',
                 onTap: () => context.push('/issues'),
               ),
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootAiAssistant,
-              highlightId: _activeHighlight,
-              child: _SettingsTile(
-                icon: Icons.smart_toy_outlined,
-                title: 'AI Assistant',
-                subtitle: aiAvailable ? 'Available' : 'Not configured',
-                trailing: Icon(
-                  Icons.circle,
-                  size: 12,
-                  color: aiAvailable ? AppTheme.available : AppTheme.unavailable,
-                ),
-                onTap: () => context.push('/assistant'),
-              ),
-            ),
             if (user?.isAdmin == true)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
