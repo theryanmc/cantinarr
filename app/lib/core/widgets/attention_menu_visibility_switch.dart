@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../storage/preferences.dart';
 import '../theme/app_theme.dart';
@@ -11,13 +12,20 @@ enum AttentionMenuItem { approvals, issues, agentFixes, profileApprovals }
 ///
 /// Keeping the copy and provider wiring in one widget prevents the recovery
 /// control in Settings from drifting from the switch that can hide the item.
+/// With [opensQueue] the row itself opens the queue — Settings uses that so
+/// each row is the queue's stable doorway even while its menu entry hides;
+/// the queue screens leave it off (the row would only push themselves).
 class AttentionMenuVisibilitySwitch extends ConsumerWidget {
   const AttentionMenuVisibilitySwitch({
     super.key,
     required this.item,
+    this.opensQueue = false,
   });
 
   final AttentionMenuItem item;
+
+  /// Whether tapping the row navigates to the queue it governs.
+  final bool opensQueue;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,12 +39,8 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
         ref.watch(profileApprovalsMenuOnlyWhenPendingProvider),
     };
 
-    return SwitchListTile(
-      key: ValueKey('${item.name}-conditional-menu-visibility'),
-      value: value,
-      onChanged: (next) => _set(ref, next),
-      activeThumbColor: AppTheme.accent,
-      secondary: Icon(_icon, color: AppTheme.textSecondary),
+    return ListTile(
+      leading: Icon(_icon, color: AppTheme.textSecondary),
       title: Text(
         _title,
         style: const TextStyle(
@@ -51,8 +55,22 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
           fontSize: 13,
         ),
       ),
+      trailing: Switch(
+        key: ValueKey('${item.name}-conditional-menu-visibility'),
+        value: value,
+        onChanged: (next) => _set(ref, next),
+        activeThumbColor: AppTheme.accent,
+      ),
+      onTap: opensQueue ? () => context.push(_route) : null,
     );
   }
+
+  String get _route => switch (item) {
+        AttentionMenuItem.approvals => '/approvals',
+        AttentionMenuItem.issues => '/issues',
+        AttentionMenuItem.agentFixes => '/agent-actions',
+        AttentionMenuItem.profileApprovals => '/settings/profile-approvals',
+      };
 
   Future<void> _set(WidgetRef ref, bool value) => switch (item) {
         AttentionMenuItem.approvals =>
@@ -68,23 +86,21 @@ class AttentionMenuVisibilitySwitch extends ConsumerWidget {
       };
 
   String get _title => switch (item) {
-        AttentionMenuItem.approvals => 'Only show Approvals when pending',
-        AttentionMenuItem.issues => 'Only show Issues when active',
-        AttentionMenuItem.agentFixes =>
-          'Only show Agent fixes when awaiting review',
-        AttentionMenuItem.profileApprovals =>
-          'Only show Profile approvals when pending',
+        AttentionMenuItem.approvals => 'Approvals',
+        AttentionMenuItem.issues => 'Issues',
+        AttentionMenuItem.agentFixes => 'Agent fixes',
+        AttentionMenuItem.profileApprovals => 'Profile approvals',
       };
 
   String get _subtitle => switch (item) {
         AttentionMenuItem.approvals =>
-          'Hide Approvals from the menu when no requests are pending.',
+          'Only show in the menu when requests are pending',
         AttentionMenuItem.issues =>
-          'Hide Issues when nothing needs attention or tracking.',
+          'Only show in the menu when something needs attention or tracking',
         AttentionMenuItem.agentFixes =>
-          'Hide Agent fixes when no proposals await review.',
+          'Only show in the menu when proposals await review',
         AttentionMenuItem.profileApprovals =>
-          'Hide Profile approvals when no external settings changes await a decision.',
+          'Only show in the menu when changes await a decision',
       };
 
   IconData get _icon => switch (item) {

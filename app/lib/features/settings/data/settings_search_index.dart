@@ -30,16 +30,12 @@ class SettingsSearchGates {
   /// `connection.services.chaptarr` — gates book-related entries.
   final bool chaptarrEnabled;
 
-  /// Device-local `plexGuideEnabledProvider` — gates the Watch on Plex tile.
-  final bool plexGuideEnabled;
-
   /// Platform gate for the Donate tile (hidden in store binaries).
   final bool donateVisible;
 
   const SettingsSearchGates({
     required this.user,
     this.chaptarrEnabled = false,
-    this.plexGuideEnabled = true,
     this.donateVisible = false,
   });
 }
@@ -57,7 +53,6 @@ bool gateAiChat(SettingsSearchGates g) =>
 bool gatePasskey(SettingsSearchGates g) => g.user?.canUsePasskey == true;
 bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
-bool gatePlexGuide(SettingsSearchGates g) => g.plexGuideEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 
 /// One searchable setting.
@@ -229,16 +224,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
-    id: 'screen.profile-approvals',
-    title: 'Profile Change Approvals',
-    icon: Icons.tune,
-    route: '/settings/profile-approvals',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['quality profile', 'proposals', 'external', 'approve', 'mcp'],
-    gate: gateAdmin,
-  ),
-  SettingsSearchEntry(
     id: 'screen.request-settings',
     title: 'Request Settings',
     icon: Icons.tune,
@@ -335,47 +320,58 @@ const List<SettingsSearchEntry> _rootEntries = [
     keywords: ['container', 'banner', 'update link', 'unraid', 'portainer'],
     gate: gateAdmin,
   ),
+  // The attention rows double as each queue's stable doorway: the row opens
+  // the queue, the switch governs its conditional menu entry.
   SettingsSearchEntry(
     id: 'root.attention-approvals',
-    title: 'Only show Approvals when pending',
+    title: 'Approvals',
     icon: Icons.fact_check_outlined,
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Needs attention menu',
-    keywords: ['menu', 'hide', 'badge', 'drawer', 'requests'],
+    keywords: ['menu', 'hide', 'badge', 'drawer', 'requests', 'queue', 'pending'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.rootAttentionApprovals,
   ),
   SettingsSearchEntry(
     id: 'root.attention-issues',
-    title: 'Only show Issues when active',
+    title: 'Issues',
     icon: Icons.flag_outlined,
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Needs attention menu',
-    keywords: ['menu', 'hide', 'badge', 'drawer', 'problems'],
+    keywords: ['menu', 'hide', 'badge', 'drawer', 'problems', 'reports'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.rootAttentionIssues,
   ),
   SettingsSearchEntry(
     id: 'root.attention-agent-fixes',
-    title: 'Only show Agent fixes when awaiting review',
+    title: 'Agent fixes',
     icon: Icons.build_circle_outlined,
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Needs attention menu',
-    keywords: ['menu', 'hide', 'badge', 'drawer', 'proposals'],
+    keywords: ['menu', 'hide', 'badge', 'drawer', 'proposals', 'review'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.rootAttentionAgentFixes,
   ),
   SettingsSearchEntry(
     id: 'root.attention-profile-approvals',
-    title: 'Only show Profile approvals when pending',
+    title: 'Profile approvals',
     icon: Icons.tune,
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Needs attention menu',
-    keywords: ['menu', 'hide', 'badge', 'drawer'],
+    keywords: [
+      'menu',
+      'hide',
+      'badge',
+      'drawer',
+      'profile change approvals',
+      'quality profile',
+      'external',
+      'mcp',
+    ],
     gate: gateAdmin,
     anchorId: SettingsAnchors.rootAttentionProfileApprovals,
   ),
@@ -401,23 +397,13 @@ const List<SettingsSearchEntry> _rootEntries = [
     anchorId: SettingsAnchors.rootRequestUpdates,
   ),
   SettingsSearchEntry(
-    id: 'screen.plex-guide',
+    id: 'root.show-plex-guide',
     title: 'Watch on Plex',
     icon: Icons.play_circle_outline,
-    route: '/plex-guide',
-    screenTitle: 'Settings',
-    section: 'Guides',
-    keywords: ['guide', 'install', 'watch', 'plex app'],
-    gate: gatePlexGuide,
-  ),
-  SettingsSearchEntry(
-    id: 'root.show-plex-guide',
-    title: 'Show Plex guide',
-    icon: Icons.visibility_outlined,
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Guides',
-    keywords: ['menu', 'hide', 'watch on plex'],
+    keywords: ['guide', 'install', 'plex app', 'menu', 'hide', 'show'],
     gate: gateEveryone,
     anchorId: SettingsAnchors.rootShowPlexGuide,
   ),
