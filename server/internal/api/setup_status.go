@@ -121,7 +121,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "trakt",
 			Title:       "Trakt discovery",
-			Description: "Adds trending, popular lists, and the release calendar to discovery.",
+			Description: "Trending, popular lists, and the release calendar run on Cantinarr's built-in Trakt app out of the box; add your own client ID in the Discover settings to use yours instead.",
 			Configured:  f.Trakt,
 			Optional:    true,
 		},
@@ -202,7 +202,7 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 			}
 		}
 		facts.TMDB = creds.TMDBAvailable()
-		facts.Trakt = creds.IsConfigured(credentials.KeyTraktClientID)
+		facts.Trakt = creds.TraktAvailable()
 		facts.AI = creds.IsAIConfigured()
 		if remediationSvc != nil {
 			facts.RemediationDecided = remediationSvc.SettingsDecided()

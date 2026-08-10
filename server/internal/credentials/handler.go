@@ -71,6 +71,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	// Distinct from the per-key booleans: whether TMDB is currently running on
 	// the built-in public token (no admin token stored).
 	status["tmdb_using_builtin"] = h.registry.TMDBUsingBuiltIn()
+	status["trakt_using_builtin"] = h.registry.TraktUsingBuiltIn()
 	configured := h.registry.IsAIConfigured()
 	if h.sharedAIConfigured != nil {
 		configured = h.sharedAIConfigured()

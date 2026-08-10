@@ -318,14 +318,20 @@ class _DiscoverySettingsScreenState
             highlightId: widget.highlightId,
             child: CredentialSection(
               title: 'Trakt',
-              description:
-                  'Enhances discovery with trending and popular lists',
+              description: 'Trending, popular lists, and the calendar run '
+                  'on Cantinarr\'s built-in Trakt app out of the box. Add '
+                  'your own client ID to use your Trakt application instead.',
               isConfigured:
                   _credentials?.isConfigured('trakt_client_id') ?? false,
+              builtinActive: _credentials?.traktUsingBuiltin ?? false,
               controller: _traktIdController,
               hint: 'Trakt client ID',
-              onDelete: () =>
-                  _deleteCredential('trakt_client_id', 'Trakt'),
+              onDelete: () => _deleteCredential(
+                'trakt_client_id',
+                'Trakt',
+                message: 'Your client ID will be removed and '
+                    'Cantinarr\'s built-in app takes over.',
+              ),
             ),
           ),
         ),

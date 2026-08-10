@@ -18,10 +18,16 @@ class _DiscoverAdapter implements HttpClientAdapter {
   _DiscoverAdapter({
     required this.traktConfigured,
     this.tmdbUsingBuiltin = false,
+    this.traktUsingBuiltin = false,
   });
 
+  /// Whether an admin CLIENT ID is stored; the built-in app makes Trakt
+  /// available without one.
   final bool traktConfigured;
   final bool tmdbUsingBuiltin;
+  final bool traktUsingBuiltin;
+
+  bool get _traktAvailable => traktConfigured || traktUsingBuiltin;
   Map<String, dynamic>? lastDiscoveryUpdate;
   Map<String, dynamic>? lastCredentialsUpdate;
 
@@ -49,6 +55,7 @@ class _DiscoverAdapter implements HttpClientAdapter {
           'tmdb_access_token': !tmdbUsingBuiltin,
         },
         'tmdb_using_builtin': tmdbUsingBuiltin,
+        'trakt_using_builtin': traktUsingBuiltin,
         'ai': const <String, dynamic>{},
       });
     }
@@ -57,11 +64,11 @@ class _DiscoverAdapter implements HttpClientAdapter {
 
   Map<String, dynamic> get _discovery => {
         // An undecided server reports the source its rows are actually using,
-        // which is Trakt as soon as the credential exists.
-        'source': traktConfigured ? 'trakt_trending' : 'tmdb_trending',
+        // which is Trakt as soon as it is available — stored or built-in.
+        'source': _traktAvailable ? 'trakt_trending' : 'tmdb_trending',
         'english_only': true,
         'sources': ['tmdb_trending', 'trakt_trending', 'tmdb_popular'],
-        'trakt_configured': traktConfigured,
+        'trakt_configured': _traktAvailable,
       };
 
   ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
@@ -88,11 +95,13 @@ Future<_DiscoverAdapter> _pumpScreen(
   WidgetTester tester, {
   required bool traktConfigured,
   bool tmdbUsingBuiltin = false,
+  bool traktUsingBuiltin = false,
   String? highlightId,
 }) async {
   final adapter = _DiscoverAdapter(
     traktConfigured: traktConfigured,
     tmdbUsingBuiltin: tmdbUsingBuiltin,
+    traktUsingBuiltin: traktUsingBuiltin,
   );
   final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
     ..httpClientAdapter = adapter;
@@ -170,6 +179,8 @@ void main() {
     final save = find.byKey(const Key('discovery-save'));
     await tester.scrollUntilVisible(save, 120,
         scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
     await tester.tap(save);
     await tester.pumpAndSettle();
 
@@ -193,6 +204,8 @@ void main() {
     final save = find.byKey(const Key('discovery-save'));
     await tester.scrollUntilVisible(save, 120,
         scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
     await tester.tap(save);
     await tester.pumpAndSettle();
 
@@ -225,6 +238,31 @@ void main() {
     );
     // Only TMDB has a built-in fallback; Trakt stays "Not set".
     expect(find.text('Not set'), findsOneWidget);
+  });
+
+  testWidgets('Trakt reports the built-in app when no client ID is stored',
+      (tester) async {
+    await _pumpScreen(
+      tester,
+      traktConfigured: false,
+      traktUsingBuiltin: true,
+    );
+
+    // The built-in app makes the Trakt source selectable with nothing stored,
+    // and the server auto-adopts it as the headline feed.
+    final trakt = tester.widget<ListTile>(_sourceTile('Trending now (Trakt)'));
+    expect(trakt.enabled, isTrue);
+    expect((trakt.leading as Icon).icon, Icons.radio_button_checked);
+
+    await tester.scrollUntilVisible(
+      find.text('Built-in key'),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    // Exactly one built-in chip: Trakt's (TMDB carries an admin token in
+    // this fixture).
+    expect(find.text('Built-in key'), findsOneWidget);
   });
 
   testWidgets('a highlight deep link scrolls to the Trakt section on load',

@@ -210,6 +210,11 @@ type Registry struct {
 	// stays unconfigured until an admin stores a token.
 	defaultTMDBToken string
 
+	// defaultTraktClientID is the built-in public Trakt client ID
+	// (trakt.DefaultClientID in production), with the same empty-means-no-
+	// fallback contract as the TMDB token above.
+	defaultTraktClientID string
+
 	mu          sync.RWMutex
 	cachedTMDB  *tmdb.Client
 	cachedTrakt *trakt.Client
@@ -225,6 +230,13 @@ type Option func(*Registry)
 // opts in.
 func WithDefaultTMDBToken(token string) Option {
 	return func(r *Registry) { r.defaultTMDBToken = token }
+}
+
+// WithDefaultTraktClientID supplies the built-in public Trakt client ID used
+// whenever no admin-supplied ID is stored. Only the server binary wires it,
+// so registries built in tests stay Trakt-less unless a test opts in.
+func WithDefaultTraktClientID(clientID string) Option {
+	return func(r *Registry) { r.defaultTraktClientID = clientID }
 }
 
 // NewRegistry creates a new credentials registry.
@@ -286,6 +298,18 @@ func (r *Registry) Trakt() *trakt.Client {
 	}
 	r.load()
 	return r.cachedTrakt
+}
+
+// TraktAvailable reports whether Trakt calls can be made at all — via an
+// admin-supplied client ID or the built-in application.
+func (r *Registry) TraktAvailable() bool {
+	return r.Trakt() != nil
+}
+
+// TraktUsingBuiltIn reports whether Trakt is running on the built-in
+// application rather than an admin-supplied client ID.
+func (r *Registry) TraktUsingBuiltIn() bool {
+	return r.defaultTraktClientID != "" && !r.IsConfigured(KeyTraktClientID)
 }
 
 // GetCredential reads a credential value from the DB, decrypting stored
@@ -489,6 +513,10 @@ func (r *Registry) load() {
 	}
 	if clientID := r.getSettingLocked(KeyTraktClientID); clientID != "" {
 		r.cachedTrakt = trakt.NewClient(clientID)
+	} else if r.defaultTraktClientID != "" {
+		// No admin client ID stored (or it failed to decrypt): run on the
+		// built-in application so Trakt discovery works without any signup.
+		r.cachedTrakt = trakt.NewClient(r.defaultTraktClientID)
 	}
 }
 

@@ -924,7 +924,7 @@ const List<SettingsSearchEntry> _discoveryEntries = [
     route: '/settings/discovery',
     screenTitle: 'Discover',
     section: 'Credentials',
-    keywords: ['client id', 'trending', 'discovery'],
+    keywords: ['client id', 'trending', 'discovery', 'built-in key'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsTrakt,
   ),

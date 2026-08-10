@@ -35,6 +35,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
 	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
+	"github.com/windoze95/cantinarr-server/internal/trakt"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
@@ -86,9 +87,12 @@ func main() {
 		}
 	}
 
-	// Credentials registry (lazy-creates TMDB/Trakt clients from DB). TMDB
-	// falls back to the built-in public token when no admin token is stored.
-	creds := credentials.NewRegistry(database, cipher, credentials.WithDefaultTMDBToken(tmdb.DefaultAccessToken))
+	// Credentials registry (lazy-creates TMDB/Trakt clients from DB). Both
+	// fall back to built-in public credentials when no admin value is stored.
+	creds := credentials.NewRegistry(database, cipher,
+		credentials.WithDefaultTMDBToken(tmdb.DefaultAccessToken),
+		credentials.WithDefaultTraktClientID(trakt.DefaultClientID),
+	)
 	credHandler := credentials.NewHandler(creds)
 
 	// Auth

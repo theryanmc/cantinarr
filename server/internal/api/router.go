@@ -623,7 +623,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"media_downloads": false,
 			"ai":              aiAvailable,
 			"tmdb":            creds.TMDBAvailable(),
-			"trakt":           creds.IsConfigured(credentials.KeyTraktClientID),
+			"trakt":           creds.TraktAvailable(),
 		}
 		for _, inst := range instances {
 			if inst.MediaDownloads {
