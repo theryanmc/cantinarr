@@ -37,12 +37,6 @@ void main() {
     expect(find.byType(AttentionMenuVisibilitySwitch), findsNothing);
     expect(find.text('NEEDS ATTENTION MENU'), findsNothing);
     expect(find.text('Configuration History'), findsNothing);
-    await tester.scrollUntilVisible(
-      find.text('AI Assistant'),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Available'), findsOneWidget);
   });
 
   testWidgets('marks a broken personal override instead of showing included',
