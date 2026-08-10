@@ -918,17 +918,6 @@ const List<SettingsSearchEntry> _discoveryEntries = [
     anchorId: SettingsAnchors.discoveryEnglishOnly,
   ),
   SettingsSearchEntry(
-    id: SettingsAnchors.credentialsTmdb,
-    title: 'TMDB',
-    icon: Icons.explore_outlined,
-    route: '/settings/discovery',
-    screenTitle: 'Discover',
-    section: 'Credentials',
-    keywords: ['access token', 'discovery', 'built-in key', 'movie database'],
-    gate: gateAdmin,
-    anchorId: SettingsAnchors.credentialsTmdb,
-  ),
-  SettingsSearchEntry(
     id: SettingsAnchors.credentialsTrakt,
     title: 'Trakt',
     icon: Icons.explore_outlined,
@@ -938,6 +927,17 @@ const List<SettingsSearchEntry> _discoveryEntries = [
     keywords: ['client id', 'trending', 'discovery'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsTrakt,
+  ),
+  SettingsSearchEntry(
+    id: SettingsAnchors.credentialsTmdb,
+    title: 'TMDB',
+    icon: Icons.explore_outlined,
+    route: '/settings/discovery',
+    screenTitle: 'Discover',
+    section: 'Credentials',
+    keywords: ['access token', 'discovery', 'built-in key', 'movie database'],
+    gate: gateAdmin,
+    anchorId: SettingsAnchors.credentialsTmdb,
   ),
 ];
 
