@@ -6,11 +6,13 @@ package trakt
 // It is DELIBERATELY PUBLIC — the same model as the built-in TMDB token one
 // package over. Everything Cantinarr asks Trakt for (trending, popular,
 // lists, calendar, id lookups) is a public GET that authenticates with
-// nothing but this ID; it unlocks no account on any Cantinarr instance, and
-// the server caches every feed for minutes at a time, so the shared request
-// budget goes a very long way. Do not move it into the encrypted credential
-// store, and do not treat its appearance in the repo, images, or request
-// headers as a leak. Rotation happens through a normal release.
+// nothing but this ID, and it unlocks no account on any Cantinarr instance.
+// Trakt rate-limits per caller, not per application ("All limits are per
+// user" — trakt/trakt-api#220), so every install's server has its own
+// 1000-GETs-per-5-minutes budget, of which the per-feed caching uses a few
+// percent. Do not move it into the encrypted credential store, and do not
+// treat its appearance in the repo, images, or request headers as a leak.
+// Rotation happens through a normal release.
 //
 // An admin-supplied client ID (Settings > Discover) always takes precedence
 // over this one — and that value IS a personal credential, handled as a
