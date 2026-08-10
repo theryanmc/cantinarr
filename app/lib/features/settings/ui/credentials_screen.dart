@@ -12,6 +12,7 @@ import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
 import '../settings_anchors.dart';
+import 'credential_section.dart';
 
 /// Admin screen for managing API credentials (write-only).
 class CredentialsScreen extends ConsumerStatefulWidget {
@@ -32,11 +33,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   static const _customModelValue = '__custom__';
 
-  final _tmdbController = TextEditingController();
   final _anthropicController = TextEditingController();
   final _openAIController = TextEditingController();
   final _geminiController = TextEditingController();
-  final _traktIdController = TextEditingController();
   final _customModelController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
@@ -78,9 +77,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   Future<void> _save() async {
     final creds = <String, String>{};
     var aiChanged = false;
-    if (_tmdbController.text.isNotEmpty) {
-      creds['tmdb_access_token'] = _tmdbController.text.trim();
-    }
     if (_anthropicController.text.isNotEmpty) {
       creds['anthropic_key'] = _anthropicController.text.trim();
       aiChanged = true;
@@ -92,9 +88,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     if (_geminiController.text.isNotEmpty) {
       creds['gemini_key'] = _geminiController.text.trim();
       aiChanged = true;
-    }
-    if (_traktIdController.text.isNotEmpty) {
-      creds['trakt_client_id'] = _traktIdController.text.trim();
     }
 
     final selectedModel = _selectedModel == _customModelValue
@@ -132,11 +125,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
     try {
       await _service.update(creds);
-      _tmdbController.clear();
       _anthropicController.clear();
       _openAIController.clear();
       _geminiController.clear();
-      _traktIdController.clear();
       await _loadStatus();
       // Provider selection and scoped Codex availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
@@ -213,11 +204,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
   @override
   void dispose() {
-    _tmdbController.dispose();
     _anthropicController.dispose();
     _openAIController.dispose();
     _geminiController.dispose();
-    _traktIdController.dispose();
     _customModelController.dispose();
     super.dispose();
   }
@@ -387,31 +376,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           ),
                         const SizedBox(height: 24),
                         _anchor(
-                          SettingsAnchors.credentialsTmdb,
-                          _CredentialSection(
-                            title: 'TMDB',
-                            description:
-                                'Discovery and search run on Cantinarr\'s '
-                                'built-in key out of the box. Add your own '
-                                'access token to use your TMDB account instead.',
-                            isConfigured:
-                                _status?.isConfigured('tmdb_access_token') ??
-                                    false,
-                            builtinActive: _status?.tmdbUsingBuiltin ?? false,
-                            controller: _tmdbController,
-                            hint: 'TMDB access token',
-                            onDelete: () => _deleteCredential(
-                              'tmdb_access_token',
-                              'TMDB',
-                              message: 'Your token will be removed and '
-                                  'Cantinarr\'s built-in key takes over.',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        _anchor(
                           SettingsAnchors.credentialsAnthropic,
-                          _CredentialSection(
+                          CredentialSection(
                             title: 'Anthropic (AI)',
                             description:
                                 'Shared Claude API key for included AI usage',
@@ -427,7 +393,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           const SizedBox(height: 20),
                           _anchor(
                             SettingsAnchors.credentialsOpenAi,
-                            _CredentialSection(
+                            CredentialSection(
                               title: 'OpenAI (AI)',
                               description:
                                   'Shared OpenAI API key for included AI usage',
@@ -442,7 +408,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                           const SizedBox(height: 20),
                           _anchor(
                             SettingsAnchors.credentialsGemini,
-                            _CredentialSection(
+                            CredentialSection(
                               title: 'Google Gemini (AI)',
                               description:
                                   'Shared Gemini API key for included AI usage',
@@ -455,22 +421,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             ),
                           ),
                         ],
-                        const SizedBox(height: 20),
-                        _anchor(
-                          SettingsAnchors.credentialsTrakt,
-                          _CredentialSection(
-                            title: 'Trakt',
-                            description:
-                                'Enhances discovery with trending and popular lists',
-                            isConfigured:
-                                _status?.isConfigured('trakt_client_id') ??
-                                    false,
-                            controller: _traktIdController,
-                            hint: 'Trakt client ID',
-                            onDelete: () =>
-                                _deleteCredential('trakt_client_id', 'Trakt'),
-                          ),
-                        ),
                         const SizedBox(height: 32),
                         SizedBox(
                           width: double.infinity,
@@ -840,94 +790,6 @@ class _SharedApiCostNotice extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _CredentialSection extends StatelessWidget {
-  final String title;
-  final String description;
-  final bool isConfigured;
-
-  /// True when the integration is running on a built-in public key instead of
-  /// an admin credential — working, but nothing stored to delete.
-  final bool builtinActive;
-  final TextEditingController controller;
-  final String hint;
-  final VoidCallback onDelete;
-
-  const _CredentialSection({
-    required this.title,
-    required this.description,
-    required this.isConfigured,
-    this.builtinActive = false,
-    required this.controller,
-    required this.hint,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: isConfigured || builtinActive
-                    ? AppTheme.available.withValues(alpha: 0.15)
-                    : AppTheme.unavailable.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                isConfigured
-                    ? 'Configured'
-                    : (builtinActive ? 'Built-in key' : 'Not set'),
-                style: TextStyle(
-                  color: isConfigured || builtinActive
-                      ? AppTheme.available
-                      : AppTheme.unavailable,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            if (isConfigured) ...[
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: onDelete,
-                child: const Icon(Icons.close,
-                    size: 18, color: AppTheme.textSecondary),
-              ),
-            ],
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(description,
-            style:
-                const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: controller,
-          obscureText: true,
-          decoration: InputDecoration(
-            hintText: isConfigured ? 'Enter new value to replace' : hint,
-            isDense: true,
-          ),
-        ),
-      ],
     );
   }
 }

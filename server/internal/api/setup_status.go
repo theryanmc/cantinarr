@@ -101,7 +101,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "tmdb",
 			Title:       "Discovery (TMDB)",
-			Description: "Browsing, search, and artwork are powered by TMDB. The built-in key works out of the box; add your own under Providers & Credentials to use your account instead.",
+			Description: "Browsing, search, and artwork are powered by TMDB. The built-in key works out of the box; add your own in the Discover settings to use your account instead.",
 			Configured:  f.TMDB,
 		},
 		{

@@ -65,14 +65,16 @@ abstract final class SettingsAnchors {
   // /settings/credentials
   static const credentialsAiModel = 'credentials.ai-model';
   static const credentialsHealthCheck = 'credentials.health-check';
-  static const credentialsTmdb = 'credentials.tmdb';
   static const credentialsAnthropic = 'credentials.anthropic';
   static const credentialsOpenAi = 'credentials.openai';
   static const credentialsGemini = 'credentials.gemini';
-  static const credentialsTrakt = 'credentials.trakt';
 
-  // /settings/discovery
+  // /settings/discovery — the TMDB/Trakt sections moved here from the
+  // credentials screen; their ids keep the historic `credentials.` prefix
+  // because anchor ids never rename.
   static const discoveryEnglishOnly = 'discovery.english-only';
+  static const credentialsTmdb = 'credentials.tmdb';
+  static const credentialsTrakt = 'credentials.trakt';
 
   // /settings/ai-tools
   static const aiToolsDebugLogging = 'ai-tools.debug-logging';

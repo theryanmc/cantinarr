@@ -155,6 +155,27 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAiChat,
   ),
   SettingsSearchEntry(
+    id: 'screen.discovery',
+    title: 'Discover',
+    icon: Icons.explore_outlined,
+    route: '/settings/discovery',
+    screenTitle: 'Settings',
+    section: 'Modules',
+    keywords: [
+      'discovery',
+      'headline rows',
+      'row source',
+      'trakt',
+      'tmdb',
+      'english',
+      'language',
+      'credentials',
+      'api key',
+      'token',
+    ],
+    gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
     id: 'screen.my-reports',
     title: 'My reports',
     icon: Icons.flag_outlined,
@@ -191,14 +212,11 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Admin',
     keywords: [
       'api key',
-      'tmdb',
-      'trakt',
       'anthropic',
       'openai',
       'gemini',
       'ai provider',
       'model',
-      'token',
       'chatgpt',
     ],
     gate: gateAdmin,
@@ -251,23 +269,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'Admin',
     keywords: ['request defaults', 'approval', 'seasons', 'quality'],
-    gate: gateAdmin,
-  ),
-  SettingsSearchEntry(
-    id: 'screen.discovery',
-    title: 'Discovery',
-    icon: Icons.explore_outlined,
-    route: '/settings/discovery',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: [
-      'headline rows',
-      'row source',
-      'trakt',
-      'tmdb',
-      'english',
-      'language',
-    ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -855,16 +856,6 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     anchorId: SettingsAnchors.credentialsHealthCheck,
   ),
   SettingsSearchEntry(
-    id: SettingsAnchors.credentialsTmdb,
-    title: 'TMDB',
-    icon: Icons.key_outlined,
-    route: '/settings/credentials',
-    screenTitle: 'Providers & Credentials',
-    keywords: ['access token', 'discovery', 'built-in key', 'movie database'],
-    gate: gateAdmin,
-    anchorId: SettingsAnchors.credentialsTmdb,
-  ),
-  SettingsSearchEntry(
     id: SettingsAnchors.credentialsAnthropic,
     title: 'Anthropic (AI)',
     icon: Icons.key_outlined,
@@ -894,16 +885,6 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     gate: gateAdmin,
     anchorId: SettingsAnchors.credentialsGemini,
   ),
-  SettingsSearchEntry(
-    id: SettingsAnchors.credentialsTrakt,
-    title: 'Trakt',
-    icon: Icons.key_outlined,
-    route: '/settings/credentials',
-    screenTitle: 'Providers & Credentials',
-    keywords: ['client id', 'trending', 'discovery'],
-    gate: gateAdmin,
-    anchorId: SettingsAnchors.credentialsTrakt,
-  ),
 ];
 
 // ── Plex Invites — /settings/plex ───────────────────────────────────────────
@@ -921,18 +902,42 @@ const List<SettingsSearchEntry> _plexEntries = [
   ),
 ];
 
-// ── Discovery — /settings/discovery ─────────────────────────────────────────
+// ── Discover — /settings/discovery ──────────────────────────────────────────
+// TMDB/Trakt moved here with their credential sections; their anchor ids keep
+// the historic `credentials.` names so shared links stay meaningful.
 const List<SettingsSearchEntry> _discoveryEntries = [
   SettingsSearchEntry(
     id: SettingsAnchors.discoveryEnglishOnly,
     title: 'Only show English-language titles',
     icon: Icons.explore_outlined,
     route: '/settings/discovery',
-    screenTitle: 'Discovery',
+    screenTitle: 'Discover',
     section: 'Language',
     keywords: ['filter', 'foreign', 'original language', 'rows'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.discoveryEnglishOnly,
+  ),
+  SettingsSearchEntry(
+    id: SettingsAnchors.credentialsTmdb,
+    title: 'TMDB',
+    icon: Icons.explore_outlined,
+    route: '/settings/discovery',
+    screenTitle: 'Discover',
+    section: 'Credentials',
+    keywords: ['access token', 'discovery', 'built-in key', 'movie database'],
+    gate: gateAdmin,
+    anchorId: SettingsAnchors.credentialsTmdb,
+  ),
+  SettingsSearchEntry(
+    id: SettingsAnchors.credentialsTrakt,
+    title: 'Trakt',
+    icon: Icons.explore_outlined,
+    route: '/settings/discovery',
+    screenTitle: 'Discover',
+    section: 'Credentials',
+    keywords: ['client id', 'trending', 'discovery'],
+    gate: gateAdmin,
+    anchorId: SettingsAnchors.credentialsTrakt,
   ),
 ];
 
