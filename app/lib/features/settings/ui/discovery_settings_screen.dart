@@ -309,8 +309,28 @@ class _DiscoverySettingsScreenState
           ),
         ),
         const _SectionLabel('Credentials'),
+        // Trakt leads: it is the credential that unlocks a source, while
+        // TMDB is an optional override of the built-in key.
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: SettingsHighlight(
+            anchorId: SettingsAnchors.credentialsTrakt,
+            highlightId: widget.highlightId,
+            child: CredentialSection(
+              title: 'Trakt',
+              description:
+                  'Enhances discovery with trending and popular lists',
+              isConfigured:
+                  _credentials?.isConfigured('trakt_client_id') ?? false,
+              controller: _traktIdController,
+              hint: 'Trakt client ID',
+              onDelete: () =>
+                  _deleteCredential('trakt_client_id', 'Trakt'),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
           child: SettingsHighlight(
             anchorId: SettingsAnchors.credentialsTmdb,
             highlightId: widget.highlightId,
@@ -330,24 +350,6 @@ class _DiscoverySettingsScreenState
                 message: 'Your token will be removed and '
                     'Cantinarr\'s built-in key takes over.',
               ),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-          child: SettingsHighlight(
-            anchorId: SettingsAnchors.credentialsTrakt,
-            highlightId: widget.highlightId,
-            child: CredentialSection(
-              title: 'Trakt',
-              description:
-                  'Enhances discovery with trending and popular lists',
-              isConfigured:
-                  _credentials?.isConfigured('trakt_client_id') ?? false,
-              controller: _traktIdController,
-              hint: 'Trakt client ID',
-              onDelete: () =>
-                  _deleteCredential('trakt_client_id', 'Trakt'),
             ),
           ),
         ),
