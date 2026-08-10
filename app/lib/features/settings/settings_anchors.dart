@@ -9,7 +9,6 @@
 /// Never rename a value: ids travel in shareable URLs. Add, don't repurpose.
 abstract final class SettingsAnchors {
   // /settings (root)
-  static const rootStatus = 'root.status';
   static const rootAiAssistant = 'root.ai-assistant';
   static const rootRequestUpdates = 'root.request-updates';
   static const rootShowPlexGuide = 'root.show-plex-guide';

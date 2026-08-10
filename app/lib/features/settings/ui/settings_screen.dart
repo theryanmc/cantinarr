@@ -125,26 +125,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           else ...[
             // Server connection
             const _SectionHeader(title: 'Server'),
+            // One live row: which server, its address, and whether the
+            // session is connected — the dot carries the status.
             _SettingsTile(
               icon: Icons.dns_outlined,
               title: connection?.serverName ?? 'Cantinarr',
               subtitle: connection?.serverUrl ?? 'Not connected',
-            ),
-            SettingsHighlight(
-              anchorId: SettingsAnchors.rootStatus,
-              highlightId: _activeHighlight,
-              child: _SettingsTile(
-                icon: Icons.check_circle_outline,
-                title: 'Status',
-                subtitle:
-                    auth?.isAuthenticated == true ? 'Connected' : 'Disconnected',
-                trailing: Icon(
-                  Icons.circle,
-                  size: 12,
-                  color: auth?.isAuthenticated == true
-                      ? AppTheme.available
-                      : AppTheme.error,
-                ),
+              trailing: Icon(
+                Icons.circle,
+                size: 12,
+                color: auth?.isAuthenticated == true
+                    ? AppTheme.available
+                    : AppTheme.error,
               ),
             ),
 
@@ -167,6 +159,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ? 'Change your sign-in password'
                         : 'Add a password for sign-in & MCP'),
                 onTap: () => context.push('/settings/password'),
+              ),
+            if (user?.canUsePasskey == true)
+              _SettingsTile(
+                icon: Icons.fingerprint,
+                title: 'Passkeys',
+                subtitle: 'Manage passkey sign-in methods',
+                onTap: () => context.push('/settings/passkeys'),
               ),
             if (user?.hasPermission('ai:chat') == true)
               _SettingsTile(
@@ -226,6 +225,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   size: 12,
                   color: aiAvailable ? AppTheme.available : AppTheme.unavailable,
                 ),
+                onTap: () => context.push('/assistant'),
               ),
             ),
             if (user?.isAdmin == true)
@@ -243,14 +243,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   icon: const Icon(Icons.add),
                   label: const Text('Add Instance'),
                 ),
-              ),
-
-            if (user?.canUsePasskey == true)
-              _SettingsTile(
-                icon: Icons.fingerprint,
-                title: 'Passkeys',
-                subtitle: 'Manage passkey sign-in methods',
-                onTap: () => context.push('/settings/passkeys'),
               ),
 
             // Admin section
