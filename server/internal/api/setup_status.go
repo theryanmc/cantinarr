@@ -119,6 +119,20 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "trakt",
+			Title:       "Trakt discovery",
+			Description: "Adds trending, popular lists, and the release calendar to discovery.",
+			Configured:  f.Trakt,
+			Optional:    true,
+		},
+		{
+			Key:         "discovery_prefs",
+			Title:       "Discovery rows",
+			Description: discoveryDescription(f),
+			Configured:  f.DiscoveryChosen,
+			Optional:    true,
+		},
+		{
 			Key:         "download_client",
 			Title:       "Download activity",
 			Description: "See and manage the live download queue (SABnzbd, qBittorrent, NZBGet, or Transmission).",
@@ -137,20 +151,6 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Title:       "Plex monitoring (Tautulli)",
 			Description: "Watch live Plex streams, history, and stats from the app.",
 			Configured:  f.HasTautulli,
-			Optional:    true,
-		},
-		{
-			Key:         "trakt",
-			Title:       "Trakt discovery",
-			Description: "Adds trending, popular lists, and the release calendar to discovery.",
-			Configured:  f.Trakt,
-			Optional:    true,
-		},
-		{
-			Key:         "discovery_prefs",
-			Title:       "Discovery rows",
-			Description: discoveryDescription(f),
-			Configured:  f.DiscoveryChosen,
 			Optional:    true,
 		},
 		{
