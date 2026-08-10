@@ -244,18 +244,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/settings/ai-tools'),
               ),
               _SettingsTile(
-                icon: Icons.manage_history_outlined,
-                title: 'Configuration History',
-                subtitle: 'Review AI/MCP profile and custom-format changes',
-                onTap: () => context.push('/settings/change-history'),
-              ),
-              _SettingsTile(
-                icon: Icons.tune,
-                title: 'Request Settings',
-                subtitle: 'Approval, season, and quality defaults',
-                onTap: () => context.push('/settings/request-settings'),
-              ),
-              _SettingsTile(
                 icon: Icons.auto_fix_high_outlined,
                 title: 'AI Remediation',
                 subtitle: 'Problem reporting and auto-fix assistant',
@@ -266,6 +254,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Agent Auto-Approvals',
                 subtitle: 'Standing rules that approve repeat fixes',
                 onTap: () => context.push('/settings/agent-approval-rules'),
+              ),
+              _SettingsTile(
+                icon: Icons.manage_history_outlined,
+                title: 'Configuration History',
+                subtitle: 'Review AI/MCP profile and custom-format changes',
+                onTap: () => context.push('/settings/change-history'),
+              ),
+              _SettingsTile(
+                icon: Icons.tune,
+                title: 'Request Settings',
+                subtitle: 'Approval, season, and quality defaults',
+                onTap: () => context.push('/settings/request-settings'),
               ),
               _SettingsTile(
                 icon: Icons.explore_outlined,
