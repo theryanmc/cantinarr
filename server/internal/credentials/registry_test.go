@@ -444,3 +444,51 @@ func TestTMDBBuiltInDefaultAndOverride(t *testing.T) {
 		t.Fatal("deleting the admin token did not fall back to the built-in token")
 	}
 }
+
+func TestTraktBuiltInDefaultAndOverride(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x43}, 32))
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+
+	// Without the option (every test registry): no client ID means no client.
+	bare := NewRegistry(database, cipher)
+	if bare.Trakt() != nil || bare.TraktAvailable() || bare.TraktUsingBuiltIn() {
+		t.Fatal("registry without a built-in client ID produced a Trakt client from nothing")
+	}
+
+	registry := NewRegistry(database, cipher, WithDefaultTraktClientID("builtin-public-client-id"))
+	if registry.Trakt() == nil || !registry.TraktAvailable() {
+		t.Fatal("built-in client ID did not produce a Trakt client")
+	}
+	if !registry.TraktUsingBuiltIn() {
+		t.Fatal("registry running on the built-in client ID did not report built-in usage")
+	}
+	if registry.IsConfigured(KeyTraktClientID) {
+		t.Fatal("built-in fallback must not report the admin credential as configured")
+	}
+
+	if err := registry.SetCredential(KeyTraktClientID, "admin-client-id"); err != nil {
+		t.Fatalf("set admin client ID: %v", err)
+	}
+	registry.Invalidate()
+	if registry.Trakt() == nil || !registry.TraktAvailable() {
+		t.Fatal("admin client ID did not produce a Trakt client")
+	}
+	if registry.TraktUsingBuiltIn() {
+		t.Fatal("admin-supplied client ID still reported built-in usage")
+	}
+
+	if err := registry.DeleteCredential(KeyTraktClientID); err != nil {
+		t.Fatalf("delete admin client ID: %v", err)
+	}
+	registry.Invalidate()
+	if registry.Trakt() == nil || !registry.TraktUsingBuiltIn() {
+		t.Fatal("deleting the admin client ID did not fall back to the built-in application")
+	}
+}

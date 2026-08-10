@@ -13,11 +13,16 @@ class CredentialsStatus {
   /// True when TMDB is running on the server's built-in public key rather
   /// than an admin-supplied token. Older servers never send the field.
   final bool tmdbUsingBuiltin;
+
+  /// True when Trakt is running on the server's built-in application rather
+  /// than an admin-supplied client ID. Older servers never send the field.
+  final bool traktUsingBuiltin;
   final AiCredentialConfig ai;
 
   const CredentialsStatus({
     required this.credentials,
     this.tmdbUsingBuiltin = false,
+    this.traktUsingBuiltin = false,
     required this.ai,
   });
 
@@ -31,6 +36,7 @@ class CredentialsStatus {
     return CredentialsStatus(
       credentials: credentials,
       tmdbUsingBuiltin: json['tmdb_using_builtin'] as bool? ?? false,
+      traktUsingBuiltin: json['trakt_using_builtin'] as bool? ?? false,
       ai: AiCredentialConfig.fromJson(
         aiJson is Map<String, dynamic> ? aiJson : const {},
       ),

@@ -380,7 +380,7 @@ func (h *Handler) configuredServices() []string {
 	if h.creds.TMDBAvailable() {
 		services = append(services, "TMDB (discovery)")
 	}
-	if h.creds.IsConfigured(credentials.KeyTraktClientID) {
+	if h.creds.TraktAvailable() {
 		services = append(services, "Trakt (trending)")
 	}
 	if h.toolServer.GetRadarr() != nil {
