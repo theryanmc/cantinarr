@@ -176,6 +176,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
             // Modules (dynamic, instance-based)
             const _SectionHeader(title: 'Modules'),
+            // Discover leads: it mirrors the drawer (above the libraries)
+            // and stays anchored while the instance list below it changes.
+            if (user?.isAdmin == true)
+              _SettingsTile(
+                icon: Icons.explore_outlined,
+                title: 'Discover',
+                subtitle: 'Row sources, language filter, TMDB and Trakt',
+                onTap: () => context.push('/settings/discovery'),
+              ),
             if (instances.isEmpty)
               const _SettingsTile(
                 icon: Icons.info_outline,
@@ -203,13 +212,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           )
                       : null,
                 )),
-            if (user?.isAdmin == true)
-              _SettingsTile(
-                icon: Icons.explore_outlined,
-                title: 'Discover',
-                subtitle: 'Row sources, language filter, TMDB and Trakt',
-                onTap: () => context.push('/settings/discovery'),
-              ),
             if (user?.isAdmin != true)
               _SettingsTile(
                 icon: Icons.flag_outlined,
@@ -238,6 +240,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Admin'),
+              // People and access first: invite, manage, their devices,
+              // their Plex — then the AI/config stack.
+              _SettingsTile(
+                icon: Icons.link,
+                title: 'Generate Connect Link',
+                subtitle: 'Create a link to invite a new user',
+                onTap: () => _showGenerateConnectLinkDialog(context),
+              ),
+              _SettingsTile(
+                icon: Icons.people_outline,
+                title: 'Users',
+                subtitle: 'Manage accounts, roles, and invites',
+                onTap: () => context.push('/settings/users'),
+              ),
+              _SettingsTile(
+                icon: Icons.devices,
+                title: 'Connected Devices',
+                subtitle: 'Manage all connected devices',
+                onTap: () => context.push('/settings/devices'),
+              ),
+              _SettingsTile(
+                icon: Icons.play_circle_outline,
+                title: 'Plex Invites',
+                subtitle: 'Link Plex for one-tap and automatic invites',
+                onTap: () => context.push('/settings/plex'),
+              ),
               _SettingsTile(
                 icon: Icons.key_outlined,
                 title: 'Providers & Credentials',
@@ -273,30 +301,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Request Settings',
                 subtitle: 'Approval, season, and quality defaults',
                 onTap: () => context.push('/settings/request-settings'),
-              ),
-              _SettingsTile(
-                icon: Icons.people_outline,
-                title: 'Users',
-                subtitle: 'Manage accounts, roles, and invites',
-                onTap: () => context.push('/settings/users'),
-              ),
-              _SettingsTile(
-                icon: Icons.play_circle_outline,
-                title: 'Plex Invites',
-                subtitle: 'Link Plex for one-tap and automatic invites',
-                onTap: () => context.push('/settings/plex'),
-              ),
-              _SettingsTile(
-                icon: Icons.link,
-                title: 'Generate Connect Link',
-                subtitle: 'Create a link to invite a new user',
-                onTap: () => _showGenerateConnectLinkDialog(context),
-              ),
-              _SettingsTile(
-                icon: Icons.devices,
-                title: 'Connected Devices',
-                subtitle: 'Manage all connected devices',
-                onTap: () => context.push('/settings/devices'),
               ),
               _SettingsTile(
                 icon: Icons.open_in_new,
