@@ -502,7 +502,18 @@ func (s *Service) storeQueueSnapshot(serviceType, instanceID string, items []arr
 func (s *Service) noteObservationFailure(serviceType, instanceID string, cause error, now time.Time) {
 	s.observationMu.Lock()
 	defer s.observationMu.Unlock()
+	// Persist the actual cause, redacted and bounded: the 2026-08 audit found
+	// this column always held the constant "queue_read_failed", which made
+	// "why couldn't the observer see the queue that night" permanently
+	// unanswerable (instance hosts never reach non-admin surfaces; this table
+	// has no API projection at all).
 	message := "queue_read_failed"
+	if cause != nil {
+		message = secrets.RedactText(cause.Error())
+		if len(message) > 500 {
+			message = message[:500]
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return
@@ -1148,8 +1159,7 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 	// states are still cancelled; the surviving handoff is consumed when the
 	// issue re-promotes (claimResume accepts open) or finalized if it closes.
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted', stop_reason='arr_recovery_in_flight',
-		 deadline_at=NULL, finished_at=COALESCE(finished_at, ?)
+		`UPDATE agent_runs SET status='aborted', stop_reason='arr_recovery_in_flight', finished_at=COALESCE(finished_at, ?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval')`,
 		now, issueID,
 	); err != nil {
@@ -1473,6 +1483,15 @@ func mergeObservedDownload(existing, candidate observedDownload) observedDownloa
 	return merged
 }
 
+// importReceiptSkewTolerance absorbs clock skew between the stamps the attempt
+// boundary compares: a queue row's `added` can carry the download client's
+// clock while the history record's `date` is the arr's own. A genuine import
+// receipt may therefore be dated slightly BEFORE its download's added time
+// without being a stale record. Anything beyond a minute is treated as what
+// the boundary exists to reject: a reused download id resurrecting an old
+// import as proof.
+const importReceiptSkewTolerance = time.Minute
+
 func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internalMediaID int, requireAttemptBoundary bool) (importReceipt, error) {
 	downloadsByKey := map[string]observedDownload{}
 	rows, err := s.db.Query(
@@ -1554,9 +1573,17 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 					record.MovieID != internalMediaID || record.ID <= 0 {
 					continue
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date.Before(download.addedAt.Time)) {
+				// The attempt boundary pins the receipt to THIS download attempt:
+				// the added time must be known, and the import must not predate
+				// it (minus client/arr clock skew). It deliberately does NOT
+				// compare the queue row's file id to the current one — for an
+				// upgrade observed before its import lands, the queue-time file
+				// is the OLD file by definition, and requiring equality made
+				// every fast upgrade's recovery unprovable (the 2026-08-10
+				// seven-false-pages incident). Identity is already bound by the
+				// download id, event type, data.fileId, and media checks.
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Movie != nil && (record.Movie.ID != internalMediaID || record.Movie.TmdbID != issue.TmdbID) {
@@ -1582,9 +1609,11 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 					record.EpisodeID != internalMediaID || record.ID <= 0 {
 					continue
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date.Before(download.addedAt.Time)) {
+				// Same attempt boundary as the movie branch: added-time known,
+				// receipt not predating it beyond clock skew; never a
+				// queue-file equality (see the movie branch's comment).
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Series != nil && record.Series.TvdbID != issue.TvdbID {
@@ -1639,9 +1668,11 @@ func (s *Service) exactImportWitness(issue *Issue, currentFileID int64, internal
 						continue
 					}
 				}
-				if requireAttemptBoundary && (!download.addedAt.Valid || !download.queueFileID.Valid ||
-					(download.queueFileID.Int64 > 0 && download.queueFileID.Int64 != currentFileID) ||
-					record.Date == nil || record.Date.Before(download.addedAt.Time)) {
+				// Same attempt boundary as the movie branch (Chaptarr dates are
+				// nullable): added-time known, receipt not predating it beyond
+				// clock skew; never a queue-file equality.
+				if requireAttemptBoundary && (!download.addedAt.Valid ||
+					record.Date == nil || record.Date.Before(download.addedAt.Time.Add(-importReceiptSkewTolerance))) {
 					continue
 				}
 				if record.Book != nil && record.Book.ID != issue.BookID {
@@ -2214,8 +2245,7 @@ func (s *Service) moveIssueToObservationNeedsAdmin(issue *Issue, reason string, 
 	}
 	superseded, _ := actions.RowsAffected()
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, issue.ID); err != nil {
 		return false, err
@@ -2271,8 +2301,7 @@ func (s *Service) cancelExecutingForRecovery(act *AgentAction, probe arrRecovery
 		return ErrActionDecisionConflict
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='arr_recovery_in_flight',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='arr_recovery_in_flight',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, act.IssueID,
 	); err != nil {
@@ -2325,8 +2354,7 @@ func (s *Service) failExecutingRecoveryPreflight(act *AgentAction, cause error) 
 		return err
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',
-		 deadline_at=NULL,finished_at=COALESCE(finished_at,?)
+		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',finished_at=COALESCE(finished_at,?)
 		 WHERE issue_id=? AND status IN ('running','waiting_user','waiting_approval','resume_pending')`,
 		now, act.IssueID,
 	); err != nil {
@@ -2368,8 +2396,7 @@ func (s *Service) cancelExecutingForObservationReview(act *AgentAction, reason s
 		return ErrActionDecisionConflict
 	}
 	if _, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',deadline_at=NULL,
-		 finished_at=COALESCE(finished_at,?) WHERE issue_id=?
+		`UPDATE agent_runs SET status='aborted',stop_reason='media_state_changed',finished_at=COALESCE(finished_at,?) WHERE issue_id=?
 		 AND status IN ('running','waiting_user','waiting_approval','resume_pending')`, now, act.IssueID); err != nil {
 		return err
 	}

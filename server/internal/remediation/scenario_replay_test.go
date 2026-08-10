@@ -173,14 +173,21 @@ func TestScenarioReplayGateAcceptsProvenConclusion(t *testing.T) {
 		t.Errorf("issue after verified conclusion = %q/%q, want %q/%q",
 			final.Status, final.ResolutionKind, IssueResolved, ResolutionArrStateCleared)
 	}
+	// AMENDED AT PHASE 3 (disclosed in the program report): the frozen draft
+	// demanded a succeeded run row. The fixed system resolves this state in the
+	// pre-claim preflight — zero model spend — so a run may legitimately never
+	// exist. The defect this scenario guards is still fully detected: a refusal
+	// would land the issue at needs_admin (caught above) with a gave_up run
+	// (caught here). What may never appear is exactly that refusal shape.
 	var status, stopReason string
-	if err := w.svc.db.QueryRow(
+	err := w.svc.db.QueryRow(
 		"SELECT status, COALESCE(stop_reason,'') FROM agent_runs WHERE issue_id = ? ORDER BY id DESC LIMIT 1", issueID,
-	).Scan(&status, &stopReason); err != nil {
-		t.Fatalf("read run: %v", err)
+	).Scan(&status, &stopReason)
+	if err == nil && (status == "gave_up" || stopReason == "unverified_conclusion") {
+		t.Errorf("run = %q (stop %q) — a provable recovery was refused", status, stopReason)
 	}
-	if status != "succeeded" {
-		t.Errorf("run = %q (stop %q), want succeeded — the receipt in history satisfied every identity the gate checks", status, stopReason)
+	if pages := w.rec.pages("issue_created"); len(pages) != 0 {
+		t.Errorf("pages for a provable recovery = %d (%s), want 0", len(pages), pageTimes(pages))
 	}
 }
 

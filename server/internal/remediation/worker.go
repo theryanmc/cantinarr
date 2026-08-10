@@ -109,8 +109,7 @@ func (s *Service) recoverWork(runner *Runner) {
 	// Always release these claims, even while remediation is disabled, so turning
 	// the feature back on cannot inherit a phantom worker.
 	s.db.Exec(
-		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'server_restarted',
-		 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		`UPDATE agent_runs SET status = 'aborted', stop_reason = 'server_restarted', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status = 'running' AND proc_generation != ?`, runner.procToken,
 	)
 	s.db.Exec(

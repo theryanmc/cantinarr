@@ -36,7 +36,6 @@ const (
 	IssueNeedsAdmin           = "needs_admin"
 	IssueResolved             = "resolved"
 	IssueWontFix              = "wont_fix"
-	IssueFailed               = "failed"
 	IssueDismissed            = "dismissed"
 )
 
