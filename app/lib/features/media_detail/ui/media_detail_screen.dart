@@ -183,6 +183,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                 pinned: true,
                 delegate: MediaHeroDelegate(
                   title: state.title,
+                  year: tmdbPremiereYear(state.movieDetail?.releaseDate),
                   posterPath: state.posterPath,
                   backdropPath: state.backdropPath,
                   expandedExtent: MediaHeroDelegate.expandedExtentFor(
