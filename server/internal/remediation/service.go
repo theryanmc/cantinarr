@@ -773,8 +773,7 @@ func (s *Service) saveUnresumableApprovalReply(issueID int64, authorKind string,
 	}
 	if n, _ := res.RowsAffected(); n > 0 {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE issue_id = ? AND status IN (?, ?)`,
 			issueID, runStatusWaitingApproval, runStatusResumePending,
 		); err != nil {
@@ -830,8 +829,7 @@ func (s *Service) saveUnresumableReply(issueID int64, authorKind string, authorI
 	}
 	if escalated > 0 {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE issue_id = ? AND status IN (?, ?)`,
 			issueID, runStatusWaitingUser, runStatusResumePending,
 		); err != nil {
@@ -1023,7 +1021,7 @@ const (
 // "closed" and "terminal" name the same rows from either direction.
 func closedIssueStatus(status string) bool {
 	return status == IssueResolved || status == IssueWontFix ||
-		status == IssueDismissed || status == IssueFailed
+		status == IssueDismissed
 }
 
 // ListIssues returns the admin issue list: every open issue, plus the most

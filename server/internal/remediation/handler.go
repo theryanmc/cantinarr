@@ -166,8 +166,6 @@ func applyRequesterCopy(issue *Issue) {
 		default:
 			issue.Resolution = "This was closed without a fix. If it still looks wrong, report it again."
 		}
-	case IssueFailed:
-		issue.Resolution = "This couldn't be resolved automatically. If it still looks wrong, report it again."
 	case IssueResolved:
 		switch issue.ResolutionKind {
 		case ResolutionReporterConfirmed:

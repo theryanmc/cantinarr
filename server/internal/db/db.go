@@ -493,7 +493,7 @@ CREATE INDEX IF NOT EXISTS idx_issue_messages_issue ON issue_messages(issue_id, 
 CREATE TABLE IF NOT EXISTS agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
-    trigger TEXT NOT NULL,                       -- 'auto'|'user_report'|'user_reply'|'approval_granted'|'approval_denied'
+    trigger TEXT NOT NULL,                       -- 'auto'|'user_report' (a resume reuses its original run row, so no other value is ever written)
     status TEXT NOT NULL DEFAULT 'running',      -- running|waiting_user|waiting_approval|resume_pending|succeeded|gave_up|failed|aborted
     model TEXT NOT NULL DEFAULT '',
     proc_generation TEXT NOT NULL DEFAULT '',    -- process-start token; watchdog uses it to tell crashed-mid-run from parked
@@ -503,8 +503,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     active_seconds INTEGER NOT NULL DEFAULT 0,   -- wall-clock excluding paused waits
-    deadline_at DATETIME,                        -- active-work deadline; NULL while parked
-    stop_reason TEXT,                            -- resolved|max_steps|timeout|repeated_failure|awaiting_approval|awaiting_user|tool_error
+    deadline_at DATETIME,                        -- retired 2026-08 (was a never-read watchdog deadline); kept NULL for rollback compatibility
+    stop_reason TEXT,                            -- vocabulary owned by runner.go's stop* constants plus the abort reasons (server_restarted, issue_closed, media_state_changed, external_resolution, arr_recovery_in_flight, action_outcome_unknown)
     transcript_json TEXT NOT NULL DEFAULT '',    -- UNTRUNCATED provider-neutral transcript for resume (NOT the audit ledger)
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME
@@ -537,7 +537,7 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
     run_id INTEGER REFERENCES agent_runs(id),
     tool_use_id TEXT,                           -- the propose_action tool_use.id, so the resume tool_result pairs correctly
-    kind TEXT NOT NULL,                          -- grab_release|remediate_queue|manual_import|trigger_search|rescan
+    kind TEXT NOT NULL,                          -- the 6-kind vocabulary owned by models.go ProposableActionKinds (incl. delete_media_files)
     params TEXT NOT NULL DEFAULT '{}',           -- JSON: the exact typed args to replay on approval
     approved_params TEXT,                        -- immutable admin override; NULL means original params
     rationale TEXT NOT NULL DEFAULT '',          -- agent's plain-language justification (UNTRUSTED — render as text)
@@ -898,6 +898,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		// Which storm cap a claim counts toward ('broadcast', 'upgrade', or
 		// 'none' for a silent claim) -- see the table comment.
 		{alter: "ALTER TABLE content_alert_claims ADD COLUMN storm_scope TEXT NOT NULL DEFAULT 'broadcast'"},
+		// When the alert queue last delivered an admin page for this issue —
+		// the durable per-issue send record the 2026-08-10 audit found missing,
+		// and the ledger behind the one-page-per-issue-per-24h budget. Stamped
+		// only by the queue flush (immediate category pushes keep their own
+		// dedupe mechanisms). NULL = never paged through the queue.
+		{alter: "ALTER TABLE issues ADD COLUMN last_paged_at DATETIME"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -996,13 +1002,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		   SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown'
 		 )`,
 		`UPDATE agent_runs
-		 SET status = 'aborted', stop_reason = 'action_outcome_unknown', deadline_at = NULL,
-		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 SET status = 'aborted', stop_reason = 'action_outcome_unknown', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
 		   AND issue_id IN (SELECT issue_id FROM agent_actions WHERE status = 'outcome_unknown')`,
 		`UPDATE agent_runs
-		 SET status = 'aborted', stop_reason = 'issue_closed', deadline_at = NULL,
-		     finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+		 SET status = 'aborted', stop_reason = 'issue_closed', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 		 WHERE status IN ('running','waiting_user','waiting_approval','resume_pending')
 		   AND issue_id IN (SELECT id FROM issues WHERE closed_at IS NOT NULL)`,
 		`UPDATE issues SET active_run_id = NULL
@@ -1202,8 +1206,7 @@ func repairReleaseActionReferences(db *sql.DB) error {
 				return fmt.Errorf("escalate legacy release issue %d: %w", action.issueID, err)
 			}
 			if _, err := tx.Exec(
-				`UPDATE agent_runs SET status = 'aborted', stop_reason = 'legacy_release_metadata',
-				 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+				`UPDATE agent_runs SET status = 'aborted', stop_reason = 'legacy_release_metadata', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 				 WHERE issue_id = ? AND status = 'waiting_approval'`, action.issueID,
 			); err != nil {
 				return fmt.Errorf("abort legacy release run for issue %d: %w", action.issueID, err)

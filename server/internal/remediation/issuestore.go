@@ -325,8 +325,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			stopReason = stopUserUnresponsive
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, deadline_at = NULL,
-				 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 				 WHERE issue_id = ? AND status IN ('running','waiting_user','waiting_approval','resume_pending')
 				   AND (? = 0 OR id != ?)`,
 			stopReason, issueID, opts.expectedRunID, opts.expectedRunID,
@@ -418,8 +417,7 @@ func (s *Service) ParkAwaitingConfirmation(ctx context.Context, issueID, runID i
 	defer tx.Rollback()
 	if runID != 0 {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL,
-			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE id = ? AND issue_id = ? AND status IN (?, ?)`,
 			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
 		)
@@ -491,8 +489,7 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 	defer tx.Rollback()
 	if runID != 0 {
 		res, err := tx.ExecContext(ctx,
-			`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL,
-			 finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE id = ? AND issue_id = ? AND status IN (?, ?)`,
 			runStatusGaveUp, stopReason, runID, issueID, runStatusRunning, runStatusResumePending,
 		)

@@ -476,8 +476,7 @@ func TestReporterConfirmFixTerminalizesALiveAgentRun(t *testing.T) {
 		t.Run(runStatus, func(t *testing.T) {
 			fx := reporterConfirmFixture(t)
 			confirmExec(t, fx,
-				`UPDATE agent_runs SET status = ?, finished_at = NULL, stop_reason = NULL,
-				 deadline_at = datetime('now', '+10 minutes') WHERE id = ?`,
+				`UPDATE agent_runs SET status = ?, finished_at = NULL, stop_reason = NULL WHERE id = ?`,
 				runStatus, fx.runID)
 
 			if err := fx.svc.ReporterConfirmFix(context.Background(), fx.issueID, fx.reporterID); err != nil {
@@ -485,19 +484,19 @@ func TestReporterConfirmFixTerminalizesALiveAgentRun(t *testing.T) {
 			}
 
 			var status, stopReason string
-			var deadlineCleared, finished bool
+			var finished bool
 			if err := fx.svc.db.QueryRow(
-				`SELECT status, COALESCE(stop_reason,''), deadline_at IS NULL, finished_at IS NOT NULL
+				`SELECT status, COALESCE(stop_reason,''), finished_at IS NOT NULL
 				 FROM agent_runs WHERE id = ?`,
 				fx.runID,
-			).Scan(&status, &stopReason, &deadlineCleared, &finished); err != nil {
+			).Scan(&status, &stopReason, &finished); err != nil {
 				t.Fatalf("load run: %v", err)
 			}
 			if status != "aborted" || stopReason != "external_resolution" {
 				t.Fatalf("run after confirmation = %s/%s, want aborted/external_resolution", status, stopReason)
 			}
-			if !deadlineCleared || !finished {
-				t.Fatalf("aborted run kept its deadline (cleared=%v) or never finished (%v)", deadlineCleared, finished)
+			if !finished {
+				t.Fatal("aborted run never got its finished_at stamp")
 			}
 			// The issue's claim is released with it.
 			if confirmIssue(t, fx).ClosedAt == nil {

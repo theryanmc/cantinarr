@@ -334,11 +334,23 @@ func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 		addedAt        *time.Time
 		snapshotFileID *int64
 		importDate     time.Time
+		proven         bool
 	}{
+		// The boundary's real protections: a receipt predating this download
+		// attempt (a reused torrent infohash resurrecting an old import) and an
+		// attempt with no known added time both stay refused.
 		{name: "old receipt for reused download id", addedAt: &attemptAdded, snapshotFileID: &queueFileID, importDate: base.Add(-time.Hour)},
 		{name: "missing arr attempt boundary", snapshotFileID: &queueFileID, importDate: base.Add(time.Minute)},
-		{name: "missing exact queue file state", addedAt: &attemptAdded, importDate: base.Add(time.Minute)},
-		{name: "different queue file", addedAt: &attemptAdded, snapshotFileID: &differentFileID, importDate: base.Add(time.Minute)},
+		// Updated with the 2026-08-10 incident (seven false pages): the
+		// queue-time file id is NOT part of the receipt's identity. A snapshot
+		// that omitted file state, and — the incident class itself — a queue row
+		// observed pre-import whose file id is the OLD file the upgrade
+		// replaced, are both proven by the receipt's own bindings (download id,
+		// event type, imported file id, media identity, date at-or-after the
+		// attempt). Requiring queue-file equality made every fast upgrade's
+		// recovery unprovable.
+		{name: "missing exact queue file state", addedAt: &attemptAdded, importDate: base.Add(time.Minute), proven: true},
+		{name: "different queue file", addedAt: &attemptAdded, snapshotFileID: &differentFileID, importDate: base.Add(time.Minute), proven: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fileState := &testFileState{
@@ -365,6 +377,17 @@ func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 			issues, _, err := svc.ListIssues("", 0)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.proven {
+				if len(issues) != 1 || issues[0].Status != IssueResolved ||
+					issues[0].ClosedAt == nil || issues[0].ResolutionKind != ResolutionArrStateCleared {
+					t.Fatalf("bound receipt did not prove recovery: %+v", issues)
+				}
+				deliverIssueAlerts(svc, base.Add(11*time.Minute))
+				if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_updated" || drainJobs(svc) != 0 {
+					t.Fatalf("proven recovery drew attention: events=%v", notifier.adminEvents)
+				}
+				return
 			}
 			if len(issues) != 1 || issues[0].Status != IssueOpen || issues[0].ClosedAt != nil {
 				t.Fatalf("ambiguous receipt falsely proved recovery: %+v", issues)

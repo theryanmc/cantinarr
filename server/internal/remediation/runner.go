@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/ai"
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
@@ -74,10 +75,12 @@ var readToolAllowSet = func() map[string]bool {
 // isReadToolAllowed reports whether name is a permitted read-only tool.
 func isReadToolAllowed(name string) bool { return readToolAllowSet[name] }
 
-// stepKind constants for the agent_steps audit ledger.
+// stepKind constants for the agent_steps audit ledger. Tool inputs ride the
+// tool_result row (persistStep stores input and output together), so there is
+// deliberately no separate tool_call kind — 46 days of production audit rows
+// confirmed nothing ever wrote one.
 const (
 	stepAssistant  = "assistant"
-	stepToolCall   = "tool_call"
 	stepToolResult = "tool_result"
 	stepGiveup     = "giveup"
 )
@@ -235,7 +238,7 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 
 	// Bound active wall-clock with a context timeout.
 	wall := time.Duration(settings.MaxWallClockSecs) * time.Second
-	activeStarted := r.beginActiveWindow(runID, settings.MaxWallClockSecs)
+	activeStarted := time.Now()
 	defer r.finishActiveWindow(runID, activeStarted)
 	runCtx, cancel := context.WithTimeout(ctx, wall)
 	defer cancel()
@@ -382,7 +385,7 @@ func (r *Runner) Resume(ctx context.Context, issueID int64) error {
 			giveUpMessage(issue, true))
 	}
 	wall := time.Duration(remainingSeconds) * time.Second
-	activeStarted := r.beginActiveWindow(runID, remainingSeconds)
+	activeStarted := time.Now()
 	defer r.finishActiveWindow(runID, activeStarted)
 	runCtx, cancel := context.WithTimeout(ctx, wall)
 	defer cancel()
@@ -410,8 +413,7 @@ func (r *Runner) abortClaimForRecoveryPreflight(issueID, runID int64, cause erro
 	}
 	defer tx.Rollback()
 	runRes, err := tx.Exec(
-		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',
-		 deadline_at=NULL,finished_at=CURRENT_TIMESTAMP
+		`UPDATE agent_runs SET status='aborted',stop_reason='recovery_preflight_failed',finished_at=CURRENT_TIMESTAMP
 		 WHERE id=? AND issue_id=? AND status=?`, runID, issueID, runStatusRunning)
 	if err != nil {
 		return err
@@ -1012,7 +1014,7 @@ func (r *Runner) parkWith(issueID, runID int64, runStatus, stopReason, issueStat
 		return r.invalidateStalePark(issueID, runID, issueStatus, cursor, toolUseID)
 	}
 	runRes, err := tx.Exec(
-		`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL
+		`UPDATE agent_runs SET status = ?, stop_reason = ?
 		 WHERE id = ? AND issue_id = ? AND status = ?`,
 		runStatus, stopReason, runID, issueID, runStatusRunning,
 	)
@@ -1196,10 +1198,22 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 			res.Text, res.ReleaseCandidates = prepareReleaseCandidatesForAgent(res.ReleaseCandidates)
 		}
 		ctrl.readEvidence = isVerificationRead(tu.Name, res)
-		if res.Verification != nil && res.Verification.ExactScope &&
-			(res.Verification.Kind == mcp.VerificationQueueTarget || res.Verification.Kind == mcp.VerificationSeasonClean) {
-			present := res.Verification.TargetPresent
-			ctrl.targetPresent = &present
+		if res.Verification != nil && res.Verification.ExactScope {
+			// Each verification kind is proof for ITS incident class only. A
+			// season_clean witness ("no unaired episode holds a file") is the
+			// recovery proof for a pre-air fill; accepting it for a queue-shaped
+			// issue let a timeline read of any ordinary season count as typed
+			// target evidence (found during the 2026-08-10 audit — masked, not
+			// exploited, by the post-loop recovery proof).
+			acceptable := res.Verification.Kind == mcp.VerificationQueueTarget
+			if res.Verification.Kind == mcp.VerificationSeasonClean {
+				kind, kindErr := r.svc.storedProblemKind(issue.ID)
+				acceptable = kindErr == nil && kind == arr.ProblemPreAirSeasonFill
+			}
+			if acceptable {
+				present := res.Verification.TargetPresent
+				ctrl.targetPresent = &present
+			}
 		}
 		ctrl.releaseCandidates = res.ReleaseCandidates
 		return res.Text, false, ctrl
@@ -1560,25 +1574,27 @@ func (r *Runner) claim(issue *Issue, model string) (runID int64, claimed bool, e
 // finalizeRun stamps a terminal status + stop_reason + finished_at on the run.
 func (r *Runner) finalizeRun(runID int64, status, stopReason string) error {
 	_, err := r.db.Exec(
-		`UPDATE agent_runs SET status = ?, stop_reason = ?, deadline_at = NULL, finished_at = CURRENT_TIMESTAMP
+		`UPDATE agent_runs SET status = ?, stop_reason = ?, finished_at = CURRENT_TIMESTAMP
 		 WHERE id = ? AND status IN (?, ?)`,
 		status, stopReason, runID, runStatusRunning, runStatusResumePending,
 	)
 	return err
 }
 
-func (r *Runner) beginActiveWindow(runID int64, remainingSeconds int) time.Time {
-	r.db.Exec("UPDATE agent_runs SET deadline_at = datetime('now', ?) WHERE id = ?",
-		fmt.Sprintf("+%d seconds", remainingSeconds), runID)
-	return time.Now()
-}
-
+// finishActiveWindow closes one active (non-parked) work segment for the run's
+// wall-clock accounting. Its begin half used to also arm agent_runs.deadline_at
+// for a hung-run watchdog that was never built: 46 days of production runs
+// (16-71s actives, bounded by the model provider's own timeout and
+// MaxWallClockSecs) never produced the hang it guarded against, so the 2026-08
+// complexity ledger deleted the writes. The column stays in the schema for
+// rollback compatibility, permanently NULL, like the retired cost_micros
+// estimates.
 func (r *Runner) finishActiveWindow(runID int64, started time.Time) {
 	elapsed := int((time.Since(started) + time.Second - 1) / time.Second)
 	if elapsed < 1 {
 		elapsed = 1
 	}
-	r.db.Exec("UPDATE agent_runs SET active_seconds = active_seconds + ?, deadline_at = NULL WHERE id = ?", elapsed, runID)
+	r.db.Exec("UPDATE agent_runs SET active_seconds = active_seconds + ? WHERE id = ?", elapsed, runID)
 }
 
 // bumpRunUsage accumulates provider-reported token usage and the step count onto
@@ -1695,7 +1711,7 @@ func (r *Runner) dailyRunCapExceeded(cap int) (bool, error) {
 
 func isTerminalStatus(s string) bool {
 	switch s {
-	case IssueResolved, IssueWontFix, IssueFailed, IssueDismissed:
+	case IssueResolved, IssueWontFix, IssueDismissed:
 		return true
 	}
 	return false
@@ -1747,7 +1763,7 @@ func boolToInt(b bool) int {
 // textForOutput selects which audit column carries the tool output vs the
 // assistant text: tool rows put content in tool_output, assistant rows in text.
 func textForOutput(kind, text string) string {
-	if kind == stepToolResult || kind == stepToolCall {
+	if kind == stepToolResult {
 		return text
 	}
 	return ""

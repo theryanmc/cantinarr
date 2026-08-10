@@ -352,8 +352,7 @@ func (s *Service) markActionOutcomeUnknown(act *AgentAction, result string, paus
 	}
 	if act.RunID != nil {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'action_outcome_unknown',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'action_outcome_unknown', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE id = ? AND status IN (?, ?, ?, ?)`,
 			*act.RunID, runStatusWaitingApproval, runStatusWaitingUser, runStatusRunning, runStatusResumePending,
 		); err != nil {
@@ -423,8 +422,7 @@ func (s *Service) stopUnresumableDecision(act *AgentAction, reason string) error
 	}
 	if act.RunID != nil {
 		if _, err := tx.Exec(
-			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript',
-			 deadline_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+			`UPDATE agent_runs SET status = 'aborted', stop_reason = 'unresumable_transcript', finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
 			 WHERE id = ? AND status IN (?, ?, ?, ?)`,
 			*act.RunID, runStatusWaitingApproval, runStatusWaitingUser, runStatusResumePending, runStatusRunning,
 		); err != nil {
@@ -729,7 +727,7 @@ func stageResumeResultTx(tx *sql.Tx, issueID, runID int64, expectedIssueStatus, 
 		return false, nil
 	}
 	runRes, err := tx.Exec(
-		`UPDATE agent_runs SET status = ?, stop_reason = NULL, deadline_at = NULL, transcript_json = ?
+		`UPDATE agent_runs SET status = ?, stop_reason = NULL, transcript_json = ?
 		 WHERE id = ? AND issue_id = ? AND status = ?`,
 		runStatusResumePending, string(encoded), runID, issueID, expectedRunStatus,
 	)
