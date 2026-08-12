@@ -504,7 +504,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,
     active_seconds INTEGER NOT NULL DEFAULT 0,   -- wall-clock excluding paused waits
     deadline_at DATETIME,                        -- retired 2026-08 (was a never-read watchdog deadline); kept NULL for rollback compatibility
-    stop_reason TEXT,                            -- vocabulary owned by runner.go's stop* constants plus the abort reasons (server_restarted, issue_closed, media_state_changed, external_resolution, arr_recovery_in_flight, action_outcome_unknown)
+    stop_reason TEXT,                            -- vocabulary owned by runner.go's stop* constants plus the abort reasons (server_restarted, issue_closed, media_state_changed, external_resolution, arr_recovery_in_flight, action_outcome_unknown, superseded_by_later_run)
     transcript_json TEXT NOT NULL DEFAULT '',    -- UNTRUNCATED provider-neutral transcript for resume (NOT the audit ledger)
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     finished_at DATETIME

@@ -654,6 +654,11 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, instanceID
 			}
 		}
 		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
+		// Chaptarr re-runs author/book identification when the import actually
+		// executes, so "no rejections listed" above is not a promise: issue 856
+		// (2026-08-11) proposed a plain import off a clean candidate list and
+		// Chaptarr refused it at import time with an author-match rejection.
+		sb.WriteString(" Note: Chaptarr re-checks identification at import time — a candidate with no rejections listed can still be rejected when the import runs; if that happens the file is not moved and the queue item will show the reason.")
 		return &ToolResult{Text: sb.String()}, nil
 
 	default:
