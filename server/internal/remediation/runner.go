@@ -1670,10 +1670,36 @@ func (r *Runner) giveUp(ctx context.Context, issueID, runID int64, model, stopRe
 	// The run transition, issue claim release, and human-readable message commit
 	// together. Exhaustion is not a resolution.
 	if _, err := r.svc.GiveUpIssue(ctx, issueID, runID, stopReason, message,
-		"Agent needs administrator review: "+stopReason); err != nil {
+		giveUpResolution(stopReason)); err != nil {
 		log.Printf("remediation: giveUp transition for issue %d: %v", issueID, err)
 	}
 	return nil
+}
+
+// giveUpResolution renders a give-up's issue headline in admin language
+// instead of stop-reason vocabulary: issue 856 (2026-08-12) showed an admin a
+// raw "unverified_conclusion" token while the actual story sat one tap deeper
+// in the thread. The token stays in parentheses because it is the key an
+// admin greps runs and rules by.
+func giveUpResolution(stopReason string) string {
+	var plain string
+	switch stopReason {
+	case stopUnverifiedClose:
+		plain = "The agent investigated and reported what it found in the conversation, but could not verify that a fix took effect, so this needs a human decision."
+	case stopMaxSteps:
+		plain = "The agent used its whole step budget without reaching a verified fix; its findings are in the conversation."
+	case stopTimeout:
+		plain = "The agent ran out of time before reaching a verified fix; its findings are in the conversation."
+	case stopModelError:
+		plain = "The AI provider failed during the investigation; whatever was gathered is in the conversation."
+	case stopInfrastructure:
+		plain = "The AI provider was unavailable, so the investigation could not run."
+	case stopNoDiagnosis:
+		plain = "The agent could not identify a safe fix; its reasoning is in the conversation."
+	default:
+		return "Agent needs administrator review: " + stopReason
+	}
+	return plain + " (" + stopReason + ")"
 }
 
 // parkConfirm finalizes a run whose fix executed but whose subjective verdict
