@@ -1097,3 +1097,87 @@ func TestSuspectImportSentinel(t *testing.T) {
 		t.Fatalf("issues after healthy + unanalyzed = %d, want still 1", count)
 	}
 }
+
+// stubSeason renders explicit air/import offsets from now into the fake's two
+// record shapes, for cases the preAirEpisode fixtures cannot express (margins
+// measured in minutes rather than days).
+func stubSeason(season int, specs []struct {
+	number    int
+	airsIn    time.Duration
+	hasFile   bool
+	importedIn time.Duration
+}) (episodes, files []map[string]any) {
+	now := time.Now().UTC()
+	for _, spec := range specs {
+		fileID := 90000 + season*100 + spec.number
+		ep := map[string]any{
+			"id": 28*10000 + season*100 + spec.number, "seriesId": 28,
+			"seasonNumber": season, "episodeNumber": spec.number,
+			"title":      fmt.Sprintf("S%02dE%02d", season, spec.number),
+			"airDateUtc": now.Add(spec.airsIn).Format(time.RFC3339),
+			"hasFile":    spec.hasFile,
+		}
+		if spec.hasFile {
+			ep["episodeFileId"] = fileID
+			files = append(files, map[string]any{
+				"id": fileID, "seriesId": 28, "seasonNumber": season,
+				"dateAdded": now.Add(spec.importedIn).Format(time.RFC3339),
+				"sceneName": fmt.Sprintf("Show.S%02dE%02d.1080p.WEB", season, spec.number),
+			})
+		}
+		episodes = append(episodes, ep)
+	}
+	return episodes, files
+}
+
+// TestPreAirWitnessIgnoresPremiereStagger replays issue 858 (Reacher S4,
+// 2026-08-12) through the production witness: a three-at-once premiere that
+// TheTVDB stamps as a runtime-staggered linear schedule, grabbed and imported
+// between the first and second nominal air times. Margins of 22 and 71
+// minutes are the calendar convention, not pre-air fill — the witness must
+// not open an issue, propose deletions, or page anyone.
+func TestPreAirWitnessIgnoresPremiereStagger(t *testing.T) {
+	svc, notifier, fake := setupPreAirService(t)
+	episodes, files := stubSeason(12, []struct {
+		number    int
+		airsIn    time.Duration
+		hasFile   bool
+		importedIn time.Duration
+	}{
+		{1, -27 * time.Minute, true, -1 * time.Minute},
+		{2, 22 * time.Minute, true, -1 * time.Minute},
+		{3, 71 * time.Minute, true, -30 * time.Second},
+		{4, 7 * 24 * time.Hour, false, 0},
+	})
+	fake.setLibrary(episodes, files)
+
+	svc.RecordPreAirImport(preAirSonarrID, 73871, 615, 12, "Futurama")
+
+	if got := openIssueCount(t, svc); got != 0 {
+		t.Fatalf("open issues after a premiere-stagger import = %d, want 0", got)
+	}
+	if len(notifier.adminEvents) != 0 {
+		t.Fatalf("admin events for a premiere = %v, want none", notifier.adminEvents)
+	}
+
+	// Control: the same entry point with genuinely pre-air files (margins in
+	// days) must still open the finding — the floor must not blunt the
+	// detector it protects.
+	episodes, files = stubSeason(13, []struct {
+		number    int
+		airsIn    time.Duration
+		hasFile   bool
+		importedIn time.Duration
+	}{
+		{1, 2 * 24 * time.Hour, true, -1 * time.Hour},
+		{2, 3 * 24 * time.Hour, true, -1 * time.Hour},
+		{3, 9 * 24 * time.Hour, false, 0},
+	})
+	fake.setLibrary(episodes, files)
+
+	svc.RecordPreAirImport(preAirSonarrID, 73871, 615, 13, "Futurama")
+
+	if got := openIssueCount(t, svc); got != 1 {
+		t.Fatalf("open issues after a genuine pre-air fill = %d, want 1", got)
+	}
+}

@@ -50,14 +50,16 @@ type SeasonTimeline struct {
 	FilesTotal int
 
 	// UnairedWithFile lists episodes that already hold a file although their
-	// air time is still in the future. Enough of these is content that does not
-	// exist yet.
+	// air time is more than PreAirMarginFloor in the future. Enough of these is
+	// content that does not exist yet. An episode within the floor of airing
+	// never counts: that margin is TheTVDB's runtime-stagger convention for
+	// binge premieres, not evidence.
 	UnairedWithFile []int
-	// ImportedBeforeAir lists episodes whose file was imported earlier than
-	// that same episode's air time — a file cannot be an episode that had not
-	// aired when the file arrived. It is the sharper evidence of the two but
-	// the scarcer one: it needs an import stamp as well as an air date, and the
-	// services do not always give one.
+	// ImportedBeforeAir lists episodes whose file was imported more than
+	// PreAirMarginFloor earlier than that same episode's air time — a file
+	// cannot be an episode that had not aired when the file arrived. It is the
+	// sharper evidence of the two but the scarcer one: it needs an import stamp
+	// as well as an air date, and the services do not always give one.
 	ImportedBeforeAir []int
 	// AiredMissing lists aired episodes with no file — an ordinary library gap,
 	// reported so a repair can search exactly those and leave unaired episodes
@@ -109,6 +111,22 @@ func (e EpisodeState) Unaired(now time.Time) bool {
 // standing rule armed on it. Only display copy may change.
 const ProblemPreAirSeasonFill = "Content that has not aired yet"
 
+// PreAirMarginFloor is how far in the future an episode's air time must be
+// before a file for it counts toward the pre-air finding at all.
+//
+// TheTVDB models a binge premiere as a linear broadcast: a season that drops
+// several episodes at once is stamped with E01 at the release instant and each
+// later episode one runtime further on. Reacher S4 (2026-08-12) released three
+// episodes together, TheTVDB staggered them 07:00/07:49/08:38Z, the grab
+// imported at 07:27 — and the detector proposed deleting two legitimate files
+// that were "unaired" for another 22 and 71 minutes (issue 858). The disease
+// this detector exists for (Futurama S11) had files THIRTEEN DAYS early.
+// Twelve hours separates the two cleanly: runtime-stagger artifacts total a
+// few hours even for a long binge season, while a genuinely mismatched grab
+// beats its air date by days. Exported because the webhook fast path applies
+// the same floor before waking the witness.
+const PreAirMarginFloor = 12 * time.Hour
+
 // preAirFillThreshold is how many unaired episodes must already hold files
 // before a season is called impossible.
 //
@@ -142,16 +160,20 @@ func BuildSeasonTimeline(season int, eps []EpisodeState, now time.Time) SeasonTi
 		if e.HasFile {
 			t.FilesTotal++
 		}
-		if e.HasFile && e.Unaired(now) {
+		// The finding buckets apply PreAirMarginFloor; the plain Aired/Unaired
+		// helpers deliberately do not — display and counts keep reporting the
+		// calendar as written, only the VERDICT ignores stagger-width margins.
+		if e.HasFile && e.AirsAt != nil && e.AirsAt.After(now.Add(PreAirMarginFloor)) {
 			t.UnairedWithFile = append(t.UnairedWithFile, e.Number)
 		}
 		if !e.HasFile && e.Aired(now) {
 			t.AiredMissing = append(t.AiredMissing, e.Number)
 		}
-		// Before, not "at or before": an import stamped at the very air instant
-		// is a service that imported the moment the episode landed, which is
-		// ordinary and fast rather than impossible.
-		if e.HasFile && e.AirsAt != nil && e.ImportedAt != nil && e.ImportedAt.Before(*e.AirsAt) {
+		// Before by more than the floor, never "at or before": an import
+		// stamped at the air instant is a service that imported the moment the
+		// episode landed, and one inside the floor is a binge premiere whose
+		// calendar was staggered by runtime.
+		if e.HasFile && e.AirsAt != nil && e.ImportedAt != nil && e.ImportedAt.Before(e.AirsAt.Add(-PreAirMarginFloor)) {
 			t.ImportedBeforeAir = append(t.ImportedBeforeAir, e.Number)
 		}
 		if e.AirsAt != nil {

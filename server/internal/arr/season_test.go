@@ -72,10 +72,13 @@ func TestBuildSeasonTimeline(t *testing.T) {
 			// The live case. Nothing in the season has aired, yet nine
 			// episodes hold files imported nearly two weeks before the
 			// premiere.
-			name:          "nine files for a season that has not started",
-			season:        11,
-			eps:           futuramaS11(),
-			now:           "2026-08-03T14:03:00Z",
+			name:   "nine files for a season that has not started",
+			season: 11,
+			eps:    futuramaS11(),
+			// A day and a half before the premiere: every unaired margin
+			// clears PreAirMarginFloor, so this case keeps testing the pure
+			// disease. The floor's own edge lives in the boundary tests.
+			now: "2026-08-02T14:03:00Z",
 			wantTotal:     10,
 			wantAired:     0,
 			wantFiles:     9,
@@ -341,10 +344,15 @@ func TestPreAirFillNeedsTwoUnairedEpisodesHoldingFiles(t *testing.T) {
 func TestImportedBeforeAirExcludesTheAirInstantItself(t *testing.T) {
 	air := ts("2026-08-04T00:00:00Z")
 	eps := []EpisodeState{
-		{Number: 1, AirsAt: air, HasFile: true, FileID: 1, ImportedAt: tp(air.Add(-time.Nanosecond))},
-		{Number: 2, AirsAt: air, HasFile: true, FileID: 2, ImportedAt: air},
-		{Number: 3, AirsAt: air, HasFile: true, FileID: 3, ImportedAt: tp(air.Add(time.Nanosecond))},
-		{Number: 4, AirsAt: air, HasFile: true, FileID: 4},
+		// Beyond the margin floor: the finding.
+		{Number: 1, AirsAt: air, HasFile: true, FileID: 1, ImportedAt: tp(air.Add(-PreAirMarginFloor - time.Second))},
+		// Inside the floor, at the instant, and after: a premiere on a
+		// runtime-staggered calendar, an import the moment the episode
+		// landed, and an ordinary post-air import — none are the finding.
+		{Number: 2, AirsAt: air, HasFile: true, FileID: 2, ImportedAt: tp(air.Add(-time.Nanosecond))},
+		{Number: 3, AirsAt: air, HasFile: true, FileID: 3, ImportedAt: air},
+		{Number: 4, AirsAt: air, HasFile: true, FileID: 4, ImportedAt: tp(air.Add(time.Nanosecond))},
+		{Number: 5, AirsAt: air, HasFile: true, FileID: 5},
 	}
 	got := BuildSeasonTimeline(11, eps, *ts("2026-08-05T00:00:00Z"))
 	if want := []int{1}; !slices.Equal(got.ImportedBeforeAir, want) {
@@ -389,7 +397,7 @@ func TestAiredIgnoresFilesOnDisk(t *testing.T) {
 // reader: a rewrite that loses the counts or either date is a regression, not a
 // change of style.
 func TestTransparencyPinnedForTheLiveCase(t *testing.T) {
-	got := BuildSeasonTimeline(11, futuramaS11(), *ts("2026-08-03T14:03:00Z")).Transparency
+	got := BuildSeasonTimeline(11, futuramaS11(), *ts("2026-08-02T14:03:00Z")).Transparency
 	want := "Season 11 already has files for 9 of its 10 episodes, and 9 of those episodes have not aired yet — " +
 		"the earliest file was imported 2026-07-21, before the season's first air date of 2026-08-04. " +
 		"Content that has not been released yet cannot be what those files hold, so they are the wrong content."
@@ -406,7 +414,7 @@ func TestTransparencySurvivesMissingImportStamps(t *testing.T) {
 		{Number: 1, AirsAt: ts("2026-08-04T00:00:00Z"), HasFile: true, FileID: 1},
 		{Number: 2, AirsAt: ts("2026-08-11T00:00:00Z"), HasFile: true, FileID: 2},
 	}
-	got := BuildSeasonTimeline(11, eps, *ts("2026-08-03T14:03:00Z"))
+	got := BuildSeasonTimeline(11, eps, *ts("2026-08-02T14:03:00Z"))
 	if !got.PreAirFill {
 		t.Fatal("two unaired episodes holding files is the finding, with or without import stamps")
 	}
@@ -462,5 +470,94 @@ func TestTimelineDoesNotAliasTheCallersInstants(t *testing.T) {
 	}
 	if !got.EarliestImport.Equal(*ts("2026-07-21T09:30:00Z")) {
 		t.Errorf("EarliestImport followed the caller's edit: %s", got.EarliestImport.Format(time.RFC3339))
+	}
+}
+
+// reacherS4Premiere rebuilds the 2026-08-12 false positive (issue 858): Amazon
+// released three episodes at once, TheTVDB staggered their air times one
+// runtime apart (07:00 / 07:49 / 08:38Z), and the grab imported E02/E03 at
+// 07:27 — 22 and 71 minutes "before air" under that calendar. Five more
+// episodes air weekly with no files.
+func reacherS4Premiere() []EpisodeState {
+	airs := []string{
+		"2026-08-12T07:00:00Z",
+		"2026-08-12T07:49:00Z",
+		"2026-08-12T08:38:00Z",
+		"2026-08-19T07:00:00Z",
+		"2026-08-26T07:00:00Z",
+		"2026-09-02T07:00:00Z",
+		"2026-09-09T07:00:00Z",
+		"2026-09-16T07:00:00Z",
+	}
+	eps := make([]EpisodeState, 0, len(airs))
+	for i, a := range airs {
+		e := EpisodeState{Number: i + 1, Title: fmt.Sprintf("Episode %d", i+1), AirsAt: ts(a)}
+		if e.Number == 2 || e.Number == 3 {
+			e.HasFile = true
+			e.FileID = 7000 + e.Number
+			e.ImportedAt = ts("2026-08-12T07:27:37Z")
+		}
+		eps = append(eps, e)
+	}
+	return eps
+}
+
+// TestPremiereStaggerIsNotPreAirFill freezes the Reacher shape: files whose
+// air times sit inside PreAirMarginFloor are a binge premiere on a staggered
+// calendar, never the pre-air finding. On 2026-08-12 this exact season
+// proposed deleting two legitimate files.
+func TestPremiereStaggerIsNotPreAirFill(t *testing.T) {
+	tl := BuildSeasonTimeline(4, reacherS4Premiere(), *ts("2026-08-12T07:27:44Z"))
+	if tl.PreAirFill {
+		t.Fatalf("premiere stagger read as pre-air fill: %+v", tl)
+	}
+	if len(tl.UnairedWithFile) != 0 {
+		t.Errorf("UnairedWithFile = %v, want none inside the margin floor", tl.UnairedWithFile)
+	}
+	if len(tl.ImportedBeforeAir) != 0 {
+		t.Errorf("ImportedBeforeAir = %v, want none inside the margin floor", tl.ImportedBeforeAir)
+	}
+	// The counts still report the calendar as written — only the verdict
+	// applies the floor. One aired episode, two files, at 07:27.
+	if tl.Aired != 1 || tl.FilesTotal != 2 {
+		t.Errorf("Aired/FilesTotal = %d/%d, want 1/2 (display truth unchanged)", tl.Aired, tl.FilesTotal)
+	}
+}
+
+// TestPreAirMarginFloorBoundary pins the floor's edge on both buckets: a file
+// beating its air time by more than the floor is the finding, inside the floor
+// is a premiere artifact. The real incident's margin was thirteen days.
+func TestPreAirMarginFloorBoundary(t *testing.T) {
+	now := *ts("2026-08-12T00:00:00Z")
+	mk := func(airOffset, importOffset time.Duration) []EpisodeState {
+		air := now.Add(airOffset)
+		imp := now.Add(importOffset)
+		eps := make([]EpisodeState, 0, 2)
+		for n := 1; n <= 2; n++ {
+			eps = append(eps, EpisodeState{
+				Number: n, AirsAt: tp(air), HasFile: true, FileID: 8000 + n, ImportedAt: tp(imp),
+			})
+		}
+		return eps
+	}
+
+	beyond := BuildSeasonTimeline(1, mk(PreAirMarginFloor+time.Minute, 0), now)
+	if !beyond.PreAirFill || len(beyond.UnairedWithFile) != 2 {
+		t.Errorf("air beyond the floor = fill %v unaired %v, want the finding", beyond.PreAirFill, beyond.UnairedWithFile)
+	}
+	inside := BuildSeasonTimeline(1, mk(PreAirMarginFloor-time.Minute, 0), now)
+	if inside.PreAirFill || len(inside.UnairedWithFile) != 0 {
+		t.Errorf("air inside the floor = fill %v unaired %v, want no finding", inside.PreAirFill, inside.UnairedWithFile)
+	}
+
+	// ImportedBeforeAir measures import-vs-air, independent of now: push the
+	// air time past to isolate the bucket.
+	sharperBeyond := BuildSeasonTimeline(1, mk(-time.Hour, -time.Hour-PreAirMarginFloor-time.Minute), now)
+	if len(sharperBeyond.ImportedBeforeAir) != 2 {
+		t.Errorf("import beyond the floor before air = %v, want both flagged", sharperBeyond.ImportedBeforeAir)
+	}
+	sharperInside := BuildSeasonTimeline(1, mk(-time.Hour, -time.Hour-PreAirMarginFloor+time.Minute), now)
+	if len(sharperInside.ImportedBeforeAir) != 0 {
+		t.Errorf("import inside the floor before air = %v, want none", sharperInside.ImportedBeforeAir)
 	}
 }
