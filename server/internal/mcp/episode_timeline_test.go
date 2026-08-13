@@ -21,9 +21,12 @@ import (
 
 // --- live fixture, evaluated at a fixed instant ---
 
-// futuramaNow is the moment the live case was captured: E1 airs in ten hours,
+// futuramaNow sits a day and a half before the live case premiered, so every
+// unaired margin clears arr.PreAirMarginFloor and the fixtures keep testing
+// the pure disease. (It originally sat ten hours out - inside the floor the
+// Reacher premiere false-positive later earned.)
 // yet nine files have been sitting in the library for thirteen days.
-var futuramaNow = time.Date(2026, 8, 3, 14, 3, 0, 0, time.UTC)
+var futuramaNow = time.Date(2026, 8, 2, 14, 3, 0, 0, time.UTC)
 
 // futuramaImportedAt is when every one of the nine files landed — one batch,
 // 2026-07-21, from nine separate RSS grabs.
@@ -108,7 +111,7 @@ func TestEpisodeTimelineRendersTheLiveSeason(t *testing.T) {
 	text := renderEpisodeTimeline(futuramaSeriesRecord(), 615, 11, bySeason, files, futuramaNow)
 
 	wantLines := []string{
-		"Futurama season 11 — 10 episode(s), 0 aired, 9 with files. Now 2026-08-03T14:03:00Z.",
+		"Futurama season 11 — 10 episode(s), 0 aired, 9 with files. Now 2026-08-02T14:03:00Z.",
 		`- E01 "Beef" — airs 2026-08-04T00:00:00Z (NOT YET AIRED) · file imported 2026-07-21T09:30:00Z [WEBDL-1080p] Futurama.S11E01.Beef.1080p.DSNP.WEB-DL.DDP5.1.H.264.Dual-CM`,
 		`- E02 "The Cure for Boredom" — airs 2026-08-04T00:23:00Z (NOT YET AIRED) · file imported 2026-07-21T09:30:00Z [WEBDL-1080p] Futurama.S11E02.The.Cure.for.Boredom.1080p.DSNP.WEB-DL.DDP5.1.H.264.Dual-CM`,
 		`- E09 "The Bots and the Bees II" — airs 2026-09-22T00:00:00Z (NOT YET AIRED) · file imported 2026-07-21T09:30:00Z`,
@@ -329,7 +332,7 @@ func TestEpisodeTimelineUnscopedRollsUpThenDetailsTheFinding(t *testing.T) {
 	}, files, futuramaNow)
 
 	for _, want := range []string{
-		"Futurama — 2 season(s). Now 2026-08-03T14:03:00Z.",
+		"Futurama — 2 season(s). Now 2026-08-02T14:03:00Z.",
 		"- Season 10: 3 episode(s), 3 aired, 3 with files",
 		"- Season 11: 10 episode(s), 0 aired, 9 with files — 9 file(s) for episodes that have NOT aired",
 	} {
@@ -454,9 +457,9 @@ func TestGetEpisodeTimelineJoinsEpisodesAndFiles(t *testing.T) {
 	imported := now.Add(-13 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	episodes := []map[string]any{
 		{"id": 1101, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 1, "title": "Beef",
-			"airDateUtc": now.Add(10 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
+			"airDateUtc": now.Add(2 * 24 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
 		{"id": 1102, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 2, "title": "The Cure for Boredom",
-			"airDateUtc": now.Add(11 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
+			"airDateUtc": now.Add(2*24*time.Hour + time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
 		{"id": 1103, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 3, "title": "How the West Was 1010001",
 			"airDateUtc": now.Add(7 * 24 * time.Hour).Format(time.RFC3339), "hasFile": false},
 	}
@@ -517,9 +520,9 @@ func TestGetEpisodeTimelineUnscopedThroughTheTool(t *testing.T) {
 		{"id": 1001, "seriesId": 28, "seasonNumber": 10, "episodeNumber": 1, "title": "Long ago",
 			"airDateUtc": now.Add(-400 * 24 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5001},
 		{"id": 1101, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 1, "title": "Beef",
-			"airDateUtc": now.Add(10 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
+			"airDateUtc": now.Add(2 * 24 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
 		{"id": 1102, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 2, "title": "The Cure for Boredom",
-			"airDateUtc": now.Add(11 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
+			"airDateUtc": now.Add(2*24*time.Hour + time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
 	}
 	files := []map[string]any{
 		{"id": 5001, "seriesId": 28, "seasonNumber": 10, "dateAdded": now.Add(-399 * 24 * time.Hour).Format(time.RFC3339)},
@@ -726,9 +729,9 @@ func TestGetEpisodeTimelineEmitsTheVerdictThroughTheTool(t *testing.T) {
 	imported := now.Add(-13 * 24 * time.Hour).UTC().Format(time.RFC3339)
 	episodes := []map[string]any{
 		{"id": 1101, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 1, "title": "Beef",
-			"airDateUtc": now.Add(10 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
+			"airDateUtc": now.Add(2 * 24 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5101},
 		{"id": 1102, "seriesId": 28, "seasonNumber": 11, "episodeNumber": 2, "title": "The Cure for Boredom",
-			"airDateUtc": now.Add(11 * time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
+			"airDateUtc": now.Add(2*24*time.Hour + time.Hour).Format(time.RFC3339), "hasFile": true, "episodeFileId": 5102},
 	}
 	files := []map[string]any{
 		{"id": 5101, "seriesId": 28, "seasonNumber": 11, "dateAdded": imported},

@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
@@ -130,9 +131,13 @@ func (h *Handler) checkPreAirImport(instanceID string, payload arrPayload) {
 	if h.preAir == nil || payload.Series == nil {
 		return
 	}
-	now := time.Now().UTC()
+	// The floor mirrors the season verdict's (arr.PreAirMarginFloor): an
+	// episode airing within it is a binge premiere on TheTVDB's runtime-
+	// staggered calendar, not a pre-air import, and must not even wake the
+	// witness for a season probe.
+	horizon := time.Now().UTC().Add(arr.PreAirMarginFloor)
 	for _, ep := range payload.Episodes {
-		if ep.AirDateUtc == nil || !ep.AirDateUtc.After(now) {
+		if ep.AirDateUtc == nil || !ep.AirDateUtc.After(horizon) {
 			continue
 		}
 		h.preAir.RecordPreAirImport(instanceID, payload.Series.TvdbID, payload.Series.TmdbID,
