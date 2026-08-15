@@ -327,7 +327,12 @@ func TestSonarrAlreadyImportedQueueRowClosesWithoutAttention(t *testing.T) {
 
 func TestBaselineCaughtImportRequiresFreshArrAttemptReceipt(t *testing.T) {
 	base := time.Date(2026, 7, 10, 10, 0, 0, 0, time.UTC)
-	attemptAdded := base
+	// Older than the stalled dwell (the fixture item is stalled-classified), so
+	// the incident is still born at `base`. Every receipt relation this test
+	// pins is against the attempt time, and all of them survive the shift: the
+	// hour-old receipt still predates the attempt, the +1m receipts still
+	// postdate it.
+	attemptAdded := base.Add(-20 * time.Minute)
 	queueFileID, differentFileID := int64(0), int64(19)
 	for _, tc := range []struct {
 		name           string

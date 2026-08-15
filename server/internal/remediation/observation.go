@@ -42,6 +42,23 @@ const (
 	// roll-ups. Hourly: it is a DB-only pass whose input changes on the scale
 	// of days.
 	preventionSweepTicks = 60
+	// stalledIncidentDwell is how old a download must be before its "stalled"
+	// verdict is believed enough to open an automatic incident. Torrent clients
+	// flag "stalled" the moment no data is moving — which describes every
+	// torrent during tracker/DHT warmup, minutes before its first peer. Issue
+	// 859 (2026-08-13) opened 34 seconds after the grab; ten minutes later the
+	// promotion ran, a standing rule auto-approved blocklist+search, and the
+	// only release in existence was destroyed before it ever had a chance to
+	// connect.
+	//
+	// The dwell delays only the incident's BIRTH, and only for stalled-class
+	// signals: a download whose stalled flag is younger than this is skipped by
+	// auto-creation and re-read on every later sweep, so a genuinely dead
+	// torrent still becomes an issue — the promotion delay then adds its usual
+	// ObservationMinMinutes on top before anything can act. A stalled torrent
+	// is by definition not making progress, so the only cost of waiting is
+	// these minutes; acting early is what cost 859 its only copy.
+	stalledIncidentDwell = 15 * time.Minute
 )
 
 const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
@@ -236,6 +253,31 @@ func groupHasProblemSignal(group observationGroup) bool {
 	return false
 }
 
+// groupWarrantsAutoIncident is groupHasProblemSignal with the stalled dwell
+// applied: a "stalled" verdict on a download younger than stalledIncidentDwell
+// is not yet evidence of anything — every torrent looks stalled while its
+// trackers warm up — so it cannot be the signal that OPENS an incident. Any
+// other problem in the group still opens one, and an already-open incident's
+// machinery never consults this (a stalled flag that persists simply opens the
+// issue on a later sweep, once the download is old enough to mean it).
+//
+// A nil AddedAt keeps today's behavior (create): all three arrs supply the
+// added timestamp, so nil is the degenerate case, and inventing a birth time
+// for it would suppress real incidents on evidence we do not have.
+func groupWarrantsAutoIncident(group observationGroup, now time.Time) bool {
+	for _, item := range group.items {
+		if item.Diagnosis.Severity != arr.SeverityWarning && item.Diagnosis.Severity != arr.SeverityError {
+			continue
+		}
+		if item.Diagnosis.Problem == arr.ProblemDownloadStalled &&
+			item.AddedAt != nil && now.Sub(*item.AddedAt) < stalledIncidentDwell {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func selectObservation(group observationGroup, currentDownloadID string) arr.QueueObservation {
 	if len(group.items) == 0 {
 		return arr.QueueObservation{}
@@ -351,7 +393,7 @@ func (s *Service) observeQueueSnapshot(serviceType, instanceID string, items []a
 					}
 				}
 			}
-			if hasMatchingRecord || !groupHasProblemSignal(group) {
+			if hasMatchingRecord || !groupWarrantsAutoIncident(group, now) {
 				continue
 			}
 			record, createErr := s.createAutoObservation(serviceType, instanceID, group, now)
