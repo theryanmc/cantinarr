@@ -59,7 +59,7 @@ const bookAuthorImportingMessage = "This book's author is still being added to t
 
 // bookParkReasonAuthorImport marks a pending request_log row the server itself
 // owns: it parks only on chaptarr.ErrAuthorPendingImport from an auto-approved
-// create, is hidden from the approval queue and badge, and is retried by the
+// create, is hidden from the approval queue and badge, and is watched by the
 // park-maintenance sweep. Rows pending because policy requires approval keep a
 // NULL park_reason and are untouchable by the sweep — that NULL is the
 // approval-bypass guard.
@@ -99,6 +99,19 @@ func serverOwnedParkSQL() (string, []interface{}) {
 	return strings.Join(placeholders, ", "), args
 }
 
+// bookImportAddFailureSQL renders bookImportAddFailures as an IN-list fragment
+// plus its bind arguments, the same shape as serverOwnedParkSQL and for the
+// same reason: adding a value updates every query at once.
+func bookImportAddFailureSQL() (string, []interface{}) {
+	placeholders := make([]string, len(bookImportAddFailures))
+	args := make([]interface{}, len(bookImportAddFailures))
+	for i, reason := range bookImportAddFailures {
+		placeholders[i] = "?"
+		args[i] = reason
+	}
+	return strings.Join(placeholders, ", "), args
+}
+
 // BookWaitReasonAuthorImport exposes that wire value to the other packages that
 // have to render a wait (the MCP tool surface). Same string, one definition.
 const BookWaitReasonAuthorImport = bookParkReasonAuthorImport
@@ -118,23 +131,55 @@ const (
 	// the add never happened. Approving replays it, which works only once
 	// Chaptarr can find the record — usually because an admin added it.
 	bookAddFailureMetadataUnresolved = "metadata_unresolved"
-	// bookAddFailureImportAbandoned: a server-owned author-import park was
-	// retried until the sweep gave up. The request is a week old and has never
-	// worked; presenting it as a fresh decision hides both facts.
+	// bookAddFailureImportAbandoned: the watch on a server-owned author-import
+	// park ended on an add failure — the legacy probe (builds without the
+	// pending-import API) hit something beyond the still-importing refusal, or
+	// the add failed even after the author landed. The wait itself never
+	// expires: Chaptarr's own retry loop is unbounded by design, so Cantinarr
+	// deliberately has no give-up clock of its own.
 	bookAddFailureImportAbandoned = "import_abandoned"
+	// bookAddFailureImportFailed: Chaptarr's pending import reached its
+	// declared-terminal Failed state (a typed metadata-server outcome stopped
+	// its automatic retries). Waiting longer cannot succeed on its own;
+	// keep-waiting re-parks AND asks Chaptarr to reopen the import.
+	bookAddFailureImportFailed = "import_failed"
+	// bookAddFailureImportCancelled: the pending import vanished from Chaptarr
+	// without the author landing — someone cancelled it in the arr's own UI.
+	// Keep-waiting replays the add, which re-queues it.
+	bookAddFailureImportCancelled = "import_cancelled"
 )
 
+// bookImportAddFailures are the add_failure_reason values that mean "the wait
+// on Chaptarr's author import ended without the author": the demotion lanes
+// whose approval-queue card offers keep-waiting alongside close.
+var bookImportAddFailures = []string{
+	bookAddFailureImportAbandoned, bookAddFailureImportFailed, bookAddFailureImportCancelled,
+}
+
+func isBookImportAddFailure(reason string) bool {
+	for _, candidate := range bookImportAddFailures {
+		if reason == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 const (
-	// bookParkRetryInterval paces the maintenance sweep. Chaptarr retries its
-	// own queued author imports on a similar cadence, so retrying faster only
-	// burns preflights.
+	// bookParkRetryInterval paces the maintenance sweep's status polls.
+	// Chaptarr processes its own queued author imports on a similar cadence,
+	// so polling faster reads the same answer twice.
 	bookParkRetryInterval = 5 * time.Minute
 	// bookParkStallAfter is when a still-parked request stops being a routine
 	// wait and becomes a system-health fact worth one auto-resolving issue.
+	//
+	// There is deliberately NO give-up horizon beyond it: Chaptarr's own
+	// retry loop is unbounded (transient "author not ready" never ages into a
+	// synthetic terminal), and Cantinarr mirrors the arr's verdicts instead of
+	// inventing a clock — a park ends when the import lands, when Chaptarr
+	// declares it failed or it is cancelled, or when a human closes the
+	// request, never because a timer fired.
 	bookParkStallAfter = 24 * time.Hour
-	// bookParkGiveUpAfter is when the sweep stops retrying and hands the row to
-	// a human: the park demotes to an ordinary approval-queue item.
-	bookParkGiveUpAfter = 7 * 24 * time.Hour
 )
 
 // Season scope choices a user (or admin) can attach to a TV request.
@@ -3478,14 +3523,32 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	return &r, status, nil
 }
 
+// isAuthorImportParked reports whether the row is still a server-owned
+// author-import park — i.e. the maintenance sweep is still retrying it.
+func (s *Service) isAuthorImportParked(requestID int64) bool {
+	var reason sql.NullString
+	if err := s.db.QueryRow(
+		"SELECT park_reason FROM request_log WHERE id = ?", requestID,
+	).Scan(&reason); err != nil {
+		return false
+	}
+	return reason.Valid && reason.String == bookParkReasonAuthorImport
+}
+
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
 // and marks the row approved. The arr add reuses the normal add path.
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
 	resp, err := s.fulfillPendingRequest(adminID, requestID, override, false)
 	if err != nil && errors.Is(err, chaptarr.ErrAuthorPendingImport) {
-		// The row is untouched and stays queued, so approving early is a
-		// non-event; hand the admin the plan instead of a bare failure.
-		return nil, fmt.Errorf("%w — the request stays queued and completes automatically once the import lands", chaptarr.ErrAuthorPendingImport)
+		// The row is untouched either way, but who watches next depends on
+		// whether the sweep still owns it. While parked, approving early is a
+		// non-event and the plan is honest. A demoted row is no longer
+		// watched, so promising automatic completion there would narrate a
+		// watch that is not running — name the real verbs instead.
+		if s.isAuthorImportParked(requestID) {
+			return nil, fmt.Errorf("%w — the request stays queued and completes automatically once the import lands", chaptarr.ErrAuthorPendingImport)
+		}
+		return nil, fmt.Errorf("%w — the wait on this request ended; choose Try again to resume watching it, or close the request", chaptarr.ErrAuthorPendingImport)
 	}
 	if err != nil && errors.Is(err, ErrBookMetadataUnresolved) {
 		// Approving replayed an add that had already failed the same way, and
@@ -3495,6 +3558,182 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		return nil, fmt.Errorf("%w — add this book in the library first, then approve", ErrBookMetadataUnresolved)
 	}
 	return resp, err
+}
+
+// bookWaitExtendedMessage is the admin-facing confirmation that a demoted
+// author-import row went back to being watched.
+const bookWaitExtendedMessage = "Waiting resumed: the library is importing this author again, and the request completes automatically when it lands."
+
+// ExtendBookWait is the admin's "try again" on a demoted author-import row —
+// the opposite verb to closing it. It replays the add once (a human asking to
+// keep trying is the one legitimate reason to touch Chaptarr's queue): the
+// replay either completes the request on the spot because the author landed
+// since demotion, re-queues an import that was cancelled, or merges into the
+// live one — and on the still-importing refusal it re-parks the row so the
+// sweep watches it again. A wait that ended in Chaptarr's declared-terminal
+// Failed state also asks the arr to reopen the import (best-effort): Chaptarr
+// never resumes a declared terminal on its own.
+func (s *Service) ExtendBookWait(adminID, requestID int64) (*CreateResponse, error) {
+	var mediaType, status string
+	var parkReason, addFailure sql.NullString
+	err := s.db.QueryRow(
+		"SELECT media_type, status, park_reason, COALESCE(add_failure_reason, '') FROM request_log WHERE id = ?",
+		requestID,
+	).Scan(&mediaType, &status, &parkReason, &addFailure)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("request not found")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load request for wait extension: %w", err)
+	}
+	if mediaType != "book" || status != StatusPending {
+		return nil, fmt.Errorf("only a pending book request can keep waiting")
+	}
+	if parkReason.Valid {
+		return nil, fmt.Errorf("this request is already being watched")
+	}
+	if !isBookImportAddFailure(addFailure.String) {
+		return nil, fmt.Errorf("this request is not waiting on an author import")
+	}
+	importWasFailed := addFailure.String == bookAddFailureImportFailed
+
+	resp, err := s.fulfillPendingRequest(adminID, requestID, nil, false)
+	if err == nil {
+		// The author landed since the demotion; nothing left to wait for.
+		return resp, nil
+	}
+	if !errors.Is(err, chaptarr.ErrAuthorPendingImport) {
+		// A different failure is a real answer the admin must see; the row
+		// stays in the queue with it.
+		return nil, err
+	}
+	res, err := s.db.Exec(
+		`UPDATE request_log SET park_reason = ?, add_failure_reason = NULL
+		 WHERE id = ? AND status = ? AND park_reason IS NULL`,
+		bookParkReasonAuthorImport, requestID, StatusPending,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("re-park book request: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("request was decided concurrently")
+	}
+	if importWasFailed {
+		s.reopenFailedAuthorImport(requestID)
+	}
+	return &CreateResponse{Success: true, Status: StatusRequested, Message: bookWaitExtendedMessage}, nil
+}
+
+// reopenFailedAuthorImport best-effort asks Chaptarr to retry a pending import
+// it had declared terminally failed. The re-park stands either way: the sweep
+// re-demotes within a pass if the import really is dead, so a failed reopen
+// costs one visible round-trip through the queue rather than a silent strand.
+func (s *Service) reopenFailedAuthorImport(requestID int64) {
+	r, _, err := s.loadRequest(requestID)
+	if err != nil {
+		log.Printf("request: reopen author import for request %d: %v", requestID, err)
+		return
+	}
+	client, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: reopen author import for request %d: resolve chaptarr: %v", requestID, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
+	if !ok || foreignAuthorID == "" {
+		return
+	}
+	importStatus, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if err != nil || !importStatus.Pending {
+		return
+	}
+	if err := client.RetryPendingAuthorImport(importStatus.PendingID); err != nil {
+		log.Printf("request: reopen author import for request %d: %v", requestID, err)
+	}
+}
+
+// cancelAuthorImportForDeniedRequest best-effort removes Chaptarr's queued
+// author import behind a denied book request. The queued row carries the whole
+// add intent — the monitored book and the search flag — so leaving it armed
+// would deliver the content whenever the import finally lands, contradicting
+// the denial. One guard: another request still waiting on the same author
+// keeps the import alive, because cancelling it would strand that wait.
+// Failures only log — the denial stands either way, and a book that arrives
+// despite a failed cancel is visible (library record, new_book alert), never
+// silent.
+func (s *Service) cancelAuthorImportForDeniedRequest(requestID int64, r *resolvedRequest) {
+	client, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: cancel author import for denied request %d: resolve chaptarr: %v", requestID, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
+	if !ok || foreignAuthorID == "" {
+		return
+	}
+	importStatus, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if err != nil || !importStatus.Pending {
+		return
+	}
+	if s.otherRequestWaitsOnAuthor(client, requestID, r.instanceID, foreignAuthorID) {
+		log.Printf("request: denied request %d leaves the author import queued; another request still waits on author %s", requestID, foreignAuthorID)
+		return
+	}
+	if err := client.CancelPendingAuthorImport(importStatus.PendingID); err != nil {
+		log.Printf("request: cancel author import for denied request %d: %v", requestID, err)
+		return
+	}
+	log.Printf("request: denied request %d cancelled its queued author import (%s)", requestID, foreignAuthorID)
+}
+
+// otherRequestWaitsOnAuthor reports whether another open wait on the same
+// instance resolves to the same author: a parked row, or a demoted one still
+// holding an import add-failure. Each candidate's author comes from a live
+// id-fetch, because request_log deliberately stores no author id. Every
+// blindness answers true — a read failure must never cancel someone else's
+// wait.
+func (s *Service) otherRequestWaitsOnAuthor(client *chaptarr.Client, requestID int64, instanceID, foreignAuthorID string) bool {
+	parkSQL, parkArgs := serverOwnedParkSQL()
+	failSQL, failArgs := bookImportAddFailureSQL()
+	args := append([]interface{}{StatusPending, instanceID, requestID}, append(parkArgs, failArgs...)...)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT COALESCE(foreign_id, '') FROM request_log
+		 WHERE media_type = 'book' AND status = ? AND COALESCE(instance_id, '') = ? AND id != ?
+		   AND (park_reason IN (`+parkSQL+`) OR add_failure_reason IN (`+failSQL+`))`,
+		args...,
+	)
+	if err != nil {
+		log.Printf("request: list sibling author waits: %v", err)
+		return true
+	}
+	var foreignIDs []string
+	for rows.Next() {
+		var fid string
+		if err := rows.Scan(&fid); err != nil {
+			_ = rows.Close()
+			log.Printf("request: scan sibling author wait: %v", err)
+			return true
+		}
+		if fid != "" {
+			foreignIDs = append(foreignIDs, fid)
+		}
+	}
+	closeErr := rows.Err()
+	_ = rows.Close()
+	if closeErr != nil {
+		log.Printf("request: read sibling author waits: %v", closeErr)
+		return true
+	}
+	for _, fid := range foreignIDs {
+		siblingAuthor, ok := s.lookupParkedAuthorID(client, fid)
+		if !ok {
+			return true
+		}
+		if siblingAuthor == foreignAuthorID {
+			return true
+		}
+	}
+	return false
 }
 
 // fulfillPendingRequest executes a pending request_log row and materializes the
@@ -3760,15 +3999,17 @@ func (s *Service) StartBookParkMaintenance(ctx context.Context) {
 }
 
 // SweepParkedBookRequests is one maintenance pass over every server-owned
-// author-import park: rows past the give-up horizon demote to the human
-// approval queue, everything else retries through the shared fulfillment core,
-// and a retry that fails for any reason other than the import still being
-// pending also demotes — an unexpected failure needs a human, not a loop.
-// Afterwards, per-instance stall health is reported so a wedged Chaptarr
-// metadata import becomes one auto-resolving system issue.
+// author-import park. Chaptarr owns the retry loop for a queued author import
+// (unbounded, on its own schedule), so each pass reads the arr's live verdict
+// per row and acts only on real exits: import landed → complete the request;
+// import declared failed or cancelled → demote to the human approval queue;
+// still importing → leave it alone. There is no time-based give-up (see
+// bookParkStallAfter). Afterwards, per-instance stall health is reported so a
+// long-running Chaptarr metadata import becomes one auto-resolving system
+// issue.
 func (s *Service) SweepParkedBookRequests() {
 	rows, err := s.db.Query(
-		`SELECT id, title, CAST((julianday('now') - julianday(requested_at)) * 86400 AS INTEGER)
+		`SELECT id, COALESCE(user_id, 0), COALESCE(foreign_id, ''), COALESCE(instance_id, ''), title
 		 FROM request_log
 		 WHERE media_type = 'book' AND status = ? AND park_reason = ?
 		 ORDER BY id ASC`,
@@ -3778,15 +4019,10 @@ func (s *Service) SweepParkedBookRequests() {
 		log.Printf("request: query parked book requests: %v", err)
 		return
 	}
-	type parkedRow struct {
-		id         int64
-		title      string
-		ageSeconds int64
-	}
-	var parked []parkedRow
+	var parked []parkedBookRow
 	for rows.Next() {
-		var row parkedRow
-		if err := rows.Scan(&row.id, &row.title, &row.ageSeconds); err != nil {
+		var row parkedBookRow
+		if err := rows.Scan(&row.id, &row.userID, &row.foreignID, &row.instanceID, &row.title); err != nil {
 			_ = rows.Close()
 			log.Printf("request: scan parked book request: %v", err)
 			return
@@ -3801,25 +4037,11 @@ func (s *Service) SweepParkedBookRequests() {
 	}
 
 	for _, row := range parked {
-		if time.Duration(row.ageSeconds)*time.Second >= bookParkGiveUpAfter {
-			log.Printf("request: parked book request %d (%q) never completed; handing to the approval queue", row.id, row.title)
-			s.demoteParkedBookRequest(row.id)
-			continue
-		}
-		_, err := s.fulfillPendingRequest(0, row.id, nil, true)
-		switch {
-		case err == nil:
-			log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
-		case errors.Is(err, chaptarr.ErrAuthorPendingImport):
-			// Still waiting on the library's import; the next pass retries.
-		default:
-			log.Printf("request: parked book request %d (%q) failed beyond the pending import (%v); handing to the approval queue", row.id, row.title, err)
-			s.demoteParkedBookRequest(row.id)
-		}
+		s.probeParkedBookRequest(row)
 	}
 
-	// Every parked row was just attempted, so one timestamp dates all of them.
-	// Stamped after the loop, not before: an early return above means no attempt
+	// Every parked row was just probed, so one timestamp dates all of them.
+	// Stamped after the loop, not before: an early return above means no probe
 	// was made, and claiming one would be the same kind of lie this whole change
 	// is removing.
 	s.markParkSweep(time.Now())
@@ -3827,11 +4049,121 @@ func (s *Service) SweepParkedBookRequests() {
 	s.reportBookImportStalls()
 }
 
+// parkedBookRow is one server-owned author-import park as the sweep sees it.
+type parkedBookRow struct {
+	id         int64
+	userID     int64
+	foreignID  string
+	instanceID string
+	title      string
+}
+
+// probeParkedBookRequest advances one author-import park by reading Chaptarr's
+// own pending-import state instead of replaying the add. Chaptarr owns the
+// retry loop: the refused add already stored the whole intent (the monitored
+// book, profiles, the search flag) on the fork's pending-import table, which
+// Chaptarr retries on its own unbounded schedule and completes itself — and a
+// duplicate add would merge into that row and force-bump its schedule. The
+// sweep therefore only watches for the exits: author landed (complete the
+// request through the normal already-tracked lane), import declared terminally
+// failed or cancelled (hand a human the row now, not at the horizon), still
+// importing (leave it alone). Builds without the read API fall back to the old
+// add-probe, whose refusal is the only signal they offer. A read failure
+// leaves the park untouched: blindness is not an answer, and the give-up
+// horizon still bounds the wait.
+func (s *Service) probeParkedBookRequest(row parkedBookRow) {
+	client, _, err := s.resolveChaptarr(row.userID, row.instanceID)
+	if err != nil || client == nil {
+		log.Printf("request: probe parked book request %d (%q): resolve chaptarr: %v", row.id, row.title, err)
+		return
+	}
+	foreignAuthorID, ok := s.lookupParkedAuthorID(client, row.foreignID)
+	if !ok {
+		return // lookup failed; blindness leaves the park untouched
+	}
+	if foreignAuthorID == "" {
+		// The id-fetch no longer names this record directly (alias resolution
+		// or a provider change). The add-probe's term ladder and error taxonomy
+		// already know how to land that shape, so use the legacy lane.
+		s.legacyProbeParkedBookRequest(row)
+		return
+	}
+	status, err := client.GetAuthorImportStatus(foreignAuthorID)
+	if errors.Is(err, chaptarr.ErrPendingImportAPIUnavailable) {
+		s.legacyProbeParkedBookRequest(row)
+		return
+	}
+	if err != nil {
+		log.Printf("request: probe parked book request %d (%q): %v", row.id, row.title, err)
+		return
+	}
+	switch {
+	case status.Exists:
+		// The author landed — and with it Chaptarr's own completion of the
+		// stored add intent. The fulfill re-runs the normal flow and lands in
+		// its already-tracked lane rather than adding twice.
+		if _, err := s.fulfillPendingRequest(0, row.id, nil, true); err != nil {
+			if errors.Is(err, chaptarr.ErrAuthorPendingImport) {
+				return // lost a race with the import; the next pass completes it
+			}
+			log.Printf("request: parked book request %d (%q) failed after its author import landed (%v); handing to the approval queue", row.id, row.title, err)
+			s.demoteParkedBookRequest(row.id, bookAddFailureImportAbandoned)
+			return
+		}
+		log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
+	case status.Pending && status.Status == chaptarr.AuthorImportStatusFailed:
+		log.Printf("request: parked book request %d (%q): chaptarr declared the author import terminally failed; handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+	case status.Pending:
+		// Chaptarr is still importing on its own schedule; nothing to do.
+	default:
+		log.Printf("request: parked book request %d (%q): the author import vanished from chaptarr without landing; handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportCancelled)
+	}
+}
+
+// lookupParkedAuthorID resolves the author foreignAuthorId behind a parked
+// book via the exact id-term fetch. Returns ok=false on a read failure (leave
+// the park alone), and an empty id with ok=true when the fetch answered but
+// did not name this record (the alias shape the legacy lane handles).
+func (s *Service) lookupParkedAuthorID(client *chaptarr.Client, foreignID string) (string, bool) {
+	results, err := client.LookupBook(foreignID)
+	if err != nil {
+		log.Printf("request: lookup parked book %q author: %v", foreignID, err)
+		return "", false
+	}
+	foreignID = strings.TrimSpace(foreignID)
+	for i := range results {
+		if strings.TrimSpace(results[i].ForeignBookID) == foreignID {
+			return strings.TrimSpace(results[i].ForeignAuthorID), true
+		}
+	}
+	return "", true
+}
+
+// legacyProbeParkedBookRequest is the pre-pending-import-API probe: replay the
+// add and read the refusal. Kept for older Chaptarr builds and for rows whose
+// id-fetch no longer answers directly.
+func (s *Service) legacyProbeParkedBookRequest(row parkedBookRow) {
+	_, err := s.fulfillPendingRequest(0, row.id, nil, true)
+	switch {
+	case err == nil:
+		log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
+	case errors.Is(err, chaptarr.ErrAuthorPendingImport):
+		// Still waiting on the library's import; the next pass retries.
+	default:
+		log.Printf("request: parked book request %d (%q) failed beyond the pending import (%v); handing to the approval queue", row.id, row.title, err)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportAbandoned)
+	}
+}
+
 // demoteParkedBookRequest turns a server-owned park back into an ordinary
 // approval-queue row and fires the request_pending notification that was
 // deliberately withheld when the park was created: this is the moment a human
-// decision first exists.
-func (s *Service) demoteParkedBookRequest(requestID int64) {
+// decision first exists. reason (one of bookImportAddFailures) records which
+// exit ended the wait, so the queue card can offer the honest verbs — try
+// again, or close the request.
+func (s *Service) demoteParkedBookRequest(requestID int64, reason string) {
 	var userID int64
 	var foreignID, bookFormat, instanceID, title string
 	err := s.db.QueryRow(
@@ -3844,11 +4176,11 @@ func (s *Service) demoteParkedBookRequest(requestID int64) {
 		return
 	}
 	res, err := s.db.Exec(
-		// The row keeps the fact that brought it here. A request that has been
-		// retried for a week and never worked is not a fresh decision, and the
-		// page fired below is the admin's first sight of it.
+		// The row keeps the fact that brought it here. A request whose wait
+		// ended without the author is not a fresh decision, and the page fired
+		// below is the admin's first sight of it.
 		"UPDATE request_log SET park_reason = NULL, add_failure_reason = ? WHERE id = ? AND status = ? AND park_reason IS NOT NULL",
-		bookAddFailureImportAbandoned, requestID, StatusPending,
+		reason, requestID, StatusPending,
 	)
 	if err != nil {
 		log.Printf("request: demote parked book request %d: %v", requestID, err)
@@ -3964,10 +4296,21 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		return fmt.Errorf("request is not pending")
 	}
 	audience := []bookRequestSubscriber{{UserID: r.userID}}
+	wasAuthorImportWait := false
 	if r.mediaType == "book" {
 		audience, err = s.bookRequestAudience(requestID, r.userID, r.bookFormat)
 		if err != nil {
 			return err
+		}
+		// Read the wait marker before the decision overwrites the row's story:
+		// a denied author-import wait must also cancel the arr's queued import
+		// (below), or the stored add intent delivers the book anyway later.
+		var parkReason, addFailure sql.NullString
+		if err := s.db.QueryRow(
+			"SELECT park_reason, COALESCE(add_failure_reason, '') FROM request_log WHERE id = ?", requestID,
+		).Scan(&parkReason, &addFailure); err == nil {
+			wasAuthorImportWait = (parkReason.Valid && parkReason.String == bookParkReasonAuthorImport) ||
+				isBookImportAddFailure(addFailure.String)
 		}
 	}
 	tx, err := s.db.Begin()
@@ -4001,6 +4344,9 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit request denial: %w", err)
+	}
+	if wasAuthorImportWait {
+		s.cancelAuthorImportForDeniedRequest(requestID, r)
 	}
 	if s.notifier != nil && r.mediaType != "book" {
 		data := map[string]interface{}{

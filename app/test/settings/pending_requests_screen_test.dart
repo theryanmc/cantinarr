@@ -370,7 +370,7 @@ void main() {
     expect(find.textContaining('The automatic add already failed'), findsNothing);
   });
 
-  testWidgets('a request retried to exhaustion is not shown as a fresh decision',
+  testWidgets('an ended author-import wait offers try again, not approve',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -379,7 +379,7 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+    final adapter = _ApprovalsAdapter(pending: const [
       {
         'id': 12,
         'user_id': 9,
@@ -388,9 +388,10 @@ void main() {
         'title': 'The Body Keeps the Score',
         'book_format': 'ebook',
         'foreign_id': 'gr:40738778',
-        'add_failure_reason': 'import_abandoned',
+        'add_failure_reason': 'import_failed',
       },
     ]);
+    dio.httpClientAdapter = adapter;
     final container = ProviderContainer(
       overrides: [
         authProvider.overrideWith(_FakeAuthNotifier.new),
@@ -411,10 +412,43 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Retried automatically for a week and never completed'),
+      find.text('The library gave up importing this author'),
       findsOneWidget,
     );
-    expect(find.textContaining('The author import never landed'), findsOneWidget);
+    expect(find.textContaining('Try again to reopen it'), findsOneWidget);
+    // Approving would just replay an add the library refused, so the verb is
+    // replaced, not merely discouraged; deny stays as the close.
+    expect(find.byIcon(Icons.check_circle_outline), findsNothing);
+    expect(find.byIcon(Icons.replay), findsOneWidget);
+    expect(find.byIcon(Icons.cancel_outlined), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.replay));
+    await tester.pumpAndSettle();
+
+    expect(adapter.waitPaths, ['/api/admin/requests/12/wait']);
+    expect(find.text('Waiting resumed.'), findsOneWidget);
+  });
+
+  test('import-wait reasons carry the try-again verbs', () {
+    for (final reason in [
+      'import_abandoned',
+      'import_failed',
+      'import_cancelled',
+    ]) {
+      final item = PendingRequestItem.fromJson({'add_failure_reason': reason});
+      expect(item.isImportWait, isTrue, reason: reason);
+      expect(item.addFailure?.action, contains('Try again'), reason: reason);
+    }
+    // The other failure kind keeps its own instruction, and an unknown reason
+    // stays a non-routine row without inventing a wait to resume.
+    final unresolved =
+        PendingRequestItem.fromJson({'add_failure_reason': 'metadata_unresolved'});
+    expect(unresolved.isImportWait, isFalse);
+    expect(
+      PendingRequestItem.fromJson({'add_failure_reason': 'some_future_reason'})
+          .isImportWait,
+      isFalse,
+    );
   });
 
   test('an unfamiliar failure reason is still not a routine decision', () {
@@ -775,6 +809,10 @@ class _ApprovalsAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> waiting;
   final int waitingStatusCode;
 
+  /// Every POST …/wait the adapter answered, and the body it returns for them.
+  final List<String> waitPaths = [];
+  Map<String, dynamic> waitResponse = const {'message': 'Waiting resumed.'};
+
   _ApprovalsAdapter({
     this.pending = const [],
     this.approvalResponse = const {},
@@ -801,6 +839,16 @@ class _ApprovalsAdapter implements HttpClientAdapter {
         bytes.isEmpty
             ? <String, dynamic>{}
             : jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+      );
+    }
+    if (options.method == 'POST' && options.uri.path.endsWith('/wait')) {
+      waitPaths.add(options.uri.path);
+      return ResponseBody.fromString(
+        jsonEncode(waitResponse),
+        200,
+        headers: {
+          'content-type': ['application/json'],
+        },
       );
     }
     final body = switch (options.uri.path) {

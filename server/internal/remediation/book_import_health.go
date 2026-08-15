@@ -67,7 +67,7 @@ func (s *Service) RecordBookImportStall(instanceID, instanceName string, waiting
 
 	title := fmt.Sprintf("Book requests are waiting on %s's metadata import", instanceName)
 	detail := fmt.Sprintf(
-		"%s has book requests parked for more than a day because its metadata service is still importing their authors. Waiting: %s. Cantinarr retries them automatically and hands anything unfinished to the approval queue after 7 days.",
+		"%s has book requests parked for more than a day because its metadata service is still importing their authors. Waiting: %s. The instance retries the import on its own schedule; Cantinarr watches it and completes the requests automatically when it lands, or hands them to the approval queue if the import fails or is cancelled.",
 		instanceName, boundedTitleList(waitingTitles),
 	)
 	resolution := "Check the Chaptarr instance's queued author imports (System page / logs). Nothing is required on the Cantinarr side; this issue resolves itself when the imports land."

@@ -988,6 +988,94 @@ func classifyAddBookRejection(body io.Reader) error {
 	return nil
 }
 
+// AuthorImportStatusFailed is the pending-import OverallStatus Chaptarr
+// assigns when a typed metadata-server outcome stopped its automatic retries.
+// Every other status (Pending/InProgress/Retrying/PartialSuccess) is a wait
+// Chaptarr is still working through on its own schedule.
+const AuthorImportStatusFailed = "Failed"
+
+// AuthorImportStatus is Chaptarr's live answer about one author's standing on
+// the instance: already in the library (Exists), still queued on the fork's
+// own pending-import table (Pending, with its retry bookkeeping), or neither.
+// Chaptarr owns the retry loop for queued imports — 60s for the first
+// attempts, then every 5 minutes, unbounded — so callers should read this
+// instead of re-posting adds: a duplicate add merges into the pending row and
+// force-bumps its schedule.
+type AuthorImportStatus struct {
+	Exists       bool   `json:"exists"`
+	AuthorID     int    `json:"authorId"`
+	AuthorName   string `json:"authorName"`
+	Pending      bool   `json:"pending"`
+	PendingID    int    `json:"pendingId"`
+	Status       string `json:"status"`
+	AttemptCount int    `json:"attemptCount"`
+}
+
+// ErrPendingImportAPIUnavailable reports a Chaptarr build without the
+// pending-import read API (the route 404s). Callers fall back to probing with
+// the add itself — the only signal older forks offer.
+var ErrPendingImportAPIUnavailable = errors.New("this chaptarr build has no pending-import API")
+
+// GetAuthorImportStatus reads the fork's pending-import answer for one author
+// provider id (e.g. "gr:21186439"). The endpoint checks the live library
+// first, then the pending-import queue, so Exists and Pending are mutually
+// exclusive and both false means neither knows the author.
+func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportStatus, error) {
+	resp, err := c.doRequest("GET", "/api/v1/pendingauthorimport/author/exists/"+url.PathEscape(foreignAuthorID))
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr author import status: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("chaptarr author import status: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode)
+	}
+	var status AuthorImportStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("chaptarr author import status: decode response: %w", err)
+	}
+	return &status, nil
+}
+
+// CancelPendingAuthorImport removes one queued author import. The queued row
+// carries the whole add intent — the monitored book and the search flag — so
+// a request an admin closes must cancel it, or the content still arrives
+// whenever the import finally lands.
+func (c *Client) CancelPendingAuthorImport(pendingID int) error {
+	resp, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/pendingauthorimport/%d", pendingID))
+	if err != nil {
+		return fmt.Errorf("chaptarr cancel pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("chaptarr cancel pending author import: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// RetryPendingAuthorImport asks Chaptarr to reprocess one queued author import
+// now. This is also the reopen lever for a Failed row, whose automatic
+// retries have stopped.
+func (c *Client) RetryPendingAuthorImport(pendingID int) error {
+	resp, err := c.doRequest("POST", fmt.Sprintf("/api/v1/pendingauthorimport/%d/retry", pendingID))
+	if err != nil {
+		return fmt.Errorf("chaptarr retry pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("chaptarr retry pending author import: %w", ErrPendingImportAPIUnavailable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // SetBookMonitored toggles monitoring for the given books. Chaptarr's
 // book/monitor endpoint is a PUT (a POST returns 405); it also re-derives a
 // book's ebook/audiobook monitor flags from its mediaType, so monitoring a book

@@ -907,9 +907,11 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE issues ADD COLUMN last_paged_at DATETIME"},
 		// Why an approval-queue row is there beyond ordinary policy: the
 		// automatic add already ran and failed ('metadata_unresolved' — the
-		// library could not match the book; 'import_abandoned' — a server-owned
-		// author-import park was retried to exhaustion and handed over). NULL is
-		// an ordinary "a human decides" row.
+		// library could not match the book; 'import_abandoned' — an add failure
+		// ended the watch on a server-owned author-import park; 'import_failed'
+		// / 'import_cancelled' — the arr's own pending author import reached a
+		// declared terminal or was cancelled). NULL is an ordinary "a human
+		// decides" row.
 		//
 		// Deliberately NOT a second park_reason value: park_reason answers who
 		// owns the row, and its NULL is the guard that keeps the sweep from
