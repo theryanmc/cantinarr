@@ -811,7 +811,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
 
   /// Every POST …/wait the adapter answered, and the body it returns for them.
   final List<String> waitPaths = [];
-  Map<String, dynamic> waitResponse;
+  Map<String, dynamic> waitResponse = const {'message': 'Waiting resumed.'};
 
   _ApprovalsAdapter({
     this.pending = const [],
@@ -819,7 +819,6 @@ class _ApprovalsAdapter implements HttpClientAdapter {
     this.approvalStatusCode = 200,
     this.waiting = const [],
     this.waitingStatusCode = 200,
-    this.waitResponse = const {'message': 'Waiting resumed.'},
   });
 
   @override
