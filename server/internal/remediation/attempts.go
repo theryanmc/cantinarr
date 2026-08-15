@@ -320,6 +320,70 @@ func (s *Service) upgradeAbandonProven(issue *Issue) (bool, error) {
 	return current.fileID == baselineFileID.Int64, nil
 }
 
+// bookRemoveWithoutReplacementProven reports that a book incident ended the way
+// a removed dead download with no available replacement is supposed to end: the
+// want had no file before the incident, the server itself dispatched a
+// blocklisting fix, and the want still has no file now that the queue is empty.
+//
+// The ordinary recovery proof cannot see this outcome any more than it can see
+// an abandoned upgrade — it was written for missing media, where recovery means
+// a NEW file arrives with an import receipt to bind it. Here no file arriving
+// IS the outcome: the dispatched fix removed the only live attempt, the arr's
+// own replacement search ran and found nothing to grab, and the want stays
+// monitored. Without a terminal for that shape the incident re-promoted
+// forever and finally told an admin the fix "could not be verified" — the one
+// claim in the story that was false (issue 859, 2026-08-13).
+//
+// Every condition is typed state rather than judgment, mirroring
+// upgradeAbandonProven: a captured baseline with NO file (this was a want, not
+// an upgrade), a dispatched blocklist facet (plain remove is excluded — an
+// unblocklisted release can simply be re-grabbed, which is the #359 repeat
+// loop, not an ending), and a known current file state that is still empty. A
+// replacement the arr did grab appears as a live queue row for the same scope,
+// so callers must additionally have proven the exact queue target absent; this
+// answers only "was the outcome the intended one".
+//
+// Book-only on purpose. Movies and TV can end in the same shape, but their
+// stalled downloads travel other proven paths (upgrade abandonment, replacement
+// grabs their richer indexer pool actually finds), and this proof was audited
+// against Chaptarr's behavior specifically — its failed-download handling
+// re-searches immediately and definitively. Widening it is a deliberate later
+// change, not a default.
+func (s *Service) bookRemoveWithoutReplacementProven(issue *Issue) (bool, error) {
+	if issue == nil || issue.MediaType != "book" || issue.Source != SourceAuto {
+		return false, nil
+	}
+	var baselineHasFile sql.NullBool
+	var captured sql.NullTime
+	if err := s.db.QueryRow(
+		"SELECT baseline_has_file, baseline_captured_at FROM issue_observations WHERE issue_id = ?",
+		issue.ID,
+	).Scan(&baselineHasFile, &captured); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read baseline for removed-no-replacement: %w", err)
+	}
+	if !captured.Valid || !baselineHasFile.Valid || baselineHasFile.Bool {
+		return false, nil // no baseline, or the library had a copy: not this shape.
+	}
+	for _, facet := range []string{arr.ActionBlocklistSearch, arr.ActionBlocklistOnly} {
+		dispatched, err := s.issueHadExecutedFacet(issue.ID, ActionRemediateQueue, facet)
+		if err != nil {
+			return false, err
+		}
+		if !dispatched {
+			continue
+		}
+		current, err := s.exactIssueFileState(issue)
+		if err != nil {
+			return false, err
+		}
+		return current.known && !current.hasFile, nil
+	}
+	return false, nil
+}
+
 // pauseRuleForRepeatedRemedy disarms a rule that was about to replay an
 // ineffective fix, recording the thread evidence in the same transaction.
 func (s *Service) pauseRuleForRepeatedRemedy(ruleID, issueID int64) (bool, error) {

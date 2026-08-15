@@ -547,8 +547,11 @@ func TestIssueTerminalAccounting(t *testing.T) {
 			t.Fatalf("GiveUpIssue = %v, %v", gaveUp, err)
 		}
 		rule := ruleRow(t, svc, ruleID)
-		if rule.Status != ApprovalRulePaused || rule.PausedReason == nil || *rule.PausedReason != autoRulePausedIssueUnresolved {
-			t.Fatalf("rule after give-up = %+v, want paused", rule)
+		// The give-up pause's own copy: the issue PARKED needs_admin — it did
+		// not close — and the note must not claim otherwise (issue 859's pause
+		// said "closed without being resolved" about an issue that never closed).
+		if rule.Status != ApprovalRulePaused || rule.PausedReason == nil || *rule.PausedReason != autoRulePausedNeedsAdmin {
+			t.Fatalf("rule after give-up = %+v, want paused with the handed-to-admin reason", rule)
 		}
 		if countAdminEvents(notifier, "agent_autoapproval_paused") != 1 {
 			t.Fatalf("give-up pause notified %d times, want 1", countAdminEvents(notifier, "agent_autoapproval_paused"))

@@ -91,6 +91,12 @@ enum IssueResolutionKind {
   aiHealthRestored('ai_health_restored', 'Shared AI recovered'),
   pushDeliveryRestored('push_delivery_restored', 'Notifications recovered'),
   bookImportCleared('book_import_cleared', 'Book imports cleared'),
+  // The dispatched fix removed and blocklisted a dead download and the
+  // replacement search came back empty: done, honestly — nothing arrived, and
+  // nobody is being waited on. The library keeps monitoring for a future
+  // release on its own.
+  removedNoReplacement(
+      'removed_no_replacement', 'Dead download removed; no copy available yet'),
   legacyUnknown('legacy_unknown', 'How it closed is unknown'),
   unknown('', 'How it closed is unknown');
 

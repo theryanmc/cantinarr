@@ -35,6 +35,11 @@ const (
 	autoRulePausedUnverifiedOutcome = "An auto-approved fix ended with an unverified outcome. Verify the arr state before re-arming this rule."
 	autoRulePausedPreflightFailed   = "An auto-approved fix was stopped by a failed pre-dispatch safety check. Review the issue before re-arming this rule."
 	autoRulePausedIssueUnresolved   = "An issue this rule acted on closed without being resolved. Review the outcome before re-arming this rule."
+	// autoRulePausedNeedsAdmin is the give-up path's pause. It used to reuse
+	// the "closed without being resolved" copy above, which was false twice
+	// over on issue 859: the issue never closed (it parked needs_admin), and
+	// the pause note therefore described an event that had not happened.
+	autoRulePausedNeedsAdmin = "An issue this rule acted on had to be handed to an administrator. Review the outcome before re-arming this rule."
 )
 
 // executionFailedPauseCause is the issue-thread clause for every pause triggered
