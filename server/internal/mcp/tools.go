@@ -1039,8 +1039,20 @@ func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
 	}
 	var sb strings.Builder
 	for i, r := range requests {
-		fmt.Fprintf(&sb, "%d. %s (%s) - Status: %s - Requested: %s\n",
+		fmt.Fprintf(&sb, "%d. %s (%s) - Status: %s - Requested: %s",
 			i+1, r.Title, r.MediaType, r.Status, r.RequestedAt.Format("2006-01-02"))
+		// "requested" is the closest single word for a book the server is still
+		// retrying, and on its own it tells the assistant the library has the
+		// title — so the assistant would reassure a requester about a record
+		// that does not exist. Say what the status word cannot.
+		if wait := r.BookFormatWait; wait != nil {
+			detail := "the library is not ready for it yet"
+			if wait.Reason == request.BookWaitReasonAuthorImport {
+				detail = "the library is still importing its author"
+			}
+			fmt.Fprintf(&sb, " - Not in the library yet: %s. Cantinarr retries automatically; nobody needs to approve anything.", detail)
+		}
+		sb.WriteByte('\n')
 	}
 	return &ToolResult{Text: sb.String()}, nil
 }

@@ -213,6 +213,10 @@ GET    /api/requests/book-recent           # user: newest book-file imports; opt
 GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress
 GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
                                            #   foreign_id and a best-effort TMDB poster_path (movie/tv)
+GET    /api/admin/requests/waiting         # admin: pending rows the SERVER owns and retries itself
+                                           #   (park_reason set); same row shape plus wait_reason and
+                                           #   last_attempt_at. Informational — no approve/deny, and
+                                           #   never counted by the badge or request_pending push
 POST   /api/admin/requests/{id}/approve    # admin: approve (executes the stored request once)
 POST   /api/admin/requests/{id}/deny       # admin: deny with optional reason
 GET|PUT /api/admin/request-settings        # admin: global policy (require_approval,
@@ -220,6 +224,8 @@ GET|PUT /api/admin/request-settings        # admin: global policy (require_appro
 GET|PUT /api/admin/users/{userID}/request-settings  # admin: per-user overrides
 ```
 Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `denied`, `downloading`, `partial`, `available`.
+
+A book the server accepted but Chaptarr could not create yet (its metadata service is still importing the author) is stored pending with `park_reason='author_import'` and reported as `requested` — the closest existing word, kept so older clients are unaffected. Because `requested` on its own claims a monitored library record that does not exist, those reads also carry a per-format wait: `book_format_waits: {"ebook": {"reason", "waiting_since", "last_attempt_at"}}` on create and book-status, and `book_format_wait` on each history row. The wait is applied after the live overlay, so it disappears the moment the library really holds the record. `last_attempt_at` is derived, not stored: the maintenance sweep retries every parked row on every pass, so one process-level timestamp dates them all; it is absent when the server has restarted since the park and cannot vouch for an attempt.
 
 ### Issues & AI remediation
 ```

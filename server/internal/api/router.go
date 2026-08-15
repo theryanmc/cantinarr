@@ -235,6 +235,8 @@ func NewRouter(
 
 			// Media request management: approval queue + request defaults
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests", requestHandler.ListPending)
+			// Static segment, so it wins over /requests/{id}/… in chi's router.
+			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/requests/waiting", requestHandler.ListWaiting)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/approve", requestHandler.Approve)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Post("/requests/{id}/deny", requestHandler.Deny)
 			r.With(auth.RequirePermission(auth.PermissionRequestsManage)).Get("/request-settings", requestHandler.GetSettings)
