@@ -375,16 +375,21 @@ var messageRules = []messageRule{
 // trackedDownloadStatus is error). First match wins.
 var errorRules = []messageRule{
 	{
+		// The claim stays at what the evidence shows. "No seeders" was written
+		// here once, but this rule fires on ANY message containing "stalled" —
+		// the client's word for "no data is moving right now", which is also
+		// every torrent during tracker warmup. The 2026-08-13 issue-859 audit
+		// caught the old text asserting seeder counts nothing had measured.
 		prefix:       "stalled",
 		problem:      ProblemDownloadStalled,
-		transparency: "This torrent has no seeders and will never finish on its own.",
+		transparency: "This download has stalled — no data is arriving. If that doesn't change, it will never finish on its own.",
 		severity:     SeverityError,
 		actions:      []string{ActionBlocklistSearch},
 	},
 	{
 		prefix:       "no connections",
 		problem:      ProblemDownloadStalled,
-		transparency: "This torrent has no connections and will never finish on its own.",
+		transparency: "This download has no connections — no data is arriving. If that doesn't change, it will never finish on its own.",
 		severity:     SeverityError,
 		actions:      []string{ActionBlocklistSearch},
 	},

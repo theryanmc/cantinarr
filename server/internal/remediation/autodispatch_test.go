@@ -411,3 +411,86 @@ func TestBootPausedRulesAnnounceOnce(t *testing.T) {
 		t.Fatalf("boot pause announcements = %d, want exactly 1", found)
 	}
 }
+
+// TestStalledIncidentWaitsOutTrackerWarmup pins the dwell that issue 859
+// (2026-08-13) lacked: a torrent flagged "stalled" 34 seconds after its grab
+// became an incident, promoted at 10 minutes, and a standing rule destroyed the
+// only release in existence before the torrent ever had a chance to find a
+// peer. "Stalled" from a torrent client means "no data moving right now" —
+// which is every torrent during tracker warmup — so a young stalled flag must
+// not be able to open the incident that starts that pipeline.
+func TestStalledIncidentWaitsOutTrackerWarmup(t *testing.T) {
+	base := time.Date(2026, 8, 13, 13, 53, 0, 0, time.UTC)
+
+	observe := func(t *testing.T, svc *Service, added *time.Time, at time.Time) {
+		t.Helper()
+		item := observedProblem("stall-dwell", 7, 100)
+		item.AddedAt = added
+		if err := svc.observeQueueSnapshot("radarr", "radarr-observe", []arr.QueueObservation{item}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issueCount := func(t *testing.T, svc *Service) int {
+		t.Helper()
+		issues, _, err := svc.ListIssues("", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(issues)
+	}
+
+	t.Run("young stalled is not an incident yet", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		added := base
+		// 34 seconds after the grab — 859's exact shape.
+		observe(t, svc, &added, base.Add(34*time.Second))
+		if n := issueCount(t, svc); n != 0 {
+			t.Fatalf("issues after a 34s-old stalled flag = %d, want 0 (tracker warmup is not an incident)", n)
+		}
+		// Still stalled past the dwell: the same download now IS an incident.
+		// Nothing was lost by waiting — a stalled torrent makes no progress.
+		observe(t, svc, &added, base.Add(stalledIncidentDwell+time.Minute))
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues after outlasting the dwell = %d, want 1 (a genuinely dead torrent must still surface)", n)
+		}
+	})
+
+	t.Run("an unknown added time keeps today's behavior", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		// All three arrs supply `added`; nil is the degenerate case, and
+		// inventing a birth time would suppress real incidents on evidence we
+		// do not have.
+		observe(t, svc, nil, base)
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues for a stalled item with no added time = %d, want 1", n)
+		}
+	})
+
+	t.Run("a different problem in the same group still opens the incident", func(t *testing.T) {
+		svc, _, _ := setupObservationService(t, false)
+		enableAutoDispatch(t, svc, 5)
+		added := base
+		young := observedProblem("stall-dwell", 7, 100)
+		young.AddedAt = &added
+		hard := arr.QueueSignal{
+			TrackedDownloadStatus: "error",
+			ErrorMessage:          "qBittorrent is reporting an error",
+			Size:                  100, SizeLeft: 100,
+		}
+		sibling := arr.QueueObservation{
+			DownloadID: "stall-dwell",
+			AddedAt:    &added,
+			Media:      arr.QueueMediaContext{QueueID: 7, Title: "Example", TmdbID: 42},
+			Signal:     hard, Diagnosis: arr.Diagnose(hard),
+		}
+		if err := svc.observeQueueSnapshot("radarr", "radarr-observe",
+			[]arr.QueueObservation{young, sibling}, base.Add(34*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if n := issueCount(t, svc); n != 1 {
+			t.Fatalf("issues with a hard client error alongside a young stall = %d, want 1 (the dwell gates only the stalled signal)", n)
+		}
+	})
+}

@@ -137,7 +137,10 @@ func TestPipelineStalledUpgradeFullLoop(t *testing.T) {
 	})
 	h.fake.setLibrary(episodes, files)
 	base := time.Now().UTC().Add(-30 * time.Minute)
-	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(41, "TORRENTABC123", base)})
+	// Added well before the first observation: a torrent that has been stalled
+	// for half an hour is past the stalled dwell, so the incident is born on
+	// first sighting exactly as this pipeline expects.
+	h.fake.setQueue([]map[string]any{stalledUpgradeQueueRow(41, "TORRENTABC123", base.Add(-30*time.Minute))})
 
 	// Intake twice through the production path: first sighting starts the quiet
 	// observation; the second, past the min/quiet windows, promotes it.
