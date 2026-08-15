@@ -787,8 +787,8 @@ func TestNotifyNewEpisodeReachesOptedInUsers(t *testing.T) {
 		t.Errorf("new_episode recipients = %v, want [\"1\"]", ids)
 	}
 	notif, _ := body["notification"].(map[string]any)
-	if notif["title"] != "New episode available" {
-		t.Errorf("title = %v, want \"New episode available\"", notif["title"])
+	if notif["title"] != "New episodes available" {
+		t.Errorf("title = %v, want \"New episodes available\"", notif["title"])
 	}
 	if notif["body"] != "New on Severance" {
 		t.Errorf("body = %v, want \"New on Severance\"", notif["body"])

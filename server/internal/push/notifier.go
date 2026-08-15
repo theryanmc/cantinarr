@@ -492,10 +492,15 @@ func (n *Notifier) NotifyNewMovie(title string, tmdbID int) {
 	n.notifyNewContent(CategoryNewMovie, "movie", "New movie available", title+" is ready to watch", title, tmdbID)
 }
 
-// NotifyNewEpisode pushes a "new episode available" alert to every user opted
-// into the new_episode category (on by default).
+// NotifyNewEpisode pushes a "new episodes available" alert to every user opted
+// into the new_episode category (on by default). The copy is plural with no
+// count on purpose: the alert sends on the first import of a wave and
+// claimContentAlert absorbs the rest of a season pack behind it, so at send
+// time the server cannot know whether one episode or ten are landing — an
+// honest count would mean holding the push, and a singular title undersells a
+// pack. The body stays count-free so the pair reads naturally either way.
 func (n *Notifier) NotifyNewEpisode(seriesTitle string, tmdbID int) {
-	n.notifyNewContent(CategoryNewEpisode, "tv", "New episode available", "New on "+seriesTitle, seriesTitle, tmdbID)
+	n.notifyNewContent(CategoryNewEpisode, "tv", "New episodes available", "New on "+seriesTitle, seriesTitle, tmdbID)
 }
 
 // NotifyNewBook pushes a "book became available" alert for a completed

@@ -261,8 +261,8 @@ class _NotificationPreferencesScreenState
           anchor: SettingsAnchors.notificationsNewMovie,
         ),
         _toggle(
-          title: 'New episode available',
-          subtitle: 'When a new episode is available',
+          title: 'New episodes available',
+          subtitle: 'When new episodes are available',
           value: prefs.newEpisode,
           onChanged: (v) => _save(prefs.copyWith(newEpisode: v), prefs),
           anchor: SettingsAnchors.notificationsNewEpisode,

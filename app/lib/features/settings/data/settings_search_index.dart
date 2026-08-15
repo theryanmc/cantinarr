@@ -793,7 +793,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.notificationsNewEpisode,
-    title: 'New episode available',
+    title: 'New episodes available',
     icon: Icons.notifications_outlined,
     route: '/settings/notifications',
     screenTitle: 'Notification Preferences',
