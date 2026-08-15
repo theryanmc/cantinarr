@@ -165,7 +165,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		return false, fmt.Errorf("begin conclude issue: %w", err)
 	}
 	defer tx.Rollback()
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		var executing int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -180,7 +180,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 			return false, fmt.Errorf("an approved fix is still executing; wait for its outcome before closing the issue")
 		}
 	}
-	if resolutionKind == ResolutionArrStateCleared {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement {
 		var unknown int
 		if err := tx.QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM agent_actions WHERE issue_id = ? AND status = ?",
@@ -285,7 +285,11 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 		switch {
 		case status == IssueResolved &&
 			(resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAgentConcluded ||
-				resolutionKind == ResolutionReporterConfirmed):
+				resolutionKind == ResolutionReporterConfirmed ||
+				// Removed-and-blocklisted with no replacement available IS the
+				// intended outcome of the rule's own action; issue 859's rule
+				// was paused by its success for want of this membership.
+				resolutionKind == ResolutionRemovedNoReplacement):
 			for _, ruleID := range autoRuleIDs {
 				if _, err := tx.ExecContext(ctx,
 					`UPDATE agent_approval_rules
@@ -315,7 +319,7 @@ func (s *Service) concludeIssueAggregate(ctx context.Context, issueID int64, sta
 	// An external observation/admin close can race a running or parked agent.
 	// Terminalize those runs here; an agent-concluded run is finalized by the
 	// Runner immediately after this transaction and must not be mislabeled.
-	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
+	if resolutionKind == ResolutionArrStateCleared || resolutionKind == ResolutionRemovedNoReplacement || resolutionKind == ResolutionAdminDismissed || resolutionKind == ResolutionReporterTimeout || resolutionKind == ResolutionAdminCompleted || resolutionKind == ResolutionReporterConfirmed {
 		stopReason := "external_resolution"
 		if resolutionKind == ResolutionAdminDismissed {
 			stopReason = "admin_dismissed"
@@ -544,7 +548,7 @@ func (s *Service) GiveUpIssue(ctx context.Context, issueID, runID int64, stopRea
 	}
 	var pausedRules []int64
 	for _, autoRuleID := range autoRuleIDs {
-		paused, err := pauseRuleForFailureTx(tx, autoRuleID, issueID, autoRulePausedIssueUnresolved)
+		paused, err := pauseRuleForFailureTx(tx, autoRuleID, issueID, autoRulePausedNeedsAdmin)
 		if err != nil {
 			return false, err
 		}

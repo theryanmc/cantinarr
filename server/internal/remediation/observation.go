@@ -81,6 +81,12 @@ const observationDownloadUpsertSQL = `INSERT INTO issue_observation_downloads
 const recoveryInFlightResult = "Superseded because the live arr state changed or the arr continued its own retry before approval; no fix was executed."
 const arrStateClearedResolution = "The requested movie or episode is now available."
 const arrStateClearedBookResolution = "The requested book is now available."
+
+// removedNoReplacementResolution narrates the removed-no-replacement terminal
+// (ResolutionRemovedNoReplacement) in the same plain language the give-up
+// headlines use: what ran, what the world looks like now, and who — nobody —
+// is being waited on.
+const removedNoReplacementResolution = "The dead download was removed and blocklisted. No other copy of this book is available right now; the library keeps monitoring and will grab one automatically when a release appears."
 const observationNeedsCloserLook = "We couldn't confirm the latest status from the connected media service. We didn't make automated changes, and this needs a closer look."
 
 var errStaleObservation = errors.New("stale observation")
@@ -960,7 +966,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 				if bookReceiptCannotProveLiveRow(record.issue, group) {
 					return s.promoteObservedIssue(record.issue.ID, now)
 				}
-				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+				return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 			}
 			if probe.needsAdmin {
 				return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -991,7 +997,7 @@ func (s *Service) applyMatchingObservation(record *observationRecord, group obse
 			if bookReceiptCannotProveLiveRow(record.issue, group) {
 				return s.promoteObservedIssue(record.issue.ID, now)
 			}
-			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+			return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 		}
 		if probe.needsAdmin {
 			return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1023,7 +1029,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 			return moveErr
 		}
 		if probe.completed {
-			return s.closeObservedRecovery(record.issue.ID, true)
+			return s.closeObservedRecovery(record.issue.ID, true, probe.resolutionKind)
 		}
 		if probe.needsAdmin {
 			_, err = s.moveIssueToObservationNeedsAdmin(record.issue, probe.reason, now)
@@ -1060,7 +1066,7 @@ func (s *Service) applyAbsentObservation(record *observationRecord, now time.Tim
 		return nil
 	}
 	if probe.completed {
-		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid)
+		return s.closeObservedRecovery(record.issue.ID, record.promotedAt.Valid, probe.resolutionKind)
 	}
 	if probe.needsAdmin {
 		return s.promoteObservationNeedsAdmin(record.issue.ID, now, probe.reason)
@@ -1234,15 +1240,24 @@ func (s *Service) suspendIssueForRecovery(issueID int64, item arr.QueueObservati
 	return true, nil
 }
 
-func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool) error {
+func (s *Service) closeObservedRecovery(issueID int64, wasPromoted bool, kind string) error {
+	// The kind names which terminal the probe proved; the narration must match
+	// it. An empty kind is the ordinary recovery: the media arrived.
+	if kind == "" {
+		kind = ResolutionArrStateCleared
+	}
 	resolution := arrStateClearedResolution
-	var mediaType string
-	if err := s.db.QueryRow("SELECT media_type FROM issues WHERE id=?", issueID).Scan(&mediaType); err == nil && mediaType == "book" {
-		resolution = arrStateClearedBookResolution
+	if kind == ResolutionRemovedNoReplacement {
+		resolution = removedNoReplacementResolution
+	} else {
+		var mediaType string
+		if err := s.db.QueryRow("SELECT media_type FROM issues WHERE id=?", issueID).Scan(&mediaType); err == nil && mediaType == "book" {
+			resolution = arrStateClearedBookResolution
+		}
 	}
 	transitioned, err := s.concludeIssueAggregate(context.Background(), issueID, IssueResolved,
 		resolution,
-		ResolutionArrStateCleared, issueClosureOptions{silentNotifications: !wasPromoted})
+		kind, issueClosureOptions{silentNotifications: !wasPromoted})
 	// Silent means no alert/push, not no cache invalidation. `issue_updated` is a
 	// websocket-only refresh signal in the push notifier, so the Tracking list and
 	// an open thread learn that a never-promoted incident quietly resolved.
@@ -1978,6 +1993,10 @@ type arrRecoveryProbe struct {
 	needsAdmin bool
 	reason     string
 	item       arr.QueueObservation
+	// resolutionKind names WHICH terminal a completed probe proved, so the
+	// close can narrate it honestly. Empty means the ordinary recovery
+	// (arr_state_cleared: the media arrived).
+	resolutionKind string
 }
 
 // exactRecoveryGuard interprets the exact library baseline and a locally
@@ -2021,6 +2040,21 @@ func (s *Service) exactRecoveryGuard(issue *Issue) (arrRecoveryProbe, error) {
 	}
 	if !stateKnown || changed {
 		return arrRecoveryProbe{needsAdmin: true, reason: observationNeedsCloserLook}, nil
+	}
+	// An unchanged 0-file baseline is not always "nothing to conclude". A book
+	// want whose dispatched blocklist fix removed the only live attempt, with
+	// nothing grabbed to replace it, has ENDED — 0→0 with an empty queue is
+	// that fix's success shape, and without this branch the incident
+	// re-promoted a fresh run on every settle, forever (issue 859). Callers of
+	// this guard have already established the exact queue scope is absent.
+	if issue.Source == SourceAuto {
+		removed, err := s.bookRemoveWithoutReplacementProven(issue)
+		if err != nil {
+			return arrRecoveryProbe{}, err
+		}
+		if removed {
+			return arrRecoveryProbe{completed: true, resolutionKind: ResolutionRemovedNoReplacement}, nil
+		}
 	}
 	return arrRecoveryProbe{}, nil
 }
@@ -2259,7 +2293,7 @@ func (s *Service) preflightArrRecovery(issueID int64) (bool, error) {
 	}
 	var promoted int
 	_ = s.db.QueryRow("SELECT promoted_at IS NOT NULL FROM issue_observations WHERE issue_id=?", issue.ID).Scan(&promoted)
-	return true, s.closeObservedRecovery(issue.ID, promoted != 0)
+	return true, s.closeObservedRecovery(issue.ID, promoted != 0, probe.resolutionKind)
 }
 
 func (s *Service) moveIssueToObservationNeedsAdmin(issue *Issue, reason string, now time.Time) (bool, error) {
@@ -2365,7 +2399,7 @@ func (s *Service) cancelExecutingForRecovery(act *AgentAction, probe arrRecovery
 	}
 	s.notifyActionsChanged(act.IssueID, ActionSuperseded)
 	if probe.completed {
-		return s.closeObservedRecovery(act.IssueID, true)
+		return s.closeObservedRecovery(act.IssueID, true, probe.resolutionKind)
 	}
 	return nil
 }

@@ -194,6 +194,23 @@ func (r *Runner) Run(ctx context.Context, issueID int64) error {
 		issue.Status == IssueAwaitingConfirmation {
 		return nil
 	}
+	// A staged resume_pending handoff owns this issue's next model turn even
+	// when the ISSUE status looks fresh: a suspend/re-promote cycle between an
+	// approval and its resume legitimately lands the issue back at open, and
+	// the observation sweep then enqueues it here as ordinary work. Starting
+	// fresh in that state is how issue 859's run 69 beat the recovery lane's
+	// minute tick by 30 seconds, re-litigated the incident from scratch, and
+	// left the staged decision to be reaped as superseded. Every fresh entry
+	// funnels through this method, so this one check makes them all
+	// resume-aware; Resume owns every subtlety after it (CAS claim, terminal
+	// finalization, provider probe), and losing its race just returns nil.
+	var staged int
+	if err := r.db.QueryRow(
+		`SELECT COUNT(1) FROM agent_runs WHERE issue_id = ? AND status = ?`,
+		issueID, runStatusResumePending,
+	).Scan(&staged); err == nil && staged > 0 {
+		return r.Resume(ctx, issueID)
+	}
 	if recovering, preflightErr := r.svc.preflightArrRecovery(issueID); preflightErr != nil {
 		if _, parkErr := r.svc.moveIssueToObservationNeedsAdmin(issue, observationNeedsCloserLook, time.Now().UTC()); parkErr != nil {
 			return fmt.Errorf("park issue %d after arr recovery preflight failed: %v (preflight: %w)", issueID, parkErr, preflightErr)
@@ -749,6 +766,7 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 			// Queue disappearance alone is not a terminal witness. Require the exact
 			// movie/episode to be present in the live arr library before accepting
 			// even a typed auto-incident conclusion.
+			resolution, resolutionKind := arrStateClearedResolution, ResolutionArrStateCleared
 			proven, known, proofErr := r.svc.exactRecoveryProven(issue)
 			if proofErr != nil || !known || !proven {
 				// The proof above was written for missing media, where recovery
@@ -759,21 +777,34 @@ func (r *Runner) loop(ctx context.Context, turn ai.TurnRunner, issue *Issue, st 
 				// the exact queue target is gone.
 				abandoned, abandonErr := r.svc.upgradeAbandonProven(issue)
 				if abandonErr != nil || !abandoned {
-					// Both proofs above read issue_observations and both call
-					// exactIssueFileState, which fails closed on a season-scoped
-					// TV issue. A season the service filled before it aired is
-					// exactly that shape and has no queue row to begin with, so
-					// it carries its own proof: nothing unaired still holds a
-					// file.
-					repaired, repairErr := r.svc.preAirRepairProven(issue)
-					if repairErr != nil || !repaired {
-						return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
-							unverifiedCloseMessage(attempts))
+					// A book want can end a third way: the dispatched blocklist
+					// fix removed the only live attempt and the arr's own
+					// replacement search found nothing. The missing-media proof
+					// reads that as failure (0 files → 0 files, no receipt),
+					// but it is this fix's success shape, and closing it wrong
+					// was what claimed the one verifiably executed fix "could
+					// not be verified" (issue 859). Same queue-target-gone
+					// contract as the abandon proof above.
+					removed, removedErr := r.svc.bookRemoveWithoutReplacementProven(issue)
+					if removedErr == nil && removed {
+						resolution, resolutionKind = removedNoReplacementResolution, ResolutionRemovedNoReplacement
+					} else {
+						// All proofs above read issue_observations and call
+						// exactIssueFileState, which fails closed on a
+						// season-scoped TV issue. A season the service filled
+						// before it aired is exactly that shape and has no
+						// queue row to begin with, so it carries its own
+						// proof: nothing unaired still holds a file.
+						repaired, repairErr := r.svc.preAirRepairProven(issue)
+						if repairErr != nil || !repaired {
+							return r.giveUp(ctx, issue.ID, st.runID, model, stopUnverifiedClose,
+								unverifiedCloseMessage(attempts))
+						}
 					}
 				}
 			}
 			transitioned, err := r.svc.concludeIssueAggregate(ctx, issue.ID, IssueResolved,
-				arrStateClearedResolution, ResolutionArrStateCleared,
+				resolution, resolutionKind,
 				issueClosureOptions{expectedRunID: st.runID})
 			if err != nil {
 				return fmt.Errorf("conclude issue %d: %w", issue.ID, err)

@@ -85,6 +85,17 @@ const (
 	ResolutionAIHealthRestored     = "ai_health_restored"
 	ResolutionPushDeliveryRestored = "push_delivery_restored"
 	ResolutionBookImportCleared    = "book_import_cleared"
+	// ResolutionRemovedNoReplacement closes a book incident whose dispatched fix
+	// removed and blocklisted a dead download and whose replacement search came
+	// back empty. Before this kind existed that shape had no terminal at all:
+	// the want went 0 files → 0 files with no import receipt, so the recovery
+	// proof could conclude neither success nor failure, the issue re-promoted
+	// forever, and the eventual needs_admin claimed the fix "could not be
+	// verified" — about the one thing in the story that verifiably ran (issue
+	// 859, 2026-08-13). The honest reading is terminal: the fix did its job, no
+	// copy exists to grab today, and the library keeps monitoring, so a future
+	// release is grabbed without anyone's involvement.
+	ResolutionRemovedNoReplacement = "removed_no_replacement"
 	// ResolutionRemediationProviderConfigured closes the "remediation is on but
 	// has no AI provider" system issue when the runner first resolves a shared
 	// turn again.
