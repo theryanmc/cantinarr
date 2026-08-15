@@ -73,6 +73,27 @@ const bookParkReasonAuthorImport = "author_import"
 // have to render a wait (the MCP tool surface). Same string, one definition.
 const BookWaitReasonAuthorImport = bookParkReasonAuthorImport
 
+// An approval-queue row can be there for two unrelated reasons, and until these
+// existed both rendered identically: a request awaiting someone's decision, and
+// a request whose automatic add already ran and failed. The second is not a
+// policy question — approving it replays the same add — so a row that says
+// nothing invites an admin to press Approve, read "Something went wrong", and
+// have no idea the real next step is in Chaptarr.
+//
+// These are descriptive only. They never move a row out of the approval queue
+// or out of the badge: a human really does have to act on both kinds. See the
+// add_failure_reason column comment for why this is not a park_reason value.
+const (
+	// bookAddFailureMetadataUnresolved: the library could not match the book, so
+	// the add never happened. Approving replays it, which works only once
+	// Chaptarr can find the record — usually because an admin added it.
+	bookAddFailureMetadataUnresolved = "metadata_unresolved"
+	// bookAddFailureImportAbandoned: a server-owned author-import park was
+	// retried until the sweep gave up. The request is a week old and has never
+	// worked; presenting it as a fresh decision hides both facts.
+	bookAddFailureImportAbandoned = "import_abandoned"
+)
+
 const (
 	// bookParkRetryInterval paces the maintenance sweep. Chaptarr retries its
 	// own queued author imports on a similar cadence, so retrying faster only
@@ -440,6 +461,11 @@ type PendingRequest struct {
 	// person rather than on a library. RequestedAt doubles as "waiting since".
 	WaitReason    string     `json:"wait_reason,omitempty"`
 	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+	// AddFailureReason marks an approval-queue row whose automatic add already
+	// ran and failed, so the queue can distinguish "decide this" from "this
+	// already broke and needs you to fix something first". Empty on an ordinary
+	// policy hold.
+	AddFailureReason string `json:"add_failure_reason,omitempty"`
 }
 
 // QualityProfile is an arr quality profile offered for selection.
@@ -524,6 +550,7 @@ type resolvedRequest struct {
 	bookFormat  string
 	searchTerm  string // the requester's own search text (book requests)
 	parkReason  string // why a pending row is server-owned (see bookParkReasonAuthorImport)
+	addFailure  string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
 	instanceID  string
 	bookFormats map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
@@ -877,6 +904,11 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 			switch {
 			case errors.Is(err, ErrBookMetadataUnresolved):
 				parkMessage = bookParkedMessage
+				// This row goes to a human (park_reason stays NULL), but it is
+				// not a policy question: the add already ran and failed. Record
+				// that so the queue can say so instead of showing it as an
+				// ordinary decision.
+				resolved.addFailure = bookAddFailureMetadataUnresolved
 			case errors.Is(err, chaptarr.ErrAuthorPendingImport):
 				parkMessage = bookAuthorImportingMessage
 				// Only this create path can park for author_import, and it is by
@@ -1000,9 +1032,9 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		} else {
 			insertedBookFormat = pendingFormat
 			res, err = tx.Exec(
-				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term, park_reason)
-				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, ?)`,
-				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm), sqlNullStr(r.parkReason),
+				`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, search_term, park_reason, add_failure_reason)
+				 VALUES (?, 0, ?, ?, ?, 'book', ?, ?, ?, ?, ?)`,
+				r.userID, r.foreignID, pendingFormat, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm), sqlNullStr(r.parkReason), sqlNullStr(r.addFailure),
 			)
 			if err == nil {
 				requestID, _ := res.LastInsertId()
@@ -3353,7 +3385,7 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), COALESCE(r.foreign_id, ''), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
 		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
 		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
-		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at, COALESCE(r.park_reason, '')
+		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at, COALESCE(r.park_reason, ''), COALESCE(r.add_failure_reason, '')
 		 FROM request_log r
 		 LEFT JOIN users u ON u.id = r.user_id
 		 LEFT JOIN service_instances si ON si.id = r.instance_id
@@ -3369,7 +3401,7 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 	for rows.Next() {
 		var p PendingRequest
 		var parkReason string
-		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt, &parkReason); err != nil {
+		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt, &parkReason, &p.AddFailureReason); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
 		p.BookFormat = normalizeBookFormat(p.BookFormat)
@@ -3415,6 +3447,13 @@ func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOve
 		// The row is untouched and stays queued, so approving early is a
 		// non-event; hand the admin the plan instead of a bare failure.
 		return nil, fmt.Errorf("%w — the request stays queued and completes automatically once the import lands", chaptarr.ErrAuthorPendingImport)
+	}
+	if err != nil && errors.Is(err, ErrBookMetadataUnresolved) {
+		// Approving replayed an add that had already failed the same way, and
+		// retrying changes nothing until the library can find the record. The
+		// bare error read as a transient glitch and invited another Approve;
+		// name the one action that actually moves this.
+		return nil, fmt.Errorf("%w — add this book in the library first, then approve", ErrBookMetadataUnresolved)
 	}
 	return resp, err
 }
@@ -3502,7 +3541,9 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 	// for history, and the fulfilled row sheds its park marker either way.
 	approvedBy := sql.NullInt64{Int64: actorID, Valid: actorID != 0}
 	res, err := tx.Exec(
-		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, book_record_id = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, park_reason = NULL, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
+		// The add just succeeded, so whatever failed before is history: the row
+		// sheds both its park marker and its failure note.
+		"UPDATE request_log SET status = ?, title = ?, tvdb_id = ?, book_format = ?, book_record_id = ?, instance_id = ?, season_scope = ?, quality_profile_id = ?, approved_by = ?, park_reason = NULL, add_failure_reason = NULL, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
 		primaryStatus, title, sqlNullInt(r.tvdbID), sqlNullStr(primaryFormat), sqlNullInt(r.bookRecordIDs[primaryFormat]), sqlNullStr(r.instanceID), sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID), approvedBy, requestID, StatusPending,
 	)
 	if err != nil {
@@ -3764,8 +3805,11 @@ func (s *Service) demoteParkedBookRequest(requestID int64) {
 		return
 	}
 	res, err := s.db.Exec(
-		"UPDATE request_log SET park_reason = NULL WHERE id = ? AND status = ? AND park_reason IS NOT NULL",
-		requestID, StatusPending,
+		// The row keeps the fact that brought it here. A request that has been
+		// retried for a week and never worked is not a fresh decision, and the
+		// page fired below is the admin's first sight of it.
+		"UPDATE request_log SET park_reason = NULL, add_failure_reason = ? WHERE id = ? AND status = ? AND park_reason IS NOT NULL",
+		bookAddFailureImportAbandoned, requestID, StatusPending,
 	)
 	if err != nil {
 		log.Printf("request: demote parked book request %d: %v", requestID, err)

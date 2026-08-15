@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS request_log (
     book_record_id INTEGER,
     search_term TEXT,
     park_reason TEXT,
+    add_failure_reason TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
     approved_by INTEGER REFERENCES users(id),
     decided_at DATETIME,
@@ -904,6 +905,17 @@ func Open(dbPath string) (*sql.DB, error) {
 		// only by the queue flush (immediate category pushes keep their own
 		// dedupe mechanisms). NULL = never paged through the queue.
 		{alter: "ALTER TABLE issues ADD COLUMN last_paged_at DATETIME"},
+		// Why an approval-queue row is there beyond ordinary policy: the
+		// automatic add already ran and failed ('metadata_unresolved' — the
+		// library could not match the book; 'import_abandoned' — a server-owned
+		// author-import park was retried to exhaustion and handed over). NULL is
+		// an ordinary "a human decides" row.
+		//
+		// Deliberately NOT a second park_reason value: park_reason answers who
+		// owns the row, and its NULL is the guard that keeps the sweep from
+		// bypassing approval policy. This answers what already went wrong, which
+		// is a different question and must not move a row out of the queue.
+		{alter: "ALTER TABLE request_log ADD COLUMN add_failure_reason TEXT"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

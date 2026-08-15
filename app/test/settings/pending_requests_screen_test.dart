@@ -306,6 +306,130 @@ void main() {
     expect(container.read(pendingApprovalsProvider), 1);
   });
 
+  testWidgets('a row whose add already failed says so, and how to fix it',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 3,
+        'user_id': 2,
+        'username': 'reader',
+        'media_type': 'movie',
+        'title': 'Dune',
+      },
+      {
+        'id': 8,
+        'user_id': 9,
+        'username': 'yana',
+        'media_type': 'book',
+        'title': 'A Book The Provider Forgot',
+        'book_format': 'ebook',
+        'foreign_id': 'ghost-1',
+        'add_failure_reason': 'metadata_unresolved',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Both rows are real decisions and keep their buttons — this is not the
+    // waiting section. The difference is that one of them stops pretending to
+    // be a routine yes/no.
+    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.byIcon(Icons.check_circle_outline), findsNWidgets(2));
+    expect(find.byIcon(Icons.cancel_outlined), findsNWidgets(2));
+    expect(container.read(pendingApprovalsProvider), 2);
+
+    expect(find.text('The library couldn’t match this book'), findsOneWidget);
+    expect(
+      find.textContaining('Add it in the library first, then approve'),
+      findsOneWidget,
+    );
+    // The ordinary decision says nothing extra.
+    expect(find.textContaining('The automatic add already failed'), findsNothing);
+  });
+
+  testWidgets('a request retried to exhaustion is not shown as a fresh decision',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 12,
+        'user_id': 9,
+        'username': 'yana',
+        'media_type': 'book',
+        'title': 'The Body Keeps the Score',
+        'book_format': 'ebook',
+        'foreign_id': 'gr:40738778',
+        'add_failure_reason': 'import_abandoned',
+      },
+    ]);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Retried automatically for a week and never completed'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('The author import never landed'), findsOneWidget);
+  });
+
+  test('an unfamiliar failure reason is still not a routine decision', () {
+    // A reason a newer server invents must not silently become a plain yes/no,
+    // which is the state this whole surface exists to stop rendering.
+    final unknown = PendingRequestItem.fromJson({
+      'add_failure_reason': 'some_future_reason',
+    });
+    expect(unknown.addFailure?.reason, 'The automatic add already failed');
+    expect(unknown.addFailure?.action, contains('Check the library first'));
+
+    // And an ordinary row still says nothing.
+    expect(PendingRequestItem.fromJson({'title': 'Dune'}).addFailure, isNull);
+  });
+
   testWidgets('an unreadable waiting list says so instead of showing silence',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -603,6 +727,28 @@ void main() {
       find.text('Check this book library’s paths and profiles, then try again.'),
       findsOneWidget,
     );
+    tester
+        .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+        .removeCurrentSnackBar();
+    await tester.pumpAndSettle();
+
+    // Approving replayed an add that had already failed the same way. The old
+    // generic "Something went wrong. Try again." read as a transient glitch and
+    // invited another Approve, which cannot work until the library has the
+    // record.
+    adapter.approvalResponse = {
+      'error':
+          'book not found for foreign id — add this book in the library first, then approve',
+    };
+    await approve();
+    expect(
+      find.text(
+        'The library still can’t find this book. Add it in the library first, '
+        'then approve — retrying here won’t help.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Something went wrong. Try again.'), findsNothing);
   });
 }
 

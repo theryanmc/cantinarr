@@ -212,7 +212,9 @@ GET    /api/requests/book-library          # user: owned/monitored digest; optio
 GET    /api/requests/book-recent           # user: newest book-file imports; optional instance_id, limit (cached)
 GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress
 GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
-                                           #   foreign_id and a best-effort TMDB poster_path (movie/tv)
+                                           #   foreign_id, a best-effort TMDB poster_path (movie/tv),
+                                           #   and add_failure_reason when the row is not a policy
+                                           #   question but an add that already ran and failed
 GET    /api/admin/requests/waiting         # admin: pending rows the SERVER owns and retries itself
                                            #   (park_reason set); same row shape plus wait_reason and
                                            #   last_attempt_at. Informational — no approve/deny, and
@@ -226,6 +228,8 @@ GET|PUT /api/admin/users/{userID}/request-settings  # admin: per-user overrides
 Request statuses: `unavailable`, `requested`, `pending` (awaiting approval), `denied`, `downloading`, `partial`, `available`.
 
 A book the server accepted but Chaptarr could not create yet (its metadata service is still importing the author) is stored pending with `park_reason='author_import'` and reported as `requested` — the closest existing word, kept so older clients are unaffected. Because `requested` on its own claims a monitored library record that does not exist, those reads also carry a per-format wait: `book_format_waits: {"ebook": {"reason", "waiting_since", "last_attempt_at"}}` on create and book-status, and `book_format_wait` on each history row. The wait is applied after the live overlay, so it disappears the moment the library really holds the record. `last_attempt_at` is derived, not stored: the maintenance sweep retries every parked row on every pass, so one process-level timestamp dates them all; it is absent when the server has restarted since the park and cannot vouch for an attempt.
+
+The approval queue itself holds two unrelated kinds of row, and `add_failure_reason` is what separates them. Most rows are a policy decision. A row whose automatic add already ran and failed is not — approving it replays the same add — so it carries `metadata_unresolved` (the library could not match the book) or `import_abandoned` (a server-owned author-import park retried to exhaustion and handed over). Both stay in the queue, the badge, and the `request_pending` page, because a person really must act; they simply say which kind they are. It is deliberately not a second `park_reason` value: `park_reason` answers who owns the row and its NULL is the guard that keeps the sweep from bypassing approval policy, so a value there would move these rows *out* of the queue. Approving a `metadata_unresolved` row that fails again returns `ErrBookMetadataUnresolved` wrapped with the one action that resolves it.
 
 ### Issues & AI remediation
 ```
@@ -651,7 +655,7 @@ SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db
 | Area | Tables |
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
-| Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled Chaptarr `book_record_id` so book status survives foreignBookId re-keys, and `park_reason` marking server-owned author-import parks), `book_request_waiters` (shared pending subscribers + their concrete format coverage), `user_request_settings` |
+| Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled Chaptarr `book_record_id` so book status survives foreignBookId re-keys, `park_reason` marking server-owned author-import parks, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending subscribers + their concrete format coverage), `user_request_settings` |
 | Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + per-instance media path mappings/legacy mode), `user_default_instances`, `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
 | Push | `push_tokens` (one per device), `notification_prefs`, `content_alert_claims` (durable new-content dedupe, 10-minute window; also counted as the 12-per-window alert storm breaker, per `storm_scope` — broadcast and upgrade alerts spend separate budgets, silent upgrade claims spend none) |
 | AI access | `user_ai_settings` (explicit personal selection), `user_ai_credentials` (per-provider encrypted personal API keys), `user_codex_accounts` (personal encrypted OpenAI OAuth authorization), `shared_codex_account` (singleton encrypted included authorization); `users.ai_shared_enabled` stores the included-access grant, while `settings` stores the daily health-check switch/timestamp |
