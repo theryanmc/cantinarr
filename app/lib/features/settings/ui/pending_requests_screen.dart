@@ -355,6 +355,29 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
     }
   }
 
+  /// "Try again" on a row whose author-import wait ended: the server replays
+  /// the add and either completes the request or resumes the automatic watch.
+  Future<void> _wait(PendingRequestItem item) async {
+    try {
+      final message = await _service.wait(item.id);
+      if (!mounted) return;
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message.isNotEmpty
+              ? message
+              : 'The library has this author now — ${item.title} went through.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_friendlyError(e))),
+      );
+    }
+  }
+
   Future<void> _deny(PendingRequestItem item) async {
     final controller = TextEditingController();
     final confirmed = await showDialog<bool>(
@@ -451,6 +474,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
           item: item,
           onApprove: () => _approve(item),
           onDeny: () => _deny(item),
+          onWait: () => _wait(item),
         ));
       }
     }
@@ -697,11 +721,13 @@ class _PendingTile extends StatelessWidget {
   final PendingRequestItem item;
   final VoidCallback onApprove;
   final VoidCallback onDeny;
+  final VoidCallback onWait;
 
   const _PendingTile({
     required this.item,
     required this.onApprove,
     required this.onDeny,
+    required this.onWait,
   });
 
   /// What the artwork slot falls back to. A pending book has no cover to
@@ -804,16 +830,28 @@ class _PendingTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.check_circle_outline),
-            color: AppTheme.available,
-            tooltip: item.isBook && item.requestedBookFormat == null
-                ? 'Unsupported book format'
-                : 'Approve',
-            onPressed: item.isBook && item.requestedBookFormat == null
-                ? null
-                : onApprove,
-          ),
+          // A row here because its author-import wait ended isn't a yes/no:
+          // approving just replays an add the library already refused, so the
+          // honest verb is "try again" — resume the wait, or complete on the
+          // spot if the author has landed since.
+          if (item.isImportWait)
+            IconButton(
+              icon: const Icon(Icons.replay),
+              color: AppTheme.requested,
+              tooltip: 'Try again',
+              onPressed: onWait,
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.check_circle_outline),
+              color: AppTheme.available,
+              tooltip: item.isBook && item.requestedBookFormat == null
+                  ? 'Unsupported book format'
+                  : 'Approve',
+              onPressed: item.isBook && item.requestedBookFormat == null
+                  ? null
+                  : onApprove,
+            ),
           IconButton(
             icon: const Icon(Icons.cancel_outlined),
             color: AppTheme.error,

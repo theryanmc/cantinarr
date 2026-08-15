@@ -278,6 +278,30 @@ func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// Wait resumes the watch on a demoted author-import book request: the admin's
+// "try again", the opposite verb to closing it. The service replays the add
+// once and either completes the request (the author landed), re-parks it for
+// the sweep to watch, or surfaces the real failure.
+func (h *Handler) Wait(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request id"})
+		return
+	}
+	resp, err := h.service.ExtendBookWait(claims.UserID, id)
+	if err != nil {
+		log.Printf("request: resume wait on request %d failed: %v", id, err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // Deny rejects a pending request with an optional reason.
 func (h *Handler) Deny(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())

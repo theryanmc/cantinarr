@@ -219,15 +219,35 @@ class PendingRequestItem {
                 'first, then approve.',
           ),
         'import_abandoned' => (
-            reason: 'Retried automatically for a week and never completed',
-            action: 'The author import never landed. Check the library before '
-                'approving.',
+            reason: 'The automatic add failed while waiting for the author '
+                'import',
+            action: 'Try again to resume waiting, or deny to close the '
+                'request.',
+          ),
+        'import_failed' => (
+            reason: 'The library gave up importing this author',
+            action: 'Its metadata service reported the import failed. Try '
+                'again to reopen it and keep waiting, or deny to close the '
+                'request.',
+          ),
+        'import_cancelled' => (
+            reason: 'The author import was cancelled in the library',
+            action: 'Try again to queue it once more and keep waiting, or '
+                'deny to close the request.',
           ),
         // A reason this version doesn't know is still not a routine decision.
         _ => (
             reason: 'The automatic add already failed',
             action: 'Approving retries it. Check the library first.',
           ),
+      };
+
+  /// True when this row is in the queue because a server-watched author-import
+  /// wait ended — the rows whose honest verbs are "try again" and deny, since
+  /// approving just replays an add the library already refused.
+  bool get isImportWait => switch (addFailureReason) {
+        'import_abandoned' || 'import_failed' || 'import_cancelled' => true,
+        _ => false,
       };
 
   bool get isTv => mediaType == 'tv';
@@ -440,5 +460,19 @@ class RequestSettingsService {
   Future<void> deny(int id, {String? reason}) async {
     await _dio.post('/api/admin/requests/$id/deny',
         data: {if (reason != null && reason.isNotEmpty) 'reason': reason});
+  }
+
+  /// "Try again" on a request whose author-import wait ended: the server
+  /// replays the add once and either completes the request (the author landed
+  /// since) or puts the row back under its automatic watch. Returns the
+  /// server's confirmation message — empty when the replay completed the
+  /// request outright.
+  Future<String> wait(int id) async {
+    final resp = await _dio.post('/api/admin/requests/$id/wait');
+    final data = resp.data;
+    if (data is Map<String, dynamic>) {
+      return data['message'] as String? ?? '';
+    }
+    return '';
   }
 }

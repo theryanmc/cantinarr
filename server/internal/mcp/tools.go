@@ -1050,7 +1050,7 @@ func (s *ToolServer) listMyRequests(userID int64) (*ToolResult, error) {
 			if wait.Reason == request.BookWaitReasonAuthorImport {
 				detail = "the library is still importing its author"
 			}
-			fmt.Fprintf(&sb, " - Not in the library yet: %s. Cantinarr retries automatically; nobody needs to approve anything.", detail)
+			fmt.Fprintf(&sb, " - Not in the library yet: %s. The library retries on its own and Cantinarr completes the request when it lands; nobody needs to approve anything.", detail)
 		}
 		sb.WriteByte('\n')
 	}

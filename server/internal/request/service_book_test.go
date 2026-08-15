@@ -2585,12 +2585,16 @@ func TestUnknownParkReasonStaysWithTheHumans(t *testing.T) {
 	}
 }
 
-// TestSweepDemotesParksThatGiveUpOrFailUnexpectedly pins the two hand-off
-// edges: a park older than the give-up horizon and a park whose retry fails
-// for a reason other than the still-pending import both demote to an ordinary
-// approval-queue row, firing the request_pending page that was withheld at
-// park time — the moment a human decision first exists.
-func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
+// TestSweepDemotesParksWhoseProbeFailsBeyondTheImport pins the legacy-lane
+// hand-off: on a build without the pending-import API (this stub answers the
+// probe's lookup with nothing), a park whose replayed add fails for a reason
+// other than the still-pending import demotes to an ordinary approval-queue
+// row, firing the request_pending page that was withheld at park time — the
+// moment a human decision first exists. There is deliberately NO age-based
+// demotion to test: the wait itself never expires (Chaptarr's own retry loop
+// is unbounded), which is why the decade-old park below demotes for the
+// vanished record, not for its age.
+func TestSweepDemotesParksWhoseProbeFailsBeyondTheImport(t *testing.T) {
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -2622,11 +2626,10 @@ func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
 		id, _ := res.LastInsertId()
 		return id
 	}
+	// One park is a decade old, one is fresh: both must demote the same way —
+	// through the failed probe — proving age plays no part.
 	oldID := insertPark("gr:old", "An Abandoned Wait", "2020-01-01 00:00:00")
 	freshID := insertPark("gr:fresh", "A Vanished Record", "2049-01-01 00:00:00")
-	// The fresh row's requested_at is future-dated so only the demotion paths
-	// differ: old → give-up, fresh → unexpected retry failure. Normalize it to
-	// now so age math stays sane.
 	if _, err := svc.db.Exec("UPDATE request_log SET requested_at = datetime('now') WHERE id = ?", freshID); err != nil {
 		t.Fatalf("normalize requested_at: %v", err)
 	}
@@ -2668,6 +2671,370 @@ func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
 	}
 	if pages != 2 {
 		t.Fatalf("request_pending pages = %d (%+v), want one per demoted row", pages, rec.adminEvents)
+	}
+}
+
+// TestDemotedParkApproveDoesNotPromiseAutomaticRetries pins the approve copy
+// on a demoted row. While a row is parked, refusing an early approval with
+// "completes automatically once the import lands" is the truth — the sweep is
+// watching. A demoted row is no longer watched, so an approve that still hits
+// the pending-import refusal must name the real verbs (Try again / close)
+// instead of re-promising a watch that is not running.
+func TestDemotedParkApproveDoesNotPromiseAutomaticRetries(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"The CEO Mindset","titleSlug":"the-ceo-mindset","foreignBookId":"gr:253739298",
+					"author":{"authorName":"Shiv Shivakumar","foreignAuthorId":"gr:21186439"},
+					"editions":[{"foreignEditionId":"gr:e1","title":"The CEO Mindset","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			// The import never lands: every add attempt gets the live refusal.
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
+
+	res, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason, search_term, requested_at)
+		 VALUES (?, 0, 'gr:253739298', 'ebook', ?, 'book', 'The CEO Mindset', ?, ?, 'the ceo mindset', '2020-01-01 00:00:00')`,
+		uid, testInstanceID(t, svc), StatusPending, bookParkReasonAuthorImport,
+	)
+	if err != nil {
+		t.Fatalf("insert park: %v", err)
+	}
+	requestID, _ := res.LastInsertId()
+	svc.demoteParkedBookRequest(requestID, bookAddFailureImportFailed)
+
+	adminID := createTestAdmin(t, svc)
+	_, err = svc.ApproveRequest(adminID, requestID, nil)
+	if err == nil || !strings.Contains(err.Error(), "Try again") {
+		t.Fatalf("post-demotion ApproveRequest error = %v, want the Try again / close copy", err)
+	}
+	if strings.Contains(err.Error(), "completes automatically") {
+		t.Fatalf("post-demotion ApproveRequest error = %v, promises a watch that is not running", err)
+	}
+	// The refusal is a non-event: the row stays an ordinary pending decision
+	// and is not silently re-parked back out of the admin's sight.
+	var status string
+	var park sql.NullString
+	if err := svc.db.QueryRow("SELECT status, park_reason FROM request_log WHERE id = ?", requestID).Scan(&status, &park); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status != StatusPending || park.Valid {
+		t.Fatalf("row = status %q park %v, want an untouched ordinary pending row", status, park)
+	}
+}
+
+// pendingImportAPIStub is a Chaptarr stub whose pending-import read API is
+// live. Lookup answers any gr: id term with a record owned by one shared
+// author, the add refuses with the author-pending validation failure while
+// refuseAdds holds, and the pending-import endpoints record their hits so a
+// test can prove what the server did — and did not — ask the arr to do.
+type pendingImportAPIStub struct {
+	server      *httptest.Server
+	existsJSON  atomic.Value
+	addAttempts atomic.Int32
+	retryHits   atomic.Int32
+	deleteHits  atomic.Int32
+	refuseAdds  atomic.Bool
+}
+
+func newPendingImportAPIStub(t *testing.T) *pendingImportAPIStub {
+	t.Helper()
+	stub := &pendingImportAPIStub{}
+	stub.refuseAdds.Store(true)
+	stub.existsJSON.Store(`{"exists":false,"pending":true,"pendingId":3,"status":"Retrying","attemptCount":4}`)
+	stub.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		path := r.URL.Path
+		switch {
+		case r.Method == http.MethodGet && path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && path == "/api/v1/book/lookup":
+			term := r.URL.Query().Get("term")
+			if !strings.HasPrefix(term, "gr:") {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"Waiting Book","titleSlug":"waiting-book","foreignBookId":"` + term + `",
+					"foreignAuthorId":"gr:21186439",
+					"author":{"authorName":"Shiv Shivakumar","foreignAuthorId":"gr:21186439"},
+					"editions":[{"foreignEditionId":"gr:e1","title":"Waiting Book","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && path == "/api/v1/book":
+			stub.addAttempts.Add(1)
+			if stub.refuseAdds.Load() {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":42,"title":"Waiting Book","foreignBookId":"gr:253739298","monitored":true}`))
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/pendingauthorimport/author/exists/"):
+			_, _ = w.Write([]byte(stub.existsJSON.Load().(string)))
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/pendingauthorimport/") && strings.HasSuffix(path, "/retry"):
+			stub.retryHits.Add(1)
+			_, _ = w.Write([]byte(`{"message":"Retry scheduled"}`))
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/pendingauthorimport/"):
+			stub.deleteHits.Add(1)
+			_, _ = w.Write([]byte(`{"message":"Pending import cancelled"}`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(stub.server.Close)
+	return stub
+}
+
+// insertAuthorImportPark plants one server-owned park directly, so probe tests
+// exercise the sweep without replaying the whole create flow.
+func insertAuthorImportPark(t *testing.T, svc *Service, uid int64, foreignID, title string) int64 {
+	t.Helper()
+	res, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason, search_term)
+		 VALUES (?, 0, ?, 'ebook', ?, 'book', ?, ?, ?, ?)`,
+		uid, foreignID, testInstanceID(t, svc), title, StatusPending, bookParkReasonAuthorImport, title,
+	)
+	if err != nil {
+		t.Fatalf("insert park: %v", err)
+	}
+	id, _ := res.LastInsertId()
+	return id
+}
+
+// TestSweepWatchesChaptarrsOwnImportRetries pins the core of the alignment:
+// while Chaptarr's pending import is still active, a sweep pass reads that
+// answer and does NOTHING else — no replayed add (which would merge into the
+// arr's pending row and force-bump its own retry schedule), no demotion, no
+// admin page. Chaptarr owns the retry; Cantinarr watches.
+func TestSweepWatchesChaptarrsOwnImportRetries(t *testing.T) {
+	stub := newPendingImportAPIStub(t)
+	svc, uid := newChaptarrBookTestService(t, stub.server.URL)
+	rec := &recordingNotifier{}
+	svc.notifier = rec
+
+	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:253739298",
+		Title:      "Waiting Book",
+		BookFormat: BookFormatEbook,
+		SearchTerm: "waiting book",
+	}); err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+	addsAtPark := stub.addAttempts.Load()
+	if addsAtPark == 0 {
+		t.Fatal("the park must come from a live add refusal")
+	}
+
+	svc.SweepParkedBookRequests()
+	svc.SweepParkedBookRequests()
+
+	if got := stub.addAttempts.Load(); got != addsAtPark {
+		t.Fatalf("add attempts = %d after two sweeps, want %d: the sweep must read the pending import, not replay the add", got, addsAtPark)
+	}
+	var park sql.NullString
+	if err := svc.db.QueryRow(
+		"SELECT park_reason FROM request_log WHERE foreign_id = 'gr:253739298'",
+	).Scan(&park); err != nil {
+		t.Fatalf("read park: %v", err)
+	}
+	if !park.Valid || park.String != bookParkReasonAuthorImport {
+		t.Fatalf("park_reason = %v, want the row still watched", park)
+	}
+	for _, ev := range rec.adminEvents {
+		if ev.eventType == "request_pending" {
+			t.Fatalf("admin events = %+v, want no page while the arr is still importing", rec.adminEvents)
+		}
+	}
+}
+
+// TestSweepDemotesOnChaptarrsDeclaredVerdicts pins the two real exits the
+// probe acts on: the arr declaring the import terminally failed, and the
+// pending import vanishing without the author (cancelled in the arr's UI).
+// Both demote immediately — a verdict exists, so a human sees it now, not
+// after any timer.
+func TestSweepDemotesOnChaptarrsDeclaredVerdicts(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		existsJSON string
+		wantReason string
+	}{
+		{
+			name:       "declared failed",
+			existsJSON: `{"exists":false,"pending":true,"pendingId":3,"status":"Failed","attemptCount":12}`,
+			wantReason: bookAddFailureImportFailed,
+		},
+		{
+			name:       "vanished",
+			existsJSON: `{"exists":false,"pending":false}`,
+			wantReason: bookAddFailureImportCancelled,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newPendingImportAPIStub(t)
+			stub.existsJSON.Store(tc.existsJSON)
+			svc, uid := newChaptarrBookTestService(t, stub.server.URL)
+			rec := &recordingNotifier{}
+			svc.notifier = rec
+			requestID := insertAuthorImportPark(t, svc, uid, "gr:111", "A Judged Wait")
+
+			svc.SweepParkedBookRequests()
+
+			var park, failure sql.NullString
+			var status string
+			if err := svc.db.QueryRow(
+				"SELECT status, park_reason, add_failure_reason FROM request_log WHERE id = ?", requestID,
+			).Scan(&status, &park, &failure); err != nil {
+				t.Fatalf("read row: %v", err)
+			}
+			if status != StatusPending || park.Valid || !failure.Valid || failure.String != tc.wantReason {
+				t.Fatalf("row = status %q park %v failure %v, want a demoted row with %q", status, park, failure, tc.wantReason)
+			}
+			pages := 0
+			for _, ev := range rec.adminEvents {
+				if ev.eventType == "request_pending" {
+					pages++
+				}
+			}
+			if pages != 1 {
+				t.Fatalf("request_pending pages = %d, want the demotion to page once", pages)
+			}
+		})
+	}
+}
+
+// TestSweepCompletesOncePendingImportSucceeds: the author landing (the exists
+// endpoint's library answer) is what triggers the fulfill, which completes the
+// request through the normal add path.
+func TestSweepCompletesOncePendingImportSucceeds(t *testing.T) {
+	stub := newPendingImportAPIStub(t)
+	stub.existsJSON.Store(`{"exists":true,"authorId":7,"authorName":"Shiv Shivakumar","pending":false}`)
+	stub.refuseAdds.Store(false)
+	svc, uid := newChaptarrBookTestService(t, stub.server.URL)
+	requestID := insertAuthorImportPark(t, svc, uid, "gr:253739298", "Waiting Book")
+
+	svc.SweepParkedBookRequests()
+
+	var park sql.NullString
+	var status string
+	if err := svc.db.QueryRow(
+		"SELECT status, park_reason FROM request_log WHERE id = ?", requestID,
+	).Scan(&status, &park); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if status == StatusPending || park.Valid {
+		t.Fatalf("row = status %q park %v, want the request completed once the author landed", status, park)
+	}
+}
+
+// TestExtendBookWaitResumesTheWatch: the admin's "try again" on a demoted row
+// re-parks it for the sweep, clears the failure note, and — because this wait
+// ended in the arr's declared-terminal Failed state — asks Chaptarr to reopen
+// the import, which the arr never does on its own.
+func TestExtendBookWaitResumesTheWatch(t *testing.T) {
+	stub := newPendingImportAPIStub(t)
+	stub.existsJSON.Store(`{"exists":false,"pending":true,"pendingId":3,"status":"Failed","attemptCount":12}`)
+	svc, uid := newChaptarrBookTestService(t, stub.server.URL)
+	requestID := insertAuthorImportPark(t, svc, uid, "gr:222", "A Second Chance")
+	if _, err := svc.db.Exec(
+		"UPDATE request_log SET park_reason = NULL, add_failure_reason = ? WHERE id = ?",
+		bookAddFailureImportFailed, requestID,
+	); err != nil {
+		t.Fatalf("demote row: %v", err)
+	}
+
+	adminID := createTestAdmin(t, svc)
+	resp, err := svc.ExtendBookWait(adminID, requestID)
+	if err != nil {
+		t.Fatalf("ExtendBookWait: %v", err)
+	}
+	if resp.Status != StatusRequested || !strings.Contains(resp.Message, "Waiting resumed") {
+		t.Fatalf("resp = %+v, want the waiting-resumed confirmation", resp)
+	}
+	var park, failure sql.NullString
+	if err := svc.db.QueryRow(
+		"SELECT park_reason, add_failure_reason FROM request_log WHERE id = ?", requestID,
+	).Scan(&park, &failure); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if !park.Valid || park.String != bookParkReasonAuthorImport || failure.Valid {
+		t.Fatalf("row = park %v failure %v, want a watched park with the failure note cleared", park, failure)
+	}
+	if got := stub.retryHits.Load(); got != 1 {
+		t.Fatalf("chaptarr retry hits = %d, want the failed import asked to reopen exactly once", got)
+	}
+
+	// An ordinary pending row is a decision, not a wait: no resume verb.
+	res, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status)
+		 VALUES (?, 0, 'gr:333', 'ebook', ?, 'book', 'A Real Decision', ?)`,
+		uid, testInstanceID(t, svc), StatusPending,
+	)
+	if err != nil {
+		t.Fatalf("insert ordinary pending row: %v", err)
+	}
+	ordinaryID, _ := res.LastInsertId()
+	if _, err := svc.ExtendBookWait(adminID, ordinaryID); err == nil {
+		t.Fatal("ExtendBookWait accepted an ordinary pending row")
+	}
+}
+
+// TestDenyCancelsQueuedAuthorImport: closing the request is the one exit that
+// must reach into the arr — the queued import carries the add intent (the
+// monitored book, the search flag), so left armed it would deliver the book
+// whenever the import lands, contradicting the denial. The one guard: a
+// sibling request still waiting on the same author keeps the import alive.
+func TestDenyCancelsQueuedAuthorImport(t *testing.T) {
+	stub := newPendingImportAPIStub(t)
+	svc, uid := newChaptarrBookTestService(t, stub.server.URL)
+	adminID := createTestAdmin(t, svc)
+
+	// Two books, one author (the stub files every gr: id under the same
+	// author): denying the first must leave the import queued for the second.
+	firstID := insertAuthorImportPark(t, svc, uid, "gr:one", "First Book")
+	secondID := insertAuthorImportPark(t, svc, uid, "gr:two", "Second Book")
+
+	if err := svc.DenyRequest(adminID, firstID, "not this one"); err != nil {
+		t.Fatalf("deny first: %v", err)
+	}
+	if got := stub.deleteHits.Load(); got != 0 {
+		t.Fatalf("cancel hits = %d after first denial, want 0: a sibling still waits on this author", got)
+	}
+
+	if err := svc.DenyRequest(adminID, secondID, "and not this one"); err != nil {
+		t.Fatalf("deny second: %v", err)
+	}
+	if got := stub.deleteHits.Load(); got != 1 {
+		t.Fatalf("cancel hits = %d after last denial, want the queued import cancelled exactly once", got)
 	}
 }
 
