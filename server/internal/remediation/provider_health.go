@@ -19,10 +19,10 @@ const (
 // circuit breaker: the agent did not fail — it was never given a provider.
 //
 // Same transactional shape as RecordSharedAIHealth: find-or-open under one tx,
-// refresh occurrences on repeats, resolve-with-note on recovery. The two sinks
-// stay separate because they answer different questions — the daily health turn
-// says "the configured model stopped answering"; this says "remediation has
-// nothing configured to ask".
+// refresh occurrences on repeats (at most hourly), resolve-with-note on
+// recovery. The two sinks stay separate because they answer different
+// questions — the daily health turn says "the configured model stopped
+// answering"; this says "remediation has nothing configured to ask".
 func (s *Service) RecordRemediationProviderHealth(available bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -31,9 +31,11 @@ func (s *Service) RecordRemediationProviderHealth(available bool) error {
 	defer tx.Rollback()
 
 	var issueID int64
+	var recentlyRefreshed bool
 	err = tx.QueryRow(`
-		SELECT id FROM issues
-		WHERE dedupe_key = ? AND closed_at IS NULL`, remediationProviderDedupeKey).Scan(&issueID)
+		SELECT id, COALESCE(datetime(updated_at) >= datetime('now', '-1 hour'), 0)
+		FROM issues
+		WHERE dedupe_key = ? AND closed_at IS NULL`, remediationProviderDedupeKey).Scan(&issueID, &recentlyRefreshed)
 	if available {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -87,6 +89,13 @@ func (s *Service) RecordRemediationProviderHealth(available bool) error {
 	} else if err != nil {
 		return fmt.Errorf("find remediation provider issue: %w", err)
 	} else {
+		// recoverWork re-runs every waiting issue once a minute, and each pass
+		// lands here while the provider is missing. Refreshing at most hourly
+		// keeps occurrences a readable "hours in this state" instead of a
+		// per-minute counter, and spares a write transaction per issue per tick.
+		if recentlyRefreshed {
+			return nil
+		}
 		if _, err := tx.Exec(`
 			UPDATE issues SET status = ?, occurrences = occurrences + 1, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ? AND closed_at IS NULL`,

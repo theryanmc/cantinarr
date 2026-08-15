@@ -405,83 +405,117 @@ class _AiRemediationSettingsScreenState
           ),
         ),
         const _SectionLabel('Shared AI'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-          child: Text(
-            'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
-            'provider and credential from Admin > Providers & Credentials. '
-            'The assistant model there is ${_credentials!.ai.model}. You can '
-            'choose a different model below for remediation only.',
-            style: const TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 13,
-              height: 1.35,
+        // The server synthesizes a default provider and model even when
+        // nothing is set up, so only the live configured flag may claim a
+        // provider exists.
+        if (!_credentials!.ai.sharedConfigured) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Text(
+              'No shared AI provider is set up yet. Remediation always runs '
+              'on the shared provider, so detected problems will wait instead '
+              'of being investigated until one is configured.',
+              style: TextStyle(
+                color: AppTheme.warning,
+                fontSize: 13,
+                height: 1.35,
+              ),
             ),
           ),
-        ),
-        _anchor(
-          SettingsAnchors.remediationModel,
+          _anchor(
+            SettingsAnchors.remediationModel,
+            ListTile(
+              leading: const Icon(Icons.vpn_key_outlined,
+                  color: AppTheme.accent),
+              title: const Text('Set up the shared provider',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              subtitle: const Text('Admin > Providers & Credentials',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right,
+                  color: AppTheme.textSecondary, size: 18),
+              onTap: () => context.push('/settings/credentials'),
+            ),
+          ),
+        ] else ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: DropdownButtonFormField<String>(
-              key: ValueKey(
-                'remediation-model-${_credentials!.ai.provider}-$_modelSelection',
+            child: Text(
+              'Uses the shared ${_providerOption(_credentials!)?.label ?? _credentials!.ai.provider} '
+              'provider and credential from Admin > Providers & Credentials. '
+              'The assistant model there is ${_credentials!.ai.model}. You can '
+              'choose a different model below for remediation only.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.35,
               ),
-              initialValue: _modelSelection,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Remediation model',
-                isDense: true,
-              ),
-              items: [
-                DropdownMenuItem(
-                  value: _sharedModel,
-                  child: Text('Use shared model (${_credentials!.ai.model})'),
+            ),
+          ),
+          _anchor(
+            SettingsAnchors.remediationModel,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: DropdownButtonFormField<String>(
+                key: ValueKey(
+                  'remediation-model-${_credentials!.ai.provider}-$_modelSelection',
                 ),
-                ...?_providerOption(_credentials!)?.models.map(
-                      (model) => DropdownMenuItem(
-                        value: model.id,
-                        child: Text(model.label),
+                initialValue: _modelSelection,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Remediation model',
+                  isDense: true,
+                ),
+                items: [
+                  DropdownMenuItem(
+                    value: _sharedModel,
+                    child: Text('Use shared model (${_credentials!.ai.model})'),
+                  ),
+                  ...?_providerOption(_credentials!)?.models.map(
+                        (model) => DropdownMenuItem(
+                          value: model.id,
+                          child: Text(model.label),
+                        ),
                       ),
-                    ),
-                const DropdownMenuItem(
-                  value: _customModel,
-                  child: Text('Custom model ID'),
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() => _modelSelection = value);
-                }
-              },
-            ),
-          ),
-        ),
-        if (_modelSelection == _customModel)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: TextField(
-              controller: _customModelController,
-              decoration: const InputDecoration(
-                labelText: 'Custom model ID',
-                helperText:
-                    'Saving runs a small response test before activation.',
-                isDense: true,
+                  const DropdownMenuItem(
+                    value: _customModel,
+                    child: Text('Custom model ID'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _modelSelection = value);
+                  }
+                },
               ),
             ),
           ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            'If the shared provider changes later, Cantinarr falls back to its '
-            'shared model until a remediation override is tested for the new provider.',
-            style: TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 12,
-              height: 1.35,
+          if (_modelSelection == _customModel)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: TextField(
+                controller: _customModelController,
+                decoration: const InputDecoration(
+                  labelText: 'Custom model ID',
+                  helperText:
+                      'Saving runs a small response test before activation.',
+                  isDense: true,
+                ),
+              ),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              'If the shared provider changes later, Cantinarr falls back to its '
+              'shared model until a remediation override is tested for the new provider.',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+                height: 1.35,
+              ),
             ),
           ),
-        ),
+        ],
         const _SectionLabel('Limits'),
         _anchor(
           SettingsAnchors.remediationMaxSteps,

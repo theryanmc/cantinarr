@@ -67,6 +67,48 @@ func TestRunWithoutProviderLeavesIssueWaiting(t *testing.T) {
 	}
 }
 
+// TestProviderUnavailableRefreshThrottledHourly: recoverWork retries every
+// waiting issue once a minute, so the standing system issue must not absorb a
+// write (and an occurrences bump) per tick — repeats inside an hour are
+// no-ops, and the first repeat past the hour refreshes exactly once.
+func TestProviderUnavailableRefreshThrottledHourly(t *testing.T) {
+	service, _, _ := setupTestService(t)
+	for i := 0; i < 3; i++ {
+		if err := service.RecordRemediationProviderHealth(false); err != nil {
+			t.Fatalf("record unavailable %d: %v", i, err)
+		}
+	}
+	var occurrences int
+	if err := service.db.QueryRow(
+		"SELECT occurrences FROM issues WHERE dedupe_key = ?",
+		remediationProviderDedupeKey,
+	).Scan(&occurrences); err != nil {
+		t.Fatalf("read provider issue: %v", err)
+	}
+	if occurrences != 1 {
+		t.Fatalf("occurrences = %d after minutely repeats, want 1 (throttled)", occurrences)
+	}
+
+	if _, err := service.db.Exec(
+		"UPDATE issues SET updated_at = datetime('now', '-61 minutes') WHERE dedupe_key = ?",
+		remediationProviderDedupeKey,
+	); err != nil {
+		t.Fatalf("backdate provider issue: %v", err)
+	}
+	if err := service.RecordRemediationProviderHealth(false); err != nil {
+		t.Fatalf("record unavailable after an hour: %v", err)
+	}
+	if err := service.db.QueryRow(
+		"SELECT occurrences FROM issues WHERE dedupe_key = ?",
+		remediationProviderDedupeKey,
+	).Scan(&occurrences); err != nil {
+		t.Fatalf("re-read provider issue: %v", err)
+	}
+	if occurrences != 2 {
+		t.Fatalf("occurrences = %d after backdated repeat, want 2", occurrences)
+	}
+}
+
 // TestProviderRestoredResolvesSystemIssue: the first successful resolve closes
 // the standing system issue with its own resolution kind.
 func TestProviderRestoredResolvesSystemIssue(t *testing.T) {
