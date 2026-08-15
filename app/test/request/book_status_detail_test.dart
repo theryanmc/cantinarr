@@ -698,6 +698,95 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
   });
 
+  // Pins the arrangement deterministically instead of by pixels. A golden of
+  // this scene sat at 1.01% against the tolerant comparator's 1.00% budget on
+  // the Linux CI renderer — glyph-box edges shifting, no structural difference
+  // — and test/flutter_test_config.dart says to keep golden scenes text-light
+  // for exactly that reason. Here the text IS the feature, so the scene can
+  // never be text-light, and a golden a hair from failing on rasterisation
+  // would flake on the next engine bump while proving nothing this doesn't.
+  testWidgets('the explanation sits under the whole panel, not inside a row',
+      (tester) async {
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(_panel(_service({
+      'status': 'requested',
+      'book_formats': {'ebook': 'requested'},
+      'book_format_waits': {
+        'ebook': {'reason': 'author_import'},
+      },
+    })));
+    await tester.pumpAndSettle();
+
+    final explanation =
+        find.textContaining('The library is still adding this author');
+    final pill = find.text('Waiting for library');
+
+    // The pill belongs to the row it describes; the explanation belongs to the
+    // panel, below both rows, so it reads as one wait rather than as a caption
+    // on the eBook line.
+    expect(
+      find.descendant(of: _row('ebook'), matching: pill),
+      findsOneWidget,
+    );
+    expect(find.descendant(of: _row('ebook'), matching: explanation),
+        findsNothing);
+    expect(
+      tester.getRect(explanation).top,
+      greaterThan(tester.getRect(_row('audiobook')).bottom),
+    );
+    // And it is inside the panel's own column, so it travels with the panel.
+    expect(
+      find.descendant(of: find.byType(BookFormatPanel), matching: explanation),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the wait survives 320px at double text size', (tester) async {
+    // The narrowest screen the app targets, at 200% text. "Waiting for library"
+    // is longer than the "Requested" it replaces, so the row has to stack
+    // rather than run off the edge — and the explanation is a paragraph.
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
+          // The real screen hosts this panel in a ListView, so a tall
+          // accessibility layout scrolls; the failure worth catching is a row
+          // that cannot fit horizontally.
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              BookFormatPanel(
+                foreignId: 'fb',
+                title: 'The Body Keeps the Score',
+                service: _service({
+                  'status': 'requested',
+                  'book_formats': {'ebook': 'requested'},
+                  'book_format_waits': {
+                    'ebook': {'reason': 'author_import'},
+                  },
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(
+      find.textContaining('The library is still adding this author'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('waiting formats keep rechecking so the wait can end on its own',
       (tester) async {
     final adapter = _GetAdapter({
