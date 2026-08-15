@@ -163,6 +163,16 @@ class PendingRequestItem {
   final int qualityProfileId;
   final DateTime? requestedAt;
 
+  /// Set only on rows from the waiting list: why the server is holding this
+  /// request itself. Empty on every approval-queue row, which is waiting on a
+  /// person instead.
+  final String waitReason;
+
+  /// When the server last retried a waiting row. Null means it could not vouch
+  /// for an attempt (it restarted since the request was parked) — the honest
+  /// answer is "unknown", not "never".
+  final DateTime? lastAttemptAt;
+
   const PendingRequestItem({
     required this.id,
     required this.userId,
@@ -180,7 +190,18 @@ class PendingRequestItem {
     required this.seasonScope,
     required this.qualityProfileId,
     required this.requestedAt,
+    this.waitReason = '',
+    this.lastAttemptAt,
   });
+
+  /// What the server is waiting on, in admin vocabulary. Null for an actionable
+  /// row; a generic line for a reason this app version does not know, because a
+  /// wait it cannot name is still a wait it must not hide.
+  String? get waitDescription => switch (waitReason) {
+        '' => null,
+        'author_import' => 'The library is still importing this author',
+        _ => 'The library is not ready for this book yet',
+      };
 
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
@@ -238,6 +259,10 @@ class PendingRequestItem {
         qualityProfileId: json['quality_profile_id'] as int? ?? 0,
         requestedAt:
             DateTime.tryParse(json['requested_at'] as String? ?? '')?.toLocal(),
+        waitReason: json['wait_reason'] as String? ?? '',
+        lastAttemptAt: DateTime.tryParse(
+                json['last_attempt_at'] as String? ?? '')
+            ?.toLocal(),
       );
 }
 
@@ -343,6 +368,33 @@ class RequestSettingsService {
     return ((resp.data as List?) ?? const [])
         .map((e) => PendingRequestItem.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// The requests the server is retrying itself. Informational: these rows have
+  /// no approve/deny.
+  ///
+  /// Returns null when this server has no such endpoint — a 404, or a body that
+  /// isn't a list, both meaning "older build". That is absence of the feature,
+  /// and the caller hides the section, leaving Approvals exactly as it was
+  /// before this existed.
+  ///
+  /// Every other failure throws, so the caller can say it went blind. The one
+  /// thing neither may do is quietly render an empty waiting list: "nothing is
+  /// waiting" and "I couldn't look" are the two answers this whole change is
+  /// about telling apart.
+  Future<List<PendingRequestItem>?> listWaiting() async {
+    try {
+      final resp = await _dio.get('/api/admin/requests/waiting');
+      final rows = resp.data;
+      if (rows is! List) return null;
+      return rows
+          .whereType<Map<String, dynamic>>()
+          .map(PendingRequestItem.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
   }
 
   Future<BookApprovalResult> approve(int id,

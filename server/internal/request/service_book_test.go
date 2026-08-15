@@ -2150,13 +2150,29 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 		t.Fatal("AddBook was never attempted; the park must come from the live refusal")
 	}
 	if resp.Status != StatusRequested {
-		t.Fatalf("status = %s, want requested (the park is invisible to the requester)", resp.Status)
+		t.Fatalf("status = %s, want requested (pending would narrate an approval that is not happening)", resp.Status)
 	}
 	if got := resp.BookFormats[BookFormatEbook]; got != StatusRequested {
 		t.Fatalf("book_formats[ebook] = %q, want requested", got)
 	}
 	if resp.Message != bookAuthorImportingMessage {
 		t.Fatalf("message = %q, want the author-importing explanation", resp.Message)
+	}
+	// The message alone is a one-shot: it is shown once at submission and then
+	// gone forever, leaving "requested" as the only durable word for a book the
+	// library does not have. The wait is the durable half.
+	createWait, ok := resp.BookFormatWaits[BookFormatEbook]
+	if !ok {
+		t.Fatalf("book_format_waits = %+v, want an ebook wait alongside the requested status", resp.BookFormatWaits)
+	}
+	if createWait.Reason != bookParkReasonAuthorImport {
+		t.Fatalf("wait reason = %q, want %q", createWait.Reason, bookParkReasonAuthorImport)
+	}
+	if createWait.WaitingSince.IsZero() {
+		t.Fatal("wait waiting_since is zero; the requester is owed how long this has been going")
+	}
+	if createWait.LastAttemptAt == nil {
+		t.Fatal("wait last_attempt_at is absent; the failed add that parked the row IS an attempt this process made")
 	}
 	var requestID int64
 	var storedSearch, storedPark string
@@ -2188,6 +2204,47 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	if got := status.BookFormats[BookFormatEbook]; got != StatusRequested {
 		t.Fatalf("status read = %q, want requested (pending would narrate an approval that is not happening)", got)
 	}
+	if _, ok := status.BookFormatWaits[BookFormatEbook]; !ok {
+		t.Fatalf("status book_format_waits = %+v, want the wait to survive a fresh read, not just the submission", status.BookFormatWaits)
+	}
+
+	// The requester's own history carries the same explanation; scrolling back
+	// to a request must not show it as finished work.
+	history, err := svc.GetRequests(uid)
+	if err != nil {
+		t.Fatalf("GetRequests: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history rows = %d, want 1", len(history))
+	}
+	if history[0].Status != StatusRequested {
+		t.Fatalf("history status = %q, want requested", history[0].Status)
+	}
+	if history[0].BookFormatWait == nil || history[0].BookFormatWait.Reason != bookParkReasonAuthorImport {
+		t.Fatalf("history wait = %+v, want the author-import wait", history[0].BookFormatWait)
+	}
+
+	// The admin surface the first 24 hours previously had none of: informational,
+	// separate from the approval queue, and never counted as work.
+	waiting, err := svc.ListWaiting()
+	if err != nil {
+		t.Fatalf("ListWaiting: %v", err)
+	}
+	if len(waiting) != 1 {
+		t.Fatalf("ListWaiting rows = %d, want the parked request visible to admins immediately", len(waiting))
+	}
+	if waiting[0].ID != requestID {
+		t.Fatalf("ListWaiting id = %d, want the parked row %d", waiting[0].ID, requestID)
+	}
+	if waiting[0].WaitReason != bookParkReasonAuthorImport {
+		t.Fatalf("ListWaiting wait_reason = %q, want %q", waiting[0].WaitReason, bookParkReasonAuthorImport)
+	}
+	if waiting[0].LastAttemptAt == nil {
+		t.Fatal("ListWaiting last_attempt_at is absent; an admin cannot tell retrying from wedged without it")
+	}
+	if waiting[0].InstanceName == "" {
+		t.Fatal("ListWaiting instance_name is empty; the admin needs to know which library is stuck")
+	}
 
 	// Approving before the import lands is a refused non-event: the row stays
 	// parked and the admin is handed the plan.
@@ -2218,9 +2275,13 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	if approvedBy.Valid {
 		t.Fatalf("approved_by = %d, want NULL (nobody decided a system completion)", approvedBy.Int64)
 	}
+	// Owner silence survives the durable wait, on the narrower ground that no
+	// decision happened: the owner watches waiting become requested in-app and
+	// still gets the content alert when the file lands. Non-owner waiters keep
+	// their push.
 	for _, ev := range rec.userEvents {
 		if ev.userID == uid {
-			t.Fatalf("owner received %+v; a system completion is silent for the owner", ev)
+			t.Fatalf("owner received %+v; a system completion invents no approval", ev)
 		}
 	}
 	status, err = svc.GetUserBookStatusForInstance(uid, "gr:253739298", "")
@@ -2229,6 +2290,166 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	}
 	if got := status.BookFormats[BookFormatEbook]; got != StatusRequested {
 		t.Fatalf("post-sweep status = %q, want requested from live truth", got)
+	}
+	// The wait is an explanation for an absence. Once the library really holds
+	// the record, the absence is gone and so is the explanation — otherwise the
+	// app would keep apologising for a book it already has.
+	if len(status.BookFormatWaits) != 0 {
+		t.Fatalf("post-sweep book_format_waits = %+v, want none once live truth has the record", status.BookFormatWaits)
+	}
+	history, err = svc.GetRequests(uid)
+	if err != nil {
+		t.Fatalf("GetRequests after sweep: %v", err)
+	}
+	if len(history) != 1 || history[0].BookFormatWait != nil {
+		t.Fatalf("post-sweep history = %+v, want the wait cleared", history)
+	}
+	if waiting, err := svc.ListWaiting(); err != nil || len(waiting) != 0 {
+		t.Fatalf("post-sweep ListWaiting = %+v err=%v, want empty", waiting, err)
+	}
+}
+
+// TestParkLastAttemptIsDerivedNotStored pins the reasoning that kept a column
+// out of the schema. The sweep retries every parked row on every pass, so a
+// per-row park_last_attempt_at could never differ from one process-level
+// timestamp — it would only add a write to every parked row every five minutes
+// against a pool holding a single connection.
+//
+// The one case that is not a max() is a park older than this process: its last
+// real attempt was made by a predecessor and recorded nowhere, so the answer is
+// "unknown", never the request time. Reporting a three-day-old request time as
+// the last attempt would read as wedged when the next retry is 5 minutes out —
+// the exact misreading this change exists to remove.
+func TestParkLastAttemptIsDerivedNotStored(t *testing.T) {
+	start := time.Date(2026, 8, 14, 20, 0, 0, 0, time.UTC)
+	sweep := start.Add(42 * time.Minute)
+	thisLife := start.Add(10 * time.Minute)
+	previousLife := start.Add(-72 * time.Hour)
+
+	for _, tc := range []struct {
+		name        string
+		lastSweep   time.Time
+		requestedAt time.Time
+		want        *time.Time
+	}{
+		{
+			name:        "parked this process, no pass yet: the failed add is the attempt",
+			requestedAt: thisLife,
+			want:        &thisLife,
+		},
+		{
+			name:        "a completed pass outranks the create attempt",
+			lastSweep:   sweep,
+			requestedAt: thisLife,
+			want:        &sweep,
+		},
+		{
+			name:        "a park created after the last pass has not been retried since",
+			lastSweep:   start.Add(5 * time.Minute),
+			requestedAt: thisLife,
+			want:        &thisLife,
+		},
+		{
+			name:        "park predates this process, no pass yet: unknown, not days ago",
+			requestedAt: previousLife,
+			want:        nil,
+		},
+		{
+			name:        "park predates this process but a pass has run: that pass",
+			lastSweep:   sweep,
+			requestedAt: previousLife,
+			want:        &sweep,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &Service{startedAt: start}
+			if !tc.lastSweep.IsZero() {
+				svc.markParkSweep(tc.lastSweep)
+			}
+			wait := svc.bookFormatWaitFor(bookParkReasonAuthorImport, tc.requestedAt)
+			if !wait.WaitingSince.Equal(tc.requestedAt) {
+				t.Fatalf("waiting_since = %s, want the row's own request time %s", wait.WaitingSince, tc.requestedAt)
+			}
+			switch {
+			case tc.want == nil && wait.LastAttemptAt != nil:
+				t.Fatalf("last_attempt_at = %s, want absent (this process cannot vouch for it)", wait.LastAttemptAt)
+			case tc.want != nil && wait.LastAttemptAt == nil:
+				t.Fatalf("last_attempt_at absent, want %s", tc.want)
+			case tc.want != nil && !wait.LastAttemptAt.Equal(*tc.want):
+				t.Fatalf("last_attempt_at = %s, want %s", wait.LastAttemptAt, tc.want)
+			}
+		})
+	}
+}
+
+// TestSweepAdvancesTheReportedLastAttempt proves the derived timestamp actually
+// moves when the loop runs: an admin reading a waiting row must be able to see
+// that Cantinarr is still trying, which is the whole reason the row is shown.
+func TestSweepAdvancesTheReportedLastAttempt(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/book/lookup":
+			_, _ = w.Write([]byte(`[
+				{
+					"title":"The CEO Mindset","titleSlug":"the-ceo-mindset","foreignBookId":"gr:253739298",
+					"author":{"authorName":"Shiv Shivakumar","foreignAuthorId":"gr:21186439"},
+					"editions":[{"foreignEditionId":"gr:e1","title":"The CEO Mindset","links":[],"images":[]}]
+				}
+			]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"E-Book"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/metadataprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Standard"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/books","accessible":true}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/book":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`[{"propertyName":"Author","errorMessage":"Author 'Shiv Shivakumar' isn't available yet on our metadata server. It has been queued for import (pending ID: 3) and will be imported automatically when it becomes available."}]`))
+		default:
+			http.Error(w, "unexpected route", http.StatusNotFound)
+		}
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+		MediaType:  "book",
+		ForeignID:  "gr:253739298",
+		Title:      "The CEO Mindset",
+		BookFormat: BookFormatEbook,
+	}); err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+
+	before, err := svc.ListWaiting()
+	if err != nil || len(before) != 1 || before[0].LastAttemptAt == nil {
+		t.Fatalf("ListWaiting before sweep = %+v err=%v, want one row with an attempt", before, err)
+	}
+
+	// The import is still pending, so the pass retries and leaves the park in
+	// place — the state where "is anything happening?" is unanswerable without
+	// this timestamp.
+	svc.SweepParkedBookRequests()
+
+	after, err := svc.ListWaiting()
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListWaiting after sweep = %+v err=%v, want the row still waiting", after, err)
+	}
+	if after[0].LastAttemptAt == nil || !after[0].LastAttemptAt.After(*before[0].LastAttemptAt) {
+		t.Fatalf("last_attempt_at did not advance across a sweep: before=%s after=%v", before[0].LastAttemptAt, after[0].LastAttemptAt)
+	}
+	if !after[0].RequestedAt.Equal(before[0].RequestedAt) {
+		t.Fatalf("waiting-since moved from %s to %s; the wait started when the requester asked", before[0].RequestedAt, after[0].RequestedAt)
+	}
+	// Still nobody's decision to make.
+	if pending, err := svc.ListPending(); err != nil || len(pending) != 0 {
+		t.Fatalf("ListPending = %+v err=%v, want the waiting row kept out of the actionable queue", pending, err)
+	}
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("PendingCount = %d err=%v, want 0 (a wait is not work)", count, err)
 	}
 }
 
@@ -2292,6 +2513,12 @@ func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
 	}
 	if pending, err := svc.ListPending(); err != nil || len(pending) != 2 {
 		t.Fatalf("ListPending = %+v err=%v, want both demoted rows visible", pending, err)
+	}
+	// Demotion is the hand-off, so it must be a move and not a copy: a row that
+	// now needs a person must stop being advertised as something the server is
+	// handling on its own.
+	if waiting, err := svc.ListWaiting(); err != nil || len(waiting) != 0 {
+		t.Fatalf("ListWaiting = %+v err=%v, want empty once both rows demoted", waiting, err)
 	}
 	pages := 0
 	for _, ev := range rec.adminEvents {

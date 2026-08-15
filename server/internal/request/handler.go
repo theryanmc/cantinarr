@@ -237,6 +237,21 @@ func (h *Handler) ListPending(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pending)
 }
 
+// ListWaiting returns the requests the server owns and is retrying itself.
+// Informational only: these rows carry no decision, which is exactly why they
+// are served apart from the approval queue rather than mixed into it.
+func (h *Handler) ListWaiting(w http.ResponseWriter, r *http.Request) {
+	waiting, err := h.service.ListWaiting()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch waiting requests"})
+		return
+	}
+	if waiting == nil {
+		waiting = []PendingRequest{}
+	}
+	writeJSON(w, http.StatusOK, waiting)
+}
+
 // Approve fulfills a pending request, optionally overriding its options.
 func (h *Handler) Approve(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())

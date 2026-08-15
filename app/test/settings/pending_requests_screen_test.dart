@@ -11,6 +11,7 @@ import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/request/data/request_service.dart'
     hide RequestOptions;
+import 'package:cantinarr/features/request/logic/pending_approvals_provider.dart';
 import 'package:cantinarr/features/settings/data/request_settings_service.dart';
 import 'package:cantinarr/features/settings/ui/pending_requests_screen.dart';
 import 'package:dio/dio.dart';
@@ -221,6 +222,175 @@ void main() {
 
     expect(container.read(approvalsMenuOnlyWhenPendingProvider), isTrue);
     expect(tester.widget<Switch>(toggle).value, isTrue);
+  });
+
+  testWidgets(
+      'requests the server is retrying get their own section, with no actions',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(
+      pending: const [
+        {
+          'id': 3,
+          'user_id': 2,
+          'username': 'reader',
+          'media_type': 'movie',
+          'title': 'Dune',
+        },
+      ],
+      waiting: [
+        {
+          'id': 112,
+          'user_id': 9,
+          'username': 'yana',
+          'media_type': 'book',
+          'title': 'The Body Keeps the Score',
+          'book_format': 'ebook',
+          'foreign_id': 'gr:40738778',
+          'instance_id': 'chaptarr-1',
+          'instance_name': 'Yana’s Books',
+          'requester_count': 1,
+          'wait_reason': 'author_import',
+          'requested_at': DateTime.now()
+              .subtract(const Duration(hours: 6))
+              .toUtc()
+              .toIso8601String(),
+          'last_attempt_at': DateTime.now()
+              .subtract(const Duration(minutes: 3))
+              .toUtc()
+              .toIso8601String(),
+        },
+      ],
+    );
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Needs approval'), findsOneWidget);
+    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(find.text('The Body Keeps the Score'), findsOneWidget);
+    // The facts an admin asked "where is Yana's book?" actually needs.
+    expect(find.text('Library: Yana’s Books'), findsOneWidget);
+    expect(find.text('The library is still importing this author'),
+        findsOneWidget);
+    expect(find.text('Waiting since 6h ago'), findsOneWidget);
+    expect(find.text('last tried 3m ago'), findsOneWidget);
+
+    // One approve and one deny — the pending movie's. The waiting row offers
+    // neither, because the server refuses an early approval on it.
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+    expect(find.byIcon(Icons.cancel_outlined), findsOneWidget);
+
+    // A badge claims someone must act. Nobody must act on a wait.
+    expect(container.read(pendingApprovalsProvider), 1);
+  });
+
+  testWidgets('an unreadable waiting list says so instead of showing silence',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(
+      pending: const [
+        {
+          'id': 3,
+          'user_id': 2,
+          'username': 'reader',
+          'media_type': 'movie',
+          'title': 'Dune',
+        },
+      ],
+      waitingStatusCode: 500,
+    );
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Blindness, named. An empty section here would say "nothing is waiting",
+    // which is the exact answer that let the original defect hide.
+    expect(
+      find.text('Couldn’t check what the server is retrying. Pull to refresh.'),
+      findsOneWidget,
+    );
+    // And the half of the screen that has buttons still works.
+    expect(find.text('Dune'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+  });
+
+  testWidgets('a server without the waiting endpoint loses nothing else',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _ApprovalsAdapter(waitingStatusCode: 404);
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(_FakeAuthNotifier.new),
+        backendClientProvider.overrideWithValue(dio),
+        realtimeEventsProvider.overrideWithValue(
+          const Stream<WsEvent>.empty(),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // An older server simply has no such section; Approvals reads as it always
+    // did rather than reporting an error nobody can act on.
+    expect(find.text('No pending requests.'), findsOneWidget);
+    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.textContaining('Couldn’t check'), findsNothing);
   });
 
   testWidgets('an unknown book format is visible and cannot be approved',
@@ -454,10 +624,17 @@ class _ApprovalsAdapter implements HttpClientAdapter {
   final int approvalStatusCode;
   final List<Map<String, dynamic>> approvalBodies = [];
 
+  /// Rows the server is retrying itself, and the status it answers the waiting
+  /// endpoint with. 404 stands in for a server that predates the endpoint.
+  final List<Map<String, dynamic>> waiting;
+  final int waitingStatusCode;
+
   _ApprovalsAdapter({
     this.pending = const [],
     this.approvalResponse = const {},
     this.approvalStatusCode = 200,
+    this.waiting = const [],
+    this.waitingStatusCode = 200,
   });
 
   @override
@@ -482,6 +659,8 @@ class _ApprovalsAdapter implements HttpClientAdapter {
     }
     final body = switch (options.uri.path) {
       '/api/admin/requests' => pending,
+      '/api/admin/requests/waiting' =>
+        waitingStatusCode == 200 ? waiting : const <String, dynamic>{},
       '/api/admin/requests/7/approve' => approvalResponse,
       '/api/admin/request-settings' => {
           'settings': const <String, dynamic>{},
@@ -490,9 +669,11 @@ class _ApprovalsAdapter implements HttpClientAdapter {
         },
       _ => const <String, dynamic>{},
     };
-    final statusCode = options.uri.path == '/api/admin/requests/7/approve'
-        ? approvalStatusCode
-        : 200;
+    final statusCode = switch (options.uri.path) {
+      '/api/admin/requests/7/approve' => approvalStatusCode,
+      '/api/admin/requests/waiting' => waitingStatusCode,
+      _ => 200,
+    };
     return ResponseBody.fromString(
       jsonEncode(body),
       statusCode,
