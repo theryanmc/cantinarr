@@ -654,6 +654,8 @@ Language IDs may vary by service and version, so they are read live from each Ra
 
 SQLite (pure Go driver) with WAL mode. **The live schema is code**: `internal/db/db.go` -- the `initSQL` create statements plus an in-code list of tolerant `ALTER TABLE` migrations with one-time backfills. There are no SQL migration files.
 
+The pool holds **exactly one connection** (SQLite is single-writer), so every query in the process takes its turn through one door, and no query sets a timeout. Code that holds the connection while waiting for something that also needs it therefore wedges the whole server -- silently: nothing crashes, nothing errors, and a blocked goroutine writes no further log line, so the container keeps reporting itself healthy while the app has stopped working. Two rules follow. **Drain and close a cursor before calling anything that touches the database** (see `reportBookImportStalls`, whose comment records the deadlock this caused). And a **stall watchdog** (`internal/db/stallwatch.go`) probes the pool from outside every 10s; two consecutive 5s failures to acquire the connection log one `db: STALLED` line with the pool counters and a goroutine dump naming the holder, a reminder every 5 minutes while it lasts, and the duration on recovery. Only the probe carries a deadline -- real queries are untouched, so this cannot fail a slow query. It reports to the log and nowhere else on purpose: system issues and admin pushes are written through the very connection that is stuck, so during this failure the log is the only channel that still works.
+
 | Area | Tables |
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
@@ -683,6 +685,7 @@ server/
 │   ├── config/               # Env config (port, name, passkey/push/Codex settings)
 │   ├── credentials/          # External credential registry + lazy client caching
 │   ├── db/db.go              # SQLite setup, WAL, THE live schema + in-code migrations
+│   ├── db/stallwatch.go      # watches the single connection; logs a wedged pool + its holder
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
 │   ├── downloads/            # Unified download-client queue API across all four clients
 │   ├── instance/             # Instance registry, defaults invariant, per-user pins, safe webhook rotation

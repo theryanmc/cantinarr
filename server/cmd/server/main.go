@@ -213,6 +213,12 @@ func main() {
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
 
+	// Watches the one database connection from outside and logs when nothing
+	// can get through. Deliberately not wired to the issue store above: a
+	// wedged pool is precisely the failure that cannot be written to the
+	// database, so the log is the only channel that still works.
+	db.NewStallWatchdog(database).Start(ctx)
+
 	// Proxy handler
 	proxyHandler := proxy.NewHandler(instanceStore)
 
