@@ -80,6 +80,13 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
         lower.contains('book configuration')) {
       return 'Check this book library’s paths and profiles, then try again.';
     }
+    // Approving replayed an add that had already failed the same way. The old
+    // "Something went wrong. Try again." read as a transient glitch and invited
+    // another Approve, which cannot work until the library has the record.
+    if (lower.contains('add this book in the library first')) {
+      return 'The library still can’t find this book. Add it in the library '
+          'first, then approve — retrying here won’t help.';
+    }
     return 'Something went wrong. Try again.';
   }
 
@@ -742,6 +749,43 @@ class _PendingTile extends StatelessWidget {
             item.requestedByLabel,
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
+          // Most rows are a plain yes/no and say nothing here. A row whose add
+          // already failed is not one, and without this it looked identical —
+          // so Approve got pressed, failed, and left no idea what to do next.
+          if (item.addFailure case final failure?) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline,
+                    size: 15, color: AppTheme.requested),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        failure.reason,
+                        style: const TextStyle(
+                          color: AppTheme.requested,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        failure.action,
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,

@@ -173,6 +173,10 @@ class PendingRequestItem {
   /// answer is "unknown", not "never".
   final DateTime? lastAttemptAt;
 
+  /// Set when this queue row is not a policy question: the automatic add
+  /// already ran and failed. Empty on an ordinary decision.
+  final String addFailureReason;
+
   const PendingRequestItem({
     required this.id,
     required this.userId,
@@ -192,6 +196,7 @@ class PendingRequestItem {
     required this.requestedAt,
     this.waitReason = '',
     this.lastAttemptAt,
+    this.addFailureReason = '',
   });
 
   /// What the server is waiting on, in admin vocabulary. Null for an actionable
@@ -201,6 +206,28 @@ class PendingRequestItem {
         '' => null,
         'author_import' => 'The library is still importing this author',
         _ => 'The library is not ready for this book yet',
+      };
+
+  /// Why this row is in the queue when it isn't a routine yes/no, and what the
+  /// admin would actually do about it. Null for an ordinary decision — most
+  /// rows — so the queue stays quiet unless there is something to say.
+  ({String reason, String action})? get addFailure => switch (addFailureReason) {
+        '' => null,
+        'metadata_unresolved' => (
+            reason: 'The library couldn’t match this book',
+            action: 'Approving retries the same add. Add it in the library '
+                'first, then approve.',
+          ),
+        'import_abandoned' => (
+            reason: 'Retried automatically for a week and never completed',
+            action: 'The author import never landed. Check the library before '
+                'approving.',
+          ),
+        // A reason this version doesn't know is still not a routine decision.
+        _ => (
+            reason: 'The automatic add already failed',
+            action: 'Approving retries it. Check the library first.',
+          ),
       };
 
   bool get isTv => mediaType == 'tv';
@@ -263,6 +290,7 @@ class PendingRequestItem {
         lastAttemptAt: DateTime.tryParse(
                 json['last_attempt_at'] as String? ?? '')
             ?.toLocal(),
+        addFailureReason: json['add_failure_reason'] as String? ?? '',
       );
 }
 

@@ -2080,6 +2080,53 @@ func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("parked pending rows = %d, want 1 (the request must survive the failed add)", count)
 	}
+
+	// This row goes to a human, so it belongs in the approval queue and in the
+	// badge — but it is not a policy question, and rendered as one it invited an
+	// Approve that replays the same failed add.
+	pending, err := svc.ListPending()
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("ListPending rows = %d, want the parked row awaiting a decision", len(pending))
+	}
+	if pending[0].AddFailureReason != bookAddFailureMetadataUnresolved {
+		t.Fatalf("add_failure_reason = %q, want %q — an ordinary-looking row is the defect", pending[0].AddFailureReason, bookAddFailureMetadataUnresolved)
+	}
+	// park_reason must stay NULL. It answers a different question (who owns the
+	// row), and its NULL is the guard that keeps the sweep from bypassing
+	// approval policy; a value here would hide this row from the queue.
+	var parkReason sql.NullString
+	if err := svc.db.QueryRow(
+		"SELECT park_reason FROM request_log WHERE id = ?", pending[0].ID,
+	).Scan(&parkReason); err != nil {
+		t.Fatalf("read park_reason: %v", err)
+	}
+	if parkReason.Valid {
+		t.Fatalf("park_reason = %q, want NULL (a human decides this one)", parkReason.String)
+	}
+	if waiting, err := svc.ListWaiting(); err != nil || len(waiting) != 0 {
+		t.Fatalf("ListWaiting = %+v err=%v, want empty (the server is not retrying this)", waiting, err)
+	}
+	if count, err := svc.PendingCount(); err != nil || count != 1 {
+		t.Fatalf("PendingCount = %d err=%v, want 1 (a person really must act)", count, err)
+	}
+
+	// Approving replays the same add against the same unresolved metadata. The
+	// bare error read as a transient glitch; the admin needs the one action that
+	// actually moves this.
+	adminID := createTestAdmin(t, svc)
+	_, approveErr := svc.ApproveRequest(adminID, pending[0].ID, nil)
+	if approveErr == nil {
+		t.Fatal("ApproveRequest succeeded; the metadata record is still unresolvable")
+	}
+	if !errors.Is(approveErr, ErrBookMetadataUnresolved) {
+		t.Fatalf("approve error = %v, want it to wrap ErrBookMetadataUnresolved", approveErr)
+	}
+	if !strings.Contains(approveErr.Error(), "add this book in the library first") {
+		t.Fatalf("approve error = %q, want the next step named", approveErr)
+	}
 }
 
 // TestBookRequestParksWhenAuthorImportIsPending covers the 0.9.879+ Chaptarr
@@ -2511,7 +2558,8 @@ func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
 			t.Fatalf("row %d = status %q park %v, want an ordinary pending row", id, status, park)
 		}
 	}
-	if pending, err := svc.ListPending(); err != nil || len(pending) != 2 {
+	pending, err := svc.ListPending()
+	if err != nil || len(pending) != 2 {
 		t.Fatalf("ListPending = %+v err=%v, want both demoted rows visible", pending, err)
 	}
 	// Demotion is the hand-off, so it must be a move and not a copy: a row that
@@ -2519,6 +2567,13 @@ func TestSweepDemotesParksThatGiveUpOrFailUnexpectedly(t *testing.T) {
 	// handling on its own.
 	if waiting, err := svc.ListWaiting(); err != nil || len(waiting) != 0 {
 		t.Fatalf("ListWaiting = %+v err=%v, want empty once both rows demoted", waiting, err)
+	}
+	// The hand-off carries its history. A request retried to exhaustion is not a
+	// fresh decision, and the page fired below is the admin's first sight of it.
+	for _, row := range pending {
+		if row.AddFailureReason != bookAddFailureImportAbandoned {
+			t.Fatalf("demoted row %d add_failure_reason = %q, want %q", row.ID, row.AddFailureReason, bookAddFailureImportAbandoned)
+		}
 	}
 	pages := 0
 	for _, ev := range rec.adminEvents {
