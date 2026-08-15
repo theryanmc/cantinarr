@@ -19,7 +19,10 @@ const (
 // instance opens or refreshes one admin-only system issue keyed to that
 // instance; a healthy pass resolves it automatically, whichever way the stall
 // cleared (the import landed, the request demoted to the approval queue, or an
-// admin denied it).
+// admin denied it). The issue lives at IssueWaiting, not IssueNeedsAdmin:
+// every exit is automatic and the sink itself is the witness, so there is no
+// honest outcome for an admin to record — asking for one would demand a
+// verdict on work nobody performed.
 func (s *Service) RecordBookImportStall(instanceID, instanceName string, waitingTitles []string, healthy bool) error {
 	instanceID = boundedHealthField(instanceID)
 	instanceName = boundedHealthField(instanceName)
@@ -64,7 +67,7 @@ func (s *Service) RecordBookImportStall(instanceID, instanceName string, waiting
 
 	title := fmt.Sprintf("Book requests are waiting on %s's metadata import", instanceName)
 	detail := fmt.Sprintf(
-		"%s has book requests parked for more than a day because its metadata service still hasn't imported the author: %s. Cantinarr retries them automatically and hands anything unfinished to the approval queue after 7 days.",
+		"%s has book requests parked for more than a day because its metadata service is still importing their authors. Waiting: %s. Cantinarr retries them automatically and hands anything unfinished to the approval queue after 7 days.",
 		instanceName, boundedTitleList(waitingTitles),
 	)
 	resolution := "Check the Chaptarr instance's queued author imports (System page / logs). Nothing is required on the Cantinarr side; this issue resolves itself when the imports land."
@@ -74,7 +77,7 @@ func (s *Service) RecordBookImportStall(instanceID, instanceName string, waiting
 			INSERT INTO issues
 				(source, status, tmdb_id, media_type, title, detail, dedupe_key, read, resolution, instance_id)
 			VALUES (?, ?, 0, ?, ?, ?, ?, 0, ?, ?)`,
-			SourceSystem, IssueNeedsAdmin, bookImportStallMediaType, title,
+			SourceSystem, IssueWaiting, bookImportStallMediaType, title,
 			detail, dedupeKey, resolution, instanceID)
 		if insertErr != nil {
 			return fmt.Errorf("create book import stall issue: %w", insertErr)
@@ -96,7 +99,7 @@ func (s *Service) RecordBookImportStall(instanceID, instanceName string, waiting
 			UPDATE issues SET status = ?, read = 0, detail = ?, resolution = ?,
 				occurrences = occurrences + 1, updated_at = CURRENT_TIMESTAMP
 			WHERE id = ? AND closed_at IS NULL`,
-			IssueNeedsAdmin, detail, resolution, issueID); err != nil {
+			IssueWaiting, detail, resolution, issueID); err != nil {
 			return fmt.Errorf("refresh book import stall issue: %w", err)
 		}
 	}

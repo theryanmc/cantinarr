@@ -21,14 +21,22 @@ func TestBookImportStallDedupesPerInstanceSystemIssueAndRecovers(t *testing.T) {
 		t.Fatalf("issues=%#v", issues)
 	}
 	issue := issues[0]
-	if issue.Source != SourceSystem || issue.Status != IssueNeedsAdmin || issue.MediaType != "system" || issue.InstanceID != "chaptarr-abc" {
+	// IssueWaiting, not IssueNeedsAdmin: the stall resolves itself, so clients
+	// must present it as passive tracking rather than demand an admin verdict.
+	if issue.Source != SourceSystem || issue.Status != IssueWaiting || issue.MediaType != "system" || issue.InstanceID != "chaptarr-abc" {
 		t.Fatalf("system issue=%#v", issue)
 	}
 	if !strings.Contains(issue.Title, "Books") {
 		t.Fatalf("issue title=%q, want the safe instance name", issue.Title)
 	}
-	if !strings.Contains(issue.Detail, `"The CEO Mindset"`) {
-		t.Fatalf("issue detail=%q, want the waiting title", issue.Detail)
+	// The list names book titles, never "the author": at park time the author
+	// is exactly what Chaptarr doesn't have yet, so the copy must not present
+	// a book title as an author name.
+	if !strings.Contains(issue.Detail, `Waiting: "The CEO Mindset"`) {
+		t.Fatalf("issue detail=%q, want the waiting title labeled as a waiting request", issue.Detail)
+	}
+	if strings.Contains(issue.Detail, "the author:") {
+		t.Fatalf("issue detail=%q, must not label book titles as the author", issue.Detail)
 	}
 	if len(notifier.adminEvents) != 1 || notifier.adminEvents[0] != "issue_created" {
 		t.Fatalf("admin events=%v", notifier.adminEvents)

@@ -38,6 +38,7 @@ enum IssueStatus {
   open('open', 'Reported'),
   observing('observing', 'Watching the download'),
   recovering('recovering', 'Download recovery in progress'),
+  waiting('waiting', 'Waiting and retrying'),
   investigating('investigating', 'Checking the problem'),
   awaitingUser('awaiting_user', 'Needs your reply'),
   awaitingApproval('awaiting_approval', 'Fix ready for review'),
@@ -61,10 +62,13 @@ enum IssueStatus {
       this == failed ||
       this == dismissed;
 
-  /// True while Cantinarr is passively tracking the arr's own recovery work.
-  /// These issues remain open for audit/history, but must not be presented as
-  /// agent or admin work that needs attention.
-  bool get isTracking => this == observing || this == recovering;
+  /// True while Cantinarr is passively tracking work that isn't its own: the
+  /// arr's recovery of a download, or a wait the server retries and resolves
+  /// itself (waiting). These issues remain open for audit/history, but must
+  /// not be presented as agent or admin work that needs attention — there is
+  /// no verdict for a human to record on them.
+  bool get isTracking =>
+      this == observing || this == recovering || this == waiting;
 
   /// True when an open issue belongs in the admin's attention queue.
   bool get needsAttention => !isTerminal && !isTracking;
