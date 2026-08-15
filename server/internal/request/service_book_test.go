@@ -2500,6 +2500,91 @@ func TestSweepAdvancesTheReportedLastAttempt(t *testing.T) {
 	}
 }
 
+// TestUnknownParkReasonStaysWithTheHumans is the guard the park_reason column
+// never had. Its meaning — "the server owns this row" — lived only in a comment,
+// and the two halves of the system read it differently: visibility treated any
+// non-NULL value as server-owned, while the sweep only ever retried the literal
+// 'author_import'. A row carrying any other value was hidden from the approval
+// queue and the badge, listed under "Waiting for library" as being retried
+// automatically, and touched by nothing — stranded under a label claiming it was
+// handled, which is the failure the waiting list exists to prevent.
+//
+// Nothing writes such a value today. The point is that the next reason someone
+// adds cannot strand a request by being added to one half and not the other:
+// unrecognised means a person still sees it.
+func TestUnknownParkReasonStaysWithTheHumans(t *testing.T) {
+	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer chaptarrServer.Close()
+
+	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
+	instanceID := testInstanceID(t, svc)
+	if _, err := svc.db.Exec(
+		`INSERT INTO request_log (user_id, tmdb_id, foreign_id, book_format, instance_id, media_type, title, status, park_reason)
+		 VALUES (?, 0, 'gr:future', 'ebook', ?, 'book', 'A Reason From The Future', ?, 'some_future_reason')`,
+		uid, instanceID, StatusPending,
+	); err != nil {
+		t.Fatalf("insert unknown park: %v", err)
+	}
+
+	pending, err := svc.ListPending()
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].Title != "A Reason From The Future" {
+		t.Fatalf("ListPending = %+v, want the row visible to a human — nothing else will touch it", pending)
+	}
+	if count, err := svc.PendingCount(); err != nil || count != 1 {
+		t.Fatalf("PendingCount = %d err=%v, want 1; an uncounted row is one nobody is asked to look at", count, err)
+	}
+	// And it must NOT be advertised as work in progress, because no sweep pass
+	// will ever pick it up.
+	waiting, err := svc.ListWaiting()
+	if err != nil {
+		t.Fatalf("ListWaiting: %v", err)
+	}
+	if len(waiting) != 0 {
+		t.Fatalf("ListWaiting = %+v, want empty: claiming a retry nothing performs is the defect", waiting)
+	}
+
+	// Prove the claim the lists are making. A full pass leaves the row exactly
+	// as it was — no retry, no demotion — so the approval queue really is its
+	// only route to a human.
+	svc.SweepParkedBookRequests()
+	var status, parkReason string
+	if err := svc.db.QueryRow(
+		"SELECT status, COALESCE(park_reason, '') FROM request_log WHERE foreign_id = 'gr:future'",
+	).Scan(&status, &parkReason); err != nil {
+		t.Fatalf("read row after sweep: %v", err)
+	}
+	if status != StatusPending || parkReason != "some_future_reason" {
+		t.Fatalf("after sweep: status=%q park_reason=%q, want the row untouched", status, parkReason)
+	}
+	if pending, err := svc.ListPending(); err != nil || len(pending) != 1 {
+		t.Fatalf("ListPending after sweep = %+v err=%v, want the row still with the humans", pending, err)
+	}
+
+	// The two lists partition the pending set: every row is in exactly one, so
+	// no future reason can fall between them.
+	var total int
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE status = ?", StatusPending).Scan(&total); err != nil {
+		t.Fatalf("count pending rows: %v", err)
+	}
+	queue, err := svc.ListPending()
+	if err != nil {
+		t.Fatalf("ListPending: %v", err)
+	}
+	held, err := svc.ListWaiting()
+	if err != nil {
+		t.Fatalf("ListWaiting: %v", err)
+	}
+	if len(queue)+len(held) != total {
+		t.Fatalf("queue %d + waiting %d != %d pending rows; the filters are not complements", len(queue), len(held), total)
+	}
+}
+
 // TestSweepDemotesParksThatGiveUpOrFailUnexpectedly pins the two hand-off
 // edges: a park older than the give-up horizon and a park whose retry fails
 // for a reason other than the still-pending import both demote to an ordinary

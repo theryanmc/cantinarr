@@ -69,6 +69,36 @@ const bookAuthorImportingMessage = "This book's author is still being added to t
 // them would let the two drift.
 const bookParkReasonAuthorImport = "author_import"
 
+// serverOwnedParkReasons is the single answer to "is this row the server's
+// problem or a person's?", and every surface must use it.
+//
+// It exists because the two halves once disagreed: visibility treated ANY
+// non-NULL park_reason as server-owned, while the sweep only ever retried the
+// exact value 'author_import'. A row carrying any other value was therefore
+// hidden from the approval queue and the badge, advertised in "Waiting for
+// library" as being retried automatically, and never retried or demoted by
+// anything — stranded under a label claiming it was handled. That is the exact
+// failure the waiting list was built to end, so the list must not be able to
+// cause it.
+//
+// A value this build does not recognise is NOT server-owned: unknown falls back
+// to the approval queue, where a person can see and decide it. Same direction
+// the rest of the schema fails in — toward human review, never toward silence.
+var serverOwnedParkReasons = []string{bookParkReasonAuthorImport}
+
+// serverOwnedParkSQL renders serverOwnedParkReasons as an IN-list fragment plus
+// its bind arguments, so adding a reason to the slice updates every query at
+// once instead of leaving one behind.
+func serverOwnedParkSQL() (string, []interface{}) {
+	placeholders := make([]string, len(serverOwnedParkReasons))
+	args := make([]interface{}, len(serverOwnedParkReasons))
+	for i, reason := range serverOwnedParkReasons {
+		placeholders[i] = "?"
+		args[i] = reason
+	}
+	return strings.Join(placeholders, ", "), args
+}
+
 // BookWaitReasonAuthorImport exposes that wire value to the other packages that
 // have to render a wait (the MCP tool surface). Same string, one definition.
 const BookWaitReasonAuthorImport = bookParkReasonAuthorImport
@@ -3266,10 +3296,16 @@ func bookFormatDownloaded(t LibraryTitle, format string) bool {
 // the badge on the admin approval surface (in-app drawer entry + home-screen
 // app icon).
 func (s *Service) PendingCount() (int, error) {
-	// Server-owned parks (park_reason set) are excluded like scanPending: the
-	// badge counts decisions a human can make, and a park offers none.
+	// Server-owned parks are excluded like scanPending: the badge counts
+	// decisions a human can make, and a park the sweep is retrying offers none.
+	// A park_reason this build does not recognise is counted — nothing is
+	// retrying it, so a person is the only one who can.
+	placeholders, args := serverOwnedParkSQL()
 	var n int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE status = ? AND park_reason IS NULL", StatusPending).Scan(&n); err != nil {
+	if err := s.db.QueryRow(
+		"SELECT COUNT(*) FROM request_log WHERE status = ? AND (park_reason IS NULL OR park_reason NOT IN ("+placeholders+"))",
+		append([]interface{}{StatusPending}, args...)...,
+	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count pending requests: %w", err)
 	}
 	return n, nil
@@ -3373,13 +3409,16 @@ func (s *Service) ListWaiting() ([]PendingRequest, error) {
 	return out, nil
 }
 
-// scanPending reads one side of the pending set. parked selects server-owned
-// rows (park_reason set) instead of the human-decision rows; the two are
-// complementary and never overlap, so no row can be in both lists.
+// scanPending reads one side of the pending set. parked selects the rows the
+// sweep is actually retrying (see serverOwnedParkReasons) instead of the
+// human-decision rows. The two filters are exact complements over the same
+// list, so every pending row lands in exactly one of them — a row can never be
+// hidden from both, which is how one would be stranded.
 func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
-	parkFilter := "r.park_reason IS NULL"
+	placeholders, parkArgs := serverOwnedParkSQL()
+	parkFilter := "(r.park_reason IS NULL OR r.park_reason NOT IN (" + placeholders + "))"
 	if parked {
-		parkFilter = "r.park_reason IS NOT NULL"
+		parkFilter = "r.park_reason IN (" + placeholders + ")"
 	}
 	rows, err := s.db.Query(
 		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), COALESCE(r.foreign_id, ''), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
@@ -3390,7 +3429,7 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 		 LEFT JOIN users u ON u.id = r.user_id
 		 LEFT JOIN service_instances si ON si.id = r.instance_id
 		 WHERE r.status = ? AND `+parkFilter+` ORDER BY r.requested_at ASC`,
-		StatusPending,
+		append([]interface{}{StatusPending}, parkArgs...)...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query pending requests: %w", err)
