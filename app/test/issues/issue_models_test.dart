@@ -33,6 +33,12 @@ void main() {
       expect(IssueStatus.recovering.isTracking, isTrue);
       expect(IssueStatus.recovering.label, 'Download recovery in progress');
       expect(IssueStatus.recovering.needsAttention, isFalse);
+      // waiting is a server-owned wait (e.g. a parked book author import): it
+      // resolves itself, so it must track passively, never demand attention.
+      expect(IssueStatus.waiting.isTerminal, isFalse);
+      expect(IssueStatus.waiting.label, 'Waiting and retrying');
+      expect(IssueStatus.waiting.isTracking, isTrue);
+      expect(IssueStatus.waiting.needsAttention, isFalse);
       expect(IssueStatus.awaitingApproval.needsAttention, isTrue);
     });
 

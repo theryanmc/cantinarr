@@ -561,6 +561,7 @@ class _IssueTile extends StatelessWidget {
         return AppTheme.downloading;
       case IssueStatus.observing:
       case IssueStatus.recovering:
+      case IssueStatus.waiting:
       case IssueStatus.unknown:
         return AppTheme.textSecondary;
     }

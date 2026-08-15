@@ -34,9 +34,16 @@ const (
 	// terminal (the reporter's tap or the confirm-wait sweep ends it).
 	IssueAwaitingConfirmation = "awaiting_confirmation"
 	IssueNeedsAdmin           = "needs_admin"
-	IssueResolved             = "resolved"
-	IssueWontFix              = "wont_fix"
-	IssueDismissed            = "dismissed"
+	// IssueWaiting is a system-owned wait on an external service doing its own
+	// work (today: a Chaptarr author import parked past the stall horizon).
+	// The server retries and resolves it itself, so there is no human verdict
+	// to record: clients present it as passive tracking — no completion verbs,
+	// no attention badge. Like needs_admin it is never enqueued for an agent
+	// run (the worker allowlists open/investigating).
+	IssueWaiting   = "waiting"
+	IssueResolved  = "resolved"
+	IssueWontFix   = "wont_fix"
+	IssueDismissed = "dismissed"
 )
 
 // Issue source values.

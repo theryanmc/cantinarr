@@ -597,7 +597,6 @@ class _PassiveTrackingBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final recovering = status == IssueStatus.recovering;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -609,7 +608,11 @@ class _PassiveTrackingBanner extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            recovering ? Icons.sync : Icons.visibility_outlined,
+            switch (status) {
+              IssueStatus.recovering => Icons.sync,
+              IssueStatus.waiting => Icons.hourglass_empty,
+              _ => Icons.visibility_outlined,
+            },
             size: 20,
             color: AppTheme.textSecondary,
           ),
@@ -967,13 +970,22 @@ class _IssueSummaryCard extends StatelessWidget {
               ),
             ],
           ],
-          if (issue.status == IssueStatus.needsAdmin &&
+          // A waiting issue keeps its pointer ("where would I check on this?")
+          // but calmly: it is not a review demand, so no attention color.
+          if ((issue.status == IssueStatus.needsAdmin ||
+                  issue.status == IssueStatus.waiting) &&
               issue.resolutionLabel.trim().isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
-              issue.isPrevention ? 'What to change' : 'Needs a closer look',
-              style: const TextStyle(
-                color: AppTheme.requested,
+              issue.status == IssueStatus.waiting
+                  ? 'Where to look'
+                  : issue.isPrevention
+                      ? 'What to change'
+                      : 'Needs a closer look',
+              style: TextStyle(
+                color: issue.status == IssueStatus.waiting
+                    ? AppTheme.textSecondary
+                    : AppTheme.requested,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
