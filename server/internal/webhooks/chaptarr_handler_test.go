@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/instance"
@@ -307,5 +308,42 @@ func TestNonChaptarrInstanceIgnoresBookPayload(t *testing.T) {
 	}
 	if len(f.requests.bookIDs) != 0 {
 		t.Error("a Radarr callback invalidated book caches")
+	}
+}
+
+// recordingParkResumer counts ResumeBookParks calls.
+type recordingParkResumer struct{ calls atomic.Int32 }
+
+func (r *recordingParkResumer) ResumeBookParks() { r.calls.Add(1) }
+
+// TestChaptarrAuthorAddedResumesBookParks pins the push-driven park exit:
+// AuthorAdded fires at the exact moment a queued author import lands, so the
+// receiver resumes the park sweep immediately. Every other event leaves the
+// maintenance cadence alone — an import or delete says nothing about an
+// author-import park.
+func TestChaptarrAuthorAddedResumesBookParks(t *testing.T) {
+	f, _, id, token := newBookFixture(t)
+	resumer := &recordingParkResumer{}
+	f.handler.SetBookParkResumer(resumer)
+
+	rec := f.postBook(t, id, token, `{"eventType":"AuthorAdded"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := resumer.calls.Load(); got != 1 {
+		t.Fatalf("ResumeBookParks calls = %d, want exactly one", got)
+	}
+
+	for _, body := range []string{
+		`{"eventType":"Download","book":{"id":7}}`,
+		`{"eventType":"BookDelete","book":{"id":7}}`,
+		`{"eventType":"Test"}`,
+	} {
+		if rec := f.postBook(t, id, token, body); rec.Code != http.StatusOK {
+			t.Fatalf("status = %d for %s, want 200", rec.Code, body)
+		}
+	}
+	if got := resumer.calls.Load(); got != 1 {
+		t.Fatalf("ResumeBookParks calls = %d after non-author events, want still one", got)
 	}
 }

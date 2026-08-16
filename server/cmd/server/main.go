@@ -306,6 +306,10 @@ func main() {
 	// arr event Cantinarr can act on before anyone notices; see
 	// remediation.RecordPreAirImport.
 	webhookHandler.SetPreAirImportWitness(remediationService)
+	// Chaptarr's AuthorAdded callback fires the moment a queued author import
+	// lands, so parked book requests resume immediately instead of on the
+	// five-minute maintenance tick.
+	webhookHandler.SetBookParkResumer(requestService)
 
 	// Update checker (GitHub release comparison).
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)

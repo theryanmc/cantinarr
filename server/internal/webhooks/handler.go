@@ -60,12 +60,13 @@ type PreAirImportWitness interface {
 
 // Handler terminates the arr webhook callbacks.
 type Handler struct {
-	store    *instance.Store
-	registry *instance.Registry
-	hub      Broadcaster
-	requests AvailabilityInvalidator
-	content  ws.ContentNotifier
-	preAir   PreAirImportWitness
+	store       *instance.Store
+	registry    *instance.Registry
+	hub         Broadcaster
+	requests    AvailabilityInvalidator
+	content     ws.ContentNotifier
+	preAir      PreAirImportWitness
+	parkResumer BookParkResumer
 }
 
 // NewHandler builds the webhook handler. content may be nil (push disabled).
@@ -76,6 +77,18 @@ func NewHandler(store *instance.Store, registry *instance.Registry, hub Broadcas
 // SetPreAirImportWitness wires the pre-air detector after construction, matching
 // how the other optional dependencies are attached in main.
 func (h *Handler) SetPreAirImportWitness(w PreAirImportWitness) { h.preAir = w }
+
+// BookParkResumer resumes the server-owned author-import parks out of cadence;
+// *request.Service satisfies it. Chaptarr's AuthorAdded callback fires at the
+// exact moment a queued author import lands — the one event every park is
+// waiting for — so the sweep runs now instead of at the next five-minute tick.
+type BookParkResumer interface {
+	ResumeBookParks()
+}
+
+// SetBookParkResumer wires the park resumer after construction; nil leaves the
+// parks on the maintenance cadence alone.
+func (h *Handler) SetBookParkResumer(r BookParkResumer) { h.parkResumer = r }
 
 // arrPayload is the superset of the Sonarr and Radarr webhook fields this
 // handler acts on. Both apps send eventType plus a movie or series object;
@@ -322,6 +335,12 @@ func (h *Handler) handleBookEvent(instanceID string, payload arrPayload) {
 			"service_type": "chaptarr",
 		},
 	})
+	if (event == "authoradd" || event == "authoradded") && h.parkResumer != nil {
+		// The arr just finished importing an author — the exit every
+		// author-import park waits on. Resume the sweep now; the maintenance
+		// cadence stays the fallback for missed callbacks.
+		h.parkResumer.ResumeBookParks()
+	}
 	if !isImport {
 		return
 	}
