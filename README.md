@@ -2,7 +2,7 @@
 
 **Your media server just learned to run itself.**
 
-**[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Request a feature](https://cantinarr.com/roadmap/)**
+**[cantinarr.com](https://cantinarr.com)** · **[Live demo](https://demo.cantinarr.com)** · **[iPhone beta](https://testflight.apple.com/join/bCPDwCsD)** · **[Android beta](https://cantinarr.com/#android-beta)** · **[Request a feature](https://cantinarr.com/roadmap/)**
 
 Discover and request movies, TV shows, and books. Get push notifications. Manage Radarr, Sonarr, Chaptarr, and your download clients. When downloads get stuck, Cantinarr diagnoses the cause and recommends the next step. You set the agent's operating boundaries. Your household gets the simple experience; you keep control of access, approvals, and quality.
 
@@ -105,10 +105,10 @@ talks only to your own server, so stand one up first (above) -- or open the
 
 - **iPhone and iPad** -- join the public beta on
   [TestFlight](https://testflight.apple.com/join/bCPDwCsD). No invite needed.
-- **Android** -- closed testing on Google Play, so testers are added by hand.
-  Email **windoze95@proton.me** with the address associated with your Play Store
-  (Google) account -- that exact address is what Google needs to let you in -- and
-  you'll get the opt-in link back.
+- **Android** -- [ask for a tester slot](https://cantinarr.com/#android-beta). Play
+  testing is closed, so testers are added by hand: email **windoze95@proton.me**
+  with the address associated with your Play Store (Google) account -- that exact
+  address is what Google needs to let you in -- and you'll get the opt-in link back.
 - **Any browser** -- your server already serves the full app at
   `http://your-server:8585`. Nothing to install.
 
