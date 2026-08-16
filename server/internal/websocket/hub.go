@@ -1294,8 +1294,14 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
-		currentQueue[item.MovieID] = progress
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.MovieID, item.Status, item.Sizeleft))
+		if item.MovieID <= 0 {
+			// A queue row Radarr could not match to a library movie has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.MovieID] = progress
 
 		// Look up TMDB ID for this movie
 		movie, err := client.GetMovie(item.MovieID)
@@ -1320,9 +1326,10 @@ func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {
 	var departed []int
 	if prevQueue := h.prevRadarrQueue[instanceID]; prevQueue != nil {
 		for movieID := range prevQueue {
-			if _, stillInQueue := currentQueue[movieID]; !stillInQueue {
-				departed = append(departed, movieID)
+			if _, stillInQueue := currentQueue[movieID]; stillInQueue || movieID <= 0 {
+				continue
 			}
+			departed = append(departed, movieID)
 		}
 		sort.Ints(departed)
 	}
@@ -1399,8 +1406,14 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 		if item.Size > 0 {
 			progress = (item.Size - item.Sizeleft) / item.Size
 		}
-		currentQueue[item.SeriesID] = progress
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.SeriesID, item.Status, item.Sizeleft))
+		if item.SeriesID <= 0 {
+			// A queue row Sonarr could not match to a library series has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.SeriesID] = progress
 
 		series, err := client.GetSeries(item.SeriesID)
 		if err != nil {
@@ -1424,9 +1437,10 @@ func (h *Hub) pollSonarrInstance(instanceID string, client *sonarr.Client) {
 	var departed []int
 	if prevQueue := h.prevSonarrQueue[instanceID]; prevQueue != nil {
 		for seriesID := range prevQueue {
-			if _, stillInQueue := currentQueue[seriesID]; !stillInQueue {
-				departed = append(departed, seriesID)
+			if _, stillInQueue := currentQueue[seriesID]; stillInQueue || seriesID <= 0 {
+				continue
 			}
+			departed = append(departed, seriesID)
 		}
 		sort.Ints(departed)
 	}
@@ -1520,8 +1534,14 @@ func (h *Hub) pollChaptarrInstance(instanceID string, client *chaptarr.Client) {
 	currentQueue := make(map[int]struct{}, len(queue))
 	tuples := make([]string, 0, len(queue))
 	for _, item := range queue {
-		currentQueue[item.BookID] = struct{}{}
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.BookID, item.Status, item.Sizeleft))
+		if item.BookID <= 0 {
+			// A queue row Chaptarr could not match to a library book has no id
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.BookID] = struct{}{}
 	}
 
 	// A book record that left the queue and now has a file finished importing.

@@ -110,7 +110,7 @@ func (b *chaptarrBackend) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/api/v1/queue":
-			fmt.Fprintf(w, `{"records":%s}`, b.queue)
+			fmt.Fprint(w, queueEnvelope(b.queue))
 		case r.URL.Path == "/api/v1/history":
 			records := b.history
 			if r.URL.Query().Get("eventType") == "5" {

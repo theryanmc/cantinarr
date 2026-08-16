@@ -500,18 +500,25 @@ func (c *Client) SetEpisodesMonitored(episodeIDs []int, monitored bool) error {
 	return nil
 }
 
+// GetQueue returns the lean queue view as one complete bounded page. It used
+// to issue an unpaged read, which Sonarr answers with its default page of 10
+// rows — a silently truncated queue for any instance downloading more than
+// that. includeUnknownSeriesItems keeps rows Sonarr could not match to a
+// library series visible; consumers must treat SeriesID 0 as unmatched.
 func (c *Client) GetQueue() ([]QueueItem, error) {
-	resp, err := c.doRequest("GET", "/api/v3/queue?includeSeries=true")
-	if err != nil {
+	var queueResp struct {
+		TotalRecords int         `json:"totalRecords"`
+		Records      []QueueItem `json:"records"`
+	}
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeUnknownSeriesItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	if err := c.do("GET", path, nil, &queueResp); err != nil {
 		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}
-	defer resp.Body.Close()
-
-	var queueResp struct {
-		Records []QueueItem `json:"records"`
+	if queueResp.TotalRecords < 0 || queueResp.TotalRecords > queueMaxRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: invalid or oversized total %d (safety cap %d)", queueResp.TotalRecords, queueMaxRecords)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
-		return nil, fmt.Errorf("decode queue: %w", err)
+	if len(queueResp.Records) != queueResp.TotalRecords {
+		return nil, fmt.Errorf("sonarr queue snapshot incomplete: received %d of %d records in bounded page", len(queueResp.Records), queueResp.TotalRecords)
 	}
 	return queueResp.Records, nil
 }
@@ -593,7 +600,10 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 		TotalRecords int                 `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
-	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeEpisode=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	// includeUnknownSeriesItems: without it Sonarr silently drops queue rows it
+	// could not match to a library series — exactly the rows most likely to be
+	// stuck — before the completeness checks below ever see them.
+	path := fmt.Sprintf("/api/v3/queue?page=1&pageSize=%d&includeSeries=true&includeEpisode=true&includeUnknownSeriesItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("sonarr queue: %w", err)
 	}

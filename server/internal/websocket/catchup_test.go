@@ -41,7 +41,7 @@ func (b *videoBackend) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == b.apiPrefix+"/queue":
-			fmt.Fprintf(w, `{"records":%s}`, b.queue)
+			fmt.Fprint(w, queueEnvelope(b.queue))
 		case r.URL.Path == b.apiPrefix+"/history":
 			b.historyHits++
 			records := b.history

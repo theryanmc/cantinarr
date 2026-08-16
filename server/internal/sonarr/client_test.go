@@ -394,6 +394,37 @@ func TestGetImportHistoryRejectsTruncatedResult(t *testing.T) {
 	}
 }
 
+// TestGetQueueReadsOneCompleteBoundedPage pins the lean queue read's contract:
+// explicit paging (an unpaged read is the server's silent 10-row default page),
+// unknown-series rows included, and truncation an error rather than a shorter
+// queue.
+func TestGetQueueReadsOneCompleteBoundedPage(t *testing.T) {
+	body := `{"totalRecords":2,"records":[{"seriesId":42,"title":"Andor","status":"downloading"},{"seriesId":0,"title":"Unmatched.Release","status":"downloading"}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("page") != "1" || q.Get("pageSize") != "1000" {
+			t.Errorf("queue was not requested in one bounded page: %s", r.URL.RawQuery)
+		}
+		if q.Get("includeUnknownSeriesItems") != "true" {
+			t.Errorf("includeUnknownSeriesItems = %q, want true", q.Get("includeUnknownSeriesItems"))
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	items, err := NewClient(server.URL, "key").GetQueue()
+	if err != nil {
+		t.Fatalf("GetQueue: %v", err)
+	}
+	if len(items) != 2 || items[0].SeriesID != 42 || items[1].SeriesID != 0 {
+		t.Fatalf("items = %+v, want the matched row and the unknown-series row", items)
+	}
+
+	body = `{"totalRecords":2,"records":[{"seriesId":42}]}`
+	if _, err := NewClient(server.URL, "key").GetQueue(); err == nil {
+		t.Fatal("accepted a truncated queue as a complete page")
+	}
+}
+
 func TestGetQueueDetailedRejectsClampedSinglePage(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

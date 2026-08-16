@@ -248,8 +248,10 @@ func TestGetAllBooks(t *testing.T) {
 	}
 }
 
-// TestGetQueue asserts GetQueue hits the queue endpoint with includeAuthor=true
-// and decodes the records array.
+// TestGetQueue asserts GetQueue reads the queue as one complete bounded page —
+// explicit pageSize (the server's default page is 10 rows, a silent
+// truncation) — with author context and the unknown-author rows Chaptarr
+// would otherwise drop before the page is even assembled.
 func TestGetQueue(t *testing.T) {
 	var gotPath string
 	var gotQuery url.Values
@@ -258,7 +260,7 @@ func TestGetQueue(t *testing.T) {
 		gotPath = r.URL.Path
 		gotQuery = r.URL.Query()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"records":[{"id":1,"bookId":42,"title":"Some Book"}]}`)
+		_, _ = io.WriteString(w, `{"totalRecords":2,"records":[{"id":1,"bookId":42,"title":"Some Book"},{"id":2,"bookId":0,"title":"Unmatched.Release.epub"}]}`)
 	}))
 	defer srv.Close()
 
@@ -274,8 +276,14 @@ func TestGetQueue(t *testing.T) {
 	if gotQuery.Get("includeAuthor") != "true" {
 		t.Errorf("includeAuthor = %q, want true (query %v)", gotQuery.Get("includeAuthor"), gotQuery)
 	}
-	if len(items) != 1 || items[0].BookID != 42 {
-		t.Fatalf("items = %+v, want one item with bookId 42", items)
+	if gotQuery.Get("pageSize") != "1000" {
+		t.Errorf("pageSize = %q, want 1000 — an unpaged read is the server's 10-row default page", gotQuery.Get("pageSize"))
+	}
+	if gotQuery.Get("includeUnknownAuthorItems") != "true" {
+		t.Errorf("includeUnknownAuthorItems = %q, want true (query %v)", gotQuery.Get("includeUnknownAuthorItems"), gotQuery)
+	}
+	if len(items) != 2 || items[0].BookID != 42 || items[1].BookID != 0 {
+		t.Fatalf("items = %+v, want the matched item and the unknown-author item", items)
 	}
 }
 
