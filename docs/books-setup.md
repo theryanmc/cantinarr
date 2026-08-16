@@ -25,6 +25,8 @@ One thing that carries straight over: if Chaptarr shares a gateway's network sta
 
 Chaptarr speaks the Readarr `/api/v1` API. Enter just the base URL; Cantinarr appends the API path.
 
+Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `/audiobook`, or a `/readarr/...` compatibility path). Those prefixes exist for Readarr-only clients and change how Chaptarr answers identity lookups; Cantinarr talks to the native API and handles both formats itself.
+
 ## 3. Grant access per user
 
 This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.

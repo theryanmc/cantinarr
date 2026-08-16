@@ -406,10 +406,11 @@ func findWebhookResource(resources []map[string]any, name string) map[string]any
 }
 
 // chaptarrImportToggles are the event flags that make Chaptarr announce a
-// completed book import. Its Readarr lineage names this onReleaseImport, but
-// forks have been seen to keep the older onDownload spelling, so every declared
-// one is enabled and at least one is required.
-var chaptarrImportToggles = []string{"onReleaseImport", "onDownload"}
+// completed book import. Verified against its open source: the notification
+// resource exposes exactly onReleaseImport (no onDownload field exists in the
+// fork), so the old onDownload hedge is gone. Kept as a list so a future
+// spelling can be added without reshaping the require-one logic.
+var chaptarrImportToggles = []string{"onReleaseImport"}
 
 // chaptarrOptionalToggles are best-effort: enabling them keeps the app's view
 // fresh when a library changes out-of-band, but none is required to alert.
@@ -431,9 +432,10 @@ func configureWebhookResource(resource map[string]any, serviceType, callbackURL,
 	setWebhookField(resource, "password", token)
 
 	if serviceType == "chaptarr" {
-		// Chaptarr's event vocabulary is inherited from Readarr rather than
-		// verified, so write only what its own schema declares and leave its
-		// settings fields (which have no headers entry) untouched.
+		// Chaptarr's event vocabulary is verified against its open source,
+		// but its schema template stays the authority at configure time:
+		// write only what that schema declares and leave its settings
+		// fields (which have no headers entry) untouched.
 		return configureChaptarrWebhookEvents(resource)
 	}
 
