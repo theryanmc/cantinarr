@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <Profile>This is the source repository for **Cantinarr**, a self-hosted request and media-management front end for Radarr, Sonarr, and Chaptarr. It publishes one Docker application: `Cantinarr`, the single-container server that also serves the web app.
+
+The template here is maintained alongside the code, so its ports, paths, and variables track the shipping image rather than drifting behind it.
+
+Support: open an issue on the [issue tracker](https://github.com/windoze95/cantinarr/issues). Feature requests go to [cantinarr.com/roadmap](https://cantinarr.com/roadmap/), no account needed.</Profile>
+  <Icon>https://raw.githubusercontent.com/windoze95/cantinarr/main/app/web/icons/Icon-512.png</Icon>
+  <WebPage>https://cantinarr.com</WebPage>
+  <DonateLink>https://github.com/sponsors/windoze95</DonateLink>
+  <DonateText>Support Cantinarr development</DonateText>
+</CommunityApplications>
