@@ -77,6 +77,25 @@ checkout instead, layer the dev override:
 
 Open `http://your-server:8585` -- the setup wizard walks you through creating an admin account. Discovery and search work immediately on the built-in TMDB key. Then connect your services (Radarr, Sonarr, etc.) from **Settings > Providers & Credentials** and **Settings > Add Instance** in the admin UI. Configure an included AI provider there (fresh installs preselect OpenAI OAuth with the fast GPT-5.6 Luna model -- connecting a ChatGPT account is all it takes) and grant it per user, or let each person bring a provider under **Settings > AI Access**.
 
+### Unraid
+
+The Community Applications template ships in this repo at
+[`templates/cantinarr.xml`](templates/cantinarr.xml). Cantinarr is not in the Apps
+tab, and Unraid removed custom template repositories, so add the file to the
+user-template folder yourself:
+
+```bash
+curl -o /boot/config/plugins/dockerMan/templates-user/my-cantinarr.xml \
+  https://raw.githubusercontent.com/windoze95/cantinarr/main/templates/cantinarr.xml
+```
+
+Then **Docker > Add Container**, pick `Cantinarr` from the Template dropdown, and
+Apply. It publishes port 8585 and keeps the database and encryption key in
+`/mnt/user/appdata/cantinarr`. Two advanced fields are worth opening: **Public
+URL**, the origin your arrs POST webhooks back to, and the read-only **Media
+library** mount plus **Media roots**, which together turn on completed-media
+downloads.
+
 ### From Source
 
 ```bash
@@ -136,6 +155,8 @@ cantinarr/
 │
 ├── Dockerfile              # Multi-stage build (Flutter web + Go)
 ├── docker-compose.yml      # Full-stack deployment (push env pre-wired)
+├── templates/              # Unraid Community Applications app template
+├── ca_profile.xml          # Community Applications repository profile
 ├── AGENTS.md               # Contributor/agent operating manual (CLAUDE.md imports it)
 └── README.md               # This file
 ```
