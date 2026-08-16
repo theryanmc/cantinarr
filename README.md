@@ -79,14 +79,14 @@ Open `http://your-server:8585` -- the setup wizard walks you through creating an
 
 ### Unraid
 
-The Community Applications template ships in this repo at
-[`templates/cantinarr.xml`](templates/cantinarr.xml). Cantinarr is not in the Apps
-tab, and Unraid removed custom template repositories, so add the file to the
-user-template folder yourself:
+The Community Applications template lives in
+[`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid).
+Cantinarr is not in the Apps tab, and Unraid removed custom template
+repositories, so add the file to the user-template folder yourself:
 
 ```bash
 curl -o /boot/config/plugins/dockerMan/templates-user/my-cantinarr.xml \
-  https://raw.githubusercontent.com/windoze95/cantinarr/main/templates/cantinarr.xml
+  https://raw.githubusercontent.com/windoze95/cantinarr-unraid/main/templates/cantinarr.xml
 ```
 
 Then **Docker > Add Container**, pick `Cantinarr` from the Template dropdown, and
@@ -155,8 +155,6 @@ cantinarr/
 │
 ├── Dockerfile              # Multi-stage build (Flutter web + Go)
 ├── docker-compose.yml      # Full-stack deployment (push env pre-wired)
-├── templates/              # Unraid Community Applications app template
-├── ca_profile.xml          # Community Applications repository profile
 ├── AGENTS.md               # Contributor/agent operating manual (CLAUDE.md imports it)
 └── README.md               # This file
 ```
