@@ -297,6 +297,29 @@ CREATE TABLE IF NOT EXISTS shared_codex_account (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-user xAI Grok OAuth state, the Grok analog of user_codex_accounts.
+-- auth_blob is the OAuth token record (access + rotating refresh token)
+-- encrypted with Cantinarr's AES-256-GCM secrets cipher; it never exists in
+-- plaintext outside one request. Email and plan are display metadata only.
+CREATE TABLE IF NOT EXISTS user_grok_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- One server-wide xAI Grok authorization for the admin-funded shared
+-- provider, singleton-keyed like shared_codex_account so admin turnover
+-- cannot orphan it.
+CREATE TABLE IF NOT EXISTS shared_grok_account (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    auth_blob TEXT NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- AI remediation / issue reporting (Wave 1 ships issues + issue_messages; the
 -- agent_* tables are created now so later waves need no migration). One row per
 -- problem to work (auto-detected or user-reported). Media-scoped like

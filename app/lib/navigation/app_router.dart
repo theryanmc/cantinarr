@@ -5,6 +5,8 @@ import '../features/ai_assistant/ui/ai_chat_screen.dart';
 import '../features/ai_assistant/ui/ai_access_screen.dart';
 import '../features/ai_assistant/ui/codex_connection_screen.dart';
 import '../features/ai_assistant/data/codex_oauth_service.dart';
+import '../features/ai_assistant/ui/grok_connection_screen.dart';
+import '../features/ai_assistant/data/grok_oauth_service.dart';
 import '../features/auth/logic/auth_provider.dart';
 import '../features/auth/ui/auth_screen.dart';
 import '../features/auth/ui/passkey_create_screen.dart';
@@ -482,6 +484,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             builder: (_, __) => const AppAmbientBackground(
               child: CodexConnectionScreen(
                 scope: CodexOAuthScope.adminShared,
+              ),
+            ),
+          ),
+          GoRoute(
+            path: '/settings/grok',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: GrokConnectionScreen()),
+          ),
+          GoRoute(
+            path: '/settings/credentials/grok',
+            builder: (_, __) => const AppAmbientBackground(
+              child: GrokConnectionScreen(
+                scope: GrokOAuthScope.adminShared,
               ),
             ),
           ),

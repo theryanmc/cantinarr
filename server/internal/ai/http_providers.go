@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +38,30 @@ func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIS
 	return &openAIService{
 		client: openai.NewClient(
 			openaioption.WithAPIKey(apiKey),
+			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
+		),
+		model:      openai.ChatModel(model),
+		toolServer: toolServer,
+	}
+}
+
+// NewGrokService builds a chat service against xAI's OpenAI-compatible API.
+// credential is either a console.x.ai API key or a subscription OAuth bearer
+// token — the wire format is identical. The base URL is pinned to api.x.ai;
+// XAI_BASE_URL exists for tests, mirroring the other providers' seams.
+func NewGrokService(credential, model string, toolServer *mcp.ToolServer) *openAIService {
+	if model == "" {
+		model = "grok-4.6"
+	}
+	baseURL := strings.TrimSpace(os.Getenv("XAI_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://api.x.ai/v1"
+	}
+	return &openAIService{
+		client: openai.NewClient(
+			openaioption.WithAPIKey(credential),
+			openaioption.WithBaseURL(baseURL),
 			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
 			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
 		),

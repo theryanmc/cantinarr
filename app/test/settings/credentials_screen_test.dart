@@ -104,6 +104,71 @@ void main() {
     });
   });
 
+  testWidgets('Grok OAuth provider shows the shared xAI account panel',
+      (tester) async {
+    final adapter = _CredentialsAdapter(provider: 'grok_oauth');
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const CredentialsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('xAI Grok (OAuth)'), findsOneWidget);
+    expect(find.text('Shared account'), findsOneWidget);
+    expect(
+      find.text(
+        'Connect one server xAI Grok account for users with included access.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Shared xAI Grok allowance'), findsOneWidget);
+    expect(find.text('Connect shared xAI Grok'), findsOneWidget);
+  });
+
+  testWidgets('saves an xAI API key under grok_key', (tester) async {
+    final adapter = _CredentialsAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = adapter;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [backendClientProvider.overrideWithValue(dio)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const CredentialsScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, -1400),
+    );
+    await tester.pumpAndSettle();
+    final grokKey = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField && widget.decoration?.hintText == 'xAI API key',
+    );
+    await tester.ensureVisible(grokKey);
+    await tester.enterText(grokKey, 'synthetic-grok-key');
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate?['grok_key'], 'synthetic-grok-key');
+  });
+
   testWidgets(
       'a highlight deep link scrolls to the Gemini section on load',
       (tester) async {
@@ -138,8 +203,9 @@ void main() {
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
-  _CredentialsAdapter();
+  _CredentialsAdapter({this.provider = 'codex'});
 
+  final String provider;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -165,8 +231,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
         'tmdb_using_builtin': false,
         'ai': {
           'config': {
-            'provider': 'codex',
-            'model': 'gpt-5.4',
+            'provider': provider,
+            'model': provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4',
           },
           'providers': [
             {
@@ -185,6 +251,24 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'credential_key': 'openai_key',
               'models': [
                 {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
+              ],
+            },
+            {
+              'id': 'grok',
+              'label': 'xAI Grok',
+              'auth_type': 'api_key',
+              'credential_key': 'grok_key',
+              'models': [
+                {'id': 'grok-4.6', 'label': 'Grok 4.6'},
+              ],
+            },
+            {
+              'id': 'grok_oauth',
+              'label': 'xAI Grok (OAuth)',
+              'auth_type': 'user_oauth',
+              'credential_key': '',
+              'models': [
+                {'id': 'grok-4.6', 'label': 'Grok 4.6'},
               ],
             },
           ],

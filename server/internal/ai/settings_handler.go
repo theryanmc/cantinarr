@@ -12,6 +12,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 )
 
 const (
@@ -69,7 +70,7 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 	h.settingsMu.Lock()
 	defer h.settingsMu.Unlock()
 	profile := credentials.AIProfile{Config: credentials.AIConfig{Provider: req.Provider, Model: req.Model}}
-	if req.Provider == credentials.AIProviderCodex {
+	if credentials.IsOAuthAIProvider(req.Provider) {
 		if req.APIKey != "" {
 			writeAISettingsError(w, http.StatusBadRequest, "OAuth providers do not accept API keys")
 			return
@@ -226,17 +227,16 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		return
 	}
 	personalCredentials := map[string]bool{}
-	for _, provider := range []string{
-		credentials.AIProviderAnthropic,
-		credentials.AIProviderOpenAI,
-		credentials.AIProviderGemini,
-	} {
-		configured, err := h.creds.UserAICredentialConfigured(userID, provider)
+	for _, option := range credentials.AIProviders {
+		if option.CredentialKey == "" {
+			continue
+		}
+		configured, err := h.creds.UserAICredentialConfigured(userID, option.ID)
 		if err != nil {
 			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
 			return
 		}
-		personalCredentials[provider] = configured
+		personalCredentials[option.ID] = configured
 	}
 	codexConnected := false
 	if h.codex != nil {
@@ -247,6 +247,15 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		}
 	}
 	personalCredentials[credentials.AIProviderCodex] = codexConnected
+	grokConnected := false
+	if h.grok != nil {
+		grokConnected, err = h.grok.AccountExists(grokoauth.PersonalAccount(userID))
+		if err != nil {
+			writeAISettingsError(w, http.StatusInternalServerError, "failed to load personal AI settings")
+			return
+		}
+	}
+	personalCredentials[credentials.AIProviderGrokOAuth] = grokConnected
 
 	sharedProfile, granted, err := h.creds.LoadSharedAIProfileForUser(r.Context(), userID)
 	sharedStorageOK := err == nil
@@ -255,6 +264,16 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		sharedConfigured = false
 		if h.codex != nil && h.codex.Available() {
 			sharedConfigured, err = h.codex.AccountExists(codexapp.SharedAccount())
+			if err != nil {
+				writeAISettingsError(w, http.StatusInternalServerError, "failed to load shared AI settings")
+				return
+			}
+		}
+	}
+	if sharedProfile.Config.Provider == credentials.AIProviderGrokOAuth {
+		sharedConfigured = false
+		if h.grok != nil && h.grok.Available() {
+			sharedConfigured, err = h.grok.AccountExists(grokoauth.SharedAccount())
 			if err != nil {
 				writeAISettingsError(w, http.StatusInternalServerError, "failed to load shared AI settings")
 				return

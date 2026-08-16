@@ -19,6 +19,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 		AIProviderAnthropic: KeyAnthropicKey,
 		AIProviderOpenAI:    KeyOpenAIKey,
 		AIProviderGemini:    KeyGeminiKey,
+		AIProviderGrok:      KeyGrokKey,
 	}
 	for provider, credentialKey := range wantAPIKeys {
 		option := aiProviderForTest(t, provider)
@@ -82,6 +83,7 @@ func TestAIProviderDefaultsAndInference(t *testing.T) {
 		"gpt-5.4-mini":      AIProviderOpenAI,
 		"o3":                AIProviderOpenAI,
 		"gemini-2.5-flash":  AIProviderGemini,
+		"grok-4.6":          AIProviderGrok,
 		"default":           "",
 		"unknown-model":     "",
 	}
@@ -89,6 +91,42 @@ func TestAIProviderDefaultsAndInference(t *testing.T) {
 		if got := inferAIProvider(model); got != want {
 			t.Errorf("inferAIProvider(%q) = %q, want %q", model, got, want)
 		}
+	}
+}
+
+func TestGrokProviderMetadata(t *testing.T) {
+	grok := aiProviderForTest(t, AIProviderGrok)
+	if grok.Label != "xAI Grok" || grok.AuthType != AIAuthTypeAPIKey || grok.CredentialKey != KeyGrokKey {
+		t.Fatalf("grok metadata = %#v", grok)
+	}
+	oauth := aiProviderForTest(t, AIProviderGrokOAuth)
+	if oauth.Label != "xAI Grok (OAuth)" || oauth.AuthType != AIAuthTypeUserOAuth {
+		t.Fatalf("grok_oauth metadata = %#v", oauth)
+	}
+	if oauth.CredentialKey != "" {
+		t.Fatalf("grok_oauth credential_key = %q, want empty", oauth.CredentialKey)
+	}
+	// Both xAI providers serve the same catalog: the auth path is the only
+	// difference between them.
+	if len(grok.Models) == 0 || len(grok.Models) != len(oauth.Models) {
+		t.Fatalf("grok models = %d, oauth models = %d", len(grok.Models), len(oauth.Models))
+	}
+	for i := range grok.Models {
+		if grok.Models[i].ID != oauth.Models[i].ID {
+			t.Fatalf("model[%d]: %q != %q", i, grok.Models[i].ID, oauth.Models[i].ID)
+		}
+	}
+	if got := DefaultAIModel(AIProviderGrok); got != "grok-4.6" {
+		t.Fatalf("DefaultAIModel(grok) = %q", got)
+	}
+	if got := DefaultAIModel(AIProviderGrokOAuth); got != "grok-4.6" {
+		t.Fatalf("DefaultAIModel(grok_oauth) = %q", got)
+	}
+	if IsOAuthAIProvider(AIProviderGrok) || !IsOAuthAIProvider(AIProviderGrokOAuth) {
+		t.Fatal("IsOAuthAIProvider misclassifies the xAI providers")
+	}
+	if !IsOAuthAIProvider(AIProviderCodex) || IsOAuthAIProvider("unknown-provider") {
+		t.Fatal("IsOAuthAIProvider misclassifies codex or unknown providers")
 	}
 }
 

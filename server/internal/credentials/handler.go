@@ -203,7 +203,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 				profile.APIKey = h.registry.GetCredential(key)
 				profile.CredentialPresent = strings.TrimSpace(profile.APIKey) != ""
 			} else {
-				profile.CredentialPresent = candidate.Provider == AIProviderCodex
+				profile.CredentialPresent = IsOAuthAIProvider(candidate.Provider)
 			}
 			profiles[candidate.Provider] = profile
 		}

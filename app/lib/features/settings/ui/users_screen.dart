@@ -363,6 +363,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       // the provider-specific warnings only apply when one actually exists.
       final unconfigured = !currentConfigured && !providerUnknown;
       final codex = currentProvider == 'codex' && !unconfigured;
+      final grokOAuth = currentProvider == 'grok_oauth' && !unconfigured;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -380,15 +381,23 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                     'Any subscription or usage costs remain with it. ChatGPT '
                     'accounts are intended for one person—only enable this for '
                     'people or devices you control.'
+                : grokOAuth
+                ? 'Prompts and tool context will use the shared xAI Grok '
+                    'account. All enabled users consume the same Grok '
+                    'subscription allowance, and activity is attributable to '
+                    'that account. Any subscription or usage costs remain with '
+                    'it. xAI accounts are intended for one person—only enable '
+                    'this for people or devices you control.'
                 : providerUnknown
                     ? 'Cantinarr could not confirm which shared provider is '
-                        'selected. If it is OpenAI OAuth, prompts and tool context '
-                        'will use one shared account and Codex allowance, '
-                        'activity is attributable to that account, and any '
-                        'subscription or usage costs remain with it. ChatGPT '
-                        'accounts are intended for one person—only enable this '
-                        'for people or devices you control. If it uses an API '
-                        'key, requests count against that provider\'s paid quota '
+                        'selected. If it is an OAuth provider (OpenAI or xAI '
+                        'Grok), prompts and tool context will use one shared '
+                        'account and its subscription allowance, activity is '
+                        'attributable to that account, and any subscription or '
+                        'usage costs remain with it. Those accounts are '
+                        'intended for one person—only enable this for people '
+                        'or devices you control. If it uses an API key, '
+                        'requests count against that provider\'s paid quota '
                         'and may create charges.'
                     : 'This user can send prompts and tool context through the '
                         'server AI provider. Requests count against its paid quota '
@@ -707,9 +716,11 @@ class _UserTile extends StatelessWidget {
                   ? 'No shared provider configured yet'
                   : sharedAiProvider == 'codex'
                       ? 'Shared OpenAI OAuth allowance'
-                      : sharedAiProvider.isEmpty
-                          ? 'Provider status unavailable'
-                          : 'Server provider quota',
+                      : sharedAiProvider == 'grok_oauth'
+                          ? 'Shared xAI Grok allowance'
+                          : sharedAiProvider.isEmpty
+                              ? 'Provider status unavailable'
+                              : 'Server provider quota',
             ),
             trailing: IgnorePointer(
               child: Switch(

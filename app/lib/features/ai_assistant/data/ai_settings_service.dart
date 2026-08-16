@@ -165,7 +165,9 @@ String _fallbackLabel(String provider) => switch (provider) {
       'anthropic' => 'Anthropic',
       'openai' => 'OpenAI',
       'gemini' => 'Google Gemini',
+      'grok' => 'xAI Grok',
       'codex' => 'OpenAI (OAuth)',
+      'grok_oauth' => 'xAI Grok (OAuth)',
       _ => provider,
     };
 

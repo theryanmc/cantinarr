@@ -123,9 +123,10 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
-		// Keep authenticated ChatGPT device-flow churn from consuming the public
-		// password/passkey budget for everyone behind the same household proxy.
-		codexLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		// Keep authenticated ChatGPT/xAI device-flow churn from consuming the
+		// public password/passkey budget for everyone behind the same household
+		// proxy. Both OAuth providers share this begin-login budget.
+		oauthLoginLimiter := auth.NewRateLimiter(10, 1*time.Minute)
 
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
@@ -212,10 +213,15 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/credentials/{key}", credHandler.Delete)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/status", aiHandler.SharedCodexStatus)
-			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), oauthLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/codex/device/{flowID}", aiHandler.CheckSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex/device/{flowID}", aiHandler.CancelSharedCodexDeviceLogin)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/codex", aiHandler.UnlinkSharedCodex)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/grok/status", aiHandler.SharedGrokStatus)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage), oauthLoginLimiter.Middleware).Post("/ai/grok/device/begin", aiHandler.BeginSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/ai/grok/device/{flowID}", aiHandler.CheckSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/grok/device/{flowID}", aiHandler.CancelSharedGrokDeviceLogin)
+			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Delete("/ai/grok", aiHandler.UnlinkSharedGrok)
 
 			// AI tool toggles
 			aiToolsHandler := mcp.NewToolSettingsHandler(toolServer)
@@ -405,6 +411,9 @@ func NewRouter(
 			r.Get("/ai/codex/status", aiHandler.CodexStatus)
 			r.Delete("/ai/codex", aiHandler.UnlinkCodex)
 			r.Delete("/ai/codex/device/{flowID}", aiHandler.CancelCodexDeviceLogin)
+			r.Get("/ai/grok/status", aiHandler.GrokStatus)
+			r.Delete("/ai/grok", aiHandler.UnlinkGrok)
+			r.Delete("/ai/grok/device/{flowID}", aiHandler.CancelGrokDeviceLogin)
 			r.Get("/ai/settings", aiHandler.AISettings)
 			r.Delete("/ai/settings", aiHandler.DeleteAISettings)
 			r.Delete("/ai/credentials/{provider}", aiHandler.DeletePersonalAICredential)
@@ -415,8 +424,10 @@ func NewRouter(
 				r.Get("/ai/available", aiHandler.Available)
 				r.Put("/ai/settings", aiHandler.UpdateAISettings)
 				r.Put("/ai/credentials/{provider}", aiHandler.UpdatePersonalAICredential)
-				r.With(codexLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
+				r.With(oauthLoginLimiter.Middleware).Post("/ai/codex/device/begin", aiHandler.BeginCodexDeviceLogin)
 				r.Get("/ai/codex/device/{flowID}", aiHandler.CheckCodexDeviceLogin)
+				r.With(oauthLoginLimiter.Middleware).Post("/ai/grok/device/begin", aiHandler.BeginGrokDeviceLogin)
+				r.Get("/ai/grok/device/{flowID}", aiHandler.CheckGrokDeviceLogin)
 			})
 		})
 

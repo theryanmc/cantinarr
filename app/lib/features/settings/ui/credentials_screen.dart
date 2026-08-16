@@ -8,6 +8,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/codex_oauth_service.dart';
+import '../../ai_assistant/data/grok_oauth_service.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/credentials_service.dart';
@@ -36,6 +37,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _anthropicController = TextEditingController();
   final _openAIController = TextEditingController();
   final _geminiController = TextEditingController();
+  final _grokController = TextEditingController();
   final _customModelController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
@@ -89,6 +91,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['gemini_key'] = _geminiController.text.trim();
       aiChanged = true;
     }
+    if (_grokController.text.isNotEmpty) {
+      creds['grok_key'] = _grokController.text.trim();
+      aiChanged = true;
+    }
 
     final selectedModel = _selectedModel == _customModelValue
         ? _customModelController.text.trim()
@@ -128,12 +134,15 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _anthropicController.clear();
       _openAIController.clear();
       _geminiController.clear();
+      _grokController.clear();
       await _loadStatus();
-      // Provider selection and scoped Codex availability are separate live
+      // Provider selection and scoped OAuth availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
       // assistant cannot retain the pre-save provider state.
       ref.invalidate(codexConnectionStatusProvider);
       ref.invalidate(adminCodexConnectionStatusProvider);
+      ref.invalidate(grokConnectionStatusProvider);
+      ref.invalidate(adminGrokConnectionStatusProvider);
       ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
@@ -207,6 +216,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _anthropicController.dispose();
     _openAIController.dispose();
     _geminiController.dispose();
+    _grokController.dispose();
     _customModelController.dispose();
     super.dispose();
   }
@@ -266,6 +276,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         highlightId: widget.highlightId,
         child: child,
       );
+
+  /// Opens a shared OAuth connection screen and refreshes every live server
+  /// fact that its outcome can change.
+  Future<void> _manageSharedOAuth(String route) async {
+    await context.push(route);
+    if (!mounted) return;
+    ref.invalidate(adminCodexConnectionStatusProvider);
+    ref.invalidate(adminGrokConnectionStatusProvider);
+    ref.invalidate(aiSettingsProvider);
+    await _loadStatus();
+    await ref.read(authProvider.notifier).refreshConfig();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -351,20 +373,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             status: ref.watch(
                               adminCodexConnectionStatusProvider,
                             ),
-                            onManage: () async {
-                              await context.push(
-                                '/settings/credentials/chatgpt',
-                              );
-                              if (!mounted) return;
-                              ref.invalidate(
-                                adminCodexConnectionStatusProvider,
-                              );
-                              ref.invalidate(aiSettingsProvider);
-                              await _loadStatus();
-                              await ref
-                                  .read(authProvider.notifier)
-                                  .refreshConfig();
-                            },
+                            onManage: () => _manageSharedOAuth(
+                              '/settings/credentials/chatgpt',
+                            ),
+                          )
+                        else if (_selectedProvider == 'grok_oauth')
+                          _SharedGrokPanel(
+                            status: ref.watch(
+                              adminGrokConnectionStatusProvider,
+                            ),
+                            onManage: () => _manageSharedOAuth(
+                              '/settings/credentials/grok',
+                            ),
                           )
                         else
                           _SharedApiCostNotice(
@@ -418,6 +438,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               hint: 'Gemini API key',
                               onDelete: () => _deleteCredential(
                                   'gemini_key', 'Google Gemini'),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          _anchor(
+                            SettingsAnchors.credentialsGrok,
+                            CredentialSection(
+                              title: 'xAI Grok (AI)',
+                              description:
+                                  'Shared xAI API key for included AI usage',
+                              isConfigured:
+                                  _status?.isConfigured('grok_key') ?? false,
+                              controller: _grokController,
+                              hint: 'xAI API key',
+                              onDelete: () =>
+                                  _deleteCredential('grok_key', 'xAI Grok'),
                             ),
                           ),
                         ],
@@ -553,7 +588,9 @@ class _AISelectionSection extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           usesOAuth
-              ? 'Connect one server OpenAI OAuth account for users with included access.'
+              ? (providerValue == 'grok_oauth'
+                  ? 'Connect one server xAI Grok account for users with included access.'
+                  : 'Connect one server OpenAI OAuth account for users with included access.')
               : 'Select the server provider and model for included access.',
           style: const TextStyle(
             color: AppTheme.textSecondary,
@@ -750,6 +787,81 @@ class _SharedCodexPanel extends StatelessWidget {
                   : status.hasError
                       ? 'Retry shared OpenAI OAuth status'
                       : 'Connect shared OpenAI OAuth',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SharedGrokPanel extends StatelessWidget {
+  final AsyncValue<GrokConnectionStatus> status;
+  final VoidCallback onManage;
+
+  const _SharedGrokPanel({
+    required this.status,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = status.valueOrNull?.connected == true;
+    return AppPanel(
+      accentColor: AppTheme.warning,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: AppTheme.warning),
+              SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Shared xAI Grok allowance',
+                      style: TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SizedBox(height: 5),
+                    Text(
+                      'Prompts and tool context from every enabled user use '
+                      'one xAI account and its Grok subscription allowance. '
+                      'Activity is attributable to that account, and any '
+                      'subscription or usage costs remain with it. xAI '
+                      'accounts are intended for one person; enable only '
+                      'people or devices you control.',
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 13,
+                        height: 1.42,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: status.isLoading ? null : onManage,
+            icon: Icon(
+              connected
+                  ? Icons.manage_accounts_outlined
+                  : Icons.open_in_browser_rounded,
+              size: 18,
+            ),
+            label: Text(
+              connected
+                  ? 'Manage shared xAI Grok'
+                  : status.hasError
+                      ? 'Retry shared xAI Grok status'
+                      : 'Connect shared xAI Grok',
             ),
           ),
         ],

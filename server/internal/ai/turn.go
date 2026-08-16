@@ -360,6 +360,11 @@ const (
 	openAIReasoningNone
 	openAIReasoningMinimal
 	openAIReasoningLow
+	// openAIReasoningHidden marks models that reason internally without an
+	// effort control (xAI's Grok family): never send reasoning_effort, but
+	// budget output like a reasoning model so hidden tokens cannot starve a
+	// small probe.
+	openAIReasoningHidden
 )
 
 type openAIReasoningAttempt struct {
@@ -494,6 +499,8 @@ func openAIReasoningAttempts(model openai.ChatModel, p TurnParams) []openAIReaso
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
 	case openAIReasoningLow:
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
+	case openAIReasoningHidden:
+		appendAttempt("", reasoningBudget)
 	default:
 		appendAttempt(openai.ReasoningEffortNone, requested)
 		appendAttempt(openai.ReasoningEffortLow, reasoningBudget)
@@ -522,6 +529,8 @@ func openAIModelReasoningCapability(model openai.ChatModel) openAIReasoningCapab
 		return openAIReasoningMinimal
 	case len(name) >= 2 && name[0] == 'o' && name[1] >= '0' && name[1] <= '9':
 		return openAIReasoningLow
+	case strings.HasPrefix(name, "grok-"):
+		return openAIReasoningHidden
 	default:
 		return openAIReasoningUnknown
 	}
