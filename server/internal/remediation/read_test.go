@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -219,5 +220,55 @@ func TestAdminGetMarksReadReporterDoesNot(t *testing.T) {
 	}
 	if !readFlag(t, svc, r.IssueID) {
 		t.Fatal("admin view must mark the issue read")
+	}
+}
+
+// TestGetRedactsThreadBodiesForNonAdmins pins the read-time thread boundary:
+// even if a thread writer forgets secrets.RedactText (simulated here with a
+// direct insert), a credential quoted in a message body never reaches the
+// reporter — while the admin view keeps the raw text for diagnosis.
+func TestGetRedactsThreadBodiesForNonAdmins(t *testing.T) {
+	svc, _, reporterID := setupTestService(t)
+	h := NewHandler(svc)
+	r, err := svc.CreateUserIssue(reporterID, movieReq(1))
+	if err != nil {
+		t.Fatalf("CreateUserIssue: %v", err)
+	}
+	const raw = "Retrying via http://thread-user:thread-pass@qbit.invalid:8080/api?apikey=thread-key shortly"
+	if _, err := svc.db.Exec(
+		`INSERT INTO issue_messages (issue_id, author_kind, author_id, body) VALUES (?, 'agent', NULL, ?)`,
+		r.IssueID, raw,
+	); err != nil {
+		t.Fatalf("seed unredacted message: %v", err)
+	}
+
+	reporterView := getIssueDetail(t, h, r.IssueID, &auth.Claims{UserID: reporterID, Role: auth.RoleUser})
+	var reporterBody string
+	for _, m := range reporterView.Thread {
+		if m.AuthorKind == "agent" {
+			reporterBody = m.Body
+		}
+	}
+	if reporterBody == "" {
+		t.Fatalf("agent message missing from reporter thread: %+v", reporterView.Thread)
+	}
+	for _, secret := range []string{"thread-user", "thread-pass", "thread-key"} {
+		if strings.Contains(reporterBody, secret) {
+			t.Fatalf("reporter thread leaked %q: %q", secret, reporterBody)
+		}
+	}
+	if !strings.Contains(reporterBody, "qbit.invalid") {
+		t.Fatalf("redaction destroyed the message instead of scrubbing it: %q", reporterBody)
+	}
+
+	adminView := getIssueDetail(t, h, r.IssueID, &auth.Claims{UserID: 9999, Role: auth.RoleAdmin})
+	adminSawRaw := false
+	for _, m := range adminView.Thread {
+		if m.Body == raw {
+			adminSawRaw = true
+		}
+	}
+	if !adminSawRaw {
+		t.Fatalf("admin view no longer carries the raw diagnostic body: %+v", adminView.Thread)
 	}
 }
