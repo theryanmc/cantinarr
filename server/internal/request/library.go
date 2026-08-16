@@ -37,9 +37,11 @@ type LibraryTitle struct {
 	// format cannot be classified. The row and canonical ID remain in the digest
 	// so clients can map search identity, but must not offer a request for it.
 	StatusKnown bool `json:"status_known"`
-	// Cover is the owned record's relative cover path (e.g. /MediaCover/...),
-	// which loads with the API key — so an owned search result can show real art
-	// without the login-session-gated /MediaCoverProxy lookup cover.
+	// Cover is a client-reachable cover reference: the owned record's relative
+	// /MediaCover path (which the app resolves through the authenticated
+	// instance proxy), or the metadata CDN copy when the record carries only an
+	// absolute URL. An arr-origin absolute URL is never passed through —
+	// clients must not dereference arr-origin URLs.
 	Cover     string          `json:"cover"`
 	Ebook     FormatOwnership `json:"ebook"`
 	Audiobook FormatOwnership `json:"audiobook"`
@@ -95,7 +97,7 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		}
 		// Take the cover from the first record in the group that has one.
 		if g.title.Cover == "" {
-			g.title.Cover = coverOf(book)
+			g.title.Cover = clientReachableCover(book)
 		}
 		if g.title.ForeignBookID == "" {
 			g.title.ForeignBookID = book.ForeignBookID
@@ -132,22 +134,6 @@ func groupKey(book chaptarr.Book) string {
 		return book.ForeignBookID
 	}
 	return fmt.Sprintf("id:%d", book.ID)
-}
-
-// coverOf returns a book's cover image path, preferring the "cover" type, else
-// the first image with a URL.
-func coverOf(book chaptarr.Book) string {
-	for _, img := range book.Images {
-		if img.URL != "" && img.CoverType == "cover" {
-			return img.URL
-		}
-	}
-	for _, img := range book.Images {
-		if img.URL != "" {
-			return img.URL
-		}
-	}
-	return ""
 }
 
 // recordFormat resolves the single format a Chaptarr book record represents.
