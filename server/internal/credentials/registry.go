@@ -21,6 +21,7 @@ const (
 	KeyAnthropicKey    = "anthropic_key"
 	KeyOpenAIKey       = "openai_key"
 	KeyGeminiKey       = "gemini_key"
+	KeyGrokKey         = "grok_key"
 	KeyTraktClientID   = "trakt_client_id"
 
 	KeyAIProvider = "ai_provider"
@@ -33,13 +34,15 @@ const (
 
 // AllKeys lists every credential key the system manages. Values for these
 // keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
-var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyTraktClientID}
+var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyGrokKey, KeyTraktClientID}
 
 const (
 	AIProviderAnthropic = "anthropic"
 	AIProviderOpenAI    = "openai"
 	AIProviderGemini    = "gemini"
+	AIProviderGrok      = "grok"
 	AIProviderCodex     = "codex"
+	AIProviderGrokOAuth = "grok_oauth"
 
 	AIAuthTypeAPIKey    = "api_key"
 	AIAuthTypeUserOAuth = "user_oauth"
@@ -124,6 +127,13 @@ var AIProviders = []AIProviderOption{
 		},
 	},
 	{
+		ID:            AIProviderGrok,
+		Label:         "xAI Grok",
+		AuthType:      AIAuthTypeAPIKey,
+		CredentialKey: KeyGrokKey,
+		Models:        grokModels,
+	},
+	{
 		ID:       AIProviderCodex,
 		Label:    "OpenAI (OAuth)",
 		AuthType: AIAuthTypeUserOAuth,
@@ -134,6 +144,20 @@ var AIProviders = []AIProviderOption{
 			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast GPT-5.6 model for clear, repeatable work"},
 		},
 	},
+	{
+		ID:       AIProviderGrokOAuth,
+		Label:    "xAI Grok (OAuth)",
+		AuthType: AIAuthTypeUserOAuth,
+		Models:   grokModels,
+	},
+}
+
+// grokModels is shared by both xAI providers: the API key and the
+// subscription OAuth paths serve the same OpenAI-compatible model catalog.
+var grokModels = []AIModelOption{
+	{ID: "grok-4.6", Label: "Grok 4.6", Description: "Latest flagship xAI model"},
+	{ID: "grok-4.5", Label: "Grok 4.5", Description: "Previous-generation flagship model"},
+	{ID: "grok-4.3", Label: "Grok 4.3", Description: "Affordable model with a 1M-token context"},
 }
 
 func isSecretKey(key string) bool {
@@ -176,6 +200,17 @@ func IsValidAIProvider(provider string) bool {
 	return false
 }
 
+// IsOAuthAIProvider reports whether provider authenticates with a linked
+// user account instead of a stored API key.
+func IsOAuthAIProvider(provider string) bool {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return p.AuthType == AIAuthTypeUserOAuth
+		}
+	}
+	return false
+}
+
 func inferAIProvider(model string) string {
 	switch {
 	case model == "":
@@ -186,6 +221,8 @@ func inferAIProvider(model string) string {
 		return AIProviderOpenAI
 	case hasAnyPrefix(model, "gemini-"):
 		return AIProviderGemini
+	case hasAnyPrefix(model, "grok-"):
+		return AIProviderGrok
 	default:
 		return ""
 	}

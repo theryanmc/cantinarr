@@ -23,6 +23,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
@@ -247,6 +248,7 @@ func main() {
 		log.Printf("OpenAI OAuth provider unavailable: %v", codexManager.AvailabilityError())
 	}
 	aiHandler := ai.NewHandler(creds, toolServer, codexManager)
+	aiHandler.SetGrokManager(grokoauth.NewManager(database, cipher, grokoauth.Options{}))
 	aiHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credHandler.SetPermissionAuthorizer(authService.AuthorizePermission)
 	credHandler.SetSharedAIConfigured(aiHandler.ProviderConfigured)

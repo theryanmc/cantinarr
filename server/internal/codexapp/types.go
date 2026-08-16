@@ -52,6 +52,12 @@ type AccountRef struct {
 func PersonalAccount(userID int64) AccountRef { return AccountRef{userID: userID} }
 func SharedAccount() AccountRef               { return AccountRef{shared: true} }
 
+// Shared and UserID expose the reference's identity so sibling OAuth
+// integrations can address the equivalent account without widening this
+// package's authority.
+func (r AccountRef) Shared() bool  { return r.shared }
+func (r AccountRef) UserID() int64 { return r.userID }
+
 func (r AccountRef) valid() bool {
 	return (r.shared && r.userID == 0) || (!r.shared && r.userID > 0)
 }

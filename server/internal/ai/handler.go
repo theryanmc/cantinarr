@@ -14,6 +14,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -23,6 +24,7 @@ type Handler struct {
 	creds               *credentials.Registry
 	toolServer          *mcp.ToolServer
 	codex               *codexapp.Manager
+	grok                *grokoauth.Manager
 	conversations       *conversationStore
 	validationProbe     func(context.Context, credentials.AIProfile, codexapp.AccountRef) error
 	healthIssueSink     SharedAIHealthIssueSink
@@ -46,6 +48,22 @@ func NewHandler(creds *credentials.Registry, toolServer *mcp.ToolServer, codex *
 // after provider validation and immediately before settings persistence.
 func (h *Handler) SetPermissionAuthorizer(authorize auth.PermissionAuthorizer) {
 	h.authorizePermission = authorize
+}
+
+// SetGrokManager wires the xAI Grok OAuth integration. Without it the
+// grok_oauth provider resolves as unavailable, mirroring a missing codex
+// manager.
+func (h *Handler) SetGrokManager(grok *grokoauth.Manager) {
+	h.grok = grok
+}
+
+// grokAccountFor addresses the Grok authorization equivalent to a Codex
+// account reference: same owner, sibling provider.
+func grokAccountFor(account codexapp.AccountRef) grokoauth.AccountRef {
+	if account.Shared() {
+		return grokoauth.SharedAccount()
+	}
+	return grokoauth.PersonalAccount(account.UserID())
 }
 
 type chatRequest struct {
@@ -221,6 +239,18 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	case credentials.AIProviderGemini:
 		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+	case credentials.AIProviderGrok:
+		service := NewGrokService(apiKey, aiConfig.Model, h.toolServer)
+		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+	case credentials.AIProviderGrokOAuth:
+		// The bearer token is resolved per turn so a rotated or refreshed
+		// authorization is always the one that reaches api.x.ai.
+		var token string
+		token, err = h.grok.AccessToken(r.Context(), grokAccountFor(resolved.Account))
+		if err == nil {
+			service := NewGrokService(token, aiConfig.Model, h.toolServer)
+			finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+		}
 	case credentials.AIProviderCodex:
 		model := aiConfig.Model
 		if model == "default" {
@@ -277,6 +307,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 		if aiConfig.Provider == credentials.AIProviderCodex {
 			clientError = codexClientError(err, resolved.Source)
+		}
+		if aiConfig.Provider == credentials.AIProviderGrokOAuth {
+			if mapped := grokClientError(err, resolved.Source); mapped != "" {
+				clientError = mapped
+			}
 		}
 		emit(map[string]string{"error": clientError})
 	} else {
@@ -337,6 +372,28 @@ func renderCodexPrompt(history transcript) string {
 		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// grokClientError maps xAI account-layer failures to honest copy. A refresh
+// or storage fault is a server-side problem — telling the user to check their
+// credentials would send them re-linking a healthy account. Provider-turn
+// errors (a failed api.x.ai completion) return "" and keep the generic copy.
+func grokClientError(err error, source string) string {
+	switch {
+	case errors.Is(err, grokoauth.ErrReloginRequired), errors.Is(err, grokoauth.ErrNotConnected):
+		if source == aiSourceShared {
+			return "The included xAI sign-in has expired. Ask an admin to reconnect Grok."
+		}
+		return "Your xAI sign-in has expired. Reconnect Grok in Settings and try again."
+	case errors.Is(err, grokoauth.ErrProvider), errors.Is(err, grokoauth.ErrUnavailable),
+		errors.Is(err, grokoauth.ErrStorage):
+		if source == aiSourceShared {
+			return "Included xAI Grok is temporarily unavailable. Try again or ask an admin to check the shared connection."
+		}
+		return "xAI Grok is temporarily unavailable. Try again shortly."
+	default:
+		return ""
+	}
 }
 
 func codexClientError(err error, source string) string {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/codexapp"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
+	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -126,6 +127,10 @@ func classifyAIValidationFailure(err error) AIValidationFailureKind {
 		return AIValidationFailureQuota
 	case errors.Is(err, codexapp.ErrBusy), errors.Is(err, codexapp.ErrUnavailable):
 		return AIValidationFailureTemporary
+	case errors.Is(err, grokoauth.ErrNotConnected), errors.Is(err, grokoauth.ErrReloginRequired):
+		return AIValidationFailureInvalidCredential
+	case errors.Is(err, grokoauth.ErrUnavailable), errors.Is(err, grokoauth.ErrStorage):
+		return AIValidationFailureTemporary
 	}
 	status := providerErrorStatus(err)
 	switch {
@@ -198,7 +203,7 @@ func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model strin
 			Model:    strings.TrimSpace(model),
 		},
 		APIKey:            resolved.APIKey,
-		CredentialPresent: resolved.APIKey != "" || resolved.Provider == credentials.AIProviderCodex,
+		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
 	}
 	return resolved.Provider, h.ValidateSharedAISettings(ctx, profile)
 }
@@ -234,7 +239,19 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 		}
 		return nil
 	}
-	if strings.TrimSpace(profile.APIKey) == "" {
+	apiKey := strings.TrimSpace(profile.APIKey)
+	if profile.Config.Provider == credentials.AIProviderGrokOAuth {
+		// The probe authenticates with a live bearer token from the linked
+		// account, exercising the exact credential a chat turn would use.
+		if h.grok == nil || !h.grok.Available() {
+			return ErrAIValidation
+		}
+		token, err := h.grok.AccessToken(ctx, grokAccountFor(account))
+		if err != nil {
+			return newAIValidationFailure(err)
+		}
+		apiKey = token
+	} else if apiKey == "" {
 		return ErrAIValidation
 	}
 
@@ -254,11 +271,13 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 	var runner TurnRunner
 	switch profile.Config.Provider {
 	case credentials.AIProviderAnthropic:
-		runner = NewService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderOpenAI:
-		runner = NewOpenAIService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewOpenAIService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderGemini:
-		runner = NewGeminiService(profile.APIKey, profile.Config.Model, h.toolServer)
+		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
+	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
+		runner = NewGrokService(apiKey, profile.Config.Model, h.toolServer)
 	default:
 		return ErrAIValidation
 	}
@@ -317,7 +336,7 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 		probeErr = h.ValidateSharedAISettings(ctx, credentials.AIProfile{
 			Config:            config,
 			APIKey:            resolved.APIKey,
-			CredentialPresent: resolved.APIKey != "" || resolved.Provider == credentials.AIProviderCodex,
+			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
 		})
 	}
 	// Record both success and failure. A failing provider should create one

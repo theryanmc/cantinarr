@@ -68,6 +68,7 @@ abstract final class SettingsAnchors {
   static const credentialsAnthropic = 'credentials.anthropic';
   static const credentialsOpenAi = 'credentials.openai';
   static const credentialsGemini = 'credentials.gemini';
+  static const credentialsGrok = 'credentials.grok';
 
   // /settings/discovery — the TMDB/Trakt sections moved here from the
   // credentials screen; their ids keep the historic `credentials.` prefix

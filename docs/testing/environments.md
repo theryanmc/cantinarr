@@ -51,10 +51,11 @@ the suites:
   themoviedb.org account.
 - **Trakt** (optional) — a Trakt account plus a registered app for the
   client ID.
-- **AI provider keys** — Anthropic/OpenAI/Gemini keys are validated with a
-  real model turn at save time, so dummy keys cannot be configured; the
-  Codex provider needs a real ChatGPT account and the pinned app-server
-  binary.
+- **AI provider keys** — Anthropic/OpenAI/Gemini/xAI keys are validated
+  with a real model turn at save time, so dummy keys cannot be configured;
+  the Codex provider needs a real ChatGPT account and the pinned app-server
+  binary, and the xAI Grok OAuth provider needs a real SuperGrok or
+  X Premium+ account.
 - **APNs/FCM delivery** — the push gateway holds the Apple and Google
   credentials; Cantinarr-side enrollment needs none, but a push reaching a
   device is Apple/Google-live.

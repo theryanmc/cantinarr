@@ -238,7 +238,7 @@ func (r *Registry) SetUserAIProfile(userID int64, provider, model, apiKey string
 	if model == "" {
 		model = DefaultAIModel(provider)
 	}
-	if provider == AIProviderCodex && apiKey != "" {
+	if IsOAuthAIProvider(provider) && apiKey != "" {
 		return fmt.Errorf("OAuth provider does not accept an API key")
 	}
 	var encrypted string
