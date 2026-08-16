@@ -76,12 +76,23 @@ func (s *ToolServer) getBookTimelineWithClient(client *chaptarr.Client, input js
 		sb.WriteString("History: UNREADABLE right now — this says nothing about whether events exist (blindness, not absence).\n")
 		return &ToolResult{Text: sb.String()}, nil
 	}
+	// A one-sided failure must not be rendered as the whole history. The import
+	// read errors BY DESIGN when the record holds more import events than one
+	// page can prove complete; swallowing that produced a grabs-only list under
+	// a "grabs + imports" heading, which reads as "no imports" and stops an
+	// investigation cold.
+	scope := "grabs + imports"
+	if gerr != nil {
+		scope = "imports only — GRAB history is UNREADABLE right now, so missing grabs are blindness, not absence"
+	} else if ierr != nil {
+		scope = "grabs only — IMPORT history is UNREADABLE right now, so missing imports are blindness, not absence"
+	}
 	events := append([]chaptarr.HistoryRecord{}, grabs...)
 	events = append(events, imports...)
 	if len(events) == 0 {
-		sb.WriteString("History: no grab or import events for this record in the newest pages. This read asked for the record's own history; older events beyond those pages are not ruled out.\n")
+		fmt.Fprintf(&sb, "History (%s): no events for this record in the newest pages. This read asked for the record's own history; older events beyond those pages are not ruled out.\n", scope)
 	} else {
-		sb.WriteString("History (newest pages, grabs + imports):\n")
+		fmt.Fprintf(&sb, "History (newest pages, %s):\n", scope)
 		for _, ev := range events {
 			when := "undated"
 			if ev.Date != nil {

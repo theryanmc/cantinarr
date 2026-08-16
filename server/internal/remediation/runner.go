@@ -1265,7 +1265,7 @@ func (r *Runner) dispatchTool(ctx context.Context, issue *Issue, runID int64, tu
 // responses rather than Go errors.
 func isVerificationRead(name string, result *mcp.ToolResult) bool {
 	switch name {
-	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline":
+	case "get_queue", "diagnose_queue", "get_manual_import_candidates", "get_history", "get_library", "get_episode_timeline", "get_book_timeline":
 	default:
 		return false
 	}
@@ -1486,6 +1486,22 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		}
 		if issue.TvdbID > 0 {
 			params["tvdb_id"] = issue.TvdbID
+		}
+		if issue.SeasonNumber > 0 {
+			params["season_number"] = issue.SeasonNumber
+		}
+	case "get_book_timeline":
+		// The scrub above deleted book_id like every other identity key; without
+		// this re-injection the tool was allow-listed but unreachable — every
+		// call refused with "needs the issue's book_id".
+		if issue.BookID > 0 {
+			params["book_id"] = issue.BookID
+		}
+	case "get_media_file_details":
+		// Same unreachable-when-scrubbed shape as get_book_timeline: the tool
+		// requires tmdb_id, which the scrub deleted.
+		if issue.TmdbID > 0 {
+			params["tmdb_id"] = issue.TmdbID
 		}
 		if issue.SeasonNumber > 0 {
 			params["season_number"] = issue.SeasonNumber
