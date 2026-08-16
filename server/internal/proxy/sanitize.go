@@ -475,9 +475,11 @@ func normalizeSensitiveName(name string) string {
 // values. The targeted userinfo rewrite preserves the rest of the URL spelling;
 // query redaction preserves parameter order, duplicate keys, and fragments.
 // Relative URLs are supported because arr history records occasionally contain
-// them.
+// them, and URLs embedded mid-string are covered because queue and history
+// prose quotes download-client and indexer URLs inside larger messages.
 func sanitizeURLCredentials(raw string) string {
 	raw = stripURLUserinfo(raw)
+	raw = stripEmbeddedURLUserinfo(raw)
 	return redactURLQuery(raw)
 }
 
@@ -504,17 +506,76 @@ func stripURLUserinfo(raw string) string {
 	return raw[:authorityStart] + authority[userinfoEnd+1:] + raw[authorityEnd:]
 }
 
+// stripEmbeddedURLUserinfo removes userinfo from absolute URL references that
+// appear inside prose, such as "Unable to connect to http://user:pass@host/".
+// stripURLUserinfo only recognizes a string that is itself a URL reference, so
+// without this pass a credential quoted mid-message would survive scrubbing.
+func stripEmbeddedURLUserinfo(raw string) string {
+	cursor := 0
+	for {
+		relative := strings.Index(raw[cursor:], "://")
+		if relative < 0 {
+			return raw
+		}
+		colon := cursor + relative
+		schemeStart := colon
+		for schemeStart > 0 && isURLSchemeByte(raw[schemeStart-1]) {
+			schemeStart--
+		}
+		// A scheme cannot start with a digit or punctuation, so a decorated
+		// reference such as "item2https://..." resolves at its alpha suffix.
+		for schemeStart < colon && !isASCIIAlpha(raw[schemeStart]) {
+			schemeStart++
+		}
+		// Resume just past the marker rather than past the authority: an
+		// authority scan that swallowed prose may itself contain the "://" of
+		// a following comma- or semicolon-separated reference.
+		cursor = colon + len("://")
+		if !isURLScheme(raw[schemeStart:colon]) {
+			continue
+		}
+		authorityEnd := cursor
+		for authorityEnd < len(raw) && !isEmbeddedAuthorityTerminator(raw[authorityEnd]) {
+			authorityEnd++
+		}
+		authority := raw[cursor:authorityEnd]
+		userinfoEnd := strings.LastIndexByte(authority, '@')
+		if userinfoEnd < 0 {
+			continue
+		}
+		raw = raw[:cursor] + authority[userinfoEnd+1:] + raw[authorityEnd:]
+	}
+}
+
+// isEmbeddedAuthorityTerminator ends the authority scan of a URL reference
+// found in prose. Beyond the RFC 3986 authority delimiters, characters that
+// cannot appear in a host end the scan so a later word's "@" is never treated
+// as userinfo. Comma and semicolon are deliberately not terminators: they are
+// legal inside userinfo, and a separated second URL is still reached because
+// the caller rescans from just past each "://" marker.
+func isEmbeddedAuthorityTerminator(b byte) bool {
+	switch b {
+	case '/', '?', '#', '\\', '"', '\'', '<', '>', '(', ')', '[', ']', '{', '}':
+		return true
+	default:
+		return b <= 0x20 || b == 0x7f
+	}
+}
+
 func isURLScheme(value string) bool {
 	if value == "" || !isASCIIAlpha(value[0]) {
 		return false
 	}
 	for i := 1; i < len(value); i++ {
-		b := value[i]
-		if !isASCIIAlpha(b) && (b < '0' || b > '9') && b != '+' && b != '-' && b != '.' {
+		if !isURLSchemeByte(value[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func isURLSchemeByte(b byte) bool {
+	return isASCIIAlpha(b) || b >= '0' && b <= '9' || b == '+' || b == '-' || b == '.'
 }
 
 func isASCIIAlpha(value byte) bool {
