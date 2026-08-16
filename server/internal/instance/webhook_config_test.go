@@ -66,6 +66,8 @@ func webhookSchema(serviceType string) map[string]any {
 		// The Readarr lineage names the import event onReleaseImport and its
 		// settings carry no headers field.
 		resource["onReleaseImport"] = false
+		resource["onAuthorAdded"] = false
+		resource["onBookAdded"] = false
 		resource["onBookDelete"] = false
 		resource["onAuthorDelete"] = false
 		resource["onBookFileDelete"] = false
@@ -147,6 +149,11 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 	// alert; the notifier, not this webhook, decides who is paged for it.
 	if got, _ := captured["onUpgrade"].(bool); !got {
 		t.Error("onUpgrade was not enabled, so upgrade imports would never reach the server")
+	}
+	// onAuthorAdded is what lets the receiver resume author-import parks the
+	// moment the arr finishes a queued import, instead of on the next tick.
+	if got, _ := captured["onAuthorAdded"].(bool); !got {
+		t.Error("onAuthorAdded was not enabled, so parked book requests would only resume by poll")
 	}
 	if _, present := captured["onEpisodeFileDelete"]; present {
 		t.Error("a Sonarr-only event flag leaked onto a Chaptarr resource")

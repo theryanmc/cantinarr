@@ -240,6 +240,10 @@ type Service struct {
 	// connection.
 	parkSweepMu   sync.RWMutex
 	lastParkSweep time.Time
+	// parkSweepRunMu serializes sweep passes: the five-minute ticker and the
+	// webhook-driven resume may fire together, and two concurrent passes would
+	// race their probes over the same parked rows.
+	parkSweepRunMu sync.Mutex
 }
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
@@ -3981,6 +3985,15 @@ func (s *Service) SetBookImportStallSink(sink BookImportStallSink) {
 	s.bookImportStallSink = sink
 }
 
+// ResumeBookParks runs one park sweep off the maintenance cadence, in the
+// background. It is the webhook seam for Chaptarr's AuthorAdded callback —
+// the event that fires at the exact moment a queued author import lands — so
+// a waiting request completes in seconds instead of at the next tick. Sweep
+// passes are serialized, so a callback burst cannot race the ticker.
+func (s *Service) ResumeBookParks() {
+	go s.SweepParkedBookRequests()
+}
+
 // StartBookParkMaintenance runs SweepParkedBookRequests on a fixed cadence
 // until ctx ends.
 func (s *Service) StartBookParkMaintenance(ctx context.Context) {
@@ -4008,6 +4021,8 @@ func (s *Service) StartBookParkMaintenance(ctx context.Context) {
 // long-running Chaptarr metadata import becomes one auto-resolving system
 // issue.
 func (s *Service) SweepParkedBookRequests() {
+	s.parkSweepRunMu.Lock()
+	defer s.parkSweepRunMu.Unlock()
 	rows, err := s.db.Query(
 		`SELECT id, COALESCE(user_id, 0), COALESCE(foreign_id, ''), COALESCE(instance_id, ''), title
 		 FROM request_log
