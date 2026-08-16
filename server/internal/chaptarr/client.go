@@ -1088,20 +1088,12 @@ func (c *Client) SetBookMonitored(bookIDs []int, monitored bool) error {
 	return nil
 }
 
+// GetQueue returns the same complete bounded snapshot as GetQueueDetailed.
+// It used to issue an unpaged read, which Chaptarr answers with its default
+// page of 10 rows — a silently truncated queue for any instance downloading
+// more than that.
 func (c *Client) GetQueue() ([]QueueItem, error) {
-	resp, err := c.doRequest("GET", "/api/v1/queue?includeAuthor=true&includeBook=true")
-	if err != nil {
-		return nil, fmt.Errorf("chaptarr queue: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var queueResp struct {
-		Records []QueueItem `json:"records"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&queueResp); err != nil {
-		return nil, fmt.Errorf("decode queue: %w", err)
-	}
-	return queueResp.Records, nil
+	return c.GetQueueDetailed()
 }
 
 // queueMaxRecords is a safety cap on the queue records a detailed snapshot may
@@ -1118,7 +1110,10 @@ func (c *Client) GetQueueDetailed() ([]DetailedQueueItem, error) {
 		TotalRecords int                 `json:"totalRecords"`
 		Records      []DetailedQueueItem `json:"records"`
 	}
-	path := fmt.Sprintf("/api/v1/queue?page=1&pageSize=%d&includeAuthor=true&includeBook=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
+	// includeUnknownAuthorItems: without it Chaptarr silently drops queue rows
+	// it could not match to a library author — exactly the rows most likely to
+	// be stuck — before the completeness checks below ever see them.
+	path := fmt.Sprintf("/api/v1/queue?page=1&pageSize=%d&includeAuthor=true&includeBook=true&includeUnknownAuthorItems=true&sortKey=id&sortDirection=ascending", queueMaxRecords)
 	if err := c.do("GET", path, nil, &resp); err != nil {
 		return nil, fmt.Errorf("chaptarr queue: %w", err)
 	}
