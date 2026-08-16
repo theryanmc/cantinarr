@@ -411,10 +411,11 @@ GET  /.well-known/oauth-protected-resource[/mcp]
 GET  /.well-known/oauth-authorization-server | /.well-known/openid-configuration
 POST /oauth/register                         # dynamic client registration
 GET|POST /oauth/authorize                    # browser login (password or passkey) + consent
+POST /oauth/passkey/login/begin|finish       # WebAuthn login for the authorize page
 POST /oauth/token                            # code/refresh grants, PKCE, rotating refresh
 GET  /passkeys/setup | /passkeys/create      # passkey pages for MCP/browser setup links
 ```
-These endpoints are Cantinarr's **inbound** OAuth authorization server: an external MCP client signs in to access Cantinarr. They do not link a ChatGPT account. Personal and admin-shared Codex chat use separate **outbound** device flows under `/api/ai/codex/*` and `/api/admin/ai/codex/*`.
+These endpoints are Cantinarr's **inbound** OAuth authorization server: an external MCP client signs in to access Cantinarr. They do not link a ChatGPT account. The POST endpoints (register, authorize, passkey login, token) share the same 10 requests/minute/IP rate limit as the public `/api/auth` endpoints; discovery metadata and the GET authorize form are unlimited. Personal and admin-shared Codex chat use separate **outbound** device flows under `/api/ai/codex/*` and `/api/admin/ai/codex/*`.
 
 When `CANTINARR_OAUTH_ISSUER` is set, authorization-server metadata advertises RFC 9207 issuer identification and successful password/passkey authorization responses include the exact canonical `iss`; without it, Cantinarr preserves request-derived legacy metadata and does not claim stable authorization-response issuer support. The configured issuer must use HTTPS so metadata, redirects, token audience, and auth challenges share one secure canonical external origin. Dynamic client registration accepts and echoes OpenID Connect `application_type` values `native` and `web` (omitted legacy values default to `web`); explicit web registrations require HTTPS redirects. Trusted browser preflights accept the current session header plus MCP protocol-version and method/name routing headers. Supplied origins must match the configured issuer or an entry in `CANTINARR_MCP_ALLOWED_ORIGINS`; when neither is configured all browser origins are rejected before authentication, while native/server clients normally send no `Origin` and are unaffected.
 

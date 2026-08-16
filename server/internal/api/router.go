@@ -73,12 +73,20 @@ func NewRouter(
 	r.Get("/.well-known/openid-configuration", oauthHandler.AuthorizationServerMetadata)
 	r.Get("/.well-known/apple-app-site-association", appleAppSiteAssociationHandler(cfg))
 	r.Get("/.well-known/assetlinks.json", androidAssetLinksHandler(cfg))
-	r.Post("/oauth/register", oauthHandler.RegisterClient)
+	// Rate limiter for the unauthenticated OAuth endpoints, matching the
+	// /api/auth posture. POST /oauth/authorize accepts a password, so leaving
+	// it unlimited would hand brute-forcers a second, uncapped login form; the
+	// register/token/passkey endpoints share the budget so unauthenticated
+	// callers cannot spam client registrations or grind at grants either. The
+	// metadata endpoints above and the GET authorize form stay unlimited —
+	// they attempt no credential and MCP client discovery depends on them.
+	oauthLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+	r.With(oauthLimiter.Middleware).Post("/oauth/register", oauthHandler.RegisterClient)
 	r.Get("/oauth/authorize", oauthHandler.Authorize)
-	r.Post("/oauth/authorize", oauthHandler.Authorize)
-	r.Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
-	r.Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
-	r.Post("/oauth/token", oauthHandler.Token)
+	r.With(oauthLimiter.Middleware).Post("/oauth/authorize", oauthHandler.Authorize)
+	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/begin", oauthHandler.BeginOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
+	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
