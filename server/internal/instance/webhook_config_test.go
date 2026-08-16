@@ -171,9 +171,10 @@ func TestConfigureWebhookRegistersChaptarrAgainstV1(t *testing.T) {
 }
 
 // TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent is the fail-loud
-// guarantee. Chaptarr is closed source, so its event vocabulary is inherited
-// rather than verified; if no import toggle exists the admin must see an error
-// at configure time instead of a silently useless webhook.
+// guarantee. The import toggle is onReleaseImport (verified against
+// Chaptarr's open source), but the schema template stays the authority at
+// configure time; if it declares no import toggle the admin must see an
+// error instead of a silently useless webhook.
 func TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent(t *testing.T) {
 	schema := webhookSchema("chaptarr")
 	delete(schema, "onReleaseImport")
@@ -199,8 +200,7 @@ func TestConfigureWebhookFailsWhenChaptarrDeclaresNoImportEvent(t *testing.T) {
 // treated as permission rather than refusal.
 func TestConfigureWebhookHonorsUnsupportedEventFlags(t *testing.T) {
 	schema := webhookSchema("chaptarr")
-	schema["onDownload"] = false
-	schema["supportsOnDownload"] = false
+	schema["supportsOnBookDelete"] = false
 
 	var captured map[string]any
 	arr := arrWebhookStub(t, "v1", schema, &captured)
@@ -211,7 +211,7 @@ func TestConfigureWebhookHonorsUnsupportedEventFlags(t *testing.T) {
 	if rec := postWebhook(t, NewHandler(store, nil), inst.ID); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if got, _ := captured["onDownload"].(bool); got {
+	if got, _ := captured["onBookDelete"].(bool); got {
 		t.Error("an event the schema reports unsupported was enabled anyway")
 	}
 	if got, _ := captured["onReleaseImport"].(bool); !got {

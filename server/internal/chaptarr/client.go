@@ -909,7 +909,9 @@ func (c *Client) AddAuthor(req AddAuthorRequest) (*Author, error) {
 // ErrAuthorPendingImport reports Chaptarr refusing an add because its metadata
 // service does not know the book's author yet: newer forks queue the author
 // for an asynchronous import and reject the add until that import lands
-// (verified live against Chaptarr 0.9.879). The condition heals on its own, so
+// (verified live against Chaptarr 0.9.879 and since against its open source:
+// AddBookService throws the queued-for-import ValidationFailure). The
+// condition heals on its own, so
 // callers should keep the request alive rather than fail it.
 var ErrAuthorPendingImport = errors.New("the book's author is still being imported by the library's metadata service")
 
@@ -989,10 +991,25 @@ func classifyAddBookRejection(body io.Reader) error {
 }
 
 // AuthorImportStatusFailed is the pending-import OverallStatus Chaptarr
-// assigns when a typed metadata-server outcome stopped its automatic retries.
-// Every other status (Pending/InProgress/Retrying/PartialSuccess) is a wait
-// Chaptarr is still working through on its own schedule.
+// assigns when a typed metadata-server outcome stopped its automatic retries —
+// and ALSO when someone cancels the row in its UI: the fork has no distinct
+// cancelled status, a cancel marks the row Failed with LastError "Cancelled by
+// user" (PendingAuthorImportService.Cancel in its source).
 const AuthorImportStatusFailed = "Failed"
+
+// AuthorImportStatusConcluded reports a pending-import status Chaptarr will
+// never process again. Its scheduler re-picks only Pending and Retrying rows
+// (GetDueForProcessing in its source), so Failed, PartialSuccess (one media
+// type succeeded, the other failed — both halves done), and Succeeded are all
+// final. A concluded row whose author is still absent from the library cannot
+// finish on its own; waiting on it waits forever.
+func AuthorImportStatusConcluded(status string) bool {
+	switch status {
+	case "Failed", "PartialSuccess", "Succeeded":
+		return true
+	}
+	return false
+}
 
 // AuthorImportStatus is Chaptarr's live answer about one author's standing on
 // the instance: already in the library (Exists), still queued on the fork's
@@ -1029,6 +1046,12 @@ func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportSta
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("chaptarr author import status: %w", ErrPendingImportAPIUnavailable)
 	}
+	if resp.StatusCode == http.StatusConflict {
+		// Chaptarr answers 409 when the provider id resolves to multiple local
+		// authors (its ProviderAmbiguityHelper). That is a structural state a
+		// human must untangle, not a transient read failure.
+		return nil, fmt.Errorf("chaptarr author import status: %w", ErrAuthorProviderAmbiguous)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode)
 	}
@@ -1037,6 +1060,42 @@ func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportSta
 		return nil, fmt.Errorf("chaptarr author import status: decode response: %w", err)
 	}
 	return &status, nil
+}
+
+// ErrAuthorProviderAmbiguous reports Chaptarr's 409 ambiguity answer: the
+// author provider id matches more than one local author (alias merges), so no
+// read or add against that id can pick one. Only a human can.
+var ErrAuthorProviderAmbiguous = errors.New("author provider id resolves to multiple local authors")
+
+// PendingAuthorImportDetail is the slice of one pending-import row the watcher
+// reads by id: whether the row concluded and — because Chaptarr has no
+// distinct cancelled status — the LastError text that says WHY a Failed row
+// stopped ("Cancelled by user" for a cancel in its UI).
+type PendingAuthorImportDetail struct {
+	ID            int    `json:"id"`
+	OverallStatus string `json:"overallStatus"`
+	LastError     string `json:"lastError"`
+}
+
+// GetPendingAuthorImport reads one pending-import row by id. A 404 returns
+// (nil, nil): the row is gone, which the caller treats as its own verdict.
+func (c *Client) GetPendingAuthorImport(pendingID int) (*PendingAuthorImportDetail, error) {
+	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/pendingauthorimport/%d", pendingID))
+	if err != nil {
+		return nil, fmt.Errorf("chaptarr pending author import: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+	}
+	var detail PendingAuthorImportDetail
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return nil, fmt.Errorf("chaptarr pending author import: decode response: %w", err)
+	}
+	return &detail, nil
 }
 
 // CancelPendingAuthorImport removes one queued author import. The queued row

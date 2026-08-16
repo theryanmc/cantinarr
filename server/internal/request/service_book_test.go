@@ -2753,6 +2753,8 @@ func TestDemotedParkApproveDoesNotPromiseAutomaticRetries(t *testing.T) {
 type pendingImportAPIStub struct {
 	server      *httptest.Server
 	existsJSON  atomic.Value
+	existsCode  atomic.Int32 // 0 means 200; set 409 for the ambiguity answer
+	detailJSON  atomic.Value // GET /pendingauthorimport/{id}; "" means 404
 	addAttempts atomic.Int32
 	retryHits   atomic.Int32
 	deleteHits  atomic.Int32
@@ -2764,6 +2766,7 @@ func newPendingImportAPIStub(t *testing.T) *pendingImportAPIStub {
 	stub := &pendingImportAPIStub{}
 	stub.refuseAdds.Store(true)
 	stub.existsJSON.Store(`{"exists":false,"pending":true,"pendingId":3,"status":"Retrying","attemptCount":4}`)
+	stub.detailJSON.Store("")
 	stub.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
@@ -2799,7 +2802,19 @@ func newPendingImportAPIStub(t *testing.T) *pendingImportAPIStub {
 			}
 			_, _ = w.Write([]byte(`{"id":42,"title":"Waiting Book","foreignBookId":"gr:253739298","monitored":true}`))
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/pendingauthorimport/author/exists/"):
+			if code := stub.existsCode.Load(); code != 0 {
+				w.WriteHeader(int(code))
+				_, _ = w.Write([]byte(`{"message":"resolves to multiple local authors"}`))
+				return
+			}
 			_, _ = w.Write([]byte(stub.existsJSON.Load().(string)))
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/pendingauthorimport/"):
+			detail := stub.detailJSON.Load().(string)
+			if detail == "" {
+				http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(detail))
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/pendingauthorimport/") && strings.HasSuffix(path, "/retry"):
 			stub.retryHits.Add(1)
 			_, _ = w.Write([]byte(`{"message":"Retry scheduled"}`))
@@ -2877,20 +2892,53 @@ func TestSweepWatchesChaptarrsOwnImportRetries(t *testing.T) {
 	}
 }
 
-// TestSweepDemotesOnChaptarrsDeclaredVerdicts pins the two real exits the
-// probe acts on: the arr declaring the import terminally failed, and the
-// pending import vanishing without the author (cancelled in the arr's UI).
-// Both demote immediately — a verdict exists, so a human sees it now, not
-// after any timer.
+// TestSweepDemotesOnChaptarrsDeclaredVerdicts pins the exits the probe acts
+// on, labelled by what actually happened in the arr (verified against
+// Chaptarr's source): a declared-terminal failure demotes as failed; a cancel
+// in the arr's UI — which Chaptarr records as Failed with LastError
+// "Cancelled by user", it has no cancelled status — demotes as cancelled; a
+// concluded row (PartialSuccess/Succeeded) whose author never landed demotes
+// as failed because the arr's scheduler will never touch it again; an
+// ambiguous author id (409) demotes because every future sweep reads the same
+// answer; and a vanished row (removed out-of-band) demotes as cancelled. All
+// demote immediately — a verdict exists, so a human sees it now, not after
+// any timer.
 func TestSweepDemotesOnChaptarrsDeclaredVerdicts(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		existsJSON string
+		existsCode int
+		detailJSON string
 		wantReason string
 	}{
 		{
 			name:       "declared failed",
 			existsJSON: `{"exists":false,"pending":true,"pendingId":3,"status":"Failed","attemptCount":12}`,
+			detailJSON: `{"id":3,"overallStatus":"Failed","lastError":"Author lookup returned a typed 404"}`,
+			wantReason: bookAddFailureImportFailed,
+		},
+		{
+			name:       "cancelled in the arr",
+			existsJSON: `{"exists":false,"pending":true,"pendingId":3,"status":"Failed","attemptCount":12}`,
+			detailJSON: `{"id":3,"overallStatus":"Failed","lastError":"Cancelled by user"}`,
+			wantReason: bookAddFailureImportCancelled,
+		},
+		{
+			// The row's LastError is unreadable (older build without the by-id
+			// route): the failed label is the fail-closed default.
+			name:       "declared failed, detail unreadable",
+			existsJSON: `{"exists":false,"pending":true,"pendingId":3,"status":"Failed","attemptCount":12}`,
+			detailJSON: "",
+			wantReason: bookAddFailureImportFailed,
+		},
+		{
+			name:       "concluded without the author",
+			existsJSON: `{"exists":false,"pending":true,"pendingId":3,"status":"PartialSuccess","attemptCount":12}`,
+			wantReason: bookAddFailureImportFailed,
+		},
+		{
+			name:       "ambiguous author id",
+			existsCode: 409,
 			wantReason: bookAddFailureImportFailed,
 		},
 		{
@@ -2901,7 +2949,11 @@ func TestSweepDemotesOnChaptarrsDeclaredVerdicts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newPendingImportAPIStub(t)
-			stub.existsJSON.Store(tc.existsJSON)
+			if tc.existsJSON != "" {
+				stub.existsJSON.Store(tc.existsJSON)
+			}
+			stub.existsCode.Store(int32(tc.existsCode))
+			stub.detailJSON.Store(tc.detailJSON)
 			svc, uid := newChaptarrBookTestService(t, stub.server.URL)
 			rec := &recordingNotifier{}
 			svc.notifier = rec

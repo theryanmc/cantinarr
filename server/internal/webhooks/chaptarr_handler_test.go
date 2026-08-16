@@ -133,8 +133,8 @@ func TestChaptarrImportUpgradeReroutesToAdmins(t *testing.T) {
 }
 
 // TestChaptarrImportPayloadIsOnlyATrigger pins that a forged or drifted payload
-// cannot fabricate an alert. Chaptarr is closed source, so the body is never
-// trusted for identity.
+// cannot fabricate an alert. An arr-origin body is never trusted for
+// identity, whoever wrote it.
 func TestChaptarrImportPayloadIsOnlyATrigger(t *testing.T) {
 	f, _, id, token := newBookFixture(t)
 

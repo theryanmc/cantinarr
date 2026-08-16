@@ -4093,6 +4093,15 @@ func (s *Service) probeParkedBookRequest(row parkedBookRow) {
 		s.legacyProbeParkedBookRequest(row)
 		return
 	}
+	if errors.Is(err, chaptarr.ErrAuthorProviderAmbiguous) {
+		// 409: the provider id matches more than one local author. That is a
+		// structural state only a human can untangle — every future sweep
+		// would read the same answer, so holding the park would hold it
+		// forever.
+		log.Printf("request: parked book request %d (%q): chaptarr reports the author id is ambiguous (multiple local authors); handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+		return
+	}
 	if err != nil {
 		log.Printf("request: probe parked book request %d (%q): %v", row.id, row.title, err)
 		return
@@ -4112,11 +4121,30 @@ func (s *Service) probeParkedBookRequest(row parkedBookRow) {
 		}
 		log.Printf("request: parked book request %d (%q) completed after the author import landed", row.id, row.title)
 	case status.Pending && status.Status == chaptarr.AuthorImportStatusFailed:
+		// Chaptarr has no distinct cancelled status — a cancel in its UI marks
+		// the row Failed with LastError "Cancelled by user" — so the label the
+		// admin sees is decided by that field, read best-effort from the row.
+		if s.pendingImportWasCancelled(client, status.PendingID) {
+			log.Printf("request: parked book request %d (%q): the author import was cancelled in chaptarr; handing to the approval queue", row.id, row.title)
+			s.demoteParkedBookRequest(row.id, bookAddFailureImportCancelled)
+			return
+		}
 		log.Printf("request: parked book request %d (%q): chaptarr declared the author import terminally failed; handing to the approval queue", row.id, row.title)
+		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
+	case status.Pending && chaptarr.AuthorImportStatusConcluded(status.Status):
+		// PartialSuccess or Succeeded with the author still absent from the
+		// library: Chaptarr's scheduler re-picks only Pending/Retrying rows,
+		// so this row will never change again — waiting on it waits forever.
+		log.Printf("request: parked book request %d (%q): chaptarr concluded the author import (%s) but the author never landed; handing to the approval queue", row.id, row.title, status.Status)
 		s.demoteParkedBookRequest(row.id, bookAddFailureImportFailed)
 	case status.Pending:
 		// Chaptarr is still importing on its own schedule; nothing to do.
 	default:
+		// Both answers false: the library does not know the author and no
+		// pending row exists. Chaptarr deletes completed rows after 30 days
+		// (CleanupOldCompleted) — with a 5-minute sweep the concluded state is
+		// seen long before that, so reaching here means the row was removed
+		// out-of-band. The closest honest word the app knows is "cancelled".
 		log.Printf("request: parked book request %d (%q): the author import vanished from chaptarr without landing; handing to the approval queue", row.id, row.title)
 		s.demoteParkedBookRequest(row.id, bookAddFailureImportCancelled)
 	}
@@ -4139,6 +4167,22 @@ func (s *Service) lookupParkedAuthorID(client *chaptarr.Client, foreignID string
 		}
 	}
 	return "", true
+}
+
+// pendingImportWasCancelled reads the arr's own record of why a Failed row
+// stopped. Chaptarr has no distinct cancelled status — a cancel in its UI
+// marks the row Failed with LastError "Cancelled by user" — so this is the
+// only signal separating "the import could not finish" from "someone chose to
+// stop it". Best-effort: an unreadable or missing row keeps the failed label.
+func (s *Service) pendingImportWasCancelled(client *chaptarr.Client, pendingID int) bool {
+	if pendingID <= 0 {
+		return false
+	}
+	detail, err := client.GetPendingAuthorImport(pendingID)
+	if err != nil || detail == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(detail.LastError), "cancelled by user")
 }
 
 // legacyProbeParkedBookRequest is the pre-pending-import-API probe: replay the
