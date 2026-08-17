@@ -221,6 +221,54 @@ class _StubAdapter implements HttpClientAdapter {
       body = {'issues': []};
     } else if (path.contains('/agent-actions')) {
       body = {'actions': []};
+    } else if (RegExp(r'/api/media/\w+/\d+/(recommendations|similar)$')
+        .hasMatch(path)) {
+      // Detail loads its rows alongside the title; a bare list here fails the
+      // whole load and drops the screen into its error state.
+      body = {'results': [], 'page': 1, 'total_pages': 1, 'total_results': 0};
+    } else if (RegExp(r'/api/media/movie/\d+$').hasMatch(path)) {
+      // Enough of a TMDB movie detail for the detail screen to render its real
+      // layout instead of the load-failure state.
+      body = {
+        'id': 550,
+        'title': 'Preview: The Long Wait',
+        'tagline': 'It gets here when it gets here.',
+        'overview': 'A stand-in synopsis so the detail screen lays out the '
+            'way it does with real TMDB copy underneath the request dock.',
+        'release_date': _previewDate(21),
+        'status': 'Post Production',
+        'vote_average': 7.8,
+        'runtime': 121,
+        'genres': [
+          {'id': 18, 'name': 'Drama'},
+          {'id': 878, 'name': 'Science Fiction'},
+        ],
+      };
+    } else if (RegExp(r'/api/requests/\d+/status$').hasMatch(path)) {
+      // Must beat the generic '/requests' branch below. The tmdb id picks
+      // which release state to preview, so the request dock's whole collapse
+      // behaviour is reachable without a Radarr: 550 is still awaiting both
+      // milestones, 551 has left cinemas and awaits only digital, 552 is fully
+      // released and shows no line at all.
+      final id = RegExp(r'/(\d+)/status$').firstMatch(path)!.group(1);
+      body = {
+        'status': 'requested',
+        'progress': 0,
+        'releases': switch (id) {
+          '551' => {
+              'in_cinemas': _previewDate(-45),
+              'digital': _previewDate(30),
+            },
+          '552' => {
+              'in_cinemas': _previewDate(-120),
+              'digital': _previewDate(-60),
+            },
+          _ => {
+              'in_cinemas': _previewDate(21),
+              'digital': _previewDate(90),
+            },
+        },
+      };
     } else if (path.contains('/requests')) {
       body = {'requests': []};
     } else if (path.endsWith('/api/admin/credentials')) {
@@ -318,4 +366,13 @@ class _StubAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+/// A `YYYY-MM-DD` calendar date [days] from today (negative for the past), so
+/// preview fixtures that depend on being ahead of or behind now don't rot.
+String _previewDate(int days) {
+  final d = DateTime.now().add(Duration(days: days));
+  final m = d.month.toString().padLeft(2, '0');
+  final day = d.day.toString().padLeft(2, '0');
+  return '${d.year}-$m-$day';
 }

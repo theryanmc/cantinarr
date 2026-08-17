@@ -482,6 +482,44 @@ type StatusResponse struct {
 	// different foreignBookId than the one queried: the id the library files
 	// this book under today. Clients should re-address the book by it.
 	CanonicalForeignID string `json:"canonical_foreign_id,omitempty"`
+	// Releases carries the movie's theatrical and digital release dates, so a
+	// title that reads "Requested" can say it is simply not out yet rather than
+	// looking like a stalled download. Only populated for movies already in the
+	// user's Radarr library — an unadded title has no arr record to read dates
+	// from — and omitted entirely when Radarr knows neither date.
+	Releases *MovieReleases `json:"releases,omitempty"`
+}
+
+// MovieReleases carries a movie's release milestones as plain YYYY-MM-DD
+// calendar dates.
+//
+// They are deliberately not timestamps: a release date has no time-of-day, and
+// serialising one as an instant invites a client to localise it and land a day
+// early or late. Whether a date is still ahead is likewise the client's call —
+// "today" belongs to the viewer's time zone, not the server's — so both dates
+// are reported verbatim whenever Radarr knows them, past or future.
+type MovieReleases struct {
+	InCinemas string `json:"in_cinemas,omitempty"`
+	Digital   string `json:"digital,omitempty"`
+}
+
+// movieReleases projects Radarr's release dates onto the wire shape, returning
+// nil when neither date is known so the field drops out of the response.
+func movieReleases(m *radarr.Movie) *MovieReleases {
+	if m == nil {
+		return nil
+	}
+	out := &MovieReleases{}
+	if m.InCinemas != nil {
+		out.InCinemas = m.InCinemas.Format("2006-01-02")
+	}
+	if m.DigitalRelease != nil {
+		out.Digital = m.DigitalRelease.Format("2006-01-02")
+	}
+	if out.InCinemas == "" && out.Digital == "" {
+		return nil
+	}
+	return out
 }
 
 // SeasonStatus is one season's availability, mirroring the title-level status
@@ -2914,8 +2952,13 @@ func (s *Service) getMovieStatus(userID int64, tmdbID int) (*StatusResponse, err
 		return &StatusResponse{Status: StatusUnavailable}, nil
 	}
 
+	// Release dates ride along on every branch below: the movie is in the
+	// library, so they are known, and which of them still matters is the
+	// client's decision.
+	releases := movieReleases(movie)
+
 	if movie.HasFile {
-		return &StatusResponse{Status: StatusAvailable, Progress: 1.0}, nil
+		return &StatusResponse{Status: StatusAvailable, Progress: 1.0, Releases: releases}, nil
 	}
 
 	queue, err := radarrClient.GetQueue()
@@ -2926,16 +2969,16 @@ func (s *Service) getMovieStatus(userID int64, tmdbID int) (*StatusResponse, err
 				if item.Size > 0 {
 					progress = (item.Size - item.Sizeleft) / item.Size
 				}
-				return &StatusResponse{Status: StatusDownloading, Progress: progress}, nil
+				return &StatusResponse{Status: StatusDownloading, Progress: progress, Releases: releases}, nil
 			}
 		}
 	}
 
 	if movie.Monitored {
-		return &StatusResponse{Status: StatusRequested, Progress: 0}, nil
+		return &StatusResponse{Status: StatusRequested, Progress: 0, Releases: releases}, nil
 	}
 
-	return &StatusResponse{Status: StatusUnavailable}, nil
+	return &StatusResponse{Status: StatusUnavailable, Releases: releases}, nil
 }
 
 func (s *Service) getTVStatus(userID int64, tmdbID int) (*StatusResponse, error) {

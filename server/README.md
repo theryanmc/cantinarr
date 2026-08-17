@@ -210,7 +210,9 @@ GET    /api/requests/options               # user: what this user may choose (se
 GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id
 GET    /api/requests/book-library          # user: owned/monitored digest; optional instance_id (brief cache)
 GET    /api/requests/book-recent           # user: newest book-file imports; optional instance_id, limit (cached)
-GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress
+GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress; movies
+                                           #   already in the library also carry releases
+                                           #   {in_cinemas, digital} as YYYY-MM-DD calendar dates
 GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
                                            #   foreign_id, a best-effort TMDB poster_path (movie/tv),
                                            #   and add_failure_reason when the row is not a policy

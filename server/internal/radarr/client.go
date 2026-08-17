@@ -52,6 +52,13 @@ type Movie struct {
 	Monitored      bool   `json:"monitored"`
 	IsAvailable    bool   `json:"isAvailable"`
 	RootFolderPath string `json:"rootFolderPath,omitempty"`
+	// InCinemas and DigitalRelease are the movie's theatrical and digital
+	// release dates. Radarr serves them as RFC3339 timestamps, but they are
+	// calendar dates with no meaningful time-of-day: read the Y/M/D components
+	// directly and never convert time zones, which would shift a midnight date
+	// onto the previous day. Absent when the date is unknown to Radarr.
+	InCinemas      *time.Time `json:"inCinemas,omitempty"`
+	DigitalRelease *time.Time `json:"digitalRelease,omitempty"`
 }
 
 // MovieFile is Radarr's metadata for one completed movie file on disk.
