@@ -98,6 +98,20 @@ URL**, the origin your arrs POST webhooks back to, and the read-only **Media
 library** mount plus **Media roots**, which together turn on completed-media
 downloads.
 
+### Prebuilt binaries (no Docker)
+
+Every release attaches `cantinarr-linux-amd64.tar.gz` and `cantinarr-linux-arm64.tar.gz`
+(with `.sha256` checksums), extracted from the same build as the published image. Each
+contains the `cantinarr` server with the web app embedded, the pinned `codex-app-server`
+runtime it can spawn for ChatGPT-subscription AI access, and license notices:
+
+```bash
+tar -xzf cantinarr-linux-amd64.tar.gz
+install -m 0755 cantinarr codex-app-server /usr/local/bin/
+mkdir -p /config   # database + generated encryption key live here
+cantinarr          # serves everything on 8585 (CANTINARR_PORT overrides)
+```
+
 ### From Source
 
 ```bash
