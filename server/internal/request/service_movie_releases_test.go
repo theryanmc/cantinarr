@@ -3,6 +3,8 @@ package request
 import (
 	"testing"
 	"time"
+
+	"github.com/windoze95/cantinarr-server/internal/radarr"
 )
 
 // TestMovieStatusCarriesReleaseDates pins the release dates a movie's status
@@ -38,35 +40,25 @@ func TestMovieStatusCarriesReleaseDates(t *testing.T) {
 
 // TestMovieReleaseDatesDoNotShiftZones is the regression pin for the trap that
 // dogs every arr date: a movie release is a calendar date with no meaningful
-// time-of-day, so localising Radarr's midnight timestamp moves it onto the
-// previous day for every viewer west of UTC. The zone is forced here so the
-// test fails on a UTC CI box too, where the bug would otherwise hide.
+// time-of-day, so converting it moves it onto the neighbouring day.
+//
+// The dates are given a location deliberately far from UTC, which is what makes
+// the test bite on a UTC CI box: inserting either .UTC() or .Local() into the
+// projection drags this midnight back to the 2nd and the 11th and fails here.
+// (The process-wide time.Local is emphatically not moved to achieve that — it
+// races with every httptest server the rest of the package leaves running.)
 func TestMovieReleaseDatesDoNotShiftZones(t *testing.T) {
-	f := &fakeRadarr{
-		libraryJSON: `[{"id":1,"title":"Dune: Part Three","tmdbId":550,
-			"hasFile":false,"monitored":true,
-			"inCinemas":"2026-07-03T00:00:00Z","digitalRelease":"2026-09-12T00:00:00Z"}]`,
-	}
-	srv := newFakeRadarrServer(t, f)
-	// Built before the zone is forced: the SQLite driver parses stored
-	// timestamps against time.Local, so moving it mid-setup breaks the fixture
-	// rather than the thing under test.
-	s, uid := newHistoryTestService(t, srv.URL, "", "")
+	tz := time.FixedZone("UTC+13", 13*60*60)
+	cinemas := time.Date(2026, 7, 3, 0, 0, 0, 0, tz)
+	digital := time.Date(2026, 9, 12, 0, 0, 0, 0, tz)
 
-	original := time.Local
-	time.Local = time.FixedZone("UTC-8", -8*60*60)
-	t.Cleanup(func() { time.Local = original })
-
-	resp, err := s.GetUserStatus(uid, 550, "movie")
-	if err != nil {
-		t.Fatalf("GetUserStatus: %v", err)
-	}
-	if resp.Releases == nil {
+	got := movieReleases(&radarr.Movie{InCinemas: &cinemas, DigitalRelease: &digital})
+	if got == nil {
 		t.Fatal("releases = nil, want the movie's dates")
 	}
-	if resp.Releases.InCinemas != "2026-07-03" || resp.Releases.Digital != "2026-09-12" {
+	if got.InCinemas != "2026-07-03" || got.Digital != "2026-09-12" {
 		t.Errorf("dates = %q/%q, want 2026-07-03/2026-09-12 (a zone conversion slipped in)",
-			resp.Releases.InCinemas, resp.Releases.Digital)
+			got.InCinemas, got.Digital)
 	}
 }
 
