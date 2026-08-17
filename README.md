@@ -79,10 +79,12 @@ Open `http://your-server:8585` -- the setup wizard walks you through creating an
 
 ### Unraid
 
-The Community Applications template lives in
-[`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid).
-Cantinarr is not in the Apps tab, and Unraid removed custom template
-repositories, so add the file to the user-template folder yourself:
+Search **Cantinarr** in the **Apps** tab. The listing was approved on 2026-08-16
+and appears once the next Community Applications build publishes; its template
+lives in [`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid).
+
+If it is not there yet, add the file to Unraid's user-template folder yourself,
+since Unraid removed custom template repositories:
 
 ```bash
 curl -o /boot/config/plugins/dockerMan/templates-user/my-cantinarr.xml \
