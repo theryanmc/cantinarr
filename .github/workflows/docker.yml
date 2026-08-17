@@ -243,8 +243,31 @@ jobs:
           # releases/latest, so the banner only ever offers stable releases.
           prerelease_flag=""
           case "$TAG" in *-*) prerelease_flag="--prerelease" ;; esac
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$TAG" \
-            --generate-notes \
-            $prerelease_flag
+          # This create is the last step of a release and the only one that needs
+          # GitHub's own API healthy at that moment — the images are already in
+          # GHCR by now. v0.2.0 burned two full runs here on a transient
+          # `HTTP 503` from POST /releases, leaving published images that no
+          # Release announced until someone re-ran the workflow by hand. Retry
+          # across that kind of blip, re-checking existence each round so a
+          # create that landed behind a failed response is recognized instead of
+          # retried into an "already exists" error.
+          for attempt in $(seq 1 6); do
+            if gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --generate-notes \
+              $prerelease_flag; then
+              exit 0
+            fi
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $TAG exists after attempt ${attempt}; treating as created."
+              exit 0
+            fi
+            if [ "$attempt" -lt 6 ]; then
+              delay=$((attempt * 30))
+              echo "Release creation failed (attempt ${attempt}/6); retrying in ${delay}s."
+              sleep "$delay"
+            fi
+          done
+          echo "::error::Could not create the GitHub Release for ${TAG} after 6 attempts."
+          exit 1
