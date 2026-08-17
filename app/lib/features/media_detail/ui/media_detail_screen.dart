@@ -34,6 +34,7 @@ import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
+import '../logic/release_window.dart';
 import 'media_hero.dart';
 import 'season_table.dart';
 
@@ -235,6 +236,17 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                             _requestNotifier.state.isRequesting,
                                         error: _requestNotifier.state.error,
                                         onRequest: () => _onRequest(),
+                                      ),
+                                      // Sits with the status, not down in the
+                                      // facts: its whole job is to explain a
+                                      // badge that would otherwise read as a
+                                      // stalled download. Empty for TV, for
+                                      // titles not in the library, and once
+                                      // every date has passed.
+                                      _PendingReleaseLine(
+                                        releases:
+                                            _requestNotifier.state.releases,
+                                        status: _requestNotifier.state.status,
                                       ),
                                       const SizedBox(height: 10),
                                       Wrap(
@@ -952,6 +964,47 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         title: title,
         status: status,
         seasons: _requestNotifier.state.seasons,
+      ),
+    );
+  }
+}
+
+/// The release milestones a movie hasn't reached yet, e.g.
+/// "In cinemas Jun 12 • Digital Sep 4".
+///
+/// Renders nothing at all — not even padding — when there is nothing still
+/// ahead, so the request dock keeps its current shape for the overwhelmingly
+/// common case of an already-released title.
+class _PendingReleaseLine extends StatelessWidget {
+  final MovieReleaseDates releases;
+  final RequestStatus status;
+
+  const _PendingReleaseLine({required this.releases, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = pendingReleases(releases, status: status);
+    if (pending.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const Icon(Icons.event_outlined,
+              size: 15, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              formatPendingReleases(pending),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

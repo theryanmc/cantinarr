@@ -466,19 +466,61 @@ class RequestSeasonStatus {
   String get episodesLabel => '$episodeFileCount/$episodeCount';
 }
 
+/// A movie's theatrical and digital release dates, mirroring the backend
+/// `StatusResponse.releases` payload. Only movies already in the library carry
+/// them; everything else is [none].
+///
+/// These are calendar dates, not instants. The backend sends plain `YYYY-MM-DD`
+/// precisely so nothing localises them — a release date converted across time
+/// zones lands a day early or late — so they are parsed component-wise and must
+/// never be run through `toLocal()`.
+class MovieReleaseDates {
+  final DateTime? inCinemas;
+  final DateTime? digital;
+
+  const MovieReleaseDates({this.inCinemas, this.digital});
+
+  /// The absence of dates: either the title isn't in the library or the arr
+  /// knows neither date.
+  static const MovieReleaseDates none = MovieReleaseDates();
+
+  bool get isEmpty => inCinemas == null && digital == null;
+
+  factory MovieReleaseDates.fromJson(Map<String, dynamic> json) =>
+      MovieReleaseDates(
+        inCinemas: _parseCalendarDate(json['in_cinemas'] as String?),
+        digital: _parseCalendarDate(json['digital'] as String?),
+      );
+}
+
+/// Parses a `YYYY-MM-DD` calendar date into local midnight, ignoring anything
+/// after the date part. Returns null for a missing or unparseable value.
+DateTime? _parseCalendarDate(String? value) {
+  if (value == null || value.length < 10) return null;
+  final year = int.tryParse(value.substring(0, 4));
+  final month = int.tryParse(value.substring(5, 7));
+  final day = int.tryParse(value.substring(8, 10));
+  if (year == null || month == null || day == null) return null;
+  return DateTime(year, month, day);
+}
+
 /// The full request status for a title: the overall [status] plus, for TV, the
-/// per-season breakdown (empty for movies or series not in the library).
+/// per-season breakdown (empty for movies or series not in the library) and,
+/// for movies in the library, the [releases] dates.
 class RequestStatusDetail {
   final RequestStatus status;
   final List<RequestSeasonStatus> seasons;
+  final MovieReleaseDates releases;
 
   const RequestStatusDetail({
     this.status = RequestStatus.unavailable,
     this.seasons = const [],
+    this.releases = MovieReleaseDates.none,
   });
 
   factory RequestStatusDetail.fromJson(Map<String, dynamic> json) {
     final statusName = json['status'] as String? ?? 'unavailable';
+    final releases = json['releases'];
     return RequestStatusDetail(
       status: RequestStatus.values.firstWhere(
         (s) => s.name == statusName,
@@ -487,6 +529,9 @@ class RequestStatusDetail {
       seasons: ((json['seasons'] as List?) ?? const [])
           .map((e) => RequestSeasonStatus.fromJson(e as Map<String, dynamic>))
           .toList(),
+      releases: releases is Map<String, dynamic>
+          ? MovieReleaseDates.fromJson(releases)
+          : MovieReleaseDates.none,
     );
   }
 }

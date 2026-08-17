@@ -12,11 +12,21 @@ class RequestState {
   /// in the library). Drives the interactive season table.
   final List<RequestSeasonStatus> seasons;
 
+  /// Theatrical/digital release dates for a movie already in the library, so
+  /// the detail screen can say a title is not out yet rather than leaving a
+  /// "Requested" badge looking like a stalled download.
+  ///
+  /// Never null — an absent payload is [MovieReleaseDates.none] — so a refetch
+  /// that no longer carries dates overwrites the old ones through [copyWith]
+  /// instead of leaving them stranded.
+  final MovieReleaseDates releases;
+
   const RequestState({
     this.status = RequestStatus.unavailable,
     this.isRequesting = false,
     this.error,
     this.seasons = const [],
+    this.releases = MovieReleaseDates.none,
   });
 
   RequestState copyWith({
@@ -24,12 +34,14 @@ class RequestState {
     bool? isRequesting,
     String? error,
     List<RequestSeasonStatus>? seasons,
+    MovieReleaseDates? releases,
   }) =>
       RequestState(
         status: status ?? this.status,
         isRequesting: isRequesting ?? this.isRequesting,
         error: error,
         seasons: seasons ?? this.seasons,
+        releases: releases ?? this.releases,
       );
 }
 
@@ -59,7 +71,11 @@ class RequestNotifier extends ChangeNotifier {
   Future<void> checkStatus() async {
     try {
       final detail = await _service.checkStatusDetail(_tmdbId, _mediaType);
-      state = state.copyWith(status: detail.status, seasons: detail.seasons);
+      state = state.copyWith(
+        status: detail.status,
+        seasons: detail.seasons,
+        releases: detail.releases,
+      );
     } catch (e) {
       state = state.copyWith(error: 'Could not check status');
     }
