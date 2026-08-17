@@ -1334,6 +1334,8 @@ class _DrawerItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final trailingWidget =
+        badgeCount > 0 ? _CountPill(count: badgeCount) : trailing;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: AnimatedContainer(
@@ -1383,17 +1385,46 @@ class _DrawerItem extends StatelessWidget {
                   color: selected ? AppTheme.accent : AppTheme.textSecondary,
                 ),
               ),
-              title: Text(
-                title,
-                style: TextStyle(
-                  color:
-                      selected ? AppTheme.textPrimary : AppTheme.textSecondary,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  letterSpacing: selected ? 0.05 : 0,
-                ),
+              // The trailing widget rides inside the title row rather than in
+              // ListTile's own trailing slot. ListTile measures trailing first
+              // and hands the title whatever is left, so a 128px instance chip
+              // left "Chaptarr" 31px of the sidebar's 167px title slot and it
+              // wrapped mid-word to "Chapta / rr". Splitting the slot by flex
+              // instead guarantees the module name enough room for the longest
+              // label that can carry a chip, and makes the user-supplied
+              // instance name the side that ellipsizes. Both children are
+              // flexible, so no width can overflow this row.
+              title: Row(
+                children: [
+                  Flexible(
+                    flex: 3,
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected
+                            ? AppTheme.textPrimary
+                            : AppTheme.textSecondary,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                        letterSpacing: selected ? 0.05 : 0,
+                      ),
+                    ),
+                  ),
+                  if (trailingWidget != null) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: trailingWidget,
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              trailing:
-                  badgeCount > 0 ? _CountPill(count: badgeCount) : trailing,
               selected: selected,
               selectedTileColor: Colors.transparent,
               shape: RoundedRectangleBorder(

@@ -530,6 +530,76 @@ void main() {
     expect(find.text('Radarr library'), findsOneWidget);
   });
 
+  // A long instance name once squeezed the module label until "Chaptarr"
+  // wrapped mid-word to "Chapta / rr" in the desktop sidebar. The chip is the
+  // side that gives way now, so the module name stays whole on one line.
+  testWidgets('a long instance name never truncates the module label',
+      (tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final container = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(
+          () => _FakeAuthNotifier(_longInstanceNameState()),
+        ),
+        backendClientProvider.overrideWithValue(_fakeDio()),
+        realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // "Settings" carries no instance chip, so its height is the one-line
+    // reference. The original defect made this label twice as tall.
+    expect(
+      tester.getSize(find.text('Radarr')).height,
+      tester.getSize(find.text('Settings')).height,
+      reason: 'the module name must stay on a single line',
+    );
+
+    // Absolute widths are not assertable here: the test font is a fixed-width
+    // placeholder that renders every label far wider than Roboto does. What
+    // must hold in any font is the priority -- the module name is the
+    // navigation target and outranks a user-supplied instance name, so it is
+    // the chip that gives way when the 280px sidebar runs out of room.
+    final labelWidth = tester.getSize(find.text('Radarr')).width;
+    final chipWidth =
+        tester.getSize(find.byTooltip('Choose Radarr instance')).width;
+    expect(
+      labelWidth,
+      greaterThan(chipWidth),
+      reason: 'the instance chip must not out-size the module name',
+    );
+  });
+
   testWidgets('admin drawer keeps all attention entries visible by default',
       (tester) async {
     await _pumpAdminDrawer(tester);
@@ -777,6 +847,32 @@ AuthState _multiRadarrState({required bool isAdmin}) {
       username: isAdmin ? 'admin' : 'viewer',
       role: isAdmin ? 'admin' : 'user',
     ),
+  );
+}
+
+/// Two instances (so the selector chip renders) where the active one carries a
+/// name long enough to compete with the module label for the sidebar's width.
+AuthState _longInstanceNameState() {
+  return const AuthState(
+    connection: BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(
+          id: 'radarr-main',
+          serviceType: 'radarr',
+          name: 'A Very Long Radarr Library Name',
+          isDefault: true,
+        ),
+        ServiceInstance(
+          id: 'radarr-4k',
+          serviceType: 'radarr',
+          name: '4K Radarr',
+        ),
+      ],
+    ),
+    user: UserProfile(id: 1, username: 'admin', role: 'admin'),
   );
 }
 
