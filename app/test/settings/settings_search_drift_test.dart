@@ -47,6 +47,7 @@ const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
   donateVisible: true,
+  phoneAppsVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
