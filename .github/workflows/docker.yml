@@ -217,7 +217,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=published
 
   # The GitHub Release is what the server's update checker polls
-  # (releases/latest) and what the banner's "Notes" button opens. It must
+  # (releases/latest) and where admins read what changed. It must
   # never precede the image it announces, so it waits on the publish job; the
   # gate already held everything until CI was green on this exact commit (a
   # v* tag reuses the CI verdict from the main push of the same commit).
@@ -240,7 +240,7 @@ jobs:
             exit 0
           fi
           # A -suffixed tag (v0.2.0-rc.1) is a prerelease: GitHub keeps it off
-          # releases/latest, so the banner only ever offers stable releases.
+          # releases/latest, so the update check only ever sees stable releases.
           prerelease_flag=""
           case "$TAG" in *-*) prerelease_flag="--prerelease" ;; esac
           # This create is the last step of a release and the only one that needs
