@@ -301,12 +301,13 @@ Full API documentation is in [`server/README.md`](server/README.md#api-reference
 
 ## Contributing
 
-Cantinarr development happens directly by the maintainer, so external pull requests are closed automatically. The two ways to shape the project:
+Pull requests are welcome. Three ways to shape the project:
 
+- **Pull requests** -- fork, branch, and open one. Run the checks first (`go vet ./...` and `go test ./...` from `server/`; `flutter analyze --no-fatal-infos` and `flutter test` from `app/`), and update any doc your change makes untrue. CI runs the same checks on every PR, and a first-time contributor's run needs one approval from the maintainer before it starts. For anything large, open an issue first so the shape can be agreed before you build it.
 - **Bugs and technical issues** -- open one on the [issue tracker](https://github.com/windoze95/cantinarr/issues).
 - **Feature requests** -- post and vote at [cantinarr.com/roadmap](https://cantinarr.com/roadmap/), no account needed.
 
-`AGENTS.md` is the operating manual for the maintainer's own workflow (branch protocol, verification commands, documentation standard).
+[`AGENTS.md`](AGENTS.md) is the operating manual for the repo: branch protocol, verification commands, architecture conventions, and the documentation standard. It applies to human contributors and AI agents alike.
 
 ## Support
 
