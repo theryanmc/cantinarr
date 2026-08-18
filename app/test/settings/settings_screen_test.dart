@@ -201,6 +201,30 @@ void main() {
     expect(find.text('Support Cantinarr on GitHub Sponsors'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
+  testWidgets('the phone-app tile never shows inside the phone apps',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('GitHub'));
+    for (var i = 0; i < 3; i++) {
+      await tester.drag(find.byType(ListView).first, const Offset(0, -200));
+      await tester.pumpAndSettle();
+    }
+    expect(find.text('Get the phone app'), findsNothing);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('the phone-app tile appears outside the store binaries',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('Get the phone app'));
+    expect(find.text('Get the phone app'), findsOneWidget);
+    expect(
+      find.text('iPhone and Android, with push notifications'),
+      findsOneWidget,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
   group('Setup Checklist tile', _setupChecklistTileTests);
 }
 

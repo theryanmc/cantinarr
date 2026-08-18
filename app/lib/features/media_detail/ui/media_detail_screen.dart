@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +14,7 @@ import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
+import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/section_header.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -458,7 +461,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               title: state.title,
                               tvdbId: state.tvDetail?.externalIds?.tvdbId,
                               canRequest: _canChooseSeasons,
-                              onRequested: _bumpLibraryRefresh,
+                              onRequested: _onRequestSucceeded,
                               downloadInstanceId: _downloadInstanceId,
                               downloadChoicesBySeason:
                                   _episodeDownloadChoicesBySeason,
@@ -559,7 +562,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       seasonScope: seasonScope,
       qualityProfileId: qualityProfileId,
     );
-    if (mounted && _requestNotifier.state.error == null) _bumpLibraryRefresh();
+    if (mounted && _requestNotifier.state.error == null) _onRequestSucceeded();
+  }
+
+  /// Every successful submission (coarse request or per-season table) lands
+  /// here: refresh the library snapshot, then offer the phone apps — a no-op
+  /// everywhere but the first success on a build that shows them.
+  void _onRequestSucceeded() {
+    _bumpLibraryRefresh();
+    unawaited(maybeShowPhoneAppsPrompt(context));
   }
 
   /// Tell the shell its search-chip library snapshot just went stale (the arr

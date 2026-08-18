@@ -9,6 +9,7 @@ import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/attention_menu_visibility_switch.dart';
+import '../../../core/widgets/phone_apps_sheet.dart';
 import '../../../core/widgets/settings_highlight.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';
@@ -76,6 +77,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
       donateVisible: _donateVisible,
+      phoneAppsVisible: phoneAppsVisible,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -424,6 +426,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 builder: (_) => const AboutSheet(),
               ),
             ),
+            if (phoneAppsVisible)
+              _SettingsTile(
+                icon: Icons.smartphone,
+                title: 'Get the phone app',
+                subtitle: 'iPhone and Android, with push notifications',
+                onTap: () => showAppSheet(
+                  context,
+                  builder: (_) => const PhoneAppsSheet(),
+                ),
+              ),
             _SettingsTile(
               icon: Icons.code,
               title: 'GitHub',

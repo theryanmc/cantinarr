@@ -33,10 +33,15 @@ class SettingsSearchGates {
   /// Platform gate for the Donate tile (hidden in store binaries).
   final bool donateVisible;
 
+  /// Platform gate for the phone-app tile (the store binaries are the apps it
+  /// advertises, so they hide it).
+  final bool phoneAppsVisible;
+
   const SettingsSearchGates({
     required this.user,
     this.chaptarrEnabled = false,
     this.donateVisible = false,
+    this.phoneAppsVisible = false,
   });
 }
 
@@ -54,6 +59,7 @@ bool gatePasskey(SettingsSearchGates g) => g.user?.canUsePasskey == true;
 bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
+bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
 
 /// One searchable setting.
 class SettingsSearchEntry {
@@ -421,6 +427,25 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'About',
     keywords: ['version', 'about', 'licenses'],
     gate: gateEveryone,
+  ),
+  SettingsSearchEntry(
+    id: 'root.phone-apps',
+    title: 'Get the phone app',
+    icon: Icons.smartphone,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'About',
+    keywords: [
+      'iphone',
+      'ios',
+      'android',
+      'mobile',
+      'testflight',
+      'beta',
+      'push notifications',
+      'download app',
+    ],
+    gate: gatePhoneApps,
   ),
   SettingsSearchEntry(
     id: 'root.github',
