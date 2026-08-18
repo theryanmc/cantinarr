@@ -102,16 +102,14 @@ class _AppLinkTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
+    return Material(
+      color: AppTheme.surface,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        border: Border.all(color: AppTheme.border),
+        side: const BorderSide(color: AppTheme.border),
       ),
+      clipBehavior: Clip.antiAlias,
       child: ListTile(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppTheme.radiusLg),
-        ),
         leading: Icon(icon, color: AppTheme.accent),
         title: Text(title,
             style: const TextStyle(
