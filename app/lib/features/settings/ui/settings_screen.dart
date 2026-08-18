@@ -307,7 +307,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Update Portal',
                 subtitle: (updateStatus?.managementUrl.isNotEmpty ?? false)
                     ? updateStatus!.managementUrl
-                    : 'Link your container manager for the update banner',
+                    : 'Link your container manager for update prompts',
                 onTap: () => _showManagementUrlDialog(
                   context,
                   updateStatus?.managementUrl ?? '',
@@ -666,9 +666,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'Optional. When set, the "update available" banner links here so '
-                'you can apply the update in your own container manager (e.g. an '
-                'Unraid Docker page or Portainer). The link opens on your '
+                'Optional. When set, an in-app prompt to update the server '
+                'links here so you can apply the update in your own container '
+                'manager (e.g. an Unraid Docker page or Portainer). The link '
+                'opens on your '
                 'devices, so use an address they can reach — a cluster-internal '
                 'name only the server resolves won\'t work from a phone. Leave '
                 'blank to clear.',

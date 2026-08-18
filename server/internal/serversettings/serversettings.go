@@ -1,8 +1,8 @@
 // Package serversettings stores small, admin-editable, server-wide preferences
 // in the settings key/value table (mirroring the remediation/request settings
-// pattern). It holds the optional management-portal URL that the "update
-// available" banner links to, and the discovery preferences that decide which
-// feed backs the headline discovery rows.
+// pattern). It holds the optional management-portal URL that the app's
+// "update the server" warning links to, and the discovery preferences that
+// decide which feed backs the headline discovery rows.
 package serversettings
 
 import (
@@ -236,7 +236,7 @@ func validateDiscoverySource(raw string) error {
 }
 
 // validateURL accepts an empty string (clears the setting) or an absolute
-// http(s) URL; anything else is rejected so the banner never links somewhere
+// http(s) URL; anything else is rejected so the link never points somewhere
 // unusable.
 func validateURL(raw string) error {
 	if raw == "" {

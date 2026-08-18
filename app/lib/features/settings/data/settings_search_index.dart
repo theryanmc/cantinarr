@@ -322,7 +322,7 @@ const List<SettingsSearchEntry> _rootEntries = [
     route: '/settings',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['container', 'banner', 'update link', 'unraid', 'portainer'],
+    keywords: ['container', 'update link', 'unraid', 'portainer'],
     gate: gateAdmin,
   ),
   // The attention rows double as each queue's stable doorway: the row opens

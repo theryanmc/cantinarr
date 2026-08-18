@@ -289,8 +289,9 @@ func main() {
 	wsHub.SetIssueOpener(autoDispatcher)
 	go wsHub.Run(ctx)
 
-	// Server settings: the admin-configured management-portal URL the update
-	// banner links to, plus the discovery preferences the rows read per request.
+	// Server settings: the admin-configured management-portal URL the app's
+	// version warnings link to, plus the discovery preferences the rows read
+	// per request.
 	// The Trakt probe is read per call, so adding or removing that credential
 	// moves the default row source without a restart.
 	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })

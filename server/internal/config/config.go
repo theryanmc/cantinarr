@@ -53,8 +53,8 @@ type Config struct {
 	PushGatewayURL  string
 	PushAPIKey      string
 	PushEnrollToken string
-	// DisableUpdateCheck turns off the periodic GitHub release check that powers
-	// the admin "update available" banner (CANTINARR_DISABLE_UPDATE_CHECK).
+	// DisableUpdateCheck turns off the periodic GitHub release check behind the
+	// admin update-status endpoint (CANTINARR_DISABLE_UPDATE_CHECK).
 	DisableUpdateCheck bool
 	// CodexBin optionally overrides the Codex app-server executable. Empty lets
 	// the adapter discover codex-app-server first and the full codex CLI second.

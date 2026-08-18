@@ -176,8 +176,6 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
       // Proposals may have executed, failed, or been superseded while the app
       // was backgrounded. Reconcile the review badge on every foreground.
       ref.read(pendingAgentActionsProvider.notifier).refresh();
-      // And re-check for a newer server release (no-op for non-admins).
-      ref.read(updateStatusProvider.notifier).refresh();
     }
   }
 
@@ -472,12 +470,17 @@ class _ReconnectingBar extends StatelessWidget {
 }
 
 /// The persistent banner slot at the top of the app, showing at most one
-/// notice in priority order: this app is older than the server's floor
-/// (everyone — the viewer can fix that one themselves), the server is older
-/// than this app's floor (admins), a newer Cantinarr release exists (admins).
-/// All are warn-only by design — a hard block would be a deliberate future
-/// escalation — and each is dismissible per exact version (pair), so a
-/// dismissal frees the slot and resurfaces only when the versions change.
+/// version-skew notice in priority order: this app is older than the server's
+/// floor (everyone — the viewer can fix that one themselves), then the server
+/// is older than this app's floor (admins). Both are warn-only by design — a
+/// hard block would be a deliberate future escalation — and each is
+/// dismissible per exact version pair, so a dismissal frees the slot and
+/// resurfaces only when the versions change.
+///
+/// Release news is deliberately *not* one of them: the app-wide "a newer
+/// Cantinarr is available" bar is off. The server still computes the
+/// comparison and `/api/admin/update-status` still answers it — only the
+/// nag is gone, so re-enabling is a UI change, not a feature rebuild.
 class _UpdateBanner extends ConsumerWidget {
   const _UpdateBanner({required this.child});
 
@@ -515,6 +518,7 @@ class _UpdateBanner extends ConsumerWidget {
     );
     final connection =
         ref.watch(authProvider.select((s) => s.valueOrNull?.connection));
+    // Read only for the admin's management-portal link below.
     final status = ref.watch(updateStatusProvider);
     final appVersion = ref.watch(appVersionProvider).valueOrNull?.version;
     final serverFloor = connection?.minAppVersion;
@@ -559,36 +563,16 @@ class _UpdateBanner extends ConsumerWidget {
         break;
     }
 
-    final update = status?.update;
-    final dismissed = ref.watch(dismissedUpdateVersionProvider);
-    if (isAdmin &&
-        update != null &&
-        update.available &&
-        update.latest.isNotEmpty &&
-        dismissed != update.latest) {
-      final (label, url) = _updateAction(status?.managementUrl ?? '');
-      return _UpdateBannerBar(
-        icon: Icons.system_update,
-        message: 'Cantinarr ${update.latest} is available',
-        notesUrl: update.url,
-        actionLabel: label,
-        actionUrl: url,
-        onDismiss: () => ref
-            .read(dismissedUpdateVersionProvider.notifier)
-            .set(update.latest),
-      );
-    }
     return null;
   }
 }
 
 /// The banner slot's visual content: an icon, a short message, an optional
-/// "Notes" link, an optional primary action, and a dismiss button.
+/// primary action, and a dismiss button.
 class _UpdateBannerBar extends StatelessWidget {
   const _UpdateBannerBar({
     required this.icon,
     required this.message,
-    this.notesUrl,
     this.actionLabel,
     this.actionUrl,
     required this.onDismiss,
@@ -596,7 +580,6 @@ class _UpdateBannerBar extends StatelessWidget {
 
   final IconData icon;
   final String message;
-  final String? notesUrl;
   final String? actionLabel;
   final String? actionUrl;
   final VoidCallback onDismiss;
@@ -610,7 +593,6 @@ class _UpdateBannerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final notes = notesUrl;
     final label = actionLabel;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
@@ -629,11 +611,6 @@ class _UpdateBannerBar extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (notes != null && notes.isNotEmpty)
-            TextButton(
-              onPressed: () => _open(notes),
-              child: const Text('Notes'),
-            ),
           if (label != null)
             TextButton(
               onPressed: () => _open(actionUrl ?? ''),

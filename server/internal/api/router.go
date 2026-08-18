@@ -178,8 +178,8 @@ func NewRouter(
 			// every request (drives the app's setup wizard + reminders).
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, plexService, serverSettings, remediationService))
 
-			// Update availability + the admin-configured management-portal URL that
-			// backs the "update available" banner. GET returns both; PUT sets the
+			// Update availability + the admin-configured management-portal URL the
+			// app's version warnings link to. GET returns both; PUT sets the
 			// management URL.
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/update-status", updateStatusHandler(updateChecker, serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/update-status", updateServerSettingsHandler(updateChecker, serverSettings))
