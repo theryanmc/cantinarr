@@ -418,7 +418,7 @@ void main() {
 
   testWidgets(
       'ROADMAP Phase 2 criterion 2: a never-requested missing format '
-      'renders Partially Available', (tester) async {
+      'renders Partial', (tester) async {
     tester.view.physicalSize = const Size(900, 1400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -440,7 +440,7 @@ void main() {
     final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
     expect(cards, hasLength(2));
     for (final card in cards) {
-      expect(card.statusLabel, 'Partially Available');
+      expect(card.statusLabel, 'Partial');
       expect(card.statusColor, AppTheme.requested);
       expect(card.subtitle, 'eBook');
     }

@@ -104,7 +104,7 @@ void main() {
   });
 
   testWidgets(
-      'TV Discover browse rows badge Partially Available/Requested from the Sonarr library',
+      'TV Discover browse rows badge Partial/Requested from the Sonarr library',
       (tester) async {
     final adapter = _SonarrAdapter(
       series: [
@@ -146,7 +146,7 @@ void main() {
 
     final byTitle = {for (final c in _browseRowCards(tester)) c.title: c};
 
-    expect(byTitle['Partial Series']?.statusLabel, 'Partially Available');
+    expect(byTitle['Partial Series']?.statusLabel, 'Partial');
     expect(byTitle['Partial Series']?.statusColor, AppTheme.requested);
     expect(byTitle['Partial Series']?.subtitle, '18/24 eps');
 

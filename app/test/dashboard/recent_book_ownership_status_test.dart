@@ -161,7 +161,7 @@ void main() {
 
     test(
         'eBook downloaded, audiobook neither monitored nor downloaded -> '
-        'Partially Available, not Available', () {
+        'Partial, not Available', () {
       // A never-requested missing format still counts as incomplete — the
       // search chip's two-state boolean would call this same input
       // available; BOOK-01 deliberately does not.
@@ -169,7 +169,7 @@ void main() {
         _title(ebook: _downloaded, audiobook: _neither),
       );
       expect(status, isNotNull);
-      expect(status!.label, 'Partially Available');
+      expect(status!.label, 'Partial');
       expect(status.label, isNot('Available'));
       expect(status.color, AppTheme.requested);
       expect(status.subtitle, 'eBook');
@@ -177,12 +177,12 @@ void main() {
 
     test(
         'audiobook downloaded, eBook neither monitored nor downloaded -> '
-        'Partially Available', () {
+        'Partial', () {
       final status = buildRecentBookStatus(
         _title(ebook: _neither, audiobook: _downloaded),
       );
       expect(status, isNotNull);
-      expect(status!.label, 'Partially Available');
+      expect(status!.label, 'Partial');
       expect(status.color, AppTheme.requested);
       expect(status.subtitle, 'Audiobook');
     });
@@ -227,7 +227,7 @@ void main() {
       expect(status!.label, 'Available');
     });
 
-    test('Requested and Partially Available share one colour, distinct from '
+    test('Requested and Partial share one colour, distinct from '
         'Available', () {
       final requested = buildRecentBookStatus(
         _title(ebook: _monitored, audiobook: _neither),

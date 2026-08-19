@@ -147,7 +147,7 @@ void main() {
         movies: const [],
         series: const [partial, empty, abandoned],
       );
-      expect(map[(MediaType.tv, 100)]?.label, 'Partially Available');
+      expect(map[(MediaType.tv, 100)]?.label, 'Partial');
       expect(map[(MediaType.tv, 100)]?.episodeSubtitle, '4/8 eps');
       expect(map[(MediaType.tv, 200)]?.label, 'Requested');
       expect(map[(MediaType.tv, 200)]?.episodeSubtitle, isNull);
@@ -177,7 +177,7 @@ void main() {
         movies: const [],
         series: const [renewed],
       );
-      expect(map[(MediaType.tv, 400)]?.label, 'Partially Available');
+      expect(map[(MediaType.tv, 400)]?.label, 'Partial');
       expect(map[(MediaType.tv, 400)]?.episodeSubtitle, '18/24 eps');
     });
 
@@ -220,7 +220,7 @@ void main() {
         movies: const [],
         series: const [unknownTotal],
       );
-      expect(map[(MediaType.tv, 500)]?.label, 'Partially Available');
+      expect(map[(MediaType.tv, 500)]?.label, 'Partial');
       expect(map[(MediaType.tv, 500)]?.episodeSubtitle, isNull);
     });
   });

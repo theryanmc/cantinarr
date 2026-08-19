@@ -36,7 +36,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
   bool _isLoadingLibrary = false;
 
   /// The full Sonarr library, retained so Discover browse-row posters can be
-  /// badged Available/Partially Available/Requested from the same fetch this
+  /// badged Available/Partial/Requested from the same fetch this
   /// tab already makes — no second Sonarr call.
   List<SonarrSeries> _librarySeries = [];
 

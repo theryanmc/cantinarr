@@ -22,7 +22,7 @@ void main() {
   const available =
       LibraryStatus(label: 'Available', color: AppTheme.available);
   const partial = LibraryStatus(
-    label: 'Partially Available',
+    label: 'Partial',
     color: AppTheme.requested,
     episodeSubtitle: '4/8 eps',
   );
@@ -79,8 +79,8 @@ void main() {
 
     expect(find.text('Available'), findsOneWidget);
     expect(colorOf('Available'), AppTheme.available);
-    expect(find.text('Partially Available'), findsOneWidget);
-    expect(colorOf('Partially Available'), AppTheme.requested);
+    expect(find.text('Partial'), findsOneWidget);
+    expect(colorOf('Partial'), AppTheme.requested);
     expect(find.text('Requested'), findsOneWidget);
     expect(colorOf('Requested'), AppTheme.requested);
   });
@@ -123,7 +123,7 @@ void main() {
     );
 
     expect(find.text('Available'), findsNothing);
-    expect(find.text('Partially Available'), findsNothing);
+    expect(find.text('Partial'), findsNothing);
     expect(find.text('Requested'), findsNothing);
   });
 
@@ -137,7 +137,7 @@ void main() {
       libraryStatus: {(MediaType.person, 5): partial},
     );
 
-    expect(find.text('Partially Available'), findsNothing);
+    expect(find.text('Partial'), findsNothing);
     expect(find.text('4/8 eps'), findsNothing);
   });
 
@@ -168,7 +168,7 @@ void main() {
 
     expect(labels.containsAll(const {
       'Available',
-      'Partially Available',
+      'Partial',
       'Requested',
     }), isTrue);
   });

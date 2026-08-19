@@ -37,7 +37,7 @@ class _Verdict {
 // `search_library_status.dart`'s `_available`/`_partial`/`_requested` — no
 // new theme token is introduced by this phase.
 const _available = _Verdict('Available', AppTheme.available);
-const _partial = _Verdict('Partially Available', AppTheme.requested);
+const _partial = _Verdict('Partial', AppTheme.requested);
 const _requested = _Verdict('Requested', AppTheme.requested);
 
 /// One format's D-04 subtitle part. Downloaded outranks monitored: a format
@@ -115,7 +115,7 @@ RecentBookStatus? buildRecentBookStatus(OwnedTitle? owned) {
   // BOOK-01 is deliberately stricter than dashboard_books_tab.dart's search
   // ownership chip (`_ownershipChip`)'s two-state `available` boolean, which
   // treats a missing format nobody ever requested as fully available. Here,
-  // "something downloaded, nothing pending" is Partially Available, not
+  // "something downloaded, nothing pending" is Partial, not
   // Available — the two sites answer different questions on purpose, so
   // this file does not import that one, and the divergence is not resolved
   // by extracting a shared helper between them.
