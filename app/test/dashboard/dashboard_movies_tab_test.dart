@@ -210,7 +210,6 @@ class _RadarrAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     Object body;
-    int status = 200;
     if (options.path == '$_base/movie') {
       if (failMovies) {
         return ResponseBody.fromString('{"error":"unavailable"}', 503,
@@ -241,7 +240,7 @@ class _RadarrAdapter implements HttpClientAdapter {
     }
     return ResponseBody.fromString(
       jsonEncode(body),
-      status,
+      200,
       headers: {
         'content-type': ['application/json'],
       },
