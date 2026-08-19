@@ -78,15 +78,15 @@ type Handler struct {
 	registry     *Registry
 	webhookMu    sync.Mutex
 	webhookLocks map[string]*sync.Mutex
-	publicURL    string
+	arrCallbackURL string
 	mediaRoots   []string
 }
 
 // NewHandler creates a new instance handler.
-func NewHandler(store *Store, registry *Registry, publicURL ...string) *Handler {
+func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
 	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex)}
-	if len(publicURL) > 0 {
-		h.publicURL = strings.TrimRight(publicURL[0], "/")
+	if len(arrCallbackURL) > 0 {
+		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
 	return h
 }

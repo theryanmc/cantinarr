@@ -375,7 +375,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	cfg := &config.Config{
 		JWTSecret:         "config-jwt-secret",
 		ServerName:        "Coverage Lab",
-		PublicURL:         "https://config-public-url-secret.invalid",
+		ArrCallbackURL:    "https://config-public-url-secret.invalid",
 		EncryptionKeyFile: "/config/encryption-key-path-secret",
 		PushGatewayURL:    "https://config-push-gateway-secret.invalid",
 		PushAPIKey:        "config-push-api-key-secret",
@@ -385,7 +385,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 	}
 	secretSentinels = append(secretSentinels,
 		cfg.JWTSecret,
-		cfg.PublicURL,
+		cfg.ArrCallbackURL,
 		cfg.EncryptionKeyFile,
 		cfg.PushGatewayURL,
 		cfg.PushAPIKey,
