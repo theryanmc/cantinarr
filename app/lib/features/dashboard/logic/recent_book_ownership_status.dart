@@ -35,10 +35,10 @@ class _Verdict {
 
 // Same three requester-vocabulary labels and the same two theme tokens as
 // `search_library_status.dart`'s `_available`/`_partial`/`_requested` — no
-// new theme token is introduced by this phase. `_partial` and `_requested`
-// are added in Task 2 alongside the branches that use them; declaring them
-// here unused would fail `flutter analyze`.
+// new theme token is introduced by this phase.
 const _available = _Verdict('Available', AppTheme.available);
+const _partial = _Verdict('Partially Available', AppTheme.requested);
+const _requested = _Verdict('Requested', AppTheme.requested);
 
 /// One format's D-04 subtitle part. Downloaded outranks monitored: a format
 /// that is both is on disk already, and there is nothing outstanding left to
@@ -95,6 +95,9 @@ RecentBookStatus? buildRecentBookStatus(OwnedTitle? owned) {
   // above has passed.
   final subtitle = recentBookOwnershipSubtitle(owned.ownership)!;
 
+  // Order matters: this both-downloaded check must come before the
+  // `awaiting` check below so a title whose formats are both downloaded and
+  // both still monitored reads Available rather than Requested.
   if (e.downloaded && a.downloaded) {
     return RecentBookStatus(
       label: _available.label,
@@ -103,8 +106,31 @@ RecentBookStatus? buildRecentBookStatus(OwnedTitle? owned) {
     );
   }
 
-  // The remainder of BOOK-01's three-state rule (Partially Available and
-  // Requested) is completed in Task 2. Returning null here is D-02-safe: an
-  // incomplete verdict shows no pill, never a wrong one.
-  return null;
+  // True when some format is being fetched right now. A downloaded format is
+  // deliberately excluded here: a downloaded file is not something the
+  // requester is waiting for, and counting it would make every monitored
+  // complete title read Requested forever.
+  final awaiting = (e.monitored && !e.downloaded) || (a.monitored && !a.downloaded);
+
+  // BOOK-01 is deliberately stricter than dashboard_books_tab.dart's search
+  // ownership chip (`_ownershipChip`)'s two-state `available` boolean, which
+  // treats a missing format nobody ever requested as fully available. Here,
+  // "something downloaded, nothing pending" is Partially Available, not
+  // Available — the two sites answer different questions on purpose, so
+  // this file does not import that one, and the divergence is not resolved
+  // by extracting a shared helper between them.
+  if (awaiting) {
+    return RecentBookStatus(
+      label: _requested.label,
+      color: _requested.color,
+      subtitle: subtitle,
+    );
+  }
+  // Something is on disk (the anyOwned guard above passed) and nothing is
+  // pending: part of the title is simply missing, with no one waiting on it.
+  return RecentBookStatus(
+    label: _partial.label,
+    color: _partial.color,
+    subtitle: subtitle,
+  );
 }

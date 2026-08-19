@@ -134,5 +134,109 @@ void main() {
       expect(status.color, AppTheme.available);
       expect(status.subtitle, 'eBook + Audiobook');
     });
+
+    test(
+        'eBook downloaded, audiobook monitored but not downloaded -> '
+        'Requested', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _downloaded, audiobook: _monitored),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Requested');
+      expect(status.color, AppTheme.requested);
+      expect(status.subtitle, 'eBook + Audiobook requested');
+    });
+
+    test(
+        'audiobook downloaded, eBook monitored but not downloaded -> '
+        'Requested', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _monitored, audiobook: _downloaded),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Requested');
+      expect(status.color, AppTheme.requested);
+      expect(status.subtitle, 'eBook requested + Audiobook');
+    });
+
+    test(
+        'eBook downloaded, audiobook neither monitored nor downloaded -> '
+        'Partially Available, not Available', () {
+      // A never-requested missing format still counts as incomplete — the
+      // search chip's two-state boolean would call this same input
+      // available; BOOK-01 deliberately does not.
+      final status = buildRecentBookStatus(
+        _title(ebook: _downloaded, audiobook: _neither),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Partially Available');
+      expect(status.label, isNot('Available'));
+      expect(status.color, AppTheme.requested);
+      expect(status.subtitle, 'eBook');
+    });
+
+    test(
+        'audiobook downloaded, eBook neither monitored nor downloaded -> '
+        'Partially Available', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _neither, audiobook: _downloaded),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Partially Available');
+      expect(status.color, AppTheme.requested);
+      expect(status.subtitle, 'Audiobook');
+    });
+
+    test('nothing downloaded, eBook monitored only -> Requested', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _monitored, audiobook: _neither),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Requested');
+      expect(status.subtitle, 'eBook requested');
+    });
+
+    test('nothing downloaded, audiobook monitored only -> Requested', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _neither, audiobook: _monitored),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Requested');
+      expect(status.subtitle, 'Audiobook requested');
+    });
+
+    test('nothing downloaded, both monitored -> Requested', () {
+      final status = buildRecentBookStatus(
+        _title(ebook: _monitored, audiobook: _monitored),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Requested');
+      expect(status.subtitle, 'eBook requested + Audiobook requested');
+    });
+
+    test(
+        'both downloaded and both also monitored -> still Available, never '
+        'downgraded to Requested', () {
+      final status = buildRecentBookStatus(
+        _title(
+          ebook: _downloadedAndMonitored,
+          audiobook: _downloadedAndMonitored,
+        ),
+      );
+      expect(status, isNotNull);
+      expect(status!.label, 'Available');
+    });
+
+    test('Requested and Partially Available share one colour, distinct from '
+        'Available', () {
+      final requested = buildRecentBookStatus(
+        _title(ebook: _monitored, audiobook: _neither),
+      )!;
+      final partial = buildRecentBookStatus(
+        _title(ebook: _downloaded, audiobook: _neither),
+      )!;
+      expect(requested.color, partial.color);
+      expect(requested.color, isNot(AppTheme.available));
+    });
   });
 }

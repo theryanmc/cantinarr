@@ -382,4 +382,64 @@ void main() {
     final card = tester.widget<MediaCard>(find.byType(MediaCard));
     expect(card.statusLabel, isNull);
   });
+
+  testWidgets(
+      'ROADMAP Phase 2 criterion 1: a monitored missing format renders '
+      'Requested', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: true,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, 'Requested');
+      expect(card.statusColor, AppTheme.requested);
+      expect(card.subtitle, 'eBook + Audiobook requested');
+    }
+  });
+
+  testWidgets(
+      'ROADMAP Phase 2 criterion 2: a never-requested missing format '
+      'renders Partially Available', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: false,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, 'Partially Available');
+      expect(card.statusColor, AppTheme.requested);
+      expect(card.subtitle, 'eBook');
+    }
+  });
 }
