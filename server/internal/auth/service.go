@@ -551,6 +551,16 @@ func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*
 	token := hex.EncodeToString(tokenBytes)
 
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	// Issuing a link supersedes this user's outstanding one, which is what the
+	// admin UI promises ("it replaces any previous link") and what reissuing
+	// is for: an admin who re-invites because the old link went to the wrong
+	// chat has to actually kill it, not add a second working key that lives
+	// out its full seven days. Redeemed rows stay for the audit trail.
+	if _, err := s.db.Exec(
+		"DELETE FROM connect_tokens WHERE user_id = ? AND redeemed_at IS NULL", userID,
+	); err != nil {
+		return nil, fmt.Errorf("supersede previous connect tokens: %w", err)
+	}
 	_, err = s.db.Exec(
 		"INSERT INTO connect_tokens (token, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)",
 		token, userID, createdBy, expiresAt,

@@ -95,6 +95,49 @@ func TestConnectLinkStillRequiresSomeAddress(t *testing.T) {
 	}
 }
 
+// TestIssuingALinkSupersedesThePreviousOne is the promise the invite dialog
+// makes in so many words. It matters most in the case reissuing exists for: a
+// link that went to the wrong person must die when the admin issues a new one,
+// not stay redeemable for the rest of its seven days.
+func TestIssuingALinkSupersedesThePreviousOne(t *testing.T) {
+	svc := setupTestService(t)
+
+	tokenOf := func(resp *CreateConnectTokenResponse) string {
+		t.Helper()
+		u, err := url.Parse(resp.Link)
+		if err != nil {
+			t.Fatalf("parse link: %v", err)
+		}
+		return u.Query().Get("token")
+	}
+
+	first, err := svc.CreateConnectToken(1, "kid", "http://example.com")
+	if err != nil {
+		t.Fatalf("create first token: %v", err)
+	}
+	second, err := svc.CreateConnectToken(1, "kid", "http://example.com")
+	if err != nil {
+		t.Fatalf("create second token: %v", err)
+	}
+
+	if _, err := svc.RedeemConnectToken(tokenOf(first), "Leaked Device", "leaked"); err == nil {
+		t.Fatal("the superseded link still redeemed, want it dead")
+	}
+	if _, err := svc.RedeemConnectToken(tokenOf(second), "Kid Device", "kid-device"); err != nil {
+		t.Fatalf("redeem current token: %v", err)
+	}
+
+	// A redeemed row is history, not an outstanding invite: issuing a link for
+	// a second device must not disturb the session the first one created.
+	third, err := svc.CreateConnectToken(1, "kid", "http://example.com")
+	if err != nil {
+		t.Fatalf("create third token: %v", err)
+	}
+	if _, err := svc.RedeemConnectToken(tokenOf(third), "Kid Tablet", "kid-tablet"); err != nil {
+		t.Fatalf("redeem third token: %v", err)
+	}
+}
+
 // TestPasskeySetupLinkPrefersTheExternalAddress: the passkey setup link is
 // opened on the user's own device, so it has the same reachability problem as
 // invite links and follows the same preference order — external address first,
