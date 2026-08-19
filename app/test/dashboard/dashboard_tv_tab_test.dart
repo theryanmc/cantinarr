@@ -148,15 +148,29 @@ void main() {
 
     expect(byTitle['Partial Series']?.statusLabel, 'Partially Available');
     expect(byTitle['Partial Series']?.statusColor, AppTheme.requested);
+    expect(byTitle['Partial Series']?.subtitle, '18/24 eps');
 
     expect(byTitle['Requested Series']?.statusLabel, 'Requested');
     expect(byTitle['Requested Series']?.statusColor, AppTheme.requested);
+    expect(byTitle['Requested Series']?.subtitle, isNull);
 
     expect(byTitle['Unmonitored Empty Series']?.statusLabel, isNull);
+    expect(byTitle['Unmonitored Empty Series']?.subtitle, isNull);
     expect(byTitle['No Match Series']?.statusLabel, isNull);
 
     // D-01: the hero is a different widget entirely, never a MediaCard.
     expect(byTitle.containsKey('Hero Series'), isFalse);
+
+    // The browse row reserves the same taller height the Sonarr library row
+    // already uses for its subtitle-bearing MediaCard row, pinned rather
+    // than left to drift from dashboard_tv_tab.dart:_buildRow's `+ 68`.
+    const cardWidth = 108.0; // 390px test viewport: width < 600.
+    final browseRows = tester.widgetList<HorizontalItemRow<MediaItem>>(
+      find.byType(HorizontalItemRow<MediaItem>),
+    );
+    for (final row in browseRows) {
+      expect(row.height, cardWidth * 1.5 + 68);
+    }
   });
 
   testWidgets(
