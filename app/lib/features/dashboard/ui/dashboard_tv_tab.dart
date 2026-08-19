@@ -169,6 +169,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
             title: discover.featuredTitle,
             items: discover.featured.skip(1).toList(growable: false),
             isLoading: discover.isLoadingFeatured,
+            isTvRow: true,
             libraryStatus: libraryStatus,
           ),
           if (discover.anticipated.isNotEmpty)
@@ -176,6 +177,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
               title: 'Most Anticipated',
               items: discover.anticipated,
               isLoading: discover.isLoadingAnticipated,
+              isTvRow: true,
               libraryStatus: libraryStatus,
             ),
 
@@ -232,7 +234,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
           HorizontalItemRow<SonarrSeries>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + 68,
+            height: cardWidth * 1.5 + MediaCard.subtitleRowExtraHeight,
             itemBuilder: (series) => MediaCard(
               id: series.id,
               title: series.title,

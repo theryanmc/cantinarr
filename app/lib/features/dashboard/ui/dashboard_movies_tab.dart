@@ -163,6 +163,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
             title: discover.featuredTitle,
             items: discover.featured.skip(1).toList(growable: false),
             isLoading: discover.isLoadingFeatured,
+            isTvRow: false,
             libraryStatus: libraryStatus,
           ),
           if (discover.topRated.isNotEmpty)
@@ -170,6 +171,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               title: 'Top Rated',
               items: discover.topRated,
               isLoading: discover.isLoadingTopRated,
+              isTvRow: false,
               libraryStatus: libraryStatus,
             ),
           if (discover.upcoming.isNotEmpty)
@@ -177,6 +179,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               title: 'Coming Soon',
               items: discover.upcoming,
               isLoading: discover.isLoadingUpcoming,
+              isTvRow: false,
               libraryStatus: libraryStatus,
             ),
           if (discover.anticipated.isNotEmpty)
@@ -184,6 +187,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
               title: 'Most Anticipated',
               items: discover.anticipated,
               isLoading: discover.isLoadingAnticipated,
+              isTvRow: false,
               libraryStatus: libraryStatus,
             ),
 
@@ -232,7 +236,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
           HorizontalItemRow<RadarrMovie>(
             items: items,
             isLoading: _isLoadingLibrary,
-            height: cardWidth * 1.5 + 54,
+            height: cardWidth * 1.5 + MediaCard.plainRowExtraHeight,
             itemBuilder: (movie) {
               final badge = badgeBuilder(movie);
               return MediaCard(

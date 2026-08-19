@@ -13,6 +13,19 @@ class CategoryRow extends StatelessWidget {
   final bool isLoading;
   final void Function(MediaItem)? onLoadMore;
 
+  /// Whether this row is a TV row (its cards may carry an episode-count
+  /// subtitle) as opposed to a movie row (which never does). Set statically
+  /// by the caller — every call site already knows this before it has any
+  /// items, since a `CategoryRow` is always built for one media type. Do
+  /// NOT infer this from `items`: while a row's `items` list is still empty
+  /// (the initial `isLoading` frame, before the TMDB/Trakt feed resolves),
+  /// an items-derived flag is necessarily `false`, so the shimmer
+  /// placeholder would render at the movie height and then jump the instant
+  /// the feed resolves — reintroducing, on every load, the exact class of
+  /// jank D-02 ("row never grows height") was written to eliminate for the
+  /// *later* badge-arrival transition.
+  final bool isTvRow;
+
   /// Availability badge data keyed by (media type, TMDB id). Defaults to
   /// empty so every existing call site keeps compiling and a row not yet fed
   /// simply renders no badge on any of its posters.
@@ -23,6 +36,7 @@ class CategoryRow extends StatelessWidget {
     required this.title,
     required this.items,
     required this.isLoading,
+    required this.isTvRow,
     this.onLoadMore,
     this.libraryStatus = const {},
   });
@@ -31,15 +45,15 @@ class CategoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final cardWidth = width >= 900 ? 124.0 : (width >= 600 ? 116.0 : 108.0);
-    // Keyed off mediaType, not subtitle presence: mediaType is settled the
-    // moment the TMDB/Trakt feed resolves, so the row's height is final
-    // before the Sonarr fetch lands. Keying off whether a subtitle exists
-    // would make every TV row grow by 14 logical pixels the instant the
-    // badges pop in — the jank D-02's no-loading-gate behaviour would
-    // otherwise introduce. 68 is the same reserved height
-    // dashboard_tv_tab.dart:_buildRow already uses for its subtitle-bearing
-    // MediaCard row.
-    final hasTvItems = items.any((item) => item.mediaType == MediaType.tv);
+    // Reserved height must be known before the first paint, not derived from
+    // loaded items — see the isTvRow doc comment. This is the same reserved
+    // height dashboard_tv_tab.dart/dashboard_movies_tab.dart's _buildRow use
+    // for their own MediaCard rows (MediaCard.subtitleRowExtraHeight /
+    // MediaCard.plainRowExtraHeight), so all three call sites can never
+    // silently drift apart.
+    final rowExtra = isTvRow
+        ? MediaCard.subtitleRowExtraHeight
+        : MediaCard.plainRowExtraHeight;
 
     return Padding(
       padding: const EdgeInsets.only(top: 20),
@@ -57,7 +71,7 @@ class CategoryRow extends StatelessWidget {
           HorizontalItemRow<MediaItem>(
             items: items,
             isLoading: isLoading,
-            height: cardWidth * 1.5 + (hasTvItems ? 68 : 54),
+            height: cardWidth * 1.5 + rowExtra,
             onItemAppear: onLoadMore,
             itemBuilder: (item) {
               final status = libraryStatus[(item.mediaType, item.id)];

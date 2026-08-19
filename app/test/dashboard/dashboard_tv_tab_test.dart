@@ -162,14 +162,16 @@ void main() {
     expect(byTitle.containsKey('Hero Series'), isFalse);
 
     // The browse row reserves the same taller height the Sonarr library row
-    // already uses for its subtitle-bearing MediaCard row, pinned rather
-    // than left to drift from dashboard_tv_tab.dart:_buildRow's `+ 68`.
+    // already uses for its subtitle-bearing MediaCard row — both now read
+    // MediaCard.subtitleRowExtraHeight, so this pins the shared constant
+    // rather than a literal that could drift from dashboard_tv_tab.dart's
+    // own _buildRow.
     const cardWidth = 108.0; // 390px test viewport: width < 600.
     final browseRows = tester.widgetList<HorizontalItemRow<MediaItem>>(
       find.byType(HorizontalItemRow<MediaItem>),
     );
     for (final row in browseRows) {
-      expect(row.height, cardWidth * 1.5 + 68);
+      expect(row.height, cardWidth * 1.5 + MediaCard.subtitleRowExtraHeight);
     }
   });
 
