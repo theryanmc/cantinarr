@@ -16,6 +16,7 @@ import '../../auth/logic/auth_provider.dart';
 import '../data/settings_search_index.dart';
 import '../data/setup_status_service.dart';
 import '../logic/app_version_provider.dart';
+import '../logic/external_address_provider.dart';
 import '../logic/setup_status_provider.dart';
 import '../logic/update_status_provider.dart';
 import '../settings_anchors.dart';
@@ -59,6 +60,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ref.read(authProvider.notifier).refreshUser();
       ref.read(setupStatusProvider.notifier).refresh();
       ref.read(updateStatusProvider.notifier).refresh();
+      ref.read(externalAddressProvider.notifier).refresh();
     });
   }
 
@@ -71,6 +73,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final instances = connection?.instances ?? [];
     final setupStatus = ref.watch(setupStatusProvider);
     final updateStatus = ref.watch(updateStatusProvider);
+    final externalAddress = ref.watch(externalAddressProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
     final gates = SettingsSearchGates(
@@ -249,6 +252,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Generate Connect Link',
                 subtitle: 'Create a link to invite a new user',
                 onTap: () => _showGenerateConnectLinkDialog(context),
+              ),
+              _SettingsTile(
+                icon: Icons.public,
+                title: 'External Address',
+                subtitle: (externalAddress?.isNotEmpty ?? false)
+                    ? externalAddress!
+                    : 'Address invite links use outside your network',
+                onTap: () =>
+                    _showExternalAddressDialog(context, externalAddress ?? ''),
               ),
               _SettingsTile(
                 icon: Icons.people_outline,
@@ -536,6 +548,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       case 'root.connect-link':
         _showGenerateConnectLinkDialog(context);
         return;
+      case 'root.external-address':
+        _showExternalAddressDialog(
+          context,
+          ref.read(externalAddressProvider) ?? '',
+        );
+        return;
       case 'root.update-portal':
         _showManagementUrlDialog(
           context,
@@ -568,6 +586,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void _showGenerateConnectLinkDialog(BuildContext context) {
     final nameController = TextEditingController();
     String? generatedLink;
+    String generatedOriginSource = '';
     bool isGenerating = false;
 
     showDialog(
@@ -591,7 +610,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ),
               ] else ...[
                 const Text(
-                  'Share this link:',
+                  'Share this link. It signs one device into the app, once, '
+                  'and expires in 7 days.',
                   style: TextStyle(color: AppTheme.textSecondary),
                 ),
                 const SizedBox(height: 12),
@@ -606,6 +626,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
+                if (generatedOriginSource == 'app') ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'This link uses the address your app connects with. If '
+                    'they are not on your network, set External Address in '
+                    'Settings and generate a new link.',
+                    style:
+                        TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                  ),
+                ],
               ],
             ],
           ),
@@ -628,6 +658,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               .generateConnectToken(name);
                           setDialogState(() {
                             generatedLink = resp.link;
+                            generatedOriginSource = resp.originSource;
                             isGenerating = false;
                           });
                         } catch (e) {
@@ -659,6 +690,80 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 icon: const Icon(Icons.copy, size: 18),
                 label: const Text('Copy'),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showExternalAddressDialog(BuildContext context, String current) {
+    final controller = TextEditingController(text: current);
+    bool saving = false;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('External Address'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'The address other people use to reach this server, like a '
+                'reverse proxy domain or a public IP. Invite links and '
+                'passkey links are built from it. Leave blank to build links '
+                'from the address your own app connects with, which usually '
+                'only works on your network.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: 'External address',
+                  hintText: 'https://cantinarr.example.com',
+                  prefixIcon: Icon(Icons.public),
+                ),
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                textInputAction: TextInputAction.done,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      setDialogState(() => saving = true);
+                      try {
+                        await ref
+                            .read(externalAddressProvider.notifier)
+                            .set(controller.text.trim());
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                      } catch (e) {
+                        setDialogState(() => saving = false);
+                        if (dialogContext.mounted) {
+                          ScaffoldMessenger.of(dialogContext).showSnackBar(
+                            SnackBar(content: Text('Failed to save: $e')),
+                          );
+                        }
+                      }
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
           ],
         ),
       ),

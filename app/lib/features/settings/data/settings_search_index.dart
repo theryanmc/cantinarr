@@ -222,6 +222,22 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
+    id: 'root.external-address',
+    title: 'External Address',
+    icon: Icons.public,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'Admin',
+    keywords: [
+      'public url',
+      'domain',
+      'reverse proxy',
+      'invite link',
+      'reachable',
+    ],
+    gate: gateAdmin,
+  ),
+  SettingsSearchEntry(
     id: 'screen.users',
     title: 'Users',
     icon: Icons.people_outline,
