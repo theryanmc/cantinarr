@@ -4,6 +4,7 @@ import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
 import '../data/tmdb_models.dart';
+import '../logic/search_library_status.dart';
 
 /// A titled horizontal row of media items (e.g. "Trending Now").
 class CategoryRow extends StatelessWidget {
@@ -12,12 +13,18 @@ class CategoryRow extends StatelessWidget {
   final bool isLoading;
   final void Function(MediaItem)? onLoadMore;
 
+  /// Availability badge data keyed by (media type, TMDB id). Defaults to
+  /// empty so every existing call site keeps compiling and a row not yet fed
+  /// simply renders no badge on any of its posters.
+  final Map<(MediaType, int), LibraryStatus> libraryStatus;
+
   const CategoryRow({
     super.key,
     required this.title,
     required this.items,
     required this.isLoading,
     this.onLoadMore,
+    this.libraryStatus = const {},
   });
 
   @override
@@ -43,16 +50,21 @@ class CategoryRow extends StatelessWidget {
             isLoading: isLoading,
             height: cardWidth * 1.5 + 54,
             onItemAppear: onLoadMore,
-            itemBuilder: (item) => MediaCard(
-              id: item.id,
-              title: item.title,
-              posterPath: item.posterPath,
-              rating: item.voteAverage,
-              width: cardWidth,
-              onTap: () => context.push(
-                '/detail/${item.mediaType.name}/${item.id}',
-              ),
-            ),
+            itemBuilder: (item) {
+              final status = libraryStatus[(item.mediaType, item.id)];
+              return MediaCard(
+                id: item.id,
+                title: item.title,
+                posterPath: item.posterPath,
+                rating: item.voteAverage,
+                statusLabel: status?.label,
+                statusColor: status?.color,
+                width: cardWidth,
+                onTap: () => context.push(
+                  '/detail/${item.mediaType.name}/${item.id}',
+                ),
+              );
+            },
           ),
         ],
       ),
