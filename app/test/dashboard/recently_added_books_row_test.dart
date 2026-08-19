@@ -292,6 +292,9 @@ void main() {
 
     expect(adapter.recentInstanceIds, isNotEmpty);
     expect(adapter.recentInstanceIds.every((id) => id == 'books'), isTrue);
+    // The two fetches must never drift onto different instances.
+    expect(adapter.libraryInstanceIds, isNotEmpty);
+    expect(adapter.libraryInstanceIds.every((id) => id == 'books'), isTrue);
   });
 
   testWidgets(
@@ -441,5 +444,55 @@ void main() {
       expect(card.statusColor, AppTheme.requested);
       expect(card.subtitle, 'eBook');
     }
+  });
+
+  testWidgets(
+      'an unreadable ownership digest hides the whole row, not just its pills',
+      (tester) async {
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      libraryStatus: 500,
+    );
+
+    expect(find.text('Recently Added'), findsNothing);
+    expect(find.byType(MediaCard), findsNothing);
+    expect(find.textContaining('error'), findsNothing);
+    expect(find.textContaining('Error'), findsNothing);
+    // The rest of the tab must be unaffected — the failure stays invisible.
+    expect(find.byType(TextField), findsOneWidget);
+  });
+
+  testWidgets(
+      'two records sharing one foreignBookId stay two cards and cannot '
+      'contradict each other', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: true,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards =
+        tester.widgetList<MediaCard>(find.byType(MediaCard)).toList();
+    expect(cards, hasLength(2));
+    expect(cards[0].id, isNot(cards[1].id));
+    expect(cards[0].statusLabel, cards[1].statusLabel);
+    expect(cards[0].statusColor, cards[1].statusColor);
+    expect(cards[0].subtitle, cards[1].subtitle);
+    expect(cards[0].statusLabel, 'Requested');
+    expect(cards[0].statusColor, AppTheme.requested);
+    expect(cards[0].subtitle, 'eBook + Audiobook requested');
   });
 }

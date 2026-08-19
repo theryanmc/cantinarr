@@ -32,9 +32,18 @@ class RecentlyAddedBooksRow extends ConsumerWidget {
     final recent = ref.watch(recentBooksProvider);
     final owned = ref.watch(ownedBooksProvider);
     final books = recent.valueOrNull ?? const <RecentBook>[];
-    // Nothing to show, no access, or an unreachable library all look the same:
-    // no row. hasError also covers a failed refresh that retained stale books.
-    if (recent.hasError || (books.isEmpty && !recent.isLoading)) {
+    // Nothing to show, no access, an unreachable library, or an unreadable
+    // ownership digest all look the same: no row. hasError also covers a
+    // failed refresh that retained stale books. D-03: rendering the cards
+    // with no pills would be honest per D-02 but pointless, since this row's
+    // whole job after this phase is to carry availability — so an
+    // unreadable digest hides the row instead of degrading it, the same
+    // treatment `recent.hasError` already gets. `ownedBooksProvider` keeps
+    // failures as `AsyncError` rather than an empty list precisely so this
+    // check can tell an unreachable library from a genuinely empty one. Do
+    // not gate on `owned.isLoading` — that would make the row flicker in and
+    // out on every refresh.
+    if (recent.hasError || owned.hasError || (books.isEmpty && !recent.isLoading)) {
       return const SizedBox.shrink();
     }
 
