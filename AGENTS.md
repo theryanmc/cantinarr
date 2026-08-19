@@ -13,9 +13,9 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 - Do not open PRs directly from `main`. If work accidentally happens on `main`, verify `main` is still even with `origin/main`, then move the work to a feature branch before committing.
 - Preserve user work. Do not revert or delete unrelated local changes or untracked files.
 - When the change is ready: commit on the feature branch, push it right away, and open a ready-for-review PR (never a draft) with `gh pr create` unless the user explicitly asks not to.
-- After opening a PR, monitor every required CI check to completion and merge only after they are all green. If a check fails, diagnose and fix it on the same branch, push the fix, and wait for the rerun to pass before merging; never merge with pending or failing required checks.
+- After opening a PR, monitor every required CI check to completion and report the outcome. **Merging is the maintainer's job — agents never merge PRs.** If a check fails, diagnose and fix it on the same branch, push the fix, and wait for the rerun to pass; a PR is ready to hand off only when every required check is green.
 - After a PR merges, do not reuse its branch — start the next change from a fresh `main`.
-- **External contributions are welcome and arrive as fork PRs.** A first-time contributor's checks sit in `action_required` until a maintainer approves the run (the button on the PR, or `gh api repos/windoze95/cantinarr/actions/runs/<id>/approve -X POST`), so a fork PR with no checks running is waiting on that, not broken. The Docker `build` job skips its GHCR `pr-N` tag push for forks (read-only token), so fork PRs have no preview image — the smoke tests still run. Merge them on the same all-green rule as any other PR.
+- **External contributions are welcome and arrive as fork PRs.** A first-time contributor's checks sit in `action_required` until a maintainer approves the run (the button on the PR, or `gh api repos/windoze95/cantinarr/actions/runs/<id>/approve -X POST`), so a fork PR with no checks running is waiting on that, not broken. The Docker `build` job skips its GHCR `pr-N` tag push for forks (read-only token), so fork PRs have no preview image — the smoke tests still run. They hand off on the same all-green rule as any other PR; the maintainer merges.
 
 ## Verification
 
