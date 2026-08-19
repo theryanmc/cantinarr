@@ -31,6 +31,15 @@ class CategoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final cardWidth = width >= 900 ? 124.0 : (width >= 600 ? 116.0 : 108.0);
+    // Keyed off mediaType, not subtitle presence: mediaType is settled the
+    // moment the TMDB/Trakt feed resolves, so the row's height is final
+    // before the Sonarr fetch lands. Keying off whether a subtitle exists
+    // would make every TV row grow by 14 logical pixels the instant the
+    // badges pop in — the jank D-02's no-loading-gate behaviour would
+    // otherwise introduce. 68 is the same reserved height
+    // dashboard_tv_tab.dart:_buildRow already uses for its subtitle-bearing
+    // MediaCard row.
+    final hasTvItems = items.any((item) => item.mediaType == MediaType.tv);
 
     return Padding(
       padding: const EdgeInsets.only(top: 20),
@@ -48,7 +57,7 @@ class CategoryRow extends StatelessWidget {
           HorizontalItemRow<MediaItem>(
             items: items,
             isLoading: isLoading,
-            height: cardWidth * 1.5 + 54,
+            height: cardWidth * 1.5 + (hasTvItems ? 68 : 54),
             onItemAppear: onLoadMore,
             itemBuilder: (item) {
               final status = libraryStatus[(item.mediaType, item.id)];
@@ -59,6 +68,7 @@ class CategoryRow extends StatelessWidget {
                 rating: item.voteAverage,
                 statusLabel: status?.label,
                 statusColor: status?.color,
+                subtitle: status?.episodeSubtitle,
                 width: cardWidth,
                 onTap: () => context.push(
                   '/detail/${item.mediaType.name}/${item.id}',
