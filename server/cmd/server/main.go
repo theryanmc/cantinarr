@@ -113,7 +113,7 @@ func main() {
 	// Instance store and registry
 	instanceStore := instance.NewStore(database, cipher)
 	registry := instance.NewRegistry(instanceStore)
-	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.PublicURL)
+	instanceHandler := instance.NewHandler(instanceStore, registry, cfg.ArrCallbackURL)
 	instanceHandler.SetMediaDownloadRoots(cfg.MediaDownloadRoots)
 	mediaFilesHandler, err := mediafiles.NewHandler(instanceStore, registry, authService, cfg.MediaDownloadRoots)
 	if err != nil {

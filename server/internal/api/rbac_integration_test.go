@@ -473,7 +473,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	discoverHandler := discover.NewHandler(registry, discoverCache, serversettings.NewService(database, func() bool { return registry.Trakt() != nil }))
 
 	cfg := &config.Config{
-		PublicURL:          "http://cantinarr.test",
+		ArrCallbackURL:     "http://cantinarr.test",
 		OAuthIssuer:        "https://cantinarr.test",
 		MCPAllowedOrigins:  []string{"https://mcp-client.example"},
 		ServerName:         "RBAC Test",

@@ -193,8 +193,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           'credential_missing' => 'The $_serviceLabel webhook exists, but the '
               'server no longer holds its credential — configure to reissue '
               'it.',
-          'no_public_url' => 'The server cannot determine its public URL — '
-              'set CANTINARR_PUBLIC_URL, then configure.',
+          'no_public_url' => 'The server cannot determine the address the '
+              '$_serviceLabel container can call back — set '
+              'CANTINARR_ARR_CALLBACK_URL, then configure.',
           _ => 'Instant updates are not configured yet.',
         };
       }
