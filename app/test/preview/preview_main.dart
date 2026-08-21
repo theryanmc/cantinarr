@@ -269,6 +269,36 @@ class _StubAdapter implements HttpClientAdapter {
             },
         },
       };
+    } else if (path.endsWith('/api/requests/book-recent')) {
+      // Must beat the generic '/requests' branch below. Four records covering
+      // every state the Books tab's Recently Added row can render: fully
+      // downloaded, a missing format on the way, a missing format nobody
+      // requested, and a record with no digest row at all.
+      body = {
+        'items': [
+          _recentBook(1, 'fb-1', 'The Long Way Home', 'ebook', 0),
+          _recentBook(2, 'fb-2', 'Tide of Sand', 'ebook', 1),
+          _recentBook(3, 'fb-3', 'Winter Signal', 'audiobook', 2),
+          _recentBook(4, 'fb-4', 'The Unknown Ledger', 'ebook', 3),
+        ],
+      };
+    } else if (path.endsWith('/api/requests/book-library')) {
+      // Ownership digest for the records above. `fb-4` is deliberately absent
+      // so its card exercises the no-pill path (an undetermined ownership
+      // state renders no badge, never a fallback "Available").
+      body = {
+        'titles': [
+          _ownedTitle('fb-1', 'The Long Way Home',
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: true)),
+          _ownedTitle('fb-2', 'Tide of Sand',
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: false)),
+          _ownedTitle('fb-3', 'Winter Signal',
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: true, downloaded: true)),
+        ],
+      };
     } else if (path.contains('/requests')) {
       body = {'requests': []};
     } else if (path.endsWith('/api/admin/credentials')) {
@@ -367,6 +397,46 @@ class _StubAdapter implements HttpClientAdapter {
   @override
   void close({bool force = false}) {}
 }
+
+/// One `/api/requests/book-recent` item. [daysAgo] orders the row newest-first
+/// without pinning the fixture to a calendar date that rots.
+Map<String, dynamic> _recentBook(
+  int bookId,
+  String foreignBookId,
+  String title,
+  String format,
+  int daysAgo,
+) =>
+    {
+      'book_id': bookId,
+      'foreign_book_id': foreignBookId,
+      'title': title,
+      'format': format,
+      // Empty cover: the card falls back to its placeholder icon, so the
+      // preview needs no image host.
+      'cover': '',
+      'imported_at': _previewDate(-daysAgo),
+    };
+
+/// One `/api/requests/book-library` ownership-digest entry, with each format's
+/// `monitored`/`downloaded` flags spelled out at the call site.
+Map<String, dynamic> _ownedTitle(
+  String foreignBookId,
+  String title, {
+  required ({bool monitored, bool downloaded}) ebook,
+  required ({bool monitored, bool downloaded}) audiobook,
+}) =>
+    {
+      'title': title,
+      'author': 'Preview Author',
+      'foreign_book_id': foreignBookId,
+      'ebook': {'monitored': ebook.monitored, 'downloaded': ebook.downloaded},
+      'audiobook': {
+        'monitored': audiobook.monitored,
+        'downloaded': audiobook.downloaded,
+      },
+      'status_known': true,
+    };
 
 /// A `YYYY-MM-DD` calendar date [days] from today (negative for the past), so
 /// preview fixtures that depend on being ahead of or behind now don't rot.

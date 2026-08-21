@@ -22,7 +22,7 @@ enum RequestStatus {
   available('Available', 'Available'),
 
   /// Partially available (some seasons/episodes).
-  partial('Partially Available', 'Request More'),
+  partial('Partial', 'Request More'),
 
   /// An administrator declined the request; it can be requested again.
   denied('Request Denied', 'Request');

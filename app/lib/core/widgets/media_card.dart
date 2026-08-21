@@ -5,6 +5,18 @@ import 'cached_image.dart';
 
 /// A poster card for movies/TV shows with optional status badge.
 class MediaCard extends StatelessWidget {
+  /// Extra height a horizontal row of [MediaCard]s must reserve below the
+  /// poster when its cards carry a [subtitle] line (e.g. TV rows' episode
+  /// availability). Shared by every browse-row/library-row call site
+  /// (`CategoryRow`, `DashboardTvTab`, `DashboardMoviesTab`) so the literal
+  /// can never drift between them — see [plainRowExtraHeight] for rows whose
+  /// cards never carry a subtitle.
+  static const double subtitleRowExtraHeight = 68;
+
+  /// Extra height a horizontal row of [MediaCard]s must reserve below the
+  /// poster when its cards never carry a [subtitle] line (e.g. movie rows).
+  static const double plainRowExtraHeight = 54;
+
   final int id;
   final String title;
   final String? posterPath;
