@@ -74,12 +74,12 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 
 // Handler provides REST endpoints for instance CRUD.
 type Handler struct {
-	store        *Store
-	registry     *Registry
-	webhookMu    sync.Mutex
-	webhookLocks map[string]*sync.Mutex
+	store          *Store
+	registry       *Registry
+	webhookMu      sync.Mutex
+	webhookLocks   map[string]*sync.Mutex
 	arrCallbackURL string
-	mediaRoots   []string
+	mediaRoots     []string
 }
 
 // NewHandler creates a new instance handler.
