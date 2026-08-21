@@ -64,6 +64,7 @@ abstract final class SettingsAnchors {
 
   // /settings/credentials
   static const credentialsAiModel = 'credentials.ai-model';
+  static const credentialsOpenAiBaseUrl = 'credentials.openai-base-url';
   static const credentialsHealthCheck = 'credentials.health-check';
   static const credentialsAnthropic = 'credentials.anthropic';
   static const credentialsOpenAi = 'credentials.openai';

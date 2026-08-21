@@ -186,7 +186,7 @@ func TestInteractiveAuthorizationRevocationStopsProviderLoops(t *testing.T) {
 		t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
 		var starts []string
 		var ends []bool
-		finalHistory, err := NewOpenAIService("secret", "gpt-5.5", revokedInteractiveToolServer()).SendMessage(
+		finalHistory, err := NewOpenAIService("secret", "gpt-5.5", "", revokedInteractiveToolServer()).SendMessage(
 			context.Background(), history, chatCtx, StreamCallbacks{
 				OnToolStart: func(name, _ string) { starts = append(starts, name) },
 				OnToolEnd:   func(_ string, ok bool) { ends = append(ends, ok) },
@@ -325,6 +325,47 @@ func TestOpenAIValidationProviderContract(t *testing.T) {
 	}
 	if _, found := req.body["tools"]; found {
 		t.Fatal("validation request unexpectedly included tools")
+	}
+}
+
+func TestOpenAIExplicitBaseURLOverridesEnvSeam(t *testing.T) {
+	// The admin-configured shared base URL must win over the SDK's implicit
+	// OPENAI_BASE_URL env default, and an empty configured value must leave
+	// that env seam in charge — every other openai test in this suite (and
+	// the lab stack) points the env var at a fake upstream and depends on it.
+	configured := make(chan providerRequest, 1)
+	configuredServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		configured <- captureProviderRequest(r)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(configuredServer.Close)
+	var envHits atomic.Int64
+	envServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		envHits.Add(1)
+		writeOpenAITextSSE(w)
+	}))
+	t.Cleanup(envServer.Close)
+	t.Setenv("OPENAI_BASE_URL", envServer.URL+"/v1")
+
+	params := TurnParams{
+		History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "hello"}}}},
+	}
+	if _, err := NewOpenAIService("secret", "gpt-5.5", configuredServer.URL+"/v1", nil).NextTurn(context.Background(), params); err != nil {
+		t.Fatalf("turn with explicit base URL: %v", err)
+	}
+	req := <-configured
+	if req.path != "/v1/chat/completions" {
+		t.Fatalf("path=%q, want /v1/chat/completions", req.path)
+	}
+	if got := envHits.Load(); got != 0 {
+		t.Fatalf("env upstream received %d requests despite explicit base URL", got)
+	}
+
+	if _, err := NewOpenAIService("secret", "gpt-5.5", "", nil).NextTurn(context.Background(), params); err != nil {
+		t.Fatalf("turn with empty base URL: %v", err)
+	}
+	if envHits.Load() == 0 {
+		t.Fatal("empty base URL no longer honors the OPENAI_BASE_URL env seam")
 	}
 }
 
@@ -1080,7 +1121,7 @@ func TestOpenAIRefusalAndEmptyResponseAreExplicitErrors(t *testing.T) {
 			t.Cleanup(server.Close)
 			t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
 
-			_, err := NewOpenAIService("secret", "gpt-5.5", nil).NextTurn(context.Background(), TurnParams{
+			_, err := NewOpenAIService("secret", "gpt-5.5", "", nil).NextTurn(context.Background(), TurnParams{
 				History: Transcript{{Role: RoleUser, Content: []TranscriptBlock{{Type: BlockText, Text: "hello"}}}},
 			})
 			if err == nil || !strings.Contains(err.Error(), test.want) {

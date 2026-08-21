@@ -5,6 +5,11 @@ class AiProviderOption {
   final String label;
   final String credentialKey;
   final String authType;
+
+  /// Whether the shared profile accepts an admin-set endpoint override for
+  /// this provider (openai only). Older servers never send the flag, which
+  /// also means they reject the override key, so the field stays hidden.
+  final bool supportsBaseUrl;
   final List<AiModelOption> models;
 
   const AiProviderOption({
@@ -12,6 +17,7 @@ class AiProviderOption {
     required this.label,
     required this.credentialKey,
     this.authType = 'api_key',
+    this.supportsBaseUrl = false,
     required this.models,
   });
 
@@ -24,6 +30,7 @@ class AiProviderOption {
         label: json['label'] as String? ?? json['id'] as String? ?? '',
         credentialKey: json['credential_key'] as String? ?? '',
         authType: json['auth_type'] as String? ?? 'api_key',
+        supportsBaseUrl: json['supports_base_url'] as bool? ?? false,
         models: ((json['models'] as List?) ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(AiModelOption.fromJson)

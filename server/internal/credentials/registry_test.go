@@ -69,6 +69,31 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 	}
 }
 
+func TestAIProviderMetadataAdvertisesBaseURLSupportOnlyForOpenAI(t *testing.T) {
+	for _, option := range AIProviders {
+		want := option.ID == AIProviderOpenAI
+		if option.SupportsBaseURL != want {
+			t.Errorf("%s supports_base_url = %t, want %t", option.ID, option.SupportsBaseURL, want)
+		}
+		encoded, err := json.Marshal(option)
+		if err != nil {
+			t.Fatalf("marshal %s metadata: %v", option.ID, err)
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(encoded, &metadata); err != nil {
+			t.Fatalf("decode %s metadata: %v", option.ID, err)
+		}
+		flag, present := metadata["supports_base_url"]
+		if want && (!present || flag != true) {
+			t.Errorf("%s JSON supports_base_url = %v (present=%t), want true", option.ID, flag, present)
+		}
+		// omitempty keeps every other provider's wire shape byte-identical.
+		if !want && present {
+			t.Errorf("%s JSON unexpectedly carries supports_base_url: %s", option.ID, encoded)
+		}
+	}
+}
+
 func TestAIProviderDefaultsAndInference(t *testing.T) {
 	if !IsValidAIProvider(AIProviderCodex) {
 		t.Fatal("Codex is not recognized as a valid AI provider")

@@ -30,8 +30,8 @@ such as **AUTO** are informational hints, not machine-enforced claims.
 | [Plex linking, libraries, and invitations](catalog/plex.md) | PLEX | 18 |
 | [Discovery and requests](catalog/discovery-requests.md) | DISC, REQ | 7 |
 | [Media services and download clients](catalog/media-services.md) | RAD, SON, BOOK, FILE, DOWN, TAUT | 12 |
-| [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 13 |
-| **Total** | | **104** |
+| [Issues, AI, and MCP](catalog/issues-ai-mcp.md) | ISS, AI, MCP | 14 |
+| **Total** | | **105** |
 
 Case IDs are stable and never renumbered, so deleted cases leave gaps in the
 sequences; a gap means the behavior moved into the automated suites, not that

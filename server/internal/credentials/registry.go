@@ -30,6 +30,12 @@ const (
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
 	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
+	// KeyOpenAIBaseURL points the shared openai provider at an
+	// OpenAI-compatible endpoint. It is a plain setting, deliberately not in
+	// AllKeys: AllKeys drives encryption at rest, the startup
+	// EncryptExisting migration, per-key GET booleans, and DELETE, none of
+	// which apply to a non-secret URL.
+	KeyOpenAIBaseURL = "openai_base_url"
 )
 
 // AllKeys lists every credential key the system manages. Values for these
@@ -70,11 +76,15 @@ type AIModelOption struct {
 
 // AIProviderOption describes a supported AI provider and its default models.
 type AIProviderOption struct {
-	ID            string          `json:"id"`
-	Label         string          `json:"label"`
-	AuthType      string          `json:"auth_type"`
-	CredentialKey string          `json:"credential_key"`
-	Models        []AIModelOption `json:"models"`
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	AuthType      string `json:"auth_type"`
+	CredentialKey string `json:"credential_key"`
+	// SupportsBaseURL marks providers whose shared profile accepts an
+	// admin-set endpoint override (openai only). The app renders the base
+	// URL field from this flag, so servers without it never show the field.
+	SupportsBaseURL bool            `json:"supports_base_url,omitempty"`
+	Models          []AIModelOption `json:"models"`
 }
 
 // AIConfig is the active provider/model pair used by the AI assistant.
@@ -98,10 +108,11 @@ var AIProviders = []AIProviderOption{
 		},
 	},
 	{
-		ID:            AIProviderOpenAI,
-		Label:         "OpenAI",
-		AuthType:      AIAuthTypeAPIKey,
-		CredentialKey: KeyOpenAIKey,
+		ID:              AIProviderOpenAI,
+		Label:           "OpenAI",
+		AuthType:        AIAuthTypeAPIKey,
+		CredentialKey:   KeyOpenAIKey,
+		SupportsBaseURL: true,
 		Models: []AIModelOption{
 			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship OpenAI model"},
 			{ID: "gpt-5.4", Label: "GPT-5.4", Description: "Affordable frontier model"},

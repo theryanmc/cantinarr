@@ -39,6 +39,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _geminiController = TextEditingController();
   final _grokController = TextEditingController();
   final _customModelController = TextEditingController();
+  final _openaiBaseUrlController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
   bool _healthCheckEnabled = true;
@@ -111,6 +112,16 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['ai_provider'] = _selectedProvider;
       creds['ai_model'] = selectedModel;
       aiChanged = true;
+    }
+    // Only a visible field writes: hidden state must never silently rewrite
+    // the server, and older servers reject the key as unknown. An empty
+    // string is a deliberate clear back to api.openai.com.
+    if (_showOpenAiBaseUrl) {
+      final baseUrl = _openaiBaseUrlController.text.trim();
+      if (baseUrl != (_status?.ai.openaiBaseUrl ?? '')) {
+        creds['openai_base_url'] = baseUrl;
+        aiChanged = true;
+      }
     }
     if (_status == null ||
         _healthCheckEnabled != _status!.ai.healthCheckEnabled) {
@@ -218,6 +229,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _geminiController.dispose();
     _grokController.dispose();
     _customModelController.dispose();
+    _openaiBaseUrlController.dispose();
     super.dispose();
   }
 
@@ -234,6 +246,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _selectedModel = _customModelValue;
       _customModelController.text = status.ai.model;
     }
+    // Tracks server state, not the dropdown: switching providers keeps the
+    // stored value visible when the admin comes back to OpenAI.
+    _openaiBaseUrlController.text = status.ai.openaiBaseUrl;
+  }
+
+  /// The base-URL override is openai-only, and only servers that advertise
+  /// the capability accept its key. Gate on the resolved option, which is
+  /// what the provider dropdown actually displays.
+  bool get _showOpenAiBaseUrl {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'openai' && provider!.supportsBaseUrl;
   }
 
   String _friendlySaveError(Object error) {
@@ -352,6 +376,28 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 setState(() => _selectedModel = value),
                           ),
                         ),
+                        if (_showOpenAiBaseUrl) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiBaseUrl,
+                            TextField(
+                              key: const ValueKey('openai-base-url'),
+                              controller: _openaiBaseUrlController,
+                              decoration: const InputDecoration(
+                                labelText: 'OpenAI base URL',
+                                hintText: 'http://llm-host:8080/v1',
+                                helperText:
+                                    'Any OpenAI-compatible server, reached '
+                                    'from the Cantinarr server, not from this '
+                                    'device. Leave empty to use '
+                                    'api.openai.com.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              keyboardType: TextInputType.url,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         _anchor(
                           SettingsAnchors.credentialsHealthCheck,

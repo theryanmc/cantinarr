@@ -22,7 +22,11 @@ type resolvedAI struct {
 	Model     string
 	Reason    string
 	APIKey    string
-	Account   codexapp.AccountRef
+	// BaseURL carries the shared openai endpoint override. Personal
+	// resolutions never set it, and it must never be serialized into
+	// non-admin payloads (settings/available responses, SSE frames).
+	BaseURL string
+	Account codexapp.AccountRef
 }
 
 func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
@@ -95,6 +99,7 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		Source:   aiSourceShared,
 		Provider: shared.Config.Provider,
 		Model:    shared.Config.Model,
+		BaseURL:  shared.BaseURL,
 		Account:  codexapp.SharedAccount(),
 	}
 	if err != nil {
@@ -160,6 +165,7 @@ func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 		Source:   aiSourceShared,
 		Provider: shared.Config.Provider,
 		Model:    shared.Config.Model,
+		BaseURL:  shared.BaseURL,
 		Account:  codexapp.SharedAccount(),
 	}
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ const (
 	maxCredentialSettingsBody = 128 << 10
 	maxAIModelLength          = 256
 	maxAIKeyLength            = 32 << 10
+	maxAIBaseURLLength        = 2048
 )
 
 // Handler provides admin-only REST endpoints for credential management.
@@ -78,8 +80,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	config := h.registry.GetAIConfig()
 	status["ai"] = map[string]any{
-		"config":    config,
-		"providers": AIProviders,
+		"config": config,
+		// Flat sibling of config on purpose: AIConfig also serializes into
+		// non-admin payloads, and a LAN endpoint belongs only in this
+		// admin-gated response.
+		"openai_base_url": strings.TrimSpace(h.registry.GetSetting(KeyOpenAIBaseURL)),
+		"providers":       AIProviders,
 		"health_check": map[string]any{
 			"enabled":        h.registry.AIHealthCheckEnabled(),
 			"interval_hours": int(AIHealthCheckInterval / time.Hour),
@@ -123,6 +129,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	valid[KeyAIProvider] = true
 	valid[KeyAIModel] = true
 	valid[KeyAIHealthCheckEnabled] = true
+	valid[KeyOpenAIBaseURL] = true
 
 	for key := range body {
 		if !valid[key] {
@@ -173,6 +180,28 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		healthEnabled = parsed
 	}
 
+	// The effective openai base URL for this save: the body's value when the
+	// key is present (empty string is a deliberate clear), else the stored
+	// override. Candidate profiles must always carry the effective value so a
+	// key rotation with no base-URL field still validates against the
+	// configured endpoint, not api.openai.com.
+	baseURL := strings.TrimSpace(h.registry.GetSetting(KeyOpenAIBaseURL))
+	baseURLValue, baseURLSet := body[KeyOpenAIBaseURL]
+	if baseURLSet {
+		baseURL = strings.TrimSpace(baseURLValue)
+		if len(baseURL) > maxAIBaseURLLength {
+			http.Error(w, `{"error":"openai_base_url is too long"}`, http.StatusBadRequest)
+			return
+		}
+		if baseURL != "" {
+			parsed, err := url.Parse(baseURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				http.Error(w, `{"error":"openai_base_url must be an absolute http or https URL"}`, http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	profiles := make(map[string]AIProfile)
 	for _, option := range AIProviders {
 		if option.CredentialKey == "" {
@@ -187,12 +216,23 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			if option.ID == candidate.Provider {
 				config.Model = candidate.Model
 			}
-			profiles[option.ID] = AIProfile{Config: config, APIKey: value, CredentialPresent: true}
+			profile := AIProfile{Config: config, APIKey: value, CredentialPresent: true}
+			if option.ID == AIProviderOpenAI {
+				profile.BaseURL = baseURL
+			}
+			profiles[option.ID] = profile
 			body[option.CredentialKey] = value
 		}
 	}
 	mustTestSelected := providerSet || modelSet || (healthSet && healthEnabled && !h.registry.AIHealthCheckEnabled())
 	if key := AIKeyCredentialKey(candidate.Provider); key != "" && strings.TrimSpace(body[key]) != "" {
+		mustTestSelected = true
+	}
+	// A base-URL change (or clear) alone must re-prove the selected openai
+	// profile against the new endpoint. With another provider selected the
+	// value persists untested; selecting openai later forces the probe via
+	// providerSet.
+	if baseURLSet && candidate.Provider == AIProviderOpenAI {
 		mustTestSelected = true
 	}
 	if mustTestSelected {
@@ -204,6 +244,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 				profile.CredentialPresent = strings.TrimSpace(profile.APIKey) != ""
 			} else {
 				profile.CredentialPresent = IsOAuthAIProvider(candidate.Provider)
+			}
+			if candidate.Provider == AIProviderOpenAI {
+				profile.BaseURL = baseURL
 			}
 			profiles[candidate.Provider] = profile
 		}
@@ -223,7 +266,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet); err != nil {
+	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, baseURL, baseURLSet); err != nil {
 		http.Error(w, `{"error":"failed to save settings"}`, http.StatusInternalServerError)
 		return
 	}
@@ -283,7 +326,7 @@ func credentialValidationDiagnostic(err error) string {
 	return secrets.RedactError(err).Error()
 }
 
-func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool) error {
+func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool, baseURL string, baseURLSet bool) error {
 	tx, err := h.registry.db.Begin()
 	if err != nil {
 		return err
@@ -313,6 +356,17 @@ func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet
 	}
 	if healthSet {
 		if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyAIHealthCheckEnabled, strconv.FormatBool(healthEnabled)); err != nil {
+			return err
+		}
+	}
+	if baseURLSet {
+		// Stored plaintext on purpose: an endpoint URL is configuration, not
+		// a secret, and stays out of the AllKeys encryption loop above.
+		if baseURL == "" {
+			if _, err := tx.Exec("DELETE FROM settings WHERE key = ?", KeyOpenAIBaseURL); err != nil {
+				return err
+			}
+		} else if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyOpenAIBaseURL, baseURL); err != nil {
 			return err
 		}
 	}

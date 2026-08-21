@@ -31,16 +31,27 @@ type openAIService struct {
 	toolServer *mcp.ToolServer
 }
 
-func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIService {
+// NewOpenAIService builds a chat service against the OpenAI API, or against
+// any OpenAI-compatible endpoint when baseURL is set (the admin-configured
+// shared override). An empty baseURL deliberately passes no WithBaseURL so the
+// SDK's own defaults stay in charge: api.openai.com in production, and the
+// implicit OPENAI_BASE_URL env seam that tests and the lab stack point at
+// fake upstreams. When baseURL is set it is applied after the SDK's env
+// default, so the configured value wins over the env var.
+func NewOpenAIService(apiKey, model, baseURL string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
 		model = "gpt-5.5"
 	}
+	options := []openaioption.RequestOption{
+		openaioption.WithAPIKey(apiKey),
+		openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+		openaioption.WithRequestTimeout(httpProviderStreamTimeout),
+	}
+	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
+		options = append(options, openaioption.WithBaseURL(baseURL))
+	}
 	return &openAIService{
-		client: openai.NewClient(
-			openaioption.WithAPIKey(apiKey),
-			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
-			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
-		),
+		client:     openai.NewClient(options...),
 		model:      openai.ChatModel(model),
 		toolServer: toolServer,
 	}
