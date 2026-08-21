@@ -414,12 +414,23 @@ class ConnectTokenResponse {
   final String link;
   final String expiresAt;
 
-  const ConnectTokenResponse({required this.link, required this.expiresAt});
+  /// Where the link's server address came from: 'external_address' when the
+  /// admin-configured external address was used, 'app' when it fell back to
+  /// the address this app is connected with (older servers send nothing,
+  /// which reads as '' and hints nowhere).
+  final String originSource;
+
+  const ConnectTokenResponse({
+    required this.link,
+    required this.expiresAt,
+    this.originSource = '',
+  });
 
   factory ConnectTokenResponse.fromJson(Map<String, dynamic> json) =>
       ConnectTokenResponse(
         link: json['link'] as String,
         expiresAt: json['expires_at'] as String,
+        originSource: json['origin_source'] as String? ?? '',
       );
 }
 

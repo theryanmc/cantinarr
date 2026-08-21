@@ -237,7 +237,9 @@ OpenAI (OAuth) source deployments use Codex app-server and are supported only on
 
 Native app passkeys require a public HTTPS server domain associated with the app (AASA for Apple, Digital Asset Links for Android). Browser passkey setup remains available when native association isn't possible. See [`server/README.md`](server/README.md#configuration) for details.
 
-By default, users are passwordless and passkeyless: a connect link starts a permanent device session, so household members never deal with credentials. A session never expires -- not from idle time, server restarts, upgrades, or secret rotation -- and ends only when an admin revokes the device (**Settings > Devices**) or deletes the user. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
+By default, users are passwordless and passkeyless: a connect link starts a permanent device session, so household members never deal with credentials. Each link signs one device into the app, once. A session never expires -- not from idle time, server restarts, upgrades, or secret rotation -- and ends only when an admin revokes the device (**Settings > Devices**) or deletes the user. Admins grant a password and/or passkey per user from **Settings > Users** when a user needs one -- that is also the durable way to sign in on the web, where clearing browser data wipes the device session a link created. A password is what authorizes MCP clients on deployments served over plain HTTP, where passkeys are unavailable (WebAuthn requires a secure context). Disabling a method is a real revoke -- it clears the stored password or deletes the user's passkeys. To recover access, an admin issues a fresh connect link.
+
+Connect links embed a server address. Set **Settings > External Address** to the origin people reach your server through (a reverse proxy domain, a public IP) and links are built from it; left unset, a link uses the address the generating admin's own app is connected with, which usually only works on the admin's network -- the invite dialog says so when that happens.
 
 ## How It Works
 
@@ -253,7 +255,7 @@ By default, users are passwordless and passkeyless: a connect link starts a perm
 ### For Admins
 1. Deploy the container and complete the setup wizard
 2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini/xAI key or link a shared OpenAI (OAuth) or xAI Grok (OAuth) account
-3. Generate connect links for your household, grant included AI access where wanted, and pin per-user default instances if you run several
+3. Generate connect links for your household (set **Settings > External Address** first so links work away from home), grant included AI access where wanted, and pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
 5. Instant updates come on by themselves: adding a Radarr/Sonarr/Chaptarr instance installs the server's authenticated webhook automatically (books need it most -- an ebook can finish downloading between two polls). Each instance's edit screen shows the live state and a **Configure instant updates** button to repair it -- e.g. after changing `CANTINARR_PUBLIC_URL`
 6. Manage everything from the app -- queues, stuck imports, issues, agent fixes. No config files.

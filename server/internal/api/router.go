@@ -162,6 +162,10 @@ func NewRouter(
 		r.Route("/admin", func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/connect-token", authHandler.HandleCreateConnectToken)
+			// The origin invite/passkey links are built from. Lives beside
+			// connect-token because that is the surface it exists for.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/external-address", externalAddressHandler(serverSettings))
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/external-address", updateExternalAddressHandler(serverSettings))
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
 

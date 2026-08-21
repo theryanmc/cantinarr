@@ -100,9 +100,21 @@ type CreateConnectTokenRequest struct {
 	ServerURL string `json:"server_url"`
 }
 
+// Values for CreateConnectTokenResponse.OriginSource.
+const (
+	originSourceExternalAddress = "external_address"
+	originSourceApp             = "app"
+)
+
 type CreateConnectTokenResponse struct {
 	Link      string    `json:"link"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// OriginSource says where the link's server address came from:
+	// "external_address" when the admin-configured external address was used,
+	// "app" when the link fell back to the address the generating admin's own
+	// app is connected with. The app hints toward Settings on "app", since a
+	// LAN address is unreachable for an invitee on another network.
+	OriginSource string `json:"origin_source"`
 }
 
 type RedeemConnectTokenRequest struct {

@@ -295,6 +295,9 @@ func main() {
 	// The Trakt probe is read per call, so adding or removing that credential
 	// moves the default row source without a restart.
 	serverSettings := serversettings.NewService(database, func() bool { return creds.Trakt() != nil })
+	// Read per call so a settings change reaches the next link without a
+	// restart. Wired late for the same reason as the access-request hook.
+	authHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()
