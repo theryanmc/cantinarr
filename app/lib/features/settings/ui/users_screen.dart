@@ -184,11 +184,13 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   /// (lost or expired link) can be re-invited without losing their account.
   Future<void> _resendInvite(UserSummary user) async {
     String? link;
+    var originSource = '';
     try {
       final resp = await ref.read(authProvider.notifier).generateConnectToken(
             user.username,
           );
       link = resp.link;
+      originSource = resp.originSource;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -211,8 +213,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Share this link with them. It replaces any previous link and '
-              'expires in 7 days.',
+              'Share this link with them. It signs one device into the app, '
+              'once. It replaces any previous link and expires in 7 days.',
               style: TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 12),
@@ -227,6 +229,15 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
                 style: const TextStyle(fontSize: 12),
               ),
             ),
+            if (originSource == 'app') ...[
+              const SizedBox(height: 12),
+              const Text(
+                'This link uses the address your app connects with. If they '
+                'are not on your network, set External Address in Settings '
+                'and issue a new link.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+              ),
+            ],
           ],
         ),
         actions: [
@@ -798,6 +809,9 @@ class _UserTile extends StatelessWidget {
             ),
           ),
         // Admins always keep both methods, so toggles are only for other users.
+        // The subtitles frame these as the web sign-in story: connect links
+        // sign one device into the app once, while a password or passkey is
+        // what survives a cleared browser.
         if (!user.isAdmin)
           PopupMenuItem(
             value:
@@ -808,6 +822,9 @@ class _UserTile extends StatelessWidget {
               title: Text(user.passwordEnabled
                   ? 'Disable password'
                   : 'Enable password'),
+              subtitle: user.passwordEnabled
+                  ? null
+                  : const Text('Lets them sign in on the web'),
               contentPadding: EdgeInsets.zero,
             ),
           ),
@@ -818,6 +835,9 @@ class _UserTile extends StatelessWidget {
               leading: const Icon(Icons.fingerprint),
               title: Text(
                   user.passkeyEnabled ? 'Disable passkeys' : 'Enable passkeys'),
+              subtitle: user.passkeyEnabled
+                  ? null
+                  : const Text('Lets them sign in on the web (HTTPS)'),
               contentPadding: EdgeInsets.zero,
             ),
           ),

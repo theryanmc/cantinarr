@@ -19,6 +19,7 @@ type AccessRequestHook func(userID int64, username string)
 type Handler struct {
 	service           *Service
 	accessRequestHook AccessRequestHook
+	externalURL       func() string
 }
 
 func NewHandler(service *Service) *Handler {
@@ -30,6 +31,25 @@ func NewHandler(service *Service) *Handler {
 // handler (it needs the notifier composite, which needs the WebSocket hub).
 func (h *Handler) SetAccessRequestHook(hook AccessRequestHook) {
 	h.accessRequestHook = hook
+}
+
+// SetExternalURLSource wires the admin-configured external address after
+// construction (the settings service is built later in startup, mirroring
+// SetAccessRequestHook). When it returns a non-empty origin, outward links —
+// connect invites and passkey setup links — are built from it instead of the
+// requesting client's own address, so links work for invitees who cannot
+// reach the admin's LAN.
+func (h *Handler) SetExternalURLSource(source func() string) {
+	h.externalURL = source
+}
+
+// resolvedExternalURL returns the configured external address, or "" when
+// unset or unwired.
+func (h *Handler) resolvedExternalURL() string {
+	if h.externalURL == nil {
+		return ""
+	}
+	return h.externalURL()
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -104,16 +124,29 @@ func (h *Handler) HandleCreateConnectToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if req.Name == "" || req.ServerURL == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and server_url required"})
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
 		return
 	}
 
-	resp, err := h.service.CreateConnectToken(claims.UserID, req.Name, req.ServerURL)
+	// The admin-configured external address wins over the client-sent URL:
+	// the client can only offer the address its own connection uses, which on
+	// a LAN is unreachable for the invitee this link is for.
+	serverURL, originSource := req.ServerURL, originSourceApp
+	if ext := h.resolvedExternalURL(); ext != "" {
+		serverURL, originSource = ext, originSourceExternalAddress
+	}
+	if serverURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_url required"})
+		return
+	}
+
+	resp, err := h.service.CreateConnectToken(claims.UserID, req.Name, serverURL)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create connect token"})
 		return
 	}
+	resp.OriginSource = originSource
 
 	writeJSON(w, http.StatusCreated, resp)
 }

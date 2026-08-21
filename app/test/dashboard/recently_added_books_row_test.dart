@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/core/widgets/media_card.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
@@ -15,11 +16,19 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// Serves the Books tab's backend calls, with the recent-books body under test.
 class _RecentAdapter implements HttpClientAdapter {
-  _RecentAdapter({this.recentStatus = 200, this.items});
+  _RecentAdapter({
+    this.recentStatus = 200,
+    this.items,
+    this.libraryStatus = 200,
+    this.titles,
+  });
 
   final int recentStatus;
   final List<Map<String, dynamic>>? items;
+  final int libraryStatus;
+  final List<Map<String, dynamic>>? titles;
   final recentInstanceIds = <String?>[];
+  final libraryInstanceIds = <String?>[];
 
   @override
   Future<ResponseBody> fetch(
@@ -41,7 +50,18 @@ class _RecentAdapter implements HttpClientAdapter {
       return _json({'items': items ?? const []});
     }
     if (options.path == '/api/requests/book-library') {
-      return _json({'titles': const []});
+      libraryInstanceIds
+          .add(options.queryParameters['instance_id'] as String?);
+      if (libraryStatus != 200) {
+        return ResponseBody.fromString(
+          jsonEncode({'error': 'unreachable'}),
+          libraryStatus,
+          headers: {
+            Headers.contentTypeHeader: [Headers.jsonContentType],
+          },
+        );
+      }
+      return _json({'titles': titles ?? const []});
     }
     if (options.path.endsWith('/api/v1/book/lookup')) {
       return _json(const []);
@@ -91,9 +111,16 @@ Future<_RecentAdapter> _pumpBooksTab(
   WidgetTester tester, {
   int recentStatus = 200,
   List<Map<String, dynamic>>? items,
+  int libraryStatus = 200,
+  List<Map<String, dynamic>>? titles,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-  final adapter = _RecentAdapter(recentStatus: recentStatus, items: items);
+  final adapter = _RecentAdapter(
+    recentStatus: recentStatus,
+    items: items,
+    libraryStatus: libraryStatus,
+    titles: titles,
+  );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
     overrides: [
@@ -134,6 +161,26 @@ List<Map<String, dynamic>> _twoFormatsOfOneTitle() => [
         'imported_at': '2026-06-01T12:00:00Z',
       },
     ];
+
+/// One owned-books digest entry for foreign book id `fb-1`.
+Map<String, dynamic> _digestEntry({
+  required bool ebookMonitored,
+  required bool ebookDownloaded,
+  required bool audiobookMonitored,
+  required bool audiobookDownloaded,
+  bool statusKnown = true,
+  String foreignBookId = 'fb-1',
+}) => {
+      'title': 'Ahsoka',
+      'author': 'E. K. Johnston',
+      'foreign_book_id': foreignBookId,
+      'ebook': {'monitored': ebookMonitored, 'downloaded': ebookDownloaded},
+      'audiobook': {
+        'monitored': audiobookMonitored,
+        'downloaded': audiobookDownloaded,
+      },
+      'status_known': statusKnown,
+    };
 
 void main() {
   testWidgets('shows each format of a title as its own card', (tester) async {
@@ -245,5 +292,207 @@ void main() {
 
     expect(adapter.recentInstanceIds, isNotEmpty);
     expect(adapter.recentInstanceIds.every((id) => id == 'books'), isTrue);
+    // The two fetches must never drift onto different instances.
+    expect(adapter.libraryInstanceIds, isNotEmpty);
+    expect(adapter.libraryInstanceIds.every((id) => id == 'books'), isTrue);
+  });
+
+  testWidgets(
+      'a fully-downloaded title shows a green Available pill and the '
+      'eBook + Audiobook subtitle', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: false,
+          audiobookDownloaded: true,
+        ),
+      ],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, 'Available');
+      expect(card.statusColor, AppTheme.available);
+    }
+    expect(find.text('eBook + Audiobook'), findsNWidgets(2));
+  });
+
+  testWidgets(
+      'an empty digest leaves cards with no pill and their own format label',
+      (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: const [],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, isNull);
+      expect(card.statusColor, isNull);
+    }
+    expect(find.text('eBook'), findsOneWidget);
+    expect(find.text('Audiobook'), findsOneWidget);
+  });
+
+  testWidgets(
+      'a recent record with an empty foreignBookId never matches an '
+      'empty-id digest row', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: [
+        {
+          'book_id': 7,
+          'foreign_book_id': '',
+          'title': 'Orphaned Record',
+          'format': 'ebook',
+          'cover': '',
+          'imported_at': '2026-07-24T12:00:00Z',
+        },
+      ],
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: false,
+          audiobookDownloaded: true,
+          foreignBookId: '',
+        ),
+      ],
+    );
+
+    final card = tester.widget<MediaCard>(find.byType(MediaCard));
+    expect(card.statusLabel, isNull);
+  });
+
+  testWidgets(
+      'ROADMAP Phase 2 criterion 1: a monitored missing format renders '
+      'Requested', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: true,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, 'Requested');
+      expect(card.statusColor, AppTheme.requested);
+      expect(card.subtitle, 'eBook + Audiobook requested');
+    }
+  });
+
+  testWidgets(
+      'ROADMAP Phase 2 criterion 2: a never-requested missing format '
+      'renders Partial', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: false,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards = tester.widgetList<MediaCard>(find.byType(MediaCard));
+    expect(cards, hasLength(2));
+    for (final card in cards) {
+      expect(card.statusLabel, 'Partial');
+      expect(card.statusColor, AppTheme.requested);
+      expect(card.subtitle, 'eBook');
+    }
+  });
+
+  testWidgets(
+      'an unreadable ownership digest hides the whole row, not just its pills',
+      (tester) async {
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      libraryStatus: 500,
+    );
+
+    expect(find.text('Recently Added'), findsNothing);
+    expect(find.byType(MediaCard), findsNothing);
+    expect(find.textContaining('error'), findsNothing);
+    expect(find.textContaining('Error'), findsNothing);
+    // The rest of the tab must be unaffected — the failure stays invisible.
+    expect(find.byType(TextField), findsOneWidget);
+  });
+
+  testWidgets(
+      'two records sharing one foreignBookId stay two cards and cannot '
+      'contradict each other', (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await _pumpBooksTab(
+      tester,
+      items: _twoFormatsOfOneTitle(),
+      titles: [
+        _digestEntry(
+          ebookMonitored: false,
+          ebookDownloaded: true,
+          audiobookMonitored: true,
+          audiobookDownloaded: false,
+        ),
+      ],
+    );
+
+    final cards =
+        tester.widgetList<MediaCard>(find.byType(MediaCard)).toList();
+    expect(cards, hasLength(2));
+    expect(cards[0].id, isNot(cards[1].id));
+    expect(cards[0].statusLabel, cards[1].statusLabel);
+    expect(cards[0].statusColor, cards[1].statusColor);
+    expect(cards[0].subtitle, cards[1].subtitle);
+    expect(cards[0].statusLabel, 'Requested');
+    expect(cards[0].statusColor, AppTheme.requested);
+    expect(cards[0].subtitle, 'eBook + Audiobook requested');
   });
 }
