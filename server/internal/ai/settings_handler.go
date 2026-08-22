@@ -64,6 +64,13 @@ func (h *Handler) UpdateAISettings(w http.ResponseWriter, r *http.Request) {
 		writeAISettingsError(w, http.StatusBadRequest, "invalid AI provider or model")
 		return
 	}
+	// Shared-only providers (the local OpenAI-compatible endpoint) never
+	// become personal selections: their endpoints can name cluster-internal
+	// hosts, which must never ride a non-admin path.
+	if credentials.IsSharedOnlyAIProvider(req.Provider) {
+		writeAISettingsError(w, http.StatusBadRequest, "this provider is available only as the server's shared profile")
+		return
+	}
 	if req.Model == "" {
 		req.Model = credentials.DefaultAIModel(req.Provider)
 	}
@@ -125,7 +132,7 @@ func (h *Handler) UpdatePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	if credentials.AIKeyCredentialKey(provider) == "" {
+	if credentials.AIKeyCredentialKey(provider) == "" || credentials.IsSharedOnlyAIProvider(provider) {
 		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -201,7 +208,7 @@ func (h *Handler) DeletePersonalAICredential(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	provider := strings.TrimSpace(chi.URLParam(r, "provider"))
-	if credentials.AIKeyCredentialKey(provider) == "" {
+	if credentials.AIKeyCredentialKey(provider) == "" || credentials.IsSharedOnlyAIProvider(provider) {
 		writeAISettingsError(w, http.StatusBadRequest, "provider does not accept an API key")
 		return
 	}
@@ -227,7 +234,10 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		return
 	}
 	personalCredentials := map[string]bool{}
-	for _, option := range credentials.AIProviders {
+	// Personal payloads carry only personally selectable providers:
+	// shared-only entries stay admin-facing.
+	personalProviders := credentials.PersonalAIProviders()
+	for _, option := range personalProviders {
 		if option.CredentialKey == "" {
 			continue
 		}
@@ -286,7 +296,7 @@ func (h *Handler) writeAISettings(w http.ResponseWriter, r *http.Request, userID
 		personalConfigJSON = personalConfig
 	}
 	response := map[string]any{
-		"providers": credentials.AIProviders,
+		"providers": personalProviders,
 		// The zero-config pair the UI preselects when nothing is chosen yet.
 		"default_provider": credentials.DefaultAIProvider,
 		"default_model":    credentials.DefaultSharedAIModel,

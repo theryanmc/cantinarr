@@ -57,6 +57,11 @@ class AiCredentialConfig {
   /// Admin-pinned reasoning effort for the shared openai provider. Empty
   /// means auto. Older servers never send it.
   final String openaiReasoningEffort;
+
+  /// The local OpenAI-compatible provider's scoped endpoint pair. Same
+  /// contracts as the openai pair; older servers never send them.
+  final String localOpenaiBaseUrl;
+  final String localOpenaiReasoningEffort;
   final List<AiProviderOption> providers;
 
   /// Whether the shared provider is actually ready (credential stored, or the
@@ -73,6 +78,8 @@ class AiCredentialConfig {
     required this.model,
     this.openaiBaseUrl = '',
     this.openaiReasoningEffort = '',
+    this.localOpenaiBaseUrl = '',
+    this.localOpenaiReasoningEffort = '',
     required this.providers,
     this.sharedConfigured = true,
     required this.healthCheckEnabled,
@@ -109,6 +116,9 @@ class AiCredentialConfig {
       // shared with non-admin payloads, which never carry the endpoint.
       openaiBaseUrl: json['openai_base_url'] as String? ?? '',
       openaiReasoningEffort: json['openai_reasoning_effort'] as String? ?? '',
+      localOpenaiBaseUrl: json['local_openai_base_url'] as String? ?? '',
+      localOpenaiReasoningEffort:
+          json['local_openai_reasoning_effort'] as String? ?? '',
       providers: providers,
       sharedConfigured: shared['configured'] as bool? ?? true,
       healthCheckEnabled: health['enabled'] as bool? ?? true,

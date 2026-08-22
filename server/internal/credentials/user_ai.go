@@ -160,18 +160,29 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 		model = DefaultAIModel(provider)
 	}
 	profile := AIProfile{Config: AIConfig{Provider: provider, Model: model}}
-	if provider == AIProviderOpenAI {
+	// Endpoint/effort settings are provider-scoped so hosted openai and the
+	// local provider never fight over one slot. Reads fail closed: an
+	// unreadable override must not silently reroute shared traffic.
+	switch provider {
+	case AIProviderOpenAI:
 		baseURL, _, err := settingTx(tx, KeyOpenAIBaseURL)
 		if err != nil {
-			// Fail closed: an unreadable override must not silently send
-			// shared openai traffic back to api.openai.com.
 			return profile, err
 		}
 		profile.BaseURL = baseURL
 		effort, _, err := settingTx(tx, KeyOpenAIReasoningEffort)
 		if err != nil {
-			// Same fail-closed contract: a pinned effort must not silently
-			// fall back to auto.
+			return profile, err
+		}
+		profile.ReasoningEffort = effort
+	case AIProviderLocalOpenAI:
+		baseURL, _, err := settingTx(tx, KeyLocalOpenAIBaseURL)
+		if err != nil {
+			return profile, err
+		}
+		profile.BaseURL = baseURL
+		effort, _, err := settingTx(tx, KeyLocalOpenAIReasoningEffort)
+		if err != nil {
 			return profile, err
 		}
 		profile.ReasoningEffort = effort
@@ -180,6 +191,9 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 	if key == "" {
 		return profile, nil
 	}
+	// Key-optional providers (local OpenAI-compatible servers) are complete
+	// without a stored key: the runner sends a placeholder bearer instead.
+	profile.CredentialPresent = AIProviderKeyOptional(provider)
 	var stored string
 	err = tx.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&stored)
 	if errors.Is(err, sql.ErrNoRows) {

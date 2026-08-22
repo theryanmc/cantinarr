@@ -238,6 +238,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		// only the shared profile can carry the admin overrides.
 		service := NewOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
+	case credentials.AIProviderLocalOpenAI:
+		// Shared-only by construction: personal selections of the local
+		// provider are rejected at the settings boundary.
+		service := NewOpenAIService(localOpenAICredential(apiKey), aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
+		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	case credentials.AIProviderGemini:
 		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)

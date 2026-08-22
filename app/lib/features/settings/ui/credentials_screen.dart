@@ -42,6 +42,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _openaiBaseUrlController = TextEditingController();
   // Admin-pinned shared openai reasoning effort. Empty string means auto.
   String _openaiReasoningEffort = '';
+  // The local provider's scoped endpoint pair.
+  final _localBaseUrlController = TextEditingController();
+  String _localReasoningEffort = '';
+  final _localKeyController = TextEditingController();
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
   bool _healthCheckEnabled = true;
@@ -98,6 +102,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['grok_key'] = _grokController.text.trim();
       aiChanged = true;
     }
+    if (_localKeyController.text.isNotEmpty) {
+      creds['local_openai_key'] = _localKeyController.text.trim();
+      aiChanged = true;
+    }
 
     final selectedModel = _selectedModel == _customModelValue
         ? _customModelController.text.trim()
@@ -129,6 +137,24 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         _openaiReasoningEffort != (_status?.ai.openaiReasoningEffort ?? '')) {
       creds['openai_reasoning_effort'] = _openaiReasoningEffort;
       aiChanged = true;
+    }
+    if (_localProviderSelected) {
+      final localBaseUrl = _localBaseUrlController.text.trim();
+      if (localBaseUrl.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Enter the server base URL')),
+        );
+        return;
+      }
+      if (localBaseUrl != (_status?.ai.localOpenaiBaseUrl ?? '')) {
+        creds['local_openai_base_url'] = localBaseUrl;
+        aiChanged = true;
+      }
+      if (_localReasoningEffort !=
+          (_status?.ai.localOpenaiReasoningEffort ?? '')) {
+        creds['local_openai_reasoning_effort'] = _localReasoningEffort;
+        aiChanged = true;
+      }
     }
     if (_status == null ||
         _healthCheckEnabled != _status!.ai.healthCheckEnabled) {
@@ -237,6 +263,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _grokController.dispose();
     _customModelController.dispose();
     _openaiBaseUrlController.dispose();
+    _localBaseUrlController.dispose();
+    _localKeyController.dispose();
     super.dispose();
   }
 
@@ -257,6 +285,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     // stored value visible when the admin comes back to OpenAI.
     _openaiBaseUrlController.text = status.ai.openaiBaseUrl;
     _openaiReasoningEffort = status.ai.openaiReasoningEffort;
+    _localBaseUrlController.text = status.ai.localOpenaiBaseUrl;
+    _localReasoningEffort = status.ai.localOpenaiReasoningEffort;
   }
 
   /// The base-URL override is openai-only, and only servers that advertise
@@ -274,6 +304,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     final provider =
         _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
     return provider?.id == 'openai' && provider!.supportsReasoningEffort;
+  }
+
+  /// The local provider carries its own scoped endpoint pair.
+  bool get _localProviderSelected {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'local_openai';
   }
 
   String _friendlySaveError(Object error) {
@@ -450,6 +487,62 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                             ),
                           ),
                         ],
+                        if (_localProviderSelected) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiBaseUrl,
+                            TextField(
+                              key: const ValueKey('local-openai-base-url'),
+                              controller: _localBaseUrlController,
+                              decoration: const InputDecoration(
+                                labelText: 'Server base URL',
+                                hintText: 'http://llm-host:11434/v1',
+                                helperText:
+                                    'Required. Your OpenAI-compatible server '
+                                    '(llama.cpp, vLLM, Ollama), reached from '
+                                    'the Cantinarr server, not from this '
+                                    'device.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              keyboardType: TextInputType.url,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiReasoningEffort,
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey(
+                                  'local-openai-reasoning-effort'),
+                              initialValue: _localReasoningEffort,
+                              decoration: const InputDecoration(
+                                labelText: 'Reasoning effort',
+                                helperText:
+                                    'How much the model thinks before '
+                                    'answering. None is fastest on local '
+                                    'models.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: '', child: Text('Auto')),
+                                DropdownMenuItem(
+                                    value: 'none', child: Text('None')),
+                                DropdownMenuItem(
+                                    value: 'minimal', child: Text('Minimal')),
+                                DropdownMenuItem(
+                                    value: 'low', child: Text('Low')),
+                                DropdownMenuItem(
+                                    value: 'medium', child: Text('Medium')),
+                                DropdownMenuItem(
+                                    value: 'high', child: Text('High')),
+                              ],
+                              onChanged: (value) => setState(
+                                  () => _localReasoningEffort = value ?? ''),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         _anchor(
                           SettingsAnchors.credentialsHealthCheck,
@@ -491,10 +584,11 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   _status?.ai.providers ?? const [],
                                 )?.label ??
                                 _selectedProvider,
-                            selfHosted: _showOpenAiBaseUrl &&
-                                _openaiBaseUrlController.text
-                                    .trim()
-                                    .isNotEmpty,
+                            selfHosted: _localProviderSelected ||
+                                (_showOpenAiBaseUrl &&
+                                    _openaiBaseUrlController.text
+                                        .trim()
+                                        .isNotEmpty),
                           ),
                         const SizedBox(height: 24),
                         _anchor(
@@ -556,6 +650,20 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                               onDelete: () =>
                                   _deleteCredential('grok_key', 'xAI Grok'),
                             ),
+                          ),
+                          const SizedBox(height: 20),
+                          CredentialSection(
+                            title: 'Local server (AI)',
+                            description:
+                                'Optional key or proxy token for the local '
+                                'OpenAI-compatible server; most need none',
+                            isConfigured:
+                                _status?.isConfigured('local_openai_key') ??
+                                    false,
+                            controller: _localKeyController,
+                            hint: 'Optional API key',
+                            onDelete: () => _deleteCredential(
+                                'local_openai_key', 'Local server'),
                           ),
                         ],
                         const SizedBox(height: 32),
@@ -998,9 +1106,9 @@ class _SharedApiCostNotice extends StatelessWidget {
           Expanded(
             child: Text(
               selfHosted
-                  ? 'Included requests go to the configured base URL using '
-                      'the server $provider key. Costs depend on that '
-                      'server, not on api.openai.com.'
+                  ? 'Included requests go to the configured server '
+                      'endpoint. Costs depend on that server, not on a '
+                      'hosted provider.'
                   : 'Included requests use the server $provider key. Usage '
                       'counts against its paid quota and may create provider '
                       'charges.',

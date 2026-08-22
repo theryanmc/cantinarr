@@ -9,7 +9,7 @@ import (
 
 func TestAIProviderMetadataAdvertisesReasoningEffortSupportOnlyForOpenAI(t *testing.T) {
 	for _, option := range AIProviders {
-		want := option.ID == AIProviderOpenAI
+		want := option.ID == AIProviderOpenAI || option.ID == AIProviderLocalOpenAI
 		if option.SupportsReasoningEffort != want {
 			t.Errorf("%s supports_reasoning_effort = %t, want %t", option.ID, option.SupportsReasoningEffort, want)
 		}
