@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import '../../../core/network/long_request_options.dart';
 import 'chaptarr_models.dart';
 
 /// Coerces a Dio response body into a JSON list. Chaptarr's lookup/metadata
@@ -53,8 +54,11 @@ class ChaptarrApiService {
     return ChaptarrSystemStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches the entire author library in one unpaginated response — slow for
+  /// large libraries.
   Future<List<ChaptarrAuthor>> getAuthors() async {
-    final resp = await _dio.get('$_basePath/author');
+    final resp =
+        await _dio.get('$_basePath/author', options: longRequestOptions());
     return (resp.data as List<dynamic>)
         .map((a) => ChaptarrAuthor.fromJson(a as Map<String, dynamic>))
         .toList();
@@ -74,11 +78,17 @@ class ChaptarrApiService {
   }
 
   /// Lists books, optionally narrowed to one author. Each book carries its
-  /// editions inline — drives the per-book status line.
+  /// editions inline — drives the per-book status line. A bare call returns
+  /// the entire book library in one unpaginated response — slow for large
+  /// libraries.
   Future<List<ChaptarrBook>> getBooks({int? authorId}) async {
-    final resp = await _dio.get('$_basePath/book', queryParameters: {
-      if (authorId != null) 'authorId': authorId,
-    });
+    final resp = await _dio.get(
+      '$_basePath/book',
+      queryParameters: {
+        if (authorId != null) 'authorId': authorId,
+      },
+      options: longRequestOptions(),
+    );
     return (resp.data as List<dynamic>)
         .map((b) => ChaptarrBook.fromJson(b as Map<String, dynamic>))
         .toList();

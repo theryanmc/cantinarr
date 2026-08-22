@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../../../core/network/long_request_options.dart';
 import 'sonarr_models.dart';
 
 /// Networking layer for Sonarr, proxied through the Cantinarr backend.
@@ -18,8 +19,11 @@ class SonarrApiService {
     return SonarrSystemStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches the entire series library in one unpaginated response — slow for
+  /// large libraries.
   Future<List<SonarrSeries>> getSeries() async {
-    final resp = await _dio.get('$_basePath/series');
+    final resp =
+        await _dio.get('$_basePath/series', options: longRequestOptions());
     return (resp.data as List<dynamic>)
         .map((s) => SonarrSeries.fromJson(s as Map<String, dynamic>))
         .toList();

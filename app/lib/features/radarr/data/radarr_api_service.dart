@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../../../core/network/long_request_options.dart';
 import 'radarr_models.dart';
 
 /// Networking layer for Radarr, proxied through the Cantinarr backend.
@@ -18,12 +19,18 @@ class RadarrApiService {
     return RadarrSystemStatus.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches the entire movie library in one unpaginated response — slow for
+  /// large libraries.
   Future<List<RadarrMovie>> getMovies({String? searchTerm}) async {
     final params = <String, dynamic>{};
     if (searchTerm != null && searchTerm.isNotEmpty) {
       params['searchTerm'] = searchTerm;
     }
-    final resp = await _dio.get('$_basePath/movie', queryParameters: params);
+    final resp = await _dio.get(
+      '$_basePath/movie',
+      queryParameters: params,
+      options: longRequestOptions(),
+    );
     return (resp.data as List<dynamic>)
         .map((m) => RadarrMovie.fromJson(m as Map<String, dynamic>))
         .toList();
