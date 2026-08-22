@@ -46,7 +46,7 @@ type openAIService struct {
 // the admin-pinned effort for every turn (empty = auto).
 func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
-		model = "gpt-5.5"
+		model = "gpt-5.6-sol"
 	}
 	options := []openaioption.RequestOption{
 		openaioption.WithAPIKey(apiKey),
