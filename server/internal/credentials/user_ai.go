@@ -165,11 +165,6 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 	// unreadable override must not silently reroute shared traffic.
 	switch provider {
 	case AIProviderOpenAI:
-		baseURL, _, err := settingTx(tx, KeyOpenAIBaseURL)
-		if err != nil {
-			return profile, err
-		}
-		profile.BaseURL = baseURL
 		effort, _, err := settingTx(tx, KeyOpenAIReasoningEffort)
 		if err != nil {
 			return profile, err

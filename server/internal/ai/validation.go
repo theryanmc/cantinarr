@@ -203,7 +203,7 @@ func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model strin
 			Model:    strings.TrimSpace(model),
 		},
 		APIKey:            resolved.APIKey,
-		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
+		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
 		BaseURL:           resolved.BaseURL,
 		ReasoningEffort:   resolved.ReasoningEffort,
 	}
@@ -342,7 +342,7 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 		probeErr = h.ValidateSharedAISettings(ctx, credentials.AIProfile{
 			Config:            config,
 			APIKey:            resolved.APIKey,
-			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
+			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
 			BaseURL:           resolved.BaseURL,
 			ReasoningEffort:   resolved.ReasoningEffort,
 		})

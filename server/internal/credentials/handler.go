@@ -84,10 +84,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// Flat sibling of config on purpose: AIConfig also serializes into
 		// non-admin payloads, and a LAN endpoint belongs only in this
 		// admin-gated response.
-		"openai_base_url": strings.TrimSpace(h.registry.GetSetting(KeyOpenAIBaseURL)),
-		// Flat sibling for the same reason as the base URL above.
-		"openai_reasoning_effort": strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort)),
-		// The local provider's scoped pair, same flat-sibling contract.
+		// Flat siblings of config on purpose: AIConfig also serializes into
+		// non-admin payloads, and endpoint configuration belongs only in this
+		// admin-gated response.
+		"openai_reasoning_effort":       strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort)),
 		"local_openai_base_url":         strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIBaseURL)),
 		"local_openai_reasoning_effort": strings.TrimSpace(h.registry.GetSetting(KeyLocalOpenAIReasoningEffort)),
 		"providers":                     AIProviders,
@@ -134,7 +134,6 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	valid[KeyAIProvider] = true
 	valid[KeyAIModel] = true
 	valid[KeyAIHealthCheckEnabled] = true
-	valid[KeyOpenAIBaseURL] = true
 	valid[KeyOpenAIReasoningEffort] = true
 	valid[KeyLocalOpenAIBaseURL] = true
 	valid[KeyLocalOpenAIReasoningEffort] = true
@@ -195,7 +194,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// configured endpoint, not the provider default. The pairs are
 	// provider-scoped: hosted openai and the local provider never share a
 	// slot.
-	openaiEndpoint, ok := h.effectiveEndpointSettings(w, body, KeyOpenAIBaseURL, KeyOpenAIReasoningEffort)
+	openaiEndpoint, ok := h.effectiveEndpointSettings(w, body, "", KeyOpenAIReasoningEffort)
 	if !ok {
 		return
 	}
@@ -241,7 +240,6 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			profile := AIProfile{Config: config, APIKey: value, CredentialPresent: true}
 			switch option.ID {
 			case AIProviderOpenAI:
-				profile.BaseURL = openaiEndpoint.baseURL
 				profile.ReasoningEffort = openaiEndpoint.effort
 			case AIProviderLocalOpenAI:
 				profile.BaseURL = localEndpoint.baseURL
@@ -259,7 +257,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// provider against the new configuration. With another provider
 	// selected the values persist untested; selecting the provider later
 	// forces the probe via providerSet.
-	if (openaiEndpoint.baseURLSet || openaiEndpoint.effortSet) && candidate.Provider == AIProviderOpenAI {
+	if openaiEndpoint.effortSet && candidate.Provider == AIProviderOpenAI {
 		mustTestSelected = true
 	}
 	if (localEndpoint.baseURLSet || localEndpoint.effortSet) && candidate.Provider == AIProviderLocalOpenAI {
@@ -277,7 +275,6 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 			switch candidate.Provider {
 			case AIProviderOpenAI:
-				profile.BaseURL = openaiEndpoint.baseURL
 				profile.ReasoningEffort = openaiEndpoint.effort
 			case AIProviderLocalOpenAI:
 				profile.BaseURL = localEndpoint.baseURL
@@ -302,7 +299,6 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	plainWrites := []plainSettingWrite{
-		{key: KeyOpenAIBaseURL, value: openaiEndpoint.baseURL, set: openaiEndpoint.baseURLSet},
 		{key: KeyOpenAIReasoningEffort, value: openaiEndpoint.effort, set: openaiEndpoint.effortSet},
 		{key: KeyLocalOpenAIBaseURL, value: localEndpoint.baseURL, set: localEndpoint.baseURLSet},
 		{key: KeyLocalOpenAIReasoningEffort, value: localEndpoint.effort, set: localEndpoint.effortSet},
@@ -381,11 +377,11 @@ type endpointSettings struct {
 // request body over the stored values, writing the HTTP error itself and
 // returning ok=false when a supplied value is invalid.
 func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[string]string, baseURLKey, effortKey string) (endpointSettings, bool) {
-	settings := endpointSettings{
-		baseURL: strings.TrimSpace(h.registry.GetSetting(baseURLKey)),
-		effort:  strings.TrimSpace(h.registry.GetSetting(effortKey)),
+	settings := endpointSettings{effort: strings.TrimSpace(h.registry.GetSetting(effortKey))}
+	if baseURLKey != "" {
+		settings.baseURL = strings.TrimSpace(h.registry.GetSetting(baseURLKey))
 	}
-	if value, set := body[baseURLKey]; set {
+	if value, set := body[baseURLKey]; baseURLKey != "" && set {
 		settings.baseURLSet = true
 		settings.baseURL = strings.TrimSpace(value)
 		if len(settings.baseURL) > maxAIBaseURLLength {

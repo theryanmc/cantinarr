@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +72,38 @@ func TestLocalOpenAISelectionRequiresBaseURLAndModel(t *testing.T) {
 	}
 }
 
+func TestLocalOpenAIBaseURLInvalidRejectedNothingSaved(t *testing.T) {
+	handler, registry := newCredentialHandlerTest(t)
+	calls := 0
+	handler.SetSharedAIValidator(func(context.Context, AIProfile) error {
+		calls++
+		return nil
+	}, nil)
+
+	for _, invalid := range []string{
+		"://bad",
+		"ftp://host/v1",
+		"host-without-scheme/v1",
+		"http://",
+		"https://" + strings.Repeat("x", maxAIBaseURLLength) + "/v1",
+	} {
+		body, err := json.Marshal(map[string]string{KeyLocalOpenAIBaseURL: invalid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := updateCredentialSettings(t, handler, string(body))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("value %q: status=%d body=%s", invalid, recorder.Code, recorder.Body.String())
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("invalid base URLs triggered %d validation turns", calls)
+	}
+	if got := registry.GetSetting(KeyLocalOpenAIBaseURL); got != "" {
+		t.Fatalf("invalid base URL was stored: %q", got)
+	}
+}
+
 func TestLocalOpenAISelectionValidatesWithoutKeyAndPersists(t *testing.T) {
 	handler, registry := newCredentialHandlerTest(t)
 	var profiles []AIProfile
@@ -133,9 +166,9 @@ func TestLocalOpenAIEndpointChangeAloneRerunsValidationTurn(t *testing.T) {
 		t.Fatalf("validated profiles = %#v", profiles)
 	}
 
-	// The scoped keys never bleed into the hosted openai pair.
-	if got := registry.GetSetting(KeyOpenAIBaseURL); got != "" {
-		t.Fatalf("hosted openai base URL contaminated: %q", got)
+	// The scoped keys never bleed into the hosted openai effort pin.
+	if got := registry.GetSetting(KeyOpenAIReasoningEffort); got != "" {
+		t.Fatalf("hosted openai effort contaminated: %q", got)
 	}
 }
 

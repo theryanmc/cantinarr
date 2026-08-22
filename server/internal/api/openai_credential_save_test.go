@@ -103,13 +103,13 @@ func TestOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
-// TestOpenAIBaseURLSavesThroughAuthenticatedRouter proves the shared base-URL
-// override end to end through the real router: the admin save's validation
-// turn lands on the configured upstream while the env-default upstream stays
-// silent, the value persists plaintext and echoes back to admins, and a
-// requester's personal save still validates against the default endpoint —
-// personal keys are never redirected by the shared override.
-func TestOpenAIBaseURLSavesThroughAuthenticatedRouter(t *testing.T) {
+// TestLocalProviderSavesThroughAuthenticatedRouter proves the local provider
+// end to end through the real router: the admin save's validation turn lands
+// on the configured upstream while the env-default upstream stays silent, the
+// endpoint persists plaintext and echoes back to admins, and a requester's
+// personal openai save still validates against the default endpoint —
+// personal keys are never redirected by the shared local endpoint.
+func TestLocalProviderSavesThroughAuthenticatedRouter(t *testing.T) {
 	configuredUpstream, configuredRequests := newStrictOpenAISaveUpstream(t)
 	envUpstream, envRequests := newStrictOpenAISaveUpstream(t)
 	t.Setenv("OPENAI_BASE_URL", envUpstream.URL+"/v1")
@@ -117,14 +117,12 @@ func TestOpenAIBaseURLSavesThroughAuthenticatedRouter(t *testing.T) {
 	harness := newRBACRouterHarness(t, false)
 	const (
 		model       = "gpt-4.1-mini"
-		sharedKey   = "sk-test-shared-openai"
 		personalKey = "sk-test-personal-openai"
 	)
 	sharedPayload, err := json.Marshal(map[string]string{
-		credentials.KeyOpenAIKey:     sharedKey,
-		credentials.KeyAIProvider:    credentials.AIProviderOpenAI,
-		credentials.KeyAIModel:       model,
-		credentials.KeyOpenAIBaseURL: configuredUpstream.URL + "/v1",
+		credentials.KeyAIProvider:         credentials.AIProviderLocalOpenAI,
+		credentials.KeyAIModel:            model,
+		credentials.KeyLocalOpenAIBaseURL: configuredUpstream.URL + "/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,11 +135,12 @@ func TestOpenAIBaseURLSavesThroughAuthenticatedRouter(t *testing.T) {
 		string(sharedPayload),
 	)
 	if shared.Code != http.StatusOK {
-		t.Fatalf("admin base-URL save status=%d, want 200; body=%s", shared.Code, shared.Body.String())
+		t.Fatalf("admin local-provider save status=%d, want 200; body=%s", shared.Code, shared.Body.String())
 	}
-	assertStrictOpenAISaveRequest(t, configuredRequests, sharedKey, model)
+	// Keyless local profiles authenticate with the fixed placeholder bearer.
+	assertStrictOpenAISaveRequest(t, configuredRequests, "cantinarr-local", model)
 	assertNoStrictOpenAISaveRequest(t, envRequests)
-	if got := harness.registry.GetSetting(credentials.KeyOpenAIBaseURL); got != configuredUpstream.URL+"/v1" {
+	if got := harness.registry.GetSetting(credentials.KeyLocalOpenAIBaseURL); got != configuredUpstream.URL+"/v1" {
 		t.Fatalf("stored base URL=%q", got)
 	}
 
@@ -151,14 +150,14 @@ func TestOpenAIBaseURLSavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 	var decoded struct {
 		AI struct {
-			OpenAIBaseURL string `json:"openai_base_url"`
+			LocalBaseURL string `json:"local_openai_base_url"`
 		} `json:"ai"`
 	}
 	if err := json.Unmarshal(status.Body.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.AI.OpenAIBaseURL != configuredUpstream.URL+"/v1" {
-		t.Fatalf("echoed base URL=%q", decoded.AI.OpenAIBaseURL)
+	if decoded.AI.LocalBaseURL != configuredUpstream.URL+"/v1" {
+		t.Fatalf("echoed base URL=%q", decoded.AI.LocalBaseURL)
 	}
 
 	personal := serveRBACRequestWithBody(

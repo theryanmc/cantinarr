@@ -50,10 +50,6 @@ class AiCredentialConfig {
   final String provider;
   final String model;
 
-  /// Admin base-URL override for the shared openai provider. Empty means the
-  /// provider default (api.openai.com). Older servers never send it.
-  final String openaiBaseUrl;
-
   /// Admin-pinned reasoning effort for the shared openai provider. Empty
   /// means auto. Older servers never send it.
   final String openaiReasoningEffort;
@@ -76,7 +72,6 @@ class AiCredentialConfig {
   const AiCredentialConfig({
     required this.provider,
     required this.model,
-    this.openaiBaseUrl = '',
     this.openaiReasoningEffort = '',
     this.localOpenaiBaseUrl = '',
     this.localOpenaiReasoningEffort = '',
@@ -112,9 +107,8 @@ class AiCredentialConfig {
           (selected?.models.isNotEmpty == true
               ? selected!.models.first.id
               : 'claude-opus-4-8'),
-      // Flat sibling of config in the server response: the config object is
-      // shared with non-admin payloads, which never carry the endpoint.
-      openaiBaseUrl: json['openai_base_url'] as String? ?? '',
+      // Flat siblings of config in the server response: the config object is
+      // shared with non-admin payloads, which never carry endpoint settings.
       openaiReasoningEffort: json['openai_reasoning_effort'] as String? ?? '',
       localOpenaiBaseUrl: json['local_openai_base_url'] as String? ?? '',
       localOpenaiReasoningEffort:
@@ -144,8 +138,8 @@ class CredentialsService {
   }
 
   /// Updates one or more credentials. Only non-empty values are written,
-  /// except openai_base_url and openai_reasoning_effort, where an empty
-  /// string is a deliberate clear.
+  /// except the endpoint/effort settings keys, where an empty string is a
+  /// deliberate clear.
   Future<void> update(Map<String, String> credentials) async {
     await _dio.put(
       '/api/admin/credentials',

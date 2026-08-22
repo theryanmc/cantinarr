@@ -226,7 +226,7 @@ func TestCodexAutonomousTurnForceNoToolsAndPropagatesError(t *testing.T) {
 	}
 }
 
-func TestResolveSharedAutonomousTurnUsesSharedOpenAIBaseURL(t *testing.T) {
+func TestResolveSharedAutonomousTurnUsesLocalProviderBaseURL(t *testing.T) {
 	h, registry, _, _ := newResolverTestHandler(t)
 	configured := make(chan providerRequest, 1)
 	configuredServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -242,13 +242,10 @@ func TestResolveSharedAutonomousTurnUsesSharedOpenAIBaseURL(t *testing.T) {
 	t.Cleanup(envServer.Close)
 	t.Setenv("OPENAI_BASE_URL", envServer.URL+"/v1")
 
-	if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+	if err := registry.SetAIConfig(credentials.AIProviderLocalOpenAI, "local-model"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "local-model"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetSetting(credentials.KeyOpenAIBaseURL, configuredServer.URL+"/v1"); err != nil {
+	if err := registry.SetSetting(credentials.KeyLocalOpenAIBaseURL, configuredServer.URL+"/v1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -265,7 +262,7 @@ func TestResolveSharedAutonomousTurnUsesSharedOpenAIBaseURL(t *testing.T) {
 	if req.path != "/v1/chat/completions" {
 		t.Fatalf("path=%q, want /v1/chat/completions", req.path)
 	}
-	if got := req.header.Get("Authorization"); got != "Bearer shared-secret" {
+	if got := req.header.Get("Authorization"); got != "Bearer cantinarr-local" {
 		t.Fatalf("Authorization=%q", got)
 	}
 	if got := envHits.Load(); got != 0 {

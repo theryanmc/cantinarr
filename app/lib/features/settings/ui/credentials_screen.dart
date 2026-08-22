@@ -39,7 +39,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _geminiController = TextEditingController();
   final _grokController = TextEditingController();
   final _customModelController = TextEditingController();
-  final _openaiBaseUrlController = TextEditingController();
   // Admin-pinned shared openai reasoning effort. Empty string means auto.
   String _openaiReasoningEffort = '';
   // The local provider's scoped endpoint pair.
@@ -123,16 +122,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       creds['ai_model'] = selectedModel;
       aiChanged = true;
     }
-    // Only a visible field writes: hidden state must never silently rewrite
-    // the server, and older servers reject the key as unknown. An empty
-    // string is a deliberate clear back to api.openai.com.
-    if (_showOpenAiBaseUrl) {
-      final baseUrl = _openaiBaseUrlController.text.trim();
-      if (baseUrl != (_status?.ai.openaiBaseUrl ?? '')) {
-        creds['openai_base_url'] = baseUrl;
-        aiChanged = true;
-      }
-    }
+    // Only a visible control writes: hidden state must never silently
+    // rewrite the server, and older servers reject the key as unknown.
     if (_showOpenAiReasoningEffort &&
         _openaiReasoningEffort != (_status?.ai.openaiReasoningEffort ?? '')) {
       creds['openai_reasoning_effort'] = _openaiReasoningEffort;
@@ -262,7 +253,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _geminiController.dispose();
     _grokController.dispose();
     _customModelController.dispose();
-    _openaiBaseUrlController.dispose();
     _localBaseUrlController.dispose();
     _localKeyController.dispose();
     super.dispose();
@@ -283,23 +273,13 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     }
     // Tracks server state, not the dropdown: switching providers keeps the
     // stored value visible when the admin comes back to OpenAI.
-    _openaiBaseUrlController.text = status.ai.openaiBaseUrl;
     _openaiReasoningEffort = status.ai.openaiReasoningEffort;
     _localBaseUrlController.text = status.ai.localOpenaiBaseUrl;
     _localReasoningEffort = status.ai.localOpenaiReasoningEffort;
   }
 
-  /// The base-URL override is openai-only, and only servers that advertise
-  /// the capability accept its key. Gate on the resolved option, which is
-  /// what the provider dropdown actually displays.
-  bool get _showOpenAiBaseUrl {
-    final provider =
-        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
-    return provider?.id == 'openai' && provider!.supportsBaseUrl;
-  }
-
-  /// Same gating as the base URL: openai only, capability-flagged so older
-  /// servers (which reject the key) never show the control.
+  /// Effort is openai-only among hosted providers, capability-flagged so
+  /// older servers (which reject the key) never show the control.
   bool get _showOpenAiReasoningEffort {
     final provider =
         _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
@@ -429,28 +409,6 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 setState(() => _selectedModel = value),
                           ),
                         ),
-                        if (_showOpenAiBaseUrl) ...[
-                          const SizedBox(height: 12),
-                          _anchor(
-                            SettingsAnchors.credentialsOpenAiBaseUrl,
-                            TextField(
-                              key: const ValueKey('openai-base-url'),
-                              controller: _openaiBaseUrlController,
-                              decoration: const InputDecoration(
-                                labelText: 'OpenAI base URL',
-                                hintText: 'http://llm-host:8080/v1',
-                                helperText:
-                                    'Any OpenAI-compatible server, reached '
-                                    'from the Cantinarr server, not from this '
-                                    'device. Leave empty to use '
-                                    'api.openai.com.',
-                                helperMaxLines: 3,
-                                isDense: true,
-                              ),
-                              keyboardType: TextInputType.url,
-                            ),
-                          ),
-                        ],
                         if (_showOpenAiReasoningEffort) ...[
                           const SizedBox(height: 12),
                           _anchor(
@@ -584,11 +542,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   _status?.ai.providers ?? const [],
                                 )?.label ??
                                 _selectedProvider,
-                            selfHosted: _localProviderSelected ||
-                                (_showOpenAiBaseUrl &&
-                                    _openaiBaseUrlController.text
-                                        .trim()
-                                        .isNotEmpty),
+                            selfHosted: _localProviderSelected,
                           ),
                         const SizedBox(height: 24),
                         _anchor(

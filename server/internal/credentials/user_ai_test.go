@@ -98,56 +98,6 @@ func TestSharedAIProfileReadsGrantConfigAndMatchingKeyCoherently(t *testing.T) {
 	}
 }
 
-func TestSharedAIProfileCarriesOpenAIBaseURLOnlyForOpenAI(t *testing.T) {
-	registry, userID, _ := newUserAIRegistry(t)
-	if _, err := registry.db.Exec(`UPDATE users SET ai_shared_enabled = 1 WHERE id = ?`, userID); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetSetting(KeyOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetCredential(KeyOpenAIKey, "shared-openai-secret"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetAIConfig(AIProviderOpenAI, "local-model"); err != nil {
-		t.Fatal(err)
-	}
-	profile, granted, err := registry.LoadSharedAIProfileForUser(context.Background(), userID)
-	if err != nil || !granted || profile.BaseURL != "http://llm-host:8080/v1" {
-		t.Fatalf("shared openai profile = %#v, granted=%t, err=%v", profile, granted, err)
-	}
-	shared, err := registry.LoadSharedAIProfile(context.Background())
-	if err != nil || shared.BaseURL != "http://llm-host:8080/v1" {
-		t.Fatalf("shared profile = %#v, err=%v", shared, err)
-	}
-
-	// The override belongs to the openai provider: any other selection must
-	// leave it behind even while the row stays stored.
-	if err := registry.SetCredential(KeyGeminiKey, "gemini-secret"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetAIConfig(AIProviderGemini, "gemini-model"); err != nil {
-		t.Fatal(err)
-	}
-	profile, _, err = registry.LoadSharedAIProfileForUser(context.Background(), userID)
-	if err != nil || profile.BaseURL != "" {
-		t.Fatalf("gemini profile = %#v, err=%v", profile, err)
-	}
-
-	// Personal profiles never carry the shared override: a user's own OpenAI
-	// key keeps talking to api.openai.com.
-	if err := registry.SetUserAIConfig(userID, AIProviderOpenAI, "gpt-personal"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetUserAICredential(userID, AIProviderOpenAI, "personal-secret"); err != nil {
-		t.Fatal(err)
-	}
-	personal, found, err := registry.LoadUserAIProfile(context.Background(), userID)
-	if err != nil || !found || personal.BaseURL != "" {
-		t.Fatalf("personal profile = %#v, found=%t, err=%v", personal, found, err)
-	}
-}
-
 func TestSharedAIProfileRejectsInvalidStoredOrEnvironmentProvider(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

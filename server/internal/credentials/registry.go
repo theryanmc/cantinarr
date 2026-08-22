@@ -30,16 +30,12 @@ const (
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
 	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
-	// KeyOpenAIBaseURL points the shared openai provider at an
-	// OpenAI-compatible endpoint. It is a plain setting, deliberately not in
-	// AllKeys: AllKeys drives encryption at rest, the startup
-	// EncryptExisting migration, per-key GET booleans, and DELETE, none of
-	// which apply to a non-secret URL.
-	KeyOpenAIBaseURL = "openai_base_url"
 	// KeyOpenAIReasoningEffort pins the reasoning_effort the shared openai
 	// provider sends on every turn. Empty means auto: interactive chat sends
-	// no effort field and validation keeps its adaptive ladder. Same
-	// plain-setting rationale as KeyOpenAIBaseURL.
+	// no effort field and validation keeps its adaptive ladder. Plain
+	// setting, deliberately not in AllKeys: AllKeys drives encryption at
+	// rest, the startup EncryptExisting migration, per-key GET booleans, and
+	// DELETE, none of which apply to a non-secret knob.
 	KeyOpenAIReasoningEffort = "openai_reasoning_effort"
 	// KeyLocalOpenAIKey is the OPTIONAL API key for the local
 	// OpenAI-compatible provider. Most local servers ignore auth entirely;
@@ -47,9 +43,9 @@ const (
 	// encrypted like every credential because some proxies do check it.
 	KeyLocalOpenAIKey = "local_openai_key"
 	// KeyLocalOpenAIBaseURL is the REQUIRED endpoint of the local
-	// OpenAI-compatible provider. Same plain-setting rationale as
-	// KeyOpenAIBaseURL, and the same shared-only exposure rules: it may
-	// name cluster-internal hosts and must never reach non-admin payloads.
+	// OpenAI-compatible provider. Plain setting (not a secret), with
+	// shared-only exposure rules: it may name cluster-internal hosts and
+	// must never reach non-admin payloads.
 	KeyLocalOpenAIBaseURL = "local_openai_base_url"
 	// KeyLocalOpenAIReasoningEffort mirrors KeyOpenAIReasoningEffort for the
 	// local provider.
@@ -123,9 +119,9 @@ type AIProviderOption struct {
 	Label         string `json:"label"`
 	AuthType      string `json:"auth_type"`
 	CredentialKey string `json:"credential_key"`
-	// SupportsBaseURL marks providers whose shared profile accepts an
-	// admin-set endpoint override (openai only). The app renders the base
-	// URL field from this flag, so servers without it never show the field.
+	// SupportsBaseURL marks providers whose shared profile carries an
+	// admin-set endpoint (the local provider only). The app renders endpoint
+	// fields from this flag, so servers without it never show them.
 	SupportsBaseURL bool `json:"supports_base_url,omitempty"`
 	// SupportsReasoningEffort marks providers whose shared profile accepts a
 	// pinned reasoning effort, with the same app-side gating: no flag, no
@@ -164,7 +160,6 @@ var AIProviders = []AIProviderOption{
 		Label:                   "OpenAI",
 		AuthType:                AIAuthTypeAPIKey,
 		CredentialKey:           KeyOpenAIKey,
-		SupportsBaseURL:         true,
 		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
