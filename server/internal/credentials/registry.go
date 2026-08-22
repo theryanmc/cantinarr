@@ -103,12 +103,11 @@ var AIProviders = []AIProviderOption{
 		AuthType:      AIAuthTypeAPIKey,
 		CredentialKey: KeyOpenAIKey,
 		Models: []AIModelOption{
-			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Flagship OpenAI model"},
-			{ID: "gpt-5.4", Label: "GPT-5.4", Description: "Affordable frontier model"},
-			{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Description: "Lower latency and cost"},
-			{ID: "gpt-5.4-nano", Label: "GPT-5.4 nano", Description: "Smallest current GPT-5.4 model"},
-			{ID: "gpt-4.1", Label: "GPT-4.1", Description: "Stable previous-generation model"},
-			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Fast previous-generation model"},
+			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
+			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost"},
+			{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Description: "Fast model for high-volume work"},
+			{ID: "gpt-5.5", Label: "GPT-5.5", Description: "Previous-generation flagship"},
+			{ID: "gpt-4.1-mini", Label: "GPT-4.1 mini", Description: "Low-cost older model"},
 		},
 	},
 	{

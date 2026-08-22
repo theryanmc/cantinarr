@@ -33,7 +33,7 @@ type openAIService struct {
 
 func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
-		model = "gpt-5.5"
+		model = "gpt-5.6-sol"
 	}
 	return &openAIService{
 		client: openai.NewClient(
