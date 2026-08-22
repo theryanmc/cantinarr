@@ -697,11 +697,22 @@ func (c *Client) GetBooks(authorID int) ([]Book, error) {
 	return matched, nil
 }
 
+// libraryFetchClient allows the much longer round-trips of a full-library
+// fetch, whose serve time grows with library size (matching the app's 120s
+// ceiling for the same endpoint). The normal 30s client fails closed on
+// libraries big enough to matter.
+func libraryFetchClient() *http.Client {
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
 // GetAllBooks lists every book in the Chaptarr library (all authors). Chaptarr
 // returns the same book shape as GetBooks; omitting authorId widens the scope.
 func (c *Client) GetAllBooks() ([]Book, error) {
 	var books []Book
-	if err := c.do("GET", "/api/v1/book", nil, &books); err != nil {
+	if err := c.doWith(libraryFetchClient(), "GET", "/api/v1/book", nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
 	}
 	return books, nil
