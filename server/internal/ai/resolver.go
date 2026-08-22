@@ -26,7 +26,10 @@ type resolvedAI struct {
 	// resolutions never set it, and it must never be serialized into
 	// non-admin payloads (settings/available responses, SSE frames).
 	BaseURL string
-	Account codexapp.AccountRef
+	// ReasoningEffort is the admin-pinned shared openai reasoning effort,
+	// with the same shared-only scoping as BaseURL. Empty means auto.
+	ReasoningEffort string
+	Account         codexapp.AccountRef
 }
 
 func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
@@ -96,11 +99,12 @@ func (h *Handler) resolveAI(ctx context.Context, userID int64) resolvedAI {
 		return resolvedAI{Source: aiSourceNone, Reason: "shared_access_disabled"}
 	}
 	resolved := resolvedAI{
-		Source:   aiSourceShared,
-		Provider: shared.Config.Provider,
-		Model:    shared.Config.Model,
-		BaseURL:  shared.BaseURL,
-		Account:  codexapp.SharedAccount(),
+		Source:          aiSourceShared,
+		Provider:        shared.Config.Provider,
+		Model:           shared.Config.Model,
+		BaseURL:         shared.BaseURL,
+		ReasoningEffort: shared.ReasoningEffort,
+		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"
@@ -162,11 +166,12 @@ func (h *Handler) resolveAIForUser(userID int64) resolvedAI {
 func (h *Handler) resolveSharedAI(ctx context.Context) resolvedAI {
 	shared, err := h.creds.LoadSharedAIProfile(ctx)
 	resolved := resolvedAI{
-		Source:   aiSourceShared,
-		Provider: shared.Config.Provider,
-		Model:    shared.Config.Model,
-		BaseURL:  shared.BaseURL,
-		Account:  codexapp.SharedAccount(),
+		Source:          aiSourceShared,
+		Provider:        shared.Config.Provider,
+		Model:           shared.Config.Model,
+		BaseURL:         shared.BaseURL,
+		ReasoningEffort: shared.ReasoningEffort,
+		Account:         codexapp.SharedAccount(),
 	}
 	if err != nil {
 		resolved.Reason = "storage_error"

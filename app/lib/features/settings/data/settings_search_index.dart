@@ -920,6 +920,23 @@ const List<SettingsSearchEntry> _credentialsEntries = [
     anchorId: SettingsAnchors.credentialsOpenAiBaseUrl,
   ),
   SettingsSearchEntry(
+    id: SettingsAnchors.credentialsOpenAiReasoningEffort,
+    title: 'OpenAI reasoning effort',
+    icon: Icons.key_outlined,
+    route: '/settings/credentials',
+    screenTitle: 'Providers & Credentials',
+    keywords: [
+      'reasoning',
+      'effort',
+      'thinking',
+      'speed',
+      'latency',
+      'local model',
+    ],
+    gate: gateAdmin,
+    anchorId: SettingsAnchors.credentialsOpenAiReasoningEffort,
+  ),
+  SettingsSearchEntry(
     id: SettingsAnchors.credentialsHealthCheck,
     title: 'Daily shared-model test',
     icon: Icons.key_outlined,

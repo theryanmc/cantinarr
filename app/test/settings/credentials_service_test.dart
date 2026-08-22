@@ -16,12 +16,14 @@ void main() {
             'model': 'gpt-5.4-mini',
           },
           'openai_base_url': 'http://llm-host:8080/v1',
+          'openai_reasoning_effort': 'low',
           'providers': [
             {
               'id': 'openai',
               'label': 'OpenAI',
               'credential_key': 'openai_key',
               'supports_base_url': true,
+              'supports_reasoning_effort': true,
               'models': [
                 {
                   'id': 'gpt-5.4-mini',
@@ -43,8 +45,10 @@ void main() {
       expect(status.ai.provider, 'openai');
       expect(status.ai.model, 'gpt-5.4-mini');
       expect(status.ai.openaiBaseUrl, 'http://llm-host:8080/v1');
+      expect(status.ai.openaiReasoningEffort, 'low');
       expect(status.ai.providers.single.credentialKey, 'openai_key');
       expect(status.ai.providers.single.supportsBaseUrl, isTrue);
+      expect(status.ai.providers.single.supportsReasoningEffort, isTrue);
       expect(status.ai.healthCheckEnabled, isFalse);
       expect(status.ai.healthCheckIntervalHours, 24);
       expect(status.ai.healthLastCheckedAt, isNotNull);
@@ -61,6 +65,7 @@ void main() {
       expect(status.ai.provider, 'anthropic');
       expect(status.ai.model, 'claude-opus-4-8');
       expect(status.ai.openaiBaseUrl, isEmpty);
+      expect(status.ai.openaiReasoningEffort, isEmpty);
       expect(status.ai.providers, isEmpty);
     });
 
@@ -91,6 +96,7 @@ void main() {
       expect(provider.authType, 'user_oauth');
       expect(provider.usesUserOAuth, isTrue);
       expect(provider.supportsBaseUrl, isFalse);
+      expect(provider.supportsReasoningEffort, isFalse);
     });
   });
 }

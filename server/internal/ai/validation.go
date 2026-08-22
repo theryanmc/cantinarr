@@ -205,6 +205,7 @@ func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model strin
 		APIKey:            resolved.APIKey,
 		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
 		BaseURL:           resolved.BaseURL,
+		ReasoningEffort:   resolved.ReasoningEffort,
 	}
 	return resolved.Provider, h.ValidateSharedAISettings(ctx, profile)
 }
@@ -274,7 +275,7 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 	case credentials.AIProviderAnthropic:
 		runner = NewService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderOpenAI:
-		runner = NewOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, h.toolServer)
+		runner = NewOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
@@ -339,6 +340,7 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 			APIKey:            resolved.APIKey,
 			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
 			BaseURL:           resolved.BaseURL,
+			ReasoningEffort:   resolved.ReasoningEffort,
 		})
 	}
 	// Record both success and failure. A failing provider should create one

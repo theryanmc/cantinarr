@@ -234,9 +234,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		service := NewService(apiKey, aiConfig.Model, h.toolServer)
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	case credentials.AIProviderOpenAI:
-		// resolved.BaseURL is empty for personal profiles: only the shared
-		// profile can carry the admin endpoint override.
-		service := NewOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, h.toolServer)
+		// resolved.BaseURL/ReasoningEffort are empty for personal profiles:
+		// only the shared profile can carry the admin overrides.
+		service := NewOpenAIService(apiKey, aiConfig.Model, resolved.BaseURL, resolved.ReasoningEffort, h.toolServer)
 		finalHistory, err = service.SendMessage(r.Context(), history, chatCtx, callbacks)
 	case credentials.AIProviderGemini:
 		service := NewGeminiService(apiKey, aiConfig.Model, h.toolServer)

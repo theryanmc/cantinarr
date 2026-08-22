@@ -28,6 +28,10 @@ type AIProfile struct {
 	APIKey            string
 	CredentialPresent bool
 	BaseURL           string
+	// ReasoningEffort is the admin-pinned reasoning_effort for the shared
+	// openai profile, with the same shared-only scoping as BaseURL. Empty
+	// means auto.
+	ReasoningEffort string
 }
 
 // LoadUserAIProfile resolves selection and matching key from one read
@@ -164,6 +168,13 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 			return profile, err
 		}
 		profile.BaseURL = baseURL
+		effort, _, err := settingTx(tx, KeyOpenAIReasoningEffort)
+		if err != nil {
+			// Same fail-closed contract: a pinned effort must not silently
+			// fall back to auto.
+			return profile, err
+		}
+		profile.ReasoningEffort = effort
 	}
 	key := AIKeyCredentialKey(provider)
 	if key == "" {

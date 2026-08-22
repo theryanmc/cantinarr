@@ -311,6 +311,106 @@ void main() {
 
     expect(find.byKey(const ValueKey('openai-base-url')), findsOneWidget);
   });
+
+  testWidgets(
+      'hides the reasoning effort control when the server does not advertise it',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+    );
+    await _pumpCredentials(tester, adapter);
+
+    expect(
+        find.byKey(const ValueKey('openai-reasoning-effort')), findsNothing);
+  });
+
+  testWidgets('prefills the reasoning effort from the credentials status',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'low',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    expect(
+        find.byKey(const ValueKey('openai-reasoning-effort')), findsOneWidget);
+    expect(find.text('OpenAI reasoning effort'), findsOneWidget);
+    expect(find.text('Low'), findsOneWidget);
+  });
+
+  testWidgets('saves only a changed reasoning effort', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: '',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final control = find.byKey(const ValueKey('openai-reasoning-effort'));
+    await tester.ensureVisible(control);
+    await tester.tap(control);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('None').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_reasoning_effort': 'none'});
+    expect(find.text('AI test passed. Settings saved.'), findsOneWidget);
+  });
+
+  testWidgets('switching back to Auto saves an empty effort', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'medium',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final control = find.byKey(const ValueKey('openai-reasoning-effort'));
+    await tester.ensureVisible(control);
+    await tester.tap(control);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Auto').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_reasoning_effort': ''});
+  });
+
+  testWidgets('an untouched reasoning effort is not a change', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'low',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, isNull);
+    expect(find.text('No changes to save'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpCredentials(
@@ -337,12 +437,16 @@ class _CredentialsAdapter implements HttpClientAdapter {
     this.model,
     this.openAiSupportsBaseUrl = false,
     this.openAiBaseUrl,
+    this.openAiSupportsReasoningEffort = false,
+    this.openAiReasoningEffort,
   });
 
   final String provider;
   final String? model;
   final bool openAiSupportsBaseUrl;
   final String? openAiBaseUrl;
+  final bool openAiSupportsReasoningEffort;
+  final String? openAiReasoningEffort;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -372,6 +476,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
             'model': model ?? (provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4'),
           },
           if (openAiBaseUrl != null) 'openai_base_url': openAiBaseUrl,
+          if (openAiReasoningEffort != null)
+            'openai_reasoning_effort': openAiReasoningEffort,
           'providers': [
             {
               'id': 'codex',
@@ -388,6 +494,8 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'auth_type': 'api_key',
               'credential_key': 'openai_key',
               if (openAiSupportsBaseUrl) 'supports_base_url': true,
+              if (openAiSupportsReasoningEffort)
+                'supports_reasoning_effort': true,
               'models': [
                 {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
               ],

@@ -10,6 +10,10 @@ class AiProviderOption {
   /// this provider (openai only). Older servers never send the flag, which
   /// also means they reject the override key, so the field stays hidden.
   final bool supportsBaseUrl;
+
+  /// Whether the shared profile accepts an admin-pinned reasoning effort for
+  /// this provider (openai only), with the same old-server gating.
+  final bool supportsReasoningEffort;
   final List<AiModelOption> models;
 
   const AiProviderOption({
@@ -18,6 +22,7 @@ class AiProviderOption {
     required this.credentialKey,
     this.authType = 'api_key',
     this.supportsBaseUrl = false,
+    this.supportsReasoningEffort = false,
     required this.models,
   });
 
@@ -31,6 +36,8 @@ class AiProviderOption {
         credentialKey: json['credential_key'] as String? ?? '',
         authType: json['auth_type'] as String? ?? 'api_key',
         supportsBaseUrl: json['supports_base_url'] as bool? ?? false,
+        supportsReasoningEffort:
+            json['supports_reasoning_effort'] as bool? ?? false,
         models: ((json['models'] as List?) ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(AiModelOption.fromJson)

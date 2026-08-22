@@ -85,6 +85,8 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// non-admin payloads, and a LAN endpoint belongs only in this
 		// admin-gated response.
 		"openai_base_url": strings.TrimSpace(h.registry.GetSetting(KeyOpenAIBaseURL)),
+		// Flat sibling for the same reason as the base URL above.
+		"openai_reasoning_effort": strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort)),
 		"providers":       AIProviders,
 		"health_check": map[string]any{
 			"enabled":        h.registry.AIHealthCheckEnabled(),
@@ -130,6 +132,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	valid[KeyAIModel] = true
 	valid[KeyAIHealthCheckEnabled] = true
 	valid[KeyOpenAIBaseURL] = true
+	valid[KeyOpenAIReasoningEffort] = true
 
 	for key := range body {
 		if !valid[key] {
@@ -202,6 +205,18 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Same effective-value contract as the base URL: candidate profiles carry
+	// the pinned effort whether or not this save touched it.
+	reasoningEffort := strings.TrimSpace(h.registry.GetSetting(KeyOpenAIReasoningEffort))
+	reasoningEffortValue, reasoningEffortSet := body[KeyOpenAIReasoningEffort]
+	if reasoningEffortSet {
+		reasoningEffort = strings.ToLower(strings.TrimSpace(reasoningEffortValue))
+		if !IsValidAIReasoningEffort(reasoningEffort) {
+			http.Error(w, `{"error":"openai_reasoning_effort must be one of none, minimal, low, medium, high, or empty for auto"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
 	profiles := make(map[string]AIProfile)
 	for _, option := range AIProviders {
 		if option.CredentialKey == "" {
@@ -219,6 +234,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			profile := AIProfile{Config: config, APIKey: value, CredentialPresent: true}
 			if option.ID == AIProviderOpenAI {
 				profile.BaseURL = baseURL
+				profile.ReasoningEffort = reasoningEffort
 			}
 			profiles[option.ID] = profile
 			body[option.CredentialKey] = value
@@ -228,11 +244,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if key := AIKeyCredentialKey(candidate.Provider); key != "" && strings.TrimSpace(body[key]) != "" {
 		mustTestSelected = true
 	}
-	// A base-URL change (or clear) alone must re-prove the selected openai
-	// profile against the new endpoint. With another provider selected the
-	// value persists untested; selecting openai later forces the probe via
-	// providerSet.
-	if baseURLSet && candidate.Provider == AIProviderOpenAI {
+	// A base-URL or pinned-effort change (or clear) alone must re-prove the
+	// selected openai profile against the new configuration. With another
+	// provider selected the value persists untested; selecting openai later
+	// forces the probe via providerSet.
+	if (baseURLSet || reasoningEffortSet) && candidate.Provider == AIProviderOpenAI {
 		mustTestSelected = true
 	}
 	if mustTestSelected {
@@ -247,6 +263,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 			if candidate.Provider == AIProviderOpenAI {
 				profile.BaseURL = baseURL
+				profile.ReasoningEffort = reasoningEffort
 			}
 			profiles[candidate.Provider] = profile
 		}
@@ -266,7 +283,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, baseURL, baseURLSet); err != nil {
+	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, baseURL, baseURLSet, reasoningEffort, reasoningEffortSet); err != nil {
 		http.Error(w, `{"error":"failed to save settings"}`, http.StatusInternalServerError)
 		return
 	}
@@ -326,7 +343,7 @@ func credentialValidationDiagnostic(err error) string {
 	return secrets.RedactError(err).Error()
 }
 
-func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool, baseURL string, baseURLSet bool) error {
+func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet bool, healthEnabled, healthSet bool, baseURL string, baseURLSet bool, reasoningEffort string, reasoningEffortSet bool) error {
 	tx, err := h.registry.db.Begin()
 	if err != nil {
 		return err
@@ -367,6 +384,16 @@ func (h *Handler) applyUpdate(body map[string]string, config AIConfig, configSet
 				return err
 			}
 		} else if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyOpenAIBaseURL, baseURL); err != nil {
+			return err
+		}
+	}
+	if reasoningEffortSet {
+		// Same plaintext contract as the base URL; empty clears back to auto.
+		if reasoningEffort == "" {
+			if _, err := tx.Exec("DELETE FROM settings WHERE key = ?", KeyOpenAIReasoningEffort); err != nil {
+				return err
+			}
+		} else if _, err := tx.Exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", KeyOpenAIReasoningEffort, reasoningEffort); err != nil {
 			return err
 		}
 	}
