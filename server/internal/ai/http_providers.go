@@ -77,6 +77,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	messages = append(messages, toOpenAIMessages(history)...)
 	tools := toOpenAITools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	finalHistory := cloneTranscript(history)
+	watch := &carouselWatch{}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1)
@@ -95,6 +96,19 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 			if message.Content != "" {
 				finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 			}
+			// The turn consumed media results and answered with titles but no
+			// carousel: remind the model once, silently. Post-nudge text is
+			// never streamed — the user already has the complete answer, only
+			// the display_media call (whose media_results frame flows through
+			// OnToolResult) is still owed.
+			if iteration < maxToolIterations-2 && watch.shouldNudge(message.Content) {
+				messages = append(messages, openAIMessageToParam(message))
+				nudge := watch.markNudged()
+				messages = append(messages, openai.UserMessage(nudge))
+				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
+				cb.OnText = nil
+				continue
+			}
 			return finalHistory, nil
 		}
 
@@ -102,7 +116,7 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 		finalHistory = append(finalHistory, openAIMessageToTranscript(message))
 		var toolResultBlocks []transcriptBlock
 		for _, toolCall := range message.ToolCalls {
-			result, transcriptBlock, toolErr := s.runOpenAITool(ctx, toolCall, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runOpenAITool(ctx, toolCall, chatCtx, cb, watch)
 			if toolErr != nil {
 				return finalHistory, toolErr
 			}
@@ -170,7 +184,7 @@ func (s *openAIService) chatStream(ctx context.Context, params openai.ChatComple
 	return message, string(choice.FinishReason), nil
 }
 
-func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks) (openai.ChatCompletionMessageParamUnion, transcriptBlock, error) {
+func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCall, chatCtx ChatContext, cb StreamCallbacks, watch *carouselWatch) (openai.ChatCompletionMessageParamUnion, transcriptBlock, error) {
 	name := toolCall.Function.Name
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(name, toolLabel(name))
@@ -207,6 +221,7 @@ func (s *openAIService) runOpenAITool(ctx context.Context, toolCall openAIToolCa
 			IsError:   true,
 		}, nil
 	}
+	watch.observe(name, result.StructuredData)
 	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[name] && cb.OnToolResult != nil {
 		cb.OnToolResult(name, result.StructuredData)
 	}
@@ -414,6 +429,7 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 	contents := toGeminiContents(history)
 	tools := toGeminiTools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	system := &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(systemPrompt + "\n\n" + dynamicContext(chatCtx))}}
+	watch := &carouselWatch{}
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		useTools := iteration != maxToolIterations-1
@@ -444,6 +460,15 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 			if len(content.Parts) > 0 {
 				finalHistory = append(finalHistory, geminiContentToTranscript(content))
 			}
+			// Owed carousel: remind once, silently (see the openAI loop).
+			if iteration < maxToolIterations-2 && watch.shouldNudge(geminiContentText(content)) {
+				contents = append(contents, content)
+				nudge := watch.markNudged()
+				contents = append(contents, genai.NewContentFromParts([]*genai.Part{genai.NewPartFromText(nudge)}, genai.RoleUser))
+				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
+				cb.OnText = nil
+				continue
+			}
 			return finalHistory, nil
 		}
 
@@ -452,7 +477,7 @@ func (s *geminiService) SendMessage(ctx context.Context, history transcript, cha
 		resultParts := make([]*genai.Part, 0, len(functionCalls))
 		toolResultBlocks := make([]transcriptBlock, 0, len(functionCalls))
 		for _, call := range functionCalls {
-			result, transcriptBlock, toolErr := s.runGeminiTool(ctx, call, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runGeminiTool(ctx, call, chatCtx, cb, watch)
 			if toolErr != nil {
 				return finalHistory, toolErr
 			}
@@ -680,7 +705,7 @@ func geminiContentHasUsableOutput(content *genai.Content) bool {
 	return false
 }
 
-func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks) (*genai.Part, transcriptBlock, error) {
+func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionCall, chatCtx ChatContext, cb StreamCallbacks, watch *carouselWatch) (*genai.Part, transcriptBlock, error) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(call.Name, toolLabel(call.Name))
 	}
@@ -720,6 +745,7 @@ func (s *geminiService) runGeminiTool(ctx context.Context, call *genai.FunctionC
 				IsError:   true,
 			}, nil
 	}
+	watch.observe(call.Name, result.StructuredData)
 	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[call.Name] && cb.OnToolResult != nil {
 		cb.OnToolResult(call.Name, result.StructuredData)
 	}
@@ -799,6 +825,21 @@ func toGeminiContents(messages transcript) []*genai.Content {
 		}
 	}
 	return out
+}
+
+// geminiContentText concatenates the plain text parts of one model content,
+// for the carousel-nudge gate.
+func geminiContentText(content *genai.Content) string {
+	if content == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range content.Parts {
+		if part != nil && !part.Thought {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
 }
 
 func geminiContentToTranscript(content *genai.Content) transcriptMessage {

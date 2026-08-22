@@ -128,6 +128,7 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 	}
 
 	finalHistory := cloneTranscript(history)
+	watch := &carouselWatch{}
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		if iteration == maxToolIterations-1 {
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
@@ -148,6 +149,16 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 			if message.StopReason == anthropic.StopReasonMaxTokens && cb.OnText != nil {
 				cb.OnText("\n\n_(Reply truncated at the length limit — ask me to continue.)_")
 			}
+			// Owed carousel: remind once, silently (see carousel_nudge.go).
+			// Post-nudge text never streams; only the display_media call's
+			// media_results frame is still owed to the client.
+			if iteration < maxToolIterations-2 && watch.shouldNudge(anthropicMessageText(message)) {
+				nudge := watch.markNudged()
+				params.Messages = append(params.Messages, anthropic.NewUserMessage(anthropic.NewTextBlock(nudge)))
+				finalHistory = append(finalHistory, textTranscriptMessage(agentRoleUser, nudge))
+				cb.OnText = nil
+				continue
+			}
 			return finalHistory, nil
 		}
 
@@ -158,7 +169,7 @@ func (s *Service) SendMessage(ctx context.Context, history transcript, chatCtx C
 			if !ok {
 				continue
 			}
-			result, transcriptBlock, toolErr := s.runTool(ctx, toolUse, chatCtx, cb)
+			result, transcriptBlock, toolErr := s.runTool(ctx, toolUse, chatCtx, cb, watch)
 			if toolErr != nil {
 				return finalHistory, toolErr
 			}
@@ -234,9 +245,24 @@ func validateAnthropicMessage(message *anthropic.Message) error {
 	return nil
 }
 
+// anthropicMessageText concatenates the plain text blocks of one message, for
+// the carousel-nudge gate.
+func anthropicMessageText(message *anthropic.Message) string {
+	if message == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, block := range message.Content {
+		if text, ok := block.AsAny().(anthropic.TextBlock); ok {
+			sb.WriteString(text.Text)
+		}
+	}
+	return sb.String()
+}
+
 // runTool executes one tool call and returns provider-specific and neutral
 // tool_result blocks.
-func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks) (anthropic.ContentBlockParamUnion, transcriptBlock, error) {
+func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, chatCtx ChatContext, cb StreamCallbacks, watch *carouselWatch) (anthropic.ContentBlockParamUnion, transcriptBlock, error) {
 	if cb.OnToolStart != nil {
 		cb.OnToolStart(toolUse.Name, toolLabel(toolUse.Name))
 	}
@@ -273,6 +299,7 @@ func (s *Service) runTool(ctx context.Context, toolUse anthropic.ToolUseBlock, c
 		}, nil
 	}
 
+	watch.observe(toolUse.Name, result.StructuredData)
 	if result.StructuredData != nil && mcp.ToolsWithStructuredResults[toolUse.Name] && cb.OnToolResult != nil {
 		cb.OnToolResult(toolUse.Name, result.StructuredData)
 	}
