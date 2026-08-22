@@ -895,20 +895,10 @@ const List<SettingsSearchEntry> _credentialsEntries = [
       'oauth',
       'grok',
       'xai',
-    ],
-    gate: gateAdmin,
-    anchorId: SettingsAnchors.credentialsAiModel,
-  ),
-  SettingsSearchEntry(
-    id: SettingsAnchors.credentialsOpenAiBaseUrl,
-    title: 'OpenAI base URL',
-    icon: Icons.key_outlined,
-    route: '/settings/credentials',
-    screenTitle: 'Providers & Credentials',
-    keywords: [
-      'base url',
+      // The Local (OpenAI-compatible) provider lives in this dropdown.
       'local',
       'self-hosted',
+      'base url',
       'endpoint',
       'ollama',
       'llama.cpp',
@@ -917,7 +907,7 @@ const List<SettingsSearchEntry> _credentialsEntries = [
       'openai compatible',
     ],
     gate: gateAdmin,
-    anchorId: SettingsAnchors.credentialsOpenAiBaseUrl,
+    anchorId: SettingsAnchors.credentialsAiModel,
   ),
   SettingsSearchEntry(
     id: SettingsAnchors.credentialsOpenAiReasoningEffort,

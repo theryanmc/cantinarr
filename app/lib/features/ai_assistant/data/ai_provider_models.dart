@@ -12,8 +12,13 @@ class AiProviderOption {
   final bool supportsBaseUrl;
 
   /// Whether the shared profile accepts an admin-pinned reasoning effort for
-  /// this provider (openai only), with the same old-server gating.
+  /// this provider, with the same old-server gating.
   final bool supportsReasoningEffort;
+
+  /// Whether this provider exists only as the admin-configured shared
+  /// profile (the local OpenAI-compatible entry). Personal payloads never
+  /// carry it; the flag exists for the admin screen.
+  final bool sharedOnly;
   final List<AiModelOption> models;
 
   const AiProviderOption({
@@ -23,6 +28,7 @@ class AiProviderOption {
     this.authType = 'api_key',
     this.supportsBaseUrl = false,
     this.supportsReasoningEffort = false,
+    this.sharedOnly = false,
     required this.models,
   });
 
@@ -38,6 +44,7 @@ class AiProviderOption {
         supportsBaseUrl: json['supports_base_url'] as bool? ?? false,
         supportsReasoningEffort:
             json['supports_reasoning_effort'] as bool? ?? false,
+        sharedOnly: json['shared_only'] as bool? ?? false,
         models: ((json['models'] as List?) ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(AiModelOption.fromJson)

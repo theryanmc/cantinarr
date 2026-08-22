@@ -203,7 +203,7 @@ func (h *Handler) ValidateSharedAIModelOverride(ctx context.Context, model strin
 			Model:    strings.TrimSpace(model),
 		},
 		APIKey:            resolved.APIKey,
-		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
+		CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
 		BaseURL:           resolved.BaseURL,
 		ReasoningEffort:   resolved.ReasoningEffort,
 	}
@@ -253,7 +253,9 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 			return newAIValidationFailure(err)
 		}
 		apiKey = token
-	} else if apiKey == "" {
+	} else if apiKey == "" && !credentials.AIProviderKeyOptional(profile.Config.Provider) {
+		// Key-optional providers (local OpenAI-compatible servers) probe with
+		// the placeholder bearer instead.
 		return ErrAIValidation
 	}
 
@@ -276,6 +278,8 @@ func (h *Handler) validateAIProfile(ctx context.Context, profile credentials.AIP
 		runner = NewService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderOpenAI:
 		runner = NewOpenAIService(apiKey, profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
+	case credentials.AIProviderLocalOpenAI:
+		runner = NewOpenAIService(localOpenAICredential(apiKey), profile.Config.Model, profile.BaseURL, profile.ReasoningEffort, h.toolServer)
 	case credentials.AIProviderGemini:
 		runner = NewGeminiService(apiKey, profile.Config.Model, h.toolServer)
 	case credentials.AIProviderGrok, credentials.AIProviderGrokOAuth:
@@ -338,7 +342,7 @@ func (h *Handler) runSharedAIHealthCheck(ctx context.Context, now time.Time) {
 		probeErr = h.ValidateSharedAISettings(ctx, credentials.AIProfile{
 			Config:            config,
 			APIKey:            resolved.APIKey,
-			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider),
+			CredentialPresent: resolved.APIKey != "" || credentials.IsOAuthAIProvider(resolved.Provider) || credentials.AIProviderKeyOptional(resolved.Provider),
 			BaseURL:           resolved.BaseURL,
 			ReasoningEffort:   resolved.ReasoningEffort,
 		})

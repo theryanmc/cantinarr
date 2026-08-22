@@ -201,116 +201,11 @@ void main() {
     expect(find.text('Google Gemini (AI)'), findsOneWidget);
   });
 
-  testWidgets('hides the base URL field when the server does not advertise it',
-      (tester) async {
-    final adapter = _CredentialsAdapter();
-    await _pumpCredentials(tester, adapter);
 
-    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI').last);
-    await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('openai-base-url')), findsNothing);
-  });
 
-  testWidgets('prefills the base URL from the credentials status',
-      (tester) async {
-    final adapter = _CredentialsAdapter(
-      provider: 'openai',
-      model: 'gpt-4.1-mini',
-      openAiSupportsBaseUrl: true,
-      openAiBaseUrl: 'http://llm-host:8080/v1',
-    );
-    await _pumpCredentials(tester, adapter);
 
-    final field = find.byKey(const ValueKey('openai-base-url'));
-    expect(field, findsOneWidget);
-    expect(find.text('OpenAI base URL'), findsOneWidget);
-    expect(
-      tester.widget<TextField>(field).controller?.text,
-      'http://llm-host:8080/v1',
-    );
-  });
 
-  testWidgets('saves only the changed base URL, trimmed', (tester) async {
-    final adapter = _CredentialsAdapter(
-      provider: 'openai',
-      model: 'gpt-4.1-mini',
-      openAiSupportsBaseUrl: true,
-      openAiBaseUrl: '',
-    );
-    await _pumpCredentials(tester, adapter);
-
-    final field = find.byKey(const ValueKey('openai-base-url'));
-    await tester.ensureVisible(field);
-    await tester.enterText(field, ' http://llm-host:8080/v1 ');
-
-    final save = find.widgetWithText(ElevatedButton, 'Save');
-    await tester.scrollUntilVisible(save, 300,
-        scrollable: find.byType(Scrollable).first);
-    await tester.tap(save);
-    await tester.pumpAndSettle();
-
-    expect(adapter.lastUpdate, {'openai_base_url': 'http://llm-host:8080/v1'});
-    expect(find.text('AI test passed. Settings saved.'), findsOneWidget);
-  });
-
-  testWidgets('clearing the base URL saves an empty string', (tester) async {
-    final adapter = _CredentialsAdapter(
-      provider: 'openai',
-      model: 'gpt-4.1-mini',
-      openAiSupportsBaseUrl: true,
-      openAiBaseUrl: 'http://old-host:1234/v1',
-    );
-    await _pumpCredentials(tester, adapter);
-
-    final field = find.byKey(const ValueKey('openai-base-url'));
-    await tester.ensureVisible(field);
-    await tester.enterText(field, '');
-
-    final save = find.widgetWithText(ElevatedButton, 'Save');
-    await tester.scrollUntilVisible(save, 300,
-        scrollable: find.byType(Scrollable).first);
-    await tester.tap(save);
-    await tester.pumpAndSettle();
-
-    expect(adapter.lastUpdate, {'openai_base_url': ''});
-  });
-
-  testWidgets('an untouched base URL is not a change', (tester) async {
-    final adapter = _CredentialsAdapter(
-      provider: 'openai',
-      model: 'gpt-4.1-mini',
-      openAiSupportsBaseUrl: true,
-      openAiBaseUrl: 'http://llm-host:8080/v1',
-    );
-    await _pumpCredentials(tester, adapter);
-
-    final save = find.widgetWithText(ElevatedButton, 'Save');
-    await tester.scrollUntilVisible(save, 300,
-        scrollable: find.byType(Scrollable).first);
-    await tester.tap(save);
-    await tester.pumpAndSettle();
-
-    expect(adapter.lastUpdate, isNull);
-    expect(find.text('No changes to save'), findsOneWidget);
-  });
-
-  testWidgets('shows the base URL field only for the OpenAI provider',
-      (tester) async {
-    final adapter = _CredentialsAdapter(openAiSupportsBaseUrl: true);
-    await _pumpCredentials(tester, adapter);
-
-    expect(find.byKey(const ValueKey('openai-base-url')), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('OpenAI').last);
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const ValueKey('openai-base-url')), findsOneWidget);
-  });
 
   testWidgets(
       'hides the reasoning effort control when the server does not advertise it',
@@ -318,7 +213,6 @@ void main() {
     final adapter = _CredentialsAdapter(
       provider: 'openai',
       model: 'gpt-4.1-mini',
-      openAiSupportsBaseUrl: true,
     );
     await _pumpCredentials(tester, adapter);
 
@@ -411,6 +305,109 @@ void main() {
     expect(adapter.lastUpdate, isNull);
     expect(find.text('No changes to save'), findsOneWidget);
   });
+
+  testWidgets('selecting the local provider shows its endpoint controls',
+      (tester) async {
+    final adapter = _CredentialsAdapter(includeLocalProvider: true);
+    await _pumpCredentials(tester, adapter);
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local (OpenAI-compatible)').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('local-openai-base-url')), findsOneWidget);
+    expect(find.byKey(const ValueKey('local-openai-reasoning-effort')),
+        findsOneWidget);
+    // No catalog: the model picker collapses to the custom-model field.
+    expect(find.text('Custom model ID'), findsWidgets);
+    // The self-hosted notice replaces the paid-quota warning. The screen
+    // builds lazily, so bring it into view before asserting.
+    final notice = find.textContaining('Costs depend on that server');
+    await tester.scrollUntilVisible(notice, 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(notice, findsOneWidget);
+  });
+
+  testWidgets('prefills the local endpoint pair from the credentials status',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'local_openai',
+      model: 'qwen3.6:35b-a3b',
+      includeLocalProvider: true,
+      localBaseUrl: 'http://llm-host:11434/v1',
+      localReasoningEffort: 'none',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final url = find.byKey(const ValueKey('local-openai-base-url'));
+    expect(url, findsOneWidget);
+    expect(
+      tester.widget<TextField>(url).controller?.text,
+      'http://llm-host:11434/v1',
+    );
+    expect(find.text('None'), findsOneWidget);
+    // The stored custom model prefills the custom-model field.
+    expect(find.text('qwen3.6:35b-a3b'), findsOneWidget);
+  });
+
+  testWidgets('local provider save requires the base URL', (tester) async {
+    final adapter = _CredentialsAdapter(includeLocalProvider: true);
+    await _pumpCredentials(tester, adapter);
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local (OpenAI-compatible)').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Provider model ID'),
+        'qwen3.6:35b-a3b');
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, isNull);
+    expect(find.text('Enter the server base URL'), findsOneWidget);
+  });
+
+  testWidgets('local provider save sends its scoped keys', (tester) async {
+    final adapter = _CredentialsAdapter(includeLocalProvider: true);
+    await _pumpCredentials(tester, adapter);
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Local (OpenAI-compatible)').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Provider model ID'), 'qwen3.6:35b-a3b');
+    final url = find.byKey(const ValueKey('local-openai-base-url'));
+    await tester.ensureVisible(url);
+    await tester.enterText(url, ' http://llm-host:11434/v1 ');
+    final effort = find.byKey(const ValueKey('local-openai-reasoning-effort'));
+    await tester.ensureVisible(effort);
+    await tester.tap(effort);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('None').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {
+      'ai_provider': 'local_openai',
+      'ai_model': 'qwen3.6:35b-a3b',
+      'local_openai_base_url': 'http://llm-host:11434/v1',
+      'local_openai_reasoning_effort': 'none',
+    });
+  });
 }
 
 Future<void> _pumpCredentials(
@@ -435,18 +432,20 @@ class _CredentialsAdapter implements HttpClientAdapter {
   _CredentialsAdapter({
     this.provider = 'codex',
     this.model,
-    this.openAiSupportsBaseUrl = false,
-    this.openAiBaseUrl,
     this.openAiSupportsReasoningEffort = false,
     this.openAiReasoningEffort,
+    this.includeLocalProvider = false,
+    this.localBaseUrl,
+    this.localReasoningEffort,
   });
 
   final String provider;
   final String? model;
-  final bool openAiSupportsBaseUrl;
-  final String? openAiBaseUrl;
   final bool openAiSupportsReasoningEffort;
   final String? openAiReasoningEffort;
+  final bool includeLocalProvider;
+  final String? localBaseUrl;
+  final String? localReasoningEffort;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -475,9 +474,11 @@ class _CredentialsAdapter implements HttpClientAdapter {
             'provider': provider,
             'model': model ?? (provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4'),
           },
-          if (openAiBaseUrl != null) 'openai_base_url': openAiBaseUrl,
           if (openAiReasoningEffort != null)
             'openai_reasoning_effort': openAiReasoningEffort,
+          if (localBaseUrl != null) 'local_openai_base_url': localBaseUrl,
+          if (localReasoningEffort != null)
+            'local_openai_reasoning_effort': localReasoningEffort,
           'providers': [
             {
               'id': 'codex',
@@ -493,7 +494,6 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'label': 'OpenAI',
               'auth_type': 'api_key',
               'credential_key': 'openai_key',
-              if (openAiSupportsBaseUrl) 'supports_base_url': true,
               if (openAiSupportsReasoningEffort)
                 'supports_reasoning_effort': true,
               'models': [
@@ -518,6 +518,17 @@ class _CredentialsAdapter implements HttpClientAdapter {
                 {'id': 'grok-4.6', 'label': 'Grok 4.6'},
               ],
             },
+            if (includeLocalProvider)
+              {
+                'id': 'local_openai',
+                'label': 'Local (OpenAI-compatible)',
+                'auth_type': 'api_key',
+                'credential_key': 'local_openai_key',
+                'supports_base_url': true,
+                'supports_reasoning_effort': true,
+                'shared_only': true,
+                'models': <Map<String, dynamic>>[],
+              },
           ],
           'health_check': {
             'enabled': true,

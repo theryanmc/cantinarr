@@ -345,13 +345,10 @@ func TestResolveAISharedCarriesBaseURLPersonalDoesNot(t *testing.T) {
 	if _, err := database.Exec(`UPDATE users SET ai_shared_enabled = 1 WHERE id = ?`, userID); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+	if err := registry.SetAIConfig(credentials.AIProviderLocalOpenAI, "shared-model"); err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "shared-model"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.SetSetting(credentials.KeyOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
+	if err := registry.SetSetting(credentials.KeyLocalOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
 		t.Fatal(err)
 	}
 

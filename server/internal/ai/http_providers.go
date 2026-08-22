@@ -64,6 +64,17 @@ func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer
 	}
 }
 
+// localOpenAICredential substitutes the fixed placeholder bearer when the
+// optional local-provider key is unset: most local OpenAI-compatible servers
+// ignore auth, but the SDK always sends an Authorization header and some
+// proxies reject an empty one.
+func localOpenAICredential(key string) string {
+	if strings.TrimSpace(key) == "" {
+		return "cantinarr-local"
+	}
+	return key
+}
+
 // NewGrokService builds a chat service against xAI's OpenAI-compatible API.
 // credential is either a console.x.ai API key or a subscription OAuth bearer
 // token — the wire format is identical. The base URL is pinned to api.x.ai;

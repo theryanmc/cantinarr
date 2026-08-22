@@ -71,7 +71,7 @@ func TestAIProviderMetadataIncludesAuthType(t *testing.T) {
 
 func TestAIProviderMetadataAdvertisesBaseURLSupportOnlyForOpenAI(t *testing.T) {
 	for _, option := range AIProviders {
-		want := option.ID == AIProviderOpenAI
+		want := option.ID == AIProviderLocalOpenAI
 		if option.SupportsBaseURL != want {
 			t.Errorf("%s supports_base_url = %t, want %t", option.ID, option.SupportsBaseURL, want)
 		}

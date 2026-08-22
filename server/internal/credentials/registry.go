@@ -30,17 +30,26 @@ const (
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
 	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
-	// KeyOpenAIBaseURL points the shared openai provider at an
-	// OpenAI-compatible endpoint. It is a plain setting, deliberately not in
-	// AllKeys: AllKeys drives encryption at rest, the startup
-	// EncryptExisting migration, per-key GET booleans, and DELETE, none of
-	// which apply to a non-secret URL.
-	KeyOpenAIBaseURL = "openai_base_url"
 	// KeyOpenAIReasoningEffort pins the reasoning_effort the shared openai
 	// provider sends on every turn. Empty means auto: interactive chat sends
-	// no effort field and validation keeps its adaptive ladder. Same
-	// plain-setting rationale as KeyOpenAIBaseURL.
+	// no effort field and validation keeps its adaptive ladder. Plain
+	// setting, deliberately not in AllKeys: AllKeys drives encryption at
+	// rest, the startup EncryptExisting migration, per-key GET booleans, and
+	// DELETE, none of which apply to a non-secret knob.
 	KeyOpenAIReasoningEffort = "openai_reasoning_effort"
+	// KeyLocalOpenAIKey is the OPTIONAL API key for the local
+	// OpenAI-compatible provider. Most local servers ignore auth entirely;
+	// when unset the server sends a fixed placeholder bearer. Stored
+	// encrypted like every credential because some proxies do check it.
+	KeyLocalOpenAIKey = "local_openai_key"
+	// KeyLocalOpenAIBaseURL is the REQUIRED endpoint of the local
+	// OpenAI-compatible provider. Plain setting (not a secret), with
+	// shared-only exposure rules: it may name cluster-internal hosts and
+	// must never reach non-admin payloads.
+	KeyLocalOpenAIBaseURL = "local_openai_base_url"
+	// KeyLocalOpenAIReasoningEffort mirrors KeyOpenAIReasoningEffort for the
+	// local provider.
+	KeyLocalOpenAIReasoningEffort = "local_openai_reasoning_effort"
 )
 
 // AIReasoningEfforts is the closed set of admin-settable shared openai
@@ -65,7 +74,7 @@ func IsValidAIReasoningEffort(value string) bool {
 
 // AllKeys lists every credential key the system manages. Values for these
 // keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
-var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyGrokKey, KeyTraktClientID}
+var AllKeys = []string{KeyTMDBAccessToken, KeyAnthropicKey, KeyOpenAIKey, KeyGeminiKey, KeyGrokKey, KeyLocalOpenAIKey, KeyTraktClientID}
 
 const (
 	AIProviderAnthropic = "anthropic"
@@ -74,6 +83,11 @@ const (
 	AIProviderGrok      = "grok"
 	AIProviderCodex     = "codex"
 	AIProviderGrokOAuth = "grok_oauth"
+	// AIProviderLocalOpenAI is the first-class entry for self-hosted
+	// OpenAI-compatible servers (llama.cpp, vLLM, Ollama). It reuses the
+	// openai wire protocol with its own endpoint/effort settings, is
+	// shared-profile-only, and treats its API key as optional.
+	AIProviderLocalOpenAI = "local_openai"
 
 	AIAuthTypeAPIKey    = "api_key"
 	AIAuthTypeUserOAuth = "user_oauth"
@@ -105,15 +119,20 @@ type AIProviderOption struct {
 	Label         string `json:"label"`
 	AuthType      string `json:"auth_type"`
 	CredentialKey string `json:"credential_key"`
-	// SupportsBaseURL marks providers whose shared profile accepts an
-	// admin-set endpoint override (openai only). The app renders the base
-	// URL field from this flag, so servers without it never show the field.
+	// SupportsBaseURL marks providers whose shared profile carries an
+	// admin-set endpoint (the local provider only). The app renders endpoint
+	// fields from this flag, so servers without it never show them.
 	SupportsBaseURL bool `json:"supports_base_url,omitempty"`
 	// SupportsReasoningEffort marks providers whose shared profile accepts a
-	// pinned reasoning effort (openai only), with the same app-side gating:
-	// no flag, no field.
-	SupportsReasoningEffort bool            `json:"supports_reasoning_effort,omitempty"`
-	Models                  []AIModelOption `json:"models"`
+	// pinned reasoning effort, with the same app-side gating: no flag, no
+	// field.
+	SupportsReasoningEffort bool `json:"supports_reasoning_effort,omitempty"`
+	// SharedOnly marks providers that exist only as the admin-configured
+	// shared profile. They are filtered out of personal settings payloads
+	// and rejected as personal selections: their endpoints can name
+	// cluster-internal hosts, which must never ride a non-admin path.
+	SharedOnly bool            `json:"shared_only,omitempty"`
+	Models     []AIModelOption `json:"models"`
 }
 
 // AIConfig is the active provider/model pair used by the AI assistant.
@@ -141,7 +160,6 @@ var AIProviders = []AIProviderOption{
 		Label:                   "OpenAI",
 		AuthType:                AIAuthTypeAPIKey,
 		CredentialKey:           KeyOpenAIKey,
-		SupportsBaseURL:         true,
 		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
@@ -190,6 +208,18 @@ var AIProviders = []AIProviderOption{
 		AuthType: AIAuthTypeUserOAuth,
 		Models:   grokModels,
 	},
+	{
+		ID:                      AIProviderLocalOpenAI,
+		Label:                   "Local (OpenAI-compatible)",
+		AuthType:                AIAuthTypeAPIKey,
+		CredentialKey:           KeyLocalOpenAIKey,
+		SupportsBaseURL:         true,
+		SupportsReasoningEffort: true,
+		SharedOnly:              true,
+		// No catalog on purpose: local model IDs are whatever the server
+		// hosts, so the app offers only the custom-model field.
+		Models: []AIModelOption{},
+	},
 }
 
 // grokModels is shared by both xAI providers: the API key and the
@@ -209,14 +239,49 @@ func isSecretKey(key string) bool {
 	return false
 }
 
-// DefaultAIModel returns the default model for a provider.
+// DefaultAIModel returns the default model for a provider. A known provider
+// with no catalog (local OpenAI-compatible servers host arbitrary model IDs)
+// returns empty: the model must be chosen explicitly.
 func DefaultAIModel(provider string) string {
 	for _, p := range AIProviders {
-		if p.ID == provider && len(p.Models) > 0 {
-			return p.Models[0].ID
+		if p.ID == provider {
+			if len(p.Models) > 0 {
+				return p.Models[0].ID
+			}
+			return ""
 		}
 	}
 	return AIProviders[0].Models[0].ID
+}
+
+// IsSharedOnlyAIProvider reports whether provider exists only as the
+// admin-configured shared profile (never a personal selection).
+func IsSharedOnlyAIProvider(provider string) bool {
+	for _, p := range AIProviders {
+		if p.ID == provider {
+			return p.SharedOnly
+		}
+	}
+	return false
+}
+
+// AIProviderKeyOptional reports whether provider works without a stored API
+// key. Local OpenAI-compatible servers usually ignore auth; the ai package
+// substitutes a fixed placeholder bearer when the key is unset.
+func AIProviderKeyOptional(provider string) bool {
+	return provider == AIProviderLocalOpenAI
+}
+
+// PersonalAIProviders returns the provider catalog with shared-only entries
+// removed — the list personal (non-admin) settings payloads may carry.
+func PersonalAIProviders() []AIProviderOption {
+	out := make([]AIProviderOption, 0, len(AIProviders))
+	for _, p := range AIProviders {
+		if !p.SharedOnly {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // AIKeyCredentialKey returns the secret setting key for a provider API key.
