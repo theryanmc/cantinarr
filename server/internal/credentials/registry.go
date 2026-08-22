@@ -30,7 +30,38 @@ const (
 	// Provider/model saves always perform their own validation turn.
 	KeyAIHealthCheckEnabled = "ai_health_check_enabled"
 	KeyAIHealthLastCheckAt  = "ai_health_last_check_at"
+	// KeyOpenAIBaseURL points the shared openai provider at an
+	// OpenAI-compatible endpoint. It is a plain setting, deliberately not in
+	// AllKeys: AllKeys drives encryption at rest, the startup
+	// EncryptExisting migration, per-key GET booleans, and DELETE, none of
+	// which apply to a non-secret URL.
+	KeyOpenAIBaseURL = "openai_base_url"
+	// KeyOpenAIReasoningEffort pins the reasoning_effort the shared openai
+	// provider sends on every turn. Empty means auto: interactive chat sends
+	// no effort field and validation keeps its adaptive ladder. Same
+	// plain-setting rationale as KeyOpenAIBaseURL.
+	KeyOpenAIReasoningEffort = "openai_reasoning_effort"
 )
+
+// AIReasoningEfforts is the closed set of admin-settable shared openai
+// reasoning efforts, lowest first. "none" maps to think-free turns on
+// OpenAI-compatible servers (llama.cpp, vLLM, Ollama translate it), the rest
+// trade latency for deliberation.
+var AIReasoningEfforts = []string{"none", "minimal", "low", "medium", "high"}
+
+// IsValidAIReasoningEffort reports whether value may be stored under
+// KeyOpenAIReasoningEffort. Empty is valid and means auto.
+func IsValidAIReasoningEffort(value string) bool {
+	if value == "" {
+		return true
+	}
+	for _, effort := range AIReasoningEfforts {
+		if value == effort {
+			return true
+		}
+	}
+	return false
+}
 
 // AllKeys lists every credential key the system manages. Values for these
 // keys are encrypted at rest; other settings (e.g. tool toggles) stay plain.
@@ -70,11 +101,19 @@ type AIModelOption struct {
 
 // AIProviderOption describes a supported AI provider and its default models.
 type AIProviderOption struct {
-	ID            string          `json:"id"`
-	Label         string          `json:"label"`
-	AuthType      string          `json:"auth_type"`
-	CredentialKey string          `json:"credential_key"`
-	Models        []AIModelOption `json:"models"`
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	AuthType      string `json:"auth_type"`
+	CredentialKey string `json:"credential_key"`
+	// SupportsBaseURL marks providers whose shared profile accepts an
+	// admin-set endpoint override (openai only). The app renders the base
+	// URL field from this flag, so servers without it never show the field.
+	SupportsBaseURL bool `json:"supports_base_url,omitempty"`
+	// SupportsReasoningEffort marks providers whose shared profile accepts a
+	// pinned reasoning effort (openai only), with the same app-side gating:
+	// no flag, no field.
+	SupportsReasoningEffort bool            `json:"supports_reasoning_effort,omitempty"`
+	Models                  []AIModelOption `json:"models"`
 }
 
 // AIConfig is the active provider/model pair used by the AI assistant.
@@ -98,10 +137,12 @@ var AIProviders = []AIProviderOption{
 		},
 	},
 	{
-		ID:            AIProviderOpenAI,
-		Label:         "OpenAI",
-		AuthType:      AIAuthTypeAPIKey,
-		CredentialKey: KeyOpenAIKey,
+		ID:                      AIProviderOpenAI,
+		Label:                   "OpenAI",
+		AuthType:                AIAuthTypeAPIKey,
+		CredentialKey:           KeyOpenAIKey,
+		SupportsBaseURL:         true,
+		SupportsReasoningEffort: true,
 		Models: []AIModelOption{
 			{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Description: "Frontier model for complex work"},
 			{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Description: "Balances intelligence and cost"},
