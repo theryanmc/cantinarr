@@ -844,10 +844,21 @@ func (c *Client) TriggerRssSync() error {
 	return c.triggerCommand(map[string]any{"name": "RssSync"})
 }
 
+// libraryFetchClient allows the much longer round-trips of a full-library
+// fetch, whose serve time grows with library size (matching the app's 120s
+// ceiling for the same endpoint). The normal 30s client fails closed on
+// libraries big enough to matter.
+func libraryFetchClient() *http.Client {
+	return &http.Client{
+		Timeout:       120 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
 // GetMovies lists all movies in the Radarr library.
 func (c *Client) GetMovies() ([]Movie, error) {
 	var movies []Movie
-	if err := c.do("GET", "/api/v3/movie", nil, &movies); err != nil {
+	if err := c.doWith(libraryFetchClient(), "GET", "/api/v3/movie", nil, &movies); err != nil {
 		return nil, fmt.Errorf("radarr movies: %w", err)
 	}
 	return movies, nil
