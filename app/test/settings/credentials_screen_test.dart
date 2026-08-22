@@ -200,12 +200,253 @@ void main() {
     );
     expect(find.text('Google Gemini (AI)'), findsOneWidget);
   });
+
+  testWidgets('hides the base URL field when the server does not advertise it',
+      (tester) async {
+    final adapter = _CredentialsAdapter();
+    await _pumpCredentials(tester, adapter);
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('openai-base-url')), findsNothing);
+  });
+
+  testWidgets('prefills the base URL from the credentials status',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+      openAiBaseUrl: 'http://llm-host:8080/v1',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final field = find.byKey(const ValueKey('openai-base-url'));
+    expect(field, findsOneWidget);
+    expect(find.text('OpenAI base URL'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(field).controller?.text,
+      'http://llm-host:8080/v1',
+    );
+  });
+
+  testWidgets('saves only the changed base URL, trimmed', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+      openAiBaseUrl: '',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final field = find.byKey(const ValueKey('openai-base-url'));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, ' http://llm-host:8080/v1 ');
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_base_url': 'http://llm-host:8080/v1'});
+    expect(find.text('AI test passed. Settings saved.'), findsOneWidget);
+  });
+
+  testWidgets('clearing the base URL saves an empty string', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+      openAiBaseUrl: 'http://old-host:1234/v1',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final field = find.byKey(const ValueKey('openai-base-url'));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, '');
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_base_url': ''});
+  });
+
+  testWidgets('an untouched base URL is not a change', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+      openAiBaseUrl: 'http://llm-host:8080/v1',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, isNull);
+    expect(find.text('No changes to save'), findsOneWidget);
+  });
+
+  testWidgets('shows the base URL field only for the OpenAI provider',
+      (tester) async {
+    final adapter = _CredentialsAdapter(openAiSupportsBaseUrl: true);
+    await _pumpCredentials(tester, adapter);
+
+    expect(find.byKey(const ValueKey('openai-base-url')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-codex')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('openai-base-url')), findsOneWidget);
+  });
+
+  testWidgets(
+      'hides the reasoning effort control when the server does not advertise it',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsBaseUrl: true,
+    );
+    await _pumpCredentials(tester, adapter);
+
+    expect(
+        find.byKey(const ValueKey('openai-reasoning-effort')), findsNothing);
+  });
+
+  testWidgets('prefills the reasoning effort from the credentials status',
+      (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'low',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    expect(
+        find.byKey(const ValueKey('openai-reasoning-effort')), findsOneWidget);
+    expect(find.text('OpenAI reasoning effort'), findsOneWidget);
+    expect(find.text('Low'), findsOneWidget);
+  });
+
+  testWidgets('saves only a changed reasoning effort', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: '',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final control = find.byKey(const ValueKey('openai-reasoning-effort'));
+    await tester.ensureVisible(control);
+    await tester.tap(control);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('None').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_reasoning_effort': 'none'});
+    expect(find.text('AI test passed. Settings saved.'), findsOneWidget);
+  });
+
+  testWidgets('switching back to Auto saves an empty effort', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'medium',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final control = find.byKey(const ValueKey('openai-reasoning-effort'));
+    await tester.ensureVisible(control);
+    await tester.tap(control);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Auto').last);
+    await tester.pumpAndSettle();
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, {'openai_reasoning_effort': ''});
+  });
+
+  testWidgets('an untouched reasoning effort is not a change', (tester) async {
+    final adapter = _CredentialsAdapter(
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      openAiSupportsReasoningEffort: true,
+      openAiReasoningEffort: 'low',
+    );
+    await _pumpCredentials(tester, adapter);
+
+    final save = find.widgetWithText(ElevatedButton, 'Save');
+    await tester.scrollUntilVisible(save, 300,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    expect(adapter.lastUpdate, isNull);
+    expect(find.text('No changes to save'), findsOneWidget);
+  });
+}
+
+Future<void> _pumpCredentials(
+  WidgetTester tester,
+  _CredentialsAdapter adapter,
+) async {
+  final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+    ..httpClientAdapter = adapter;
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [backendClientProvider.overrideWithValue(dio)],
+      child: MaterialApp(
+        theme: AppTheme.dark,
+        home: const CredentialsScreen(),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
 }
 
 class _CredentialsAdapter implements HttpClientAdapter {
-  _CredentialsAdapter({this.provider = 'codex'});
+  _CredentialsAdapter({
+    this.provider = 'codex',
+    this.model,
+    this.openAiSupportsBaseUrl = false,
+    this.openAiBaseUrl,
+    this.openAiSupportsReasoningEffort = false,
+    this.openAiReasoningEffort,
+  });
 
   final String provider;
+  final String? model;
+  final bool openAiSupportsBaseUrl;
+  final String? openAiBaseUrl;
+  final bool openAiSupportsReasoningEffort;
+  final String? openAiReasoningEffort;
   Map<String, dynamic>? lastUpdate;
 
   @override
@@ -232,8 +473,11 @@ class _CredentialsAdapter implements HttpClientAdapter {
         'ai': {
           'config': {
             'provider': provider,
-            'model': provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4',
+            'model': model ?? (provider == 'grok_oauth' ? 'grok-4.6' : 'gpt-5.4'),
           },
+          if (openAiBaseUrl != null) 'openai_base_url': openAiBaseUrl,
+          if (openAiReasoningEffort != null)
+            'openai_reasoning_effort': openAiReasoningEffort,
           'providers': [
             {
               'id': 'codex',
@@ -249,6 +493,9 @@ class _CredentialsAdapter implements HttpClientAdapter {
               'label': 'OpenAI',
               'auth_type': 'api_key',
               'credential_key': 'openai_key',
+              if (openAiSupportsBaseUrl) 'supports_base_url': true,
+              if (openAiSupportsReasoningEffort)
+                'supports_reasoning_effort': true,
               'models': [
                 {'id': 'gpt-4.1-mini', 'label': 'GPT-4.1 mini'},
               ],

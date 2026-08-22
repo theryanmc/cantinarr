@@ -39,6 +39,9 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   final _geminiController = TextEditingController();
   final _grokController = TextEditingController();
   final _customModelController = TextEditingController();
+  final _openaiBaseUrlController = TextEditingController();
+  // Admin-pinned shared openai reasoning effort. Empty string means auto.
+  String _openaiReasoningEffort = '';
   String _selectedProvider = 'anthropic';
   String _selectedModel = 'claude-opus-4-8';
   bool _healthCheckEnabled = true;
@@ -110,6 +113,21 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
         selectedModel != _status!.ai.model) {
       creds['ai_provider'] = _selectedProvider;
       creds['ai_model'] = selectedModel;
+      aiChanged = true;
+    }
+    // Only a visible field writes: hidden state must never silently rewrite
+    // the server, and older servers reject the key as unknown. An empty
+    // string is a deliberate clear back to api.openai.com.
+    if (_showOpenAiBaseUrl) {
+      final baseUrl = _openaiBaseUrlController.text.trim();
+      if (baseUrl != (_status?.ai.openaiBaseUrl ?? '')) {
+        creds['openai_base_url'] = baseUrl;
+        aiChanged = true;
+      }
+    }
+    if (_showOpenAiReasoningEffort &&
+        _openaiReasoningEffort != (_status?.ai.openaiReasoningEffort ?? '')) {
+      creds['openai_reasoning_effort'] = _openaiReasoningEffort;
       aiChanged = true;
     }
     if (_status == null ||
@@ -218,6 +236,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     _geminiController.dispose();
     _grokController.dispose();
     _customModelController.dispose();
+    _openaiBaseUrlController.dispose();
     super.dispose();
   }
 
@@ -234,6 +253,27 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _selectedModel = _customModelValue;
       _customModelController.text = status.ai.model;
     }
+    // Tracks server state, not the dropdown: switching providers keeps the
+    // stored value visible when the admin comes back to OpenAI.
+    _openaiBaseUrlController.text = status.ai.openaiBaseUrl;
+    _openaiReasoningEffort = status.ai.openaiReasoningEffort;
+  }
+
+  /// The base-URL override is openai-only, and only servers that advertise
+  /// the capability accept its key. Gate on the resolved option, which is
+  /// what the provider dropdown actually displays.
+  bool get _showOpenAiBaseUrl {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'openai' && provider!.supportsBaseUrl;
+  }
+
+  /// Same gating as the base URL: openai only, capability-flagged so older
+  /// servers (which reject the key) never show the control.
+  bool get _showOpenAiReasoningEffort {
+    final provider =
+        _providerFor(_selectedProvider, _status?.ai.providers ?? const []);
+    return provider?.id == 'openai' && provider!.supportsReasoningEffort;
   }
 
   String _friendlySaveError(Object error) {
@@ -352,6 +392,64 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                 setState(() => _selectedModel = value),
                           ),
                         ),
+                        if (_showOpenAiBaseUrl) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiBaseUrl,
+                            TextField(
+                              key: const ValueKey('openai-base-url'),
+                              controller: _openaiBaseUrlController,
+                              decoration: const InputDecoration(
+                                labelText: 'OpenAI base URL',
+                                hintText: 'http://llm-host:8080/v1',
+                                helperText:
+                                    'Any OpenAI-compatible server, reached '
+                                    'from the Cantinarr server, not from this '
+                                    'device. Leave empty to use '
+                                    'api.openai.com.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              keyboardType: TextInputType.url,
+                            ),
+                          ),
+                        ],
+                        if (_showOpenAiReasoningEffort) ...[
+                          const SizedBox(height: 12),
+                          _anchor(
+                            SettingsAnchors.credentialsOpenAiReasoningEffort,
+                            DropdownButtonFormField<String>(
+                              key: const ValueKey('openai-reasoning-effort'),
+                              initialValue: _openaiReasoningEffort,
+                              decoration: const InputDecoration(
+                                labelText: 'OpenAI reasoning effort',
+                                helperText:
+                                    'How much the model thinks before '
+                                    'answering. Auto keeps the model\'s own '
+                                    'default; None is fastest on local '
+                                    'models.',
+                                helperMaxLines: 3,
+                                isDense: true,
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: '', child: Text('Auto')),
+                                DropdownMenuItem(
+                                    value: 'none', child: Text('None')),
+                                DropdownMenuItem(
+                                    value: 'minimal', child: Text('Minimal')),
+                                DropdownMenuItem(
+                                    value: 'low', child: Text('Low')),
+                                DropdownMenuItem(
+                                    value: 'medium', child: Text('Medium')),
+                                DropdownMenuItem(
+                                    value: 'high', child: Text('High')),
+                              ],
+                              onChanged: (value) => setState(
+                                  () => _openaiReasoningEffort = value ?? ''),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         _anchor(
                           SettingsAnchors.credentialsHealthCheck,
@@ -393,6 +491,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
                                   _status?.ai.providers ?? const [],
                                 )?.label ??
                                 _selectedProvider,
+                            selfHosted: _showOpenAiBaseUrl &&
+                                _openaiBaseUrlController.text
+                                    .trim()
+                                    .isNotEmpty,
                           ),
                         const SizedBox(height: 24),
                         _anchor(
@@ -873,7 +975,11 @@ class _SharedGrokPanel extends StatelessWidget {
 class _SharedApiCostNotice extends StatelessWidget {
   final String provider;
 
-  const _SharedApiCostNotice({required this.provider});
+  /// A configured openai base URL means included requests go to the admin's
+  /// own endpoint: claiming paid-quota charges there would be false.
+  final bool selfHosted;
+
+  const _SharedApiCostNotice({required this.provider, this.selfHosted = false});
 
   @override
   Widget build(BuildContext context) {
@@ -891,8 +997,13 @@ class _SharedApiCostNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Included requests use the server $provider key. Usage counts '
-              'against its paid quota and may create provider charges.',
+              selfHosted
+                  ? 'Included requests go to the configured base URL using '
+                      'the server $provider key. Costs depend on that '
+                      'server, not on api.openai.com.'
+                  : 'Included requests use the server $provider key. Usage '
+                      'counts against its paid quota and may create provider '
+                      'charges.',
               style: const TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 13,

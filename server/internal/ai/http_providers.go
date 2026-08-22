@@ -29,20 +29,38 @@ type openAIService struct {
 	client     openai.Client
 	model      openai.ChatModel
 	toolServer *mcp.ToolServer
+	// reasoningEffort is the admin-pinned shared reasoning_effort. Empty
+	// means auto: interactive turns send no effort field and NextTurn keeps
+	// its adaptive ladder. Grok services always leave it empty (the Grok
+	// family rejects the field).
+	reasoningEffort openai.ReasoningEffort
 }
 
-func NewOpenAIService(apiKey, model string, toolServer *mcp.ToolServer) *openAIService {
+// NewOpenAIService builds a chat service against the OpenAI API, or against
+// any OpenAI-compatible endpoint when baseURL is set (the admin-configured
+// shared override). An empty baseURL deliberately passes no WithBaseURL so the
+// SDK's own defaults stay in charge: api.openai.com in production, and the
+// implicit OPENAI_BASE_URL env seam that tests and the lab stack point at
+// fake upstreams. When baseURL is set it is applied after the SDK's env
+// default, so the configured value wins over the env var. reasoningEffort is
+// the admin-pinned effort for every turn (empty = auto).
+func NewOpenAIService(apiKey, model, baseURL, reasoningEffort string, toolServer *mcp.ToolServer) *openAIService {
 	if model == "" {
 		model = "gpt-5.5"
 	}
+	options := []openaioption.RequestOption{
+		openaioption.WithAPIKey(apiKey),
+		openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
+		openaioption.WithRequestTimeout(httpProviderStreamTimeout),
+	}
+	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
+		options = append(options, openaioption.WithBaseURL(baseURL))
+	}
 	return &openAIService{
-		client: openai.NewClient(
-			openaioption.WithAPIKey(apiKey),
-			openaioption.WithHTTPClient(newCredentialHTTPClient(httpProviderStreamTimeout)),
-			openaioption.WithRequestTimeout(httpProviderStreamTimeout),
-		),
-		model:      openai.ChatModel(model),
-		toolServer: toolServer,
+		client:          openai.NewClient(options...),
+		model:           openai.ChatModel(model),
+		toolServer:      toolServer,
+		reasoningEffort: openai.ReasoningEffort(strings.TrimSpace(reasoningEffort)),
 	}
 }
 
@@ -77,11 +95,20 @@ func (s *openAIService) SendMessage(ctx context.Context, history transcript, cha
 	messages = append(messages, toOpenAIMessages(history)...)
 	tools := toOpenAITools(s.toolServer.GetToolsForRole(chatCtx.Role))
 	finalHistory := cloneTranscript(history)
+	effort := s.reasoningEffort
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
-		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1)
+		params := openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1, effort)
 
 		message, finishReason, err := s.chatStream(ctx, params, cb)
+		if err != nil && effort != "" && classifyOpenAIReasoningRejection(err) != openAIReasoningNotRejected {
+			// The endpoint rejected the pinned reasoning_effort (a
+			// non-reasoning model, or a proxy without the control). Drop the
+			// field for the rest of this turn instead of failing the chat.
+			effort = ""
+			params = openAIInteractiveParams(s.model, messages, tools, iteration == maxToolIterations-1, effort)
+			message, finishReason, err = s.chatStream(ctx, params, cb)
+		}
 		if err != nil {
 			return finalHistory, err
 		}
@@ -123,12 +150,18 @@ func openAIInteractiveParams(
 	messages []openai.ChatCompletionMessageParamUnion,
 	tools []openai.ChatCompletionToolUnionParam,
 	forceText bool,
+	effort openai.ReasoningEffort,
 ) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model:               model,
 		Messages:            messages,
 		MaxCompletionTokens: openai.Int(httpProviderMaxOutputTokens),
 		Tools:               tools,
+	}
+	// Auto (empty) sends no field at all, so hosted models keep their own
+	// defaults and OpenAI-compatible servers keep their native behavior.
+	if effort != "" {
+		params.ReasoningEffort = effort
 	}
 	if forceText && len(tools) > 0 {
 		params.ToolChoice.OfAuto = openai.String(string(openai.ChatCompletionToolChoiceOptionAutoNone))
