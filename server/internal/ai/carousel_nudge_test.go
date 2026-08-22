@@ -161,7 +161,7 @@ func TestOpenAIInteractiveLoopNudgesOwedCarousel(t *testing.T) {
 	}
 
 	history := transcript{textTranscriptMessage(agentRoleUser, "whats trending")}
-	finalHistory, err := NewOpenAIService("secret", "local-test", toolServer).SendMessage(
+	finalHistory, err := NewOpenAIService("secret", "local-test", "", "", toolServer).SendMessage(
 		context.Background(), history, ChatContext{UserID: 7, Role: auth.RoleUser}, callbacks,
 	)
 	if err != nil {
@@ -243,7 +243,7 @@ func TestOpenAIInteractiveLoopDoesNotNudgeEmptySources(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", openAIServer.URL+"/v1")
 
 	history := transcript{textTranscriptMessage(agentRoleUser, "whats trending")}
-	_, err = NewOpenAIService("secret", "local-test", toolServer).SendMessage(
+	_, err = NewOpenAIService("secret", "local-test", "", "", toolServer).SendMessage(
 		context.Background(), history, ChatContext{UserID: 7, Role: auth.RoleUser}, StreamCallbacks{},
 	)
 	if err != nil {

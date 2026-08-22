@@ -19,10 +19,19 @@ var ErrAIStorage = errors.New("AI credential storage unavailable")
 // AIProfile is one coherent provider/model/credential snapshot. APIKey never
 // crosses the credentials package except to the request-scoped provider
 // runner. CredentialPresent distinguishes a missing key from storage failure.
+// BaseURL is the admin-set OpenAI-compatible endpoint override; it is only
+// ever populated for the shared openai profile (personal loads leave it
+// empty, so personal keys keep talking to api.openai.com). Empty means the
+// provider default.
 type AIProfile struct {
 	Config            AIConfig
 	APIKey            string
 	CredentialPresent bool
+	BaseURL           string
+	// ReasoningEffort is the admin-pinned reasoning_effort for the shared
+	// openai profile, with the same shared-only scoping as BaseURL. Empty
+	// means auto.
+	ReasoningEffort string
 }
 
 // LoadUserAIProfile resolves selection and matching key from one read
@@ -151,6 +160,22 @@ func (r *Registry) loadSharedAIProfileTx(tx *sql.Tx) (AIProfile, error) {
 		model = DefaultAIModel(provider)
 	}
 	profile := AIProfile{Config: AIConfig{Provider: provider, Model: model}}
+	if provider == AIProviderOpenAI {
+		baseURL, _, err := settingTx(tx, KeyOpenAIBaseURL)
+		if err != nil {
+			// Fail closed: an unreadable override must not silently send
+			// shared openai traffic back to api.openai.com.
+			return profile, err
+		}
+		profile.BaseURL = baseURL
+		effort, _, err := settingTx(tx, KeyOpenAIReasoningEffort)
+		if err != nil {
+			// Same fail-closed contract: a pinned effort must not silently
+			// fall back to auto.
+			return profile, err
+		}
+		profile.ReasoningEffort = effort
+	}
 	key := AIKeyCredentialKey(provider)
 	if key == "" {
 		return profile, nil

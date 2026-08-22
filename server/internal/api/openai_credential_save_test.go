@@ -103,6 +103,81 @@ func TestOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
+// TestOpenAIBaseURLSavesThroughAuthenticatedRouter proves the shared base-URL
+// override end to end through the real router: the admin save's validation
+// turn lands on the configured upstream while the env-default upstream stays
+// silent, the value persists plaintext and echoes back to admins, and a
+// requester's personal save still validates against the default endpoint —
+// personal keys are never redirected by the shared override.
+func TestOpenAIBaseURLSavesThroughAuthenticatedRouter(t *testing.T) {
+	configuredUpstream, configuredRequests := newStrictOpenAISaveUpstream(t)
+	envUpstream, envRequests := newStrictOpenAISaveUpstream(t)
+	t.Setenv("OPENAI_BASE_URL", envUpstream.URL+"/v1")
+
+	harness := newRBACRouterHarness(t, false)
+	const (
+		model       = "gpt-4.1-mini"
+		sharedKey   = "sk-test-shared-openai"
+		personalKey = "sk-test-personal-openai"
+	)
+	sharedPayload, err := json.Marshal(map[string]string{
+		credentials.KeyOpenAIKey:     sharedKey,
+		credentials.KeyAIProvider:    credentials.AIProviderOpenAI,
+		credentials.KeyAIModel:       model,
+		credentials.KeyOpenAIBaseURL: configuredUpstream.URL + "/v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/admin/credentials",
+		harness.adminToken,
+		string(sharedPayload),
+	)
+	if shared.Code != http.StatusOK {
+		t.Fatalf("admin base-URL save status=%d, want 200; body=%s", shared.Code, shared.Body.String())
+	}
+	assertStrictOpenAISaveRequest(t, configuredRequests, sharedKey, model)
+	assertNoStrictOpenAISaveRequest(t, envRequests)
+	if got := harness.registry.GetSetting(credentials.KeyOpenAIBaseURL); got != configuredUpstream.URL+"/v1" {
+		t.Fatalf("stored base URL=%q", got)
+	}
+
+	status := serveRBACRequest(harness.router, http.MethodGet, "/api/admin/credentials", harness.adminToken)
+	if status.Code != http.StatusOK {
+		t.Fatalf("admin status read=%d; body=%s", status.Code, status.Body.String())
+	}
+	var decoded struct {
+		AI struct {
+			OpenAIBaseURL string `json:"openai_base_url"`
+		} `json:"ai"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.AI.OpenAIBaseURL != configuredUpstream.URL+"/v1" {
+		t.Fatalf("echoed base URL=%q", decoded.AI.OpenAIBaseURL)
+	}
+
+	personal := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/ai/settings",
+		harness.requesterToken,
+		`{"provider":"openai","model":"gpt-4.1-mini","api_key":"sk-test-personal-openai"}`,
+	)
+	if personal.Code != http.StatusOK {
+		t.Fatalf("requester personal save status=%d, want 200; body=%s", personal.Code, personal.Body.String())
+	}
+	assertStrictOpenAISaveRequest(t, envRequests, personalKey, model)
+	assertNoStrictOpenAISaveRequest(t, configuredRequests)
+	if strings.Contains(personal.Body.String(), configuredUpstream.URL) {
+		t.Fatalf("personal settings response leaked the shared base URL: %s", personal.Body.String())
+	}
+}
+
 func TestLiveOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	if os.Getenv("CANTINARR_LIVE_AI_TESTS") != "1" {
 		t.Skip("set CANTINARR_LIVE_AI_TESTS=1 to run hosted-provider save tests")

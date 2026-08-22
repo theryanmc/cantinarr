@@ -53,12 +53,20 @@ func TestValidateSharedAIModelOverrideKeepsSharedProviderAndCredential(t *testin
 	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "assistant-model"); err != nil {
 		t.Fatal(err)
 	}
+	if err := registry.SetSetting(credentials.KeyOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
+		t.Fatal(err)
+	}
 	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, account codexapp.AccountRef) error {
 		if profile.Config.Provider != credentials.AIProviderOpenAI || profile.Config.Model != "remediation-model" {
 			t.Fatalf("override profile=%#v", profile)
 		}
 		if profile.APIKey != "shared-secret" || account != codexapp.SharedAccount() {
 			t.Fatalf("override credential/account profile=%#v account=%#v", profile, account)
+		}
+		// The override probe must run against the configured endpoint, or a
+		// local-only deployment would validate against api.openai.com.
+		if profile.BaseURL != "http://llm-host:8080/v1" {
+			t.Fatalf("override base URL=%q", profile.BaseURL)
 		}
 		return nil
 	}
@@ -108,6 +116,30 @@ func TestSharedAIHealthCheckSkipsUntilConfiguredEnabledAndDue(t *testing.T) {
 	h.runSharedAIHealthCheck(context.Background(), now.Add(credentials.AIHealthCheckInterval))
 	if calls != 1 {
 		t.Fatalf("due monitor calls=%d, want 1", calls)
+	}
+}
+
+func TestSharedAIHealthCheckProbesConfiguredBaseURL(t *testing.T) {
+	h, registry, _, _ := newResolverTestHandler(t)
+	if err := registry.SetCredential(credentials.KeyOpenAIKey, "shared-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAIConfig(credentials.AIProviderOpenAI, "shared-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetSetting(credentials.KeyOpenAIBaseURL, "http://llm-host:8080/v1"); err != nil {
+		t.Fatal(err)
+	}
+	var probed credentials.AIProfile
+	calls := 0
+	h.validationProbe = func(_ context.Context, profile credentials.AIProfile, _ codexapp.AccountRef) error {
+		probed = profile
+		calls++
+		return nil
+	}
+	h.runSharedAIHealthCheck(context.Background(), time.Date(2026, 7, 13, 13, 0, 0, 0, time.UTC))
+	if calls != 1 || probed.BaseURL != "http://llm-host:8080/v1" {
+		t.Fatalf("calls=%d probed=%#v", calls, probed)
 	}
 }
 

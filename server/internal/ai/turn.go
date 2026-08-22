@@ -377,6 +377,20 @@ type openAIReasoningAttempt struct {
 // chat loop) so the chat path stays untouched while this seam also reads usage.
 func (s *openAIService) NextTurn(ctx context.Context, p TurnParams) (TurnResult, error) {
 	attempts := openAIReasoningAttempts(s.model, p)
+	// An admin-pinned effort leads the ladder so validation proves the exact
+	// configuration production turns will use; the capability-based attempts
+	// stay behind it as the rejection fallback.
+	if s.reasoningEffort != "" {
+		requested := int64(turnMaxTokens(p))
+		budget := requested
+		if s.reasoningEffort != openai.ReasoningEffortNone && budget < openAIValidationReasoningMaxTokens {
+			budget = openAIValidationReasoningMaxTokens
+		}
+		pinned := openAIReasoningAttempt{effort: s.reasoningEffort, maxTokens: budget}
+		if len(attempts) == 0 || attempts[0] != pinned {
+			attempts = append([]openAIReasoningAttempt{pinned}, attempts...)
+		}
+	}
 	for i := 0; i < len(attempts); {
 		result, err := s.openAINextTurnAttempt(ctx, p, attempts[i])
 		if err == nil {

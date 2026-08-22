@@ -313,6 +313,10 @@ void main() {
                 'label': 'OpenAI',
                 'auth_type': 'api_key',
                 'credential_key': 'openai_key',
+                // Renders the base-URL and reasoning-effort fields so their
+                // index titles stay drift-checked against the screen.
+                'supports_base_url': true,
+                'supports_reasoning_effort': true,
                 'models': [
                   {'id': 'gpt-5.5', 'label': 'GPT-5.5'},
                 ],
