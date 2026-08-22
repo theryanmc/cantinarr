@@ -339,7 +339,7 @@ class ChaptarrApiService {
     final resp = await _dio.get(
       '$_basePath/release',
       queryParameters: {'bookId': bookId},
-      options: Options(receiveTimeout: const Duration(seconds: 120)),
+      options: longRequestOptions(),
     );
     return _releaseList(resp.data)
         .whereType<Map<String, dynamic>>()
@@ -352,7 +352,7 @@ class ChaptarrApiService {
     await _dio.post(
       '$_basePath/release',
       data: {'guid': guid, 'indexerId': indexerId},
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
   }
 
@@ -369,7 +369,7 @@ class ChaptarrApiService {
         'downloadId': downloadId,
         'filterExistingFiles': false,
       },
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
     return (resp.data as List<dynamic>)
         .map((c) =>

@@ -110,6 +110,10 @@ void main() {
 
       expect(adapter.lastPath, '/api/instances/inst1/api/v1/release');
       expect(adapter.lastQuery['bookId'], '359');
+      // Live indexer queries take 10-60s; the long-call options keep web from
+      // aborting at the base connect timeout before the first byte arrives.
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 120));
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
       expect(releases, hasLength(1));
       expect(releases.first.guid,
           'https://audiobookbay.lu/abss/dark-force-rising/');

@@ -64,4 +64,20 @@ void main() {
       expect(series, isEmpty);
     });
   });
+
+  group('getReleases', () {
+    // Live indexer queries take 10-60s; the long-call options keep web from
+    // aborting at the base connect timeout before the first byte arrives.
+    test('uses the long-call receive timeout, keeping the base connect timeout',
+        () async {
+      final adapter = _FakeAdapter(<dynamic>[]);
+
+      await _service(adapter).getReleases(seriesId: 1, seasonNumber: 1);
+
+      expect(
+          adapter.lastRequest?.uri.path, '/api/instances/inst1/api/v3/release');
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 120));
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
+    });
+  });
 }

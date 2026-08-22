@@ -207,7 +207,7 @@ class RadarrApiService {
     final resp = await _dio.get(
       '$_basePath/release',
       queryParameters: {'movieId': movieId},
-      options: Options(receiveTimeout: const Duration(seconds: 120)),
+      options: longRequestOptions(),
     );
     return (resp.data as List<dynamic>)
         .map((r) => RadarrRelease.fromJson(r as Map<String, dynamic>))
@@ -226,7 +226,7 @@ class RadarrApiService {
     await _dio.post(
       '$_basePath/release',
       data: {'guid': guid, 'indexerId': indexerId},
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
   }
 
@@ -243,7 +243,7 @@ class RadarrApiService {
         'downloadId': downloadId,
         'filterExistingFiles': false,
       },
-      options: Options(receiveTimeout: const Duration(seconds: 60)),
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
     );
     return (resp.data as List<dynamic>)
         .map((c) =>
