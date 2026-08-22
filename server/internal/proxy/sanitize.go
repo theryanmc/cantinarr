@@ -16,9 +16,12 @@ import (
 
 const (
 	// Keep response sanitization memory-bounded. Arr list/history responses are
-	// normally far smaller than this; an oversized JSON response is rejected
-	// rather than passed through unsanitized.
-	maxSanitizedJSONResponseSize int64 = 32 << 20
+	// normally far smaller than this, but the unpaginated full-library
+	// endpoints (/movie, /series, /author, /book) scale with library size and
+	// exceeded the previous 32 MiB bound on large real-world instances (#483).
+	// An oversized JSON response is still rejected rather than passed through
+	// unsanitized.
+	maxSanitizedJSONResponseSize int64 = 256 << 20
 	redactedValue                      = "[REDACTED]"
 	maxJSONSniffBytes                  = 4 << 10
 )
@@ -32,6 +35,28 @@ var (
 	errJSONResponseSniffFailed = errors.New("could not classify upstream response")
 	errUnsanitizableUpgrade    = errors.New("protocol upgrade cannot be sanitized")
 )
+
+// sanitizeFailureReason returns the loggable reason when err is one of the
+// sanitizer's own sentinel errors, and "" otherwise. Only sentinel text is
+// safe to log: any other proxy error may embed upstream details (hosts,
+// response fragments), which must stay out of logs just as they stay out of
+// client responses.
+func sanitizeFailureReason(err error) string {
+	for _, sentinel := range []error{
+		errEncodedJSONResponse,
+		errJSONResponseTooLarge,
+		errInvalidJSONResponse,
+		errMalformedJSONMediaType,
+		errStreamingJSONResponse,
+		errJSONResponseSniffFailed,
+		errUnsanitizableUpgrade,
+	} {
+		if errors.Is(err, sentinel) {
+			return sentinel.Error()
+		}
+	}
+	return ""
+}
 
 // sanitizeProxyResponse removes credentials that an arr (or one of its
 // integrations) embeds in an otherwise user-readable response. In particular,

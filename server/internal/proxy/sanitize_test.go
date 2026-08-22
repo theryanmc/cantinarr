@@ -409,3 +409,17 @@ func TestArrAPIPathSuffix(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeFailureReasonLogsOnlySentinels(t *testing.T) {
+	if got := sanitizeFailureReason(errJSONResponseTooLarge); got != errJSONResponseTooLarge.Error() {
+		t.Errorf("sentinel reason = %q; want %q", got, errJSONResponseTooLarge.Error())
+	}
+	// A transport error can embed the upstream URL; it must never become a
+	// loggable reason.
+	if got := sanitizeFailureReason(errors.New("dial tcp radarr.internal:7878: no route to host")); got != "" {
+		t.Errorf("non-sentinel reason = %q; want empty", got)
+	}
+	if got := sanitizeFailureReason(nil); got != "" {
+		t.Errorf("nil reason = %q; want empty", got)
+	}
+}
