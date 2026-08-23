@@ -212,6 +212,12 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/default-instances", instanceHandler.GetUserDefaultInstances)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/default-instances", instanceHandler.UpdateUserDefaultInstances)
 
+			// Per-user instance access grants (admin-managed). Additive to the
+			// default: a granted instance appears alongside the user's default
+			// so they can choose a library per request.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/instance-grants", instanceHandler.GetUserInstanceGrants)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/instance-grants", instanceHandler.UpdateUserInstanceGrants)
+
 			// Credential management
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Get("/credentials", credHandler.Get)
 			r.With(auth.RequirePermission(auth.PermissionCredentialsManage)).Put("/credentials", credHandler.Update)
@@ -457,6 +463,12 @@ func NewRouter(
 				// type, and (PUT) assign this instance to an exact set of users.
 				r.Get("/instances/{instanceID}/users", instanceHandler.GetInstanceUsers)
 				r.Put("/instances/{instanceID}/users", instanceHandler.UpdateInstanceUsers)
+				// Instance-centric view of user_instance_grants: which users
+				// hold an access grant on which instance of this service type,
+				// and (PUT) grant this instance to an exact set of users
+				// without moving anyone's default.
+				r.Get("/instances/{instanceID}/grant-users", instanceHandler.GetInstanceGrantUsers)
+				r.Put("/instances/{instanceID}/grant-users", instanceHandler.UpdateInstanceGrantUsers)
 				// Configure the server-managed Radarr/Sonarr Connect webhook
 				// without ever returning its callback credential to the app.
 				r.Post("/instances/{instanceID}/webhook", instanceHandler.ConfigureWebhook)
@@ -572,6 +584,8 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
+	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
+	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
 func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
@@ -587,9 +601,12 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		}
 
 		// The config payload is per-user: admins see every instance, while
-		// regular users only see the effective default Radarr/Sonarr instances
-		// selected for them and any Chaptarr instance explicitly granted by an
-		// admin.
+		// regular users see their granted Radarr/Sonarr/Chaptarr set — every
+		// access-granted instance plus their effective default (the global
+		// default when nothing was granted; for chaptarr only explicit rows,
+		// never a fallback). is_default is rewritten per user to mark THEIR
+		// effective default, which is how older clients that expect a single
+		// instance keep picking the right one.
 		claims := auth.GetClaims(r.Context())
 		var userID int64
 		isAdmin := false
@@ -606,25 +623,44 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				return
 			}
 		}
+		visible := map[string]map[string]bool{}
+		visibleDefault := map[string]string{}
+		if !isAdmin {
+			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr"} {
+				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
+				if err != nil {
+					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+					return
+				}
+				defaultID, err := store.EffectiveDefaultInstanceID(userID, serviceType)
+				if err != nil {
+					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+					return
+				}
+				ids := map[string]bool{}
+				for _, id := range visibleIDs {
+					ids[id] = true
+				}
+				visible[serviceType] = ids
+				visibleDefault[serviceType] = defaultID
+			}
+		}
 
 		instances := []instanceInfo{}
 		allInstances, err := store.ListAll()
 		if err == nil {
-			visibleDefaults := map[string]string{}
-			if !isAdmin {
-				visibleDefaults = effectiveUserInstanceIDs(allInstances, overrides)
-			}
 			for _, inst := range allInstances {
-				if !isAdmin && visibleDefaults[inst.ServiceType] != inst.ID {
+				if !isAdmin && !visible[inst.ServiceType][inst.ID] {
 					continue
 				}
-				// A requester's filtered entry is always its effective default,
-				// including the deterministic first-instance fallback when no row
-				// carries the global is_default flag. Admins retain the configured
-				// global flag unless their own per-user override selects a sibling.
+				// A requester's is_default always marks their effective
+				// default, including the deterministic first-instance fallback
+				// when no row carries the global flag. Admins retain the
+				// configured global flag unless their own per-user override
+				// selects a sibling.
 				isDefault := inst.IsDefault
 				if !isAdmin {
-					isDefault = visibleDefaults[inst.ServiceType] == inst.ID
+					isDefault = visibleDefault[inst.ServiceType] == inst.ID
 				} else if pinned, ok := overrides[inst.ServiceType]; ok {
 					isDefault = pinned == inst.ID
 				}
@@ -685,39 +721,3 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 	}
 }
 
-func effectiveUserInstanceIDs(instances []instance.Instance, overrides map[string]string) map[string]string {
-	first := map[string]string{}
-	globalDefault := map[string]string{}
-	for _, inst := range instances {
-		switch inst.ServiceType {
-		case "radarr", "sonarr":
-			if _, ok := first[inst.ServiceType]; !ok {
-				first[inst.ServiceType] = inst.ID
-			}
-			if inst.IsDefault {
-				if _, ok := globalDefault[inst.ServiceType]; !ok {
-					globalDefault[inst.ServiceType] = inst.ID
-				}
-			}
-		}
-	}
-
-	visible := map[string]string{}
-	for _, serviceType := range []string{"radarr", "sonarr"} {
-		if override, ok := overrides[serviceType]; ok {
-			visible[serviceType] = override
-			continue
-		}
-		if id, ok := globalDefault[serviceType]; ok {
-			visible[serviceType] = id
-			continue
-		}
-		if id, ok := first[serviceType]; ok {
-			visible[serviceType] = id
-		}
-	}
-	if chaptarrID, ok := overrides["chaptarr"]; ok {
-		visible["chaptarr"] = chaptarrID
-	}
-	return visible
-}

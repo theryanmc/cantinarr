@@ -197,6 +197,30 @@ class InstanceApiService {
     await _dio.put('/api/instances/$id/users', data: {'user_ids': userIds});
   }
 
+  /// Every access-grant row for this instance's service type, as user id →
+  /// granted instance ids. Like [getInstanceUsers] the answer covers the whole
+  /// type so the UI can also show what a user holds on a sibling.
+  Future<Map<int, List<String>>> getInstanceGrantUsers(String id) async {
+    final resp = await _dio.get('/api/instances/$id/grant-users');
+    final grants = <int, List<String>>{};
+    for (final row in (resp.data as List<dynamic>? ?? const [])) {
+      final map = row as Map<String, dynamic>;
+      grants
+          .putIfAbsent((map['user_id'] as num).toInt(), () => [])
+          .add(map['instance_id'] as String);
+    }
+    return grants;
+  }
+
+  /// Grant this instance to exactly [userIds]. Users absent from the list
+  /// lose their grant AND any per-user default pin naming this instance —
+  /// unchecking really revokes — while listed users' pins and every sibling
+  /// instance's rows stay untouched.
+  Future<void> updateInstanceGrantUsers(String id, List<int> userIds) async {
+    await _dio
+        .put('/api/instances/$id/grant-users', data: {'user_ids': userIds});
+  }
+
   /// Ask the server to test a candidate instance configuration. The server is
   /// what dials instance URLs in production, so cluster-internal names this
   /// device cannot resolve (e.g. http://radarr:7878) still test truthfully —

@@ -702,7 +702,9 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 	if params.TmdbID <= 0 {
 		return &ToolResult{Text: "A movie/TV status check requires the tmdb_id from search results."}, nil
 	}
-	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
+	// MCP callers read their effective default library's status; a per-request
+	// instance selection is an app-side flow for now.
+	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType, "")
 	if err != nil {
 		return nil, err
 	}
@@ -720,7 +722,9 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" {
 		return &ToolResult{Text: "Request options require media_type movie, tv, or book."}, nil
 	}
-	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType)
+	// MCP callers get their effective default library's options; a per-request
+	// instance selection is an app-side flow for now.
+	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType, "")
 	if err != nil {
 		return nil, err
 	}

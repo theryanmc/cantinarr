@@ -83,9 +83,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   List<ServiceInstance> _instances = const [];
   bool _instancesLoaded = false;
 
-  // User-assignment section state: all accounts, their current per-user pin
-  // for this service type (user id → instance id, possibly a sibling
-  // instance), the working selection, and the selection as last saved.
+  // User-access section state: all accounts, their current per-user pin for
+  // this service type (user id → instance id, possibly a sibling instance),
+  // the working selection, and the selection as last saved. A user counts as
+  // having access here when either a pin or a grant row names this instance.
   List<UserSummary>? _users;
   Map<int, String> _pins = const {};
   Set<int> _assignedUserIds = <int>{};
@@ -301,9 +302,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
   }
 
-  /// Fetches the per-user pins for the selected service type. The endpoint is
-  /// instance-scoped but answers for the whole type, so when creating we can
-  /// ask via any existing sibling; a type with no instances can have no pins.
+  /// Fetches the per-user pins and access grants for the selected service
+  /// type. Both endpoints are instance-scoped but answer for the whole type,
+  /// so when creating we can ask via any existing sibling; a type with no
+  /// instances can have no rows. A checkbox starts checked when either row
+  /// kind names this instance — a legacy pin is an assignment too, and
+  /// showing it unchecked would turn the next save into a silent revocation.
   Future<void> _loadPins() async {
     if (!_supportsUserAssignment) return;
     String? anchorId = widget.instanceId;
@@ -328,14 +332,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       final service =
           InstanceApiService(backendDio: ref.read(backendClientProvider));
       final pins = await service.getInstanceUsers(anchorId);
+      final grants = await service.getInstanceGrantUsers(anchorId);
       if (!mounted) return;
       setState(() {
         _pins = pins;
         _assignedUserIds = widget.isEditing
-            ? pins.entries
-                .where((e) => e.value == widget.instanceId)
-                .map((e) => e.key)
-                .toSet()
+            ? {
+                ...pins.entries
+                    .where((e) => e.value == widget.instanceId)
+                    .map((e) => e.key),
+                ...grants.entries
+                    .where((e) => e.value.contains(widget.instanceId))
+                    .map((e) => e.key),
+              }
             : <int>{};
         _savedAssignedUserIds = Set.of(_assignedUserIds);
         _userSelectError = null;
@@ -628,77 +637,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return id;
   }
 
-  /// Selected users who are currently pinned to a sibling instance, grouped
-  /// by that sibling's name. Saving moves them off it — for Chaptarr that
-  /// also moves their Books access.
-  Map<String, List<String>> get _pendingUserMoves {
-    final moves = <String, List<String>>{};
-    for (final user in _users ?? const <UserSummary>[]) {
-      if (!_assignedUserIds.contains(user.id)) continue;
-      final pinnedTo = _pins[user.id];
-      if (pinnedTo == null || pinnedTo == widget.instanceId) continue;
-      moves.putIfAbsent(_instanceName(pinnedTo), () => []).add(user.username);
-    }
-    return moves;
-  }
-
-  static String _joinNames(List<String> names) {
-    if (names.length == 1) return names.first;
-    return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
-  }
-
-  /// Assigning a user who is pinned to a sibling instance removes them there
-  /// — spell out exactly who is removed from which instance, and let the
-  /// admin back out, before anything is saved.
-  Future<bool> _confirmUserMoves() async {
-    final moves = _pendingUserMoves;
-    if (moves.isEmpty) return true;
-    final newName = _nameController.text.trim();
-    final total = moves.values.fold<int>(0, (n, names) => n + names.length);
-    final String description;
-    if (moves.length == 1) {
-      final entry = moves.entries.first;
-      description = 'This removes ${_joinNames(entry.value)} from '
-          '"${entry.key}" and assigns them to "$newName".';
-    } else {
-      final lines = moves.entries
-          .map((e) => '• ${_joinNames(e.value)} — from "${e.key}"')
-          .join('\n');
-      description = 'This removes $total users from their current instances '
-          'and assigns them to "$newName":\n\n$lines';
-    }
-    final note = _isChaptarr
-        ? 'Their Books access will come from "$newName" instead.'
-        : 'Their requests and dashboard statuses will use "$newName" instead.';
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Reassign $total user${total == 1 ? '' : 's'}?'),
-        content: Text('$description\n\n$note'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Reassign'),
-          ),
-        ],
-      ),
-    );
-    return confirmed == true;
-  }
-
-  /// Per-user assignment: for Chaptarr this IS the access model (selected
-  /// users get Books through this instance); for Radarr/Sonarr it pins the
-  /// selected users to this instance as an override of the global default.
+  /// Per-user access: selected users can use this instance. Access is
+  /// additive — a user granted this library beside their default gets a
+  /// per-request choice between them — and unselecting removes their access
+  /// to exactly this instance (their default and sibling grants stay put).
   List<Widget> _buildUserSelect() {
     final users = _users;
     return [
       const SizedBox(height: 16),
       Text(
-        _isChaptarr ? 'Assigned Users' : 'Per-User Default',
+        _isChaptarr ? 'Assigned Users' : 'User Access',
         style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 13,
@@ -708,10 +656,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       Text(
         _isChaptarr
             ? 'Chaptarr instances are assigned per user: selected users get '
-                'Books access through this instance. Unselecting a user '
-                'removes their access.'
-            : 'Selected users use this instance for requests and dashboard '
-                'statuses instead of the default $_serviceLabel instance.',
+                'Books access through this instance (alongside any other '
+                'Chaptarr instance they hold). Unselecting a user removes '
+                'their access.'
+            : 'Selected users can use this library for requests alongside '
+                'their default $_serviceLabel library, choosing per request. '
+                'Unselecting a user removes their access to this library.',
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: 8),
@@ -750,9 +700,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   Widget _userTile(UserSummary user) {
     final pinnedTo = _pins[user.id];
-    // Surface where the user is assigned today, so selecting them here is a
-    // visible move rather than a silent one.
-    final movingFrom = pinnedTo != null && pinnedTo != widget.instanceId
+    // Surface the user's default library when it is a sibling, so the admin
+    // can see access here is IN ADDITION to it, not a move off it.
+    final defaultElsewhere = pinnedTo != null && pinnedTo != widget.instanceId
         ? _instanceName(pinnedTo)
         : null;
     return CheckboxListTile(
@@ -762,8 +712,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       activeColor: AppTheme.accent,
       title: Text(user.username,
           style: const TextStyle(color: AppTheme.textPrimary)),
-      subtitle: movingFrom != null
-          ? Text('Currently assigned to "$movingFrom"',
+      subtitle: defaultElsewhere != null
+          ? Text('Default library: "$defaultElsewhere"',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
           : null,
@@ -802,10 +752,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final mediaPathMappings = _shouldSubmitMediaPathMappings
         ? _currentMediaPathMappings()
         : null;
-    // Pulling users off a sibling instance needs the same explicit sign-off
-    // as a default takeover.
-    if (applyAssignments && !await _confirmUserMoves()) return;
-    if (!mounted) return;
 
     setState(() => _isSaving = true);
 
@@ -826,7 +772,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         );
         if (applyAssignments) {
           try {
-            await service.updateInstanceUsers(widget.instanceId!, assignedIds);
+            await service.updateInstanceGrantUsers(
+                widget.instanceId!, assignedIds);
           } catch (e) {
             // The instance itself saved; stay here so Save can retry the
             // assignments (re-updating the instance is idempotent).
@@ -865,7 +812,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       String? assignmentError;
       if (applyAssignments) {
         try {
-          await service.updateInstanceUsers(created.id, assignedIds);
+          await service.updateInstanceGrantUsers(created.id, assignedIds);
         } catch (e) {
           assignmentError = _errorMessage(e);
         }

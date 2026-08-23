@@ -13,12 +13,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-/// Fake Dio adapter: serves the instance list and per-type user pins, and
-/// records every request (method, path, decoded body) for assertions.
+/// Fake Dio adapter: serves the instance list, per-type user pins, and
+/// per-type access grants, and records every request (method, path, decoded
+/// body) for assertions.
 class _FakeAdapter implements HttpClientAdapter {
   _FakeAdapter({
     this.instances = const [],
     this.pins = const [],
+    this.grants = const [],
     this.mediaRoots = const ['/media'],
     this.arrRootFolders = const [],
     this.webhookError,
@@ -28,6 +30,7 @@ class _FakeAdapter implements HttpClientAdapter {
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> pins;
+  final List<Map<String, dynamic>> grants;
   final List<String> mediaRoots;
   final List<String> arrRootFolders;
   final String? webhookError;
@@ -62,6 +65,10 @@ class _FakeAdapter implements HttpClientAdapter {
       ];
     } else if (options.method == 'GET' && path == '/api/instances') {
       response = instances;
+    } else if (options.method == 'GET' && path.endsWith('/grant-users')) {
+      response = grants;
+    } else if (options.method == 'PUT' && path.endsWith('/grant-users')) {
+      response = grants;
     } else if (options.method == 'GET' && path.endsWith('/users')) {
       response = pins;
     } else if (options.method == 'POST' && path == '/api/instances/test') {
@@ -254,7 +261,7 @@ void main() {
     final toggle = tester.widget<SwitchListTile>(
         find.widgetWithText(SwitchListTile, 'Default Instance'));
     expect(toggle.value, isFalse);
-    expect(find.text('Per-User Default'), findsOneWidget);
+    expect(find.text('User Access'), findsOneWidget);
     expect(find.widgetWithText(CheckboxListTile, 'alice'), findsOneWidget);
   });
 
@@ -321,14 +328,15 @@ void main() {
     await tester.pumpAndSettle();
 
     // No confirmation dialog for chaptarr, the flag is forced off, and the
-    // selected users are assigned to the new instance.
+    // selected users are granted the new instance.
     final post = adapter.requests
         .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
     expect(post.body['is_default'], isFalse);
-    final putUsers = adapter.requests.singleWhere((r) =>
-        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
-    expect(putUsers.body, {
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/chaptarr-new/grant-users');
+    expect(putGrants.body, {
       'user_ids': [1]
     });
   });
@@ -686,12 +694,15 @@ void main() {
   });
 
   testWidgets(
-      'editing a non-default instance pins users and shows current pins',
+      'editing a non-default instance grants users beside their default',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [Map.of(_mainRadarr), Map.of(_radarrB)],
       pins: [
         {'user_id': 2, 'instance_id': 'radarr-main'},
+      ],
+      grants: [
+        {'user_id': 1, 'instance_id': 'radarr-b'},
       ],
     );
     await _pumpEdit(
@@ -707,49 +718,37 @@ void main() {
       ),
     );
 
-    // Bob is pinned to the sibling instance; selecting him here is a move.
-    expect(find.text('Per-User Default'), findsOneWidget);
-    expect(find.text('Currently assigned to "Main Radarr"'), findsOneWidget);
+    // Alice already holds a grant here (checked); Bob's pin to the sibling is
+    // informational — access here is additive, not a move.
+    expect(find.text('User Access'), findsOneWidget);
+    expect(find.text('Default library: "Main Radarr"'), findsOneWidget);
+    final aliceTile = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'alice'));
+    expect(aliceTile.value, isTrue);
 
     await tester.tap(find.widgetWithText(CheckboxListTile, 'bob'));
     await tester.pumpAndSettle();
 
-    // Moving bob off the sibling asks for confirmation naming who moves from
-    // where; cancelling aborts the save entirely.
+    // Granting is additive: no reassignment dialog, the save applies both the
+    // instance update and the grant list directly.
     await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
     await tester.pumpAndSettle();
-    expect(find.text('Reassign 1 user?'), findsOneWidget);
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.textContaining(
-              'removes bob from "Main Radarr" and assigns them to "Radarr B"')),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
-
-    // Confirming applies both the instance update and the reassignment.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Save Changes'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reassign'));
-    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
 
     expect(
       adapter.requests
           .any((r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b'),
       isTrue,
     );
-    final putUsers = adapter.requests.singleWhere(
-        (r) => r.method == 'PUT' && r.path == '/api/instances/radarr-b/users');
-    expect(putUsers.body, {
-      'user_ids': [2]
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/radarr-b/grant-users');
+    expect(putGrants.body, {
+      'user_ids': [1, 2]
     });
   });
 
   testWidgets(
-      'assigning a user pinned to a sibling Chaptarr instance confirms the move',
+      'granting a sibling Chaptarr instance never moves the existing one',
       (tester) async {
     final adapter = _FakeAdapter(
       instances: [
@@ -776,43 +775,23 @@ void main() {
     await tester.pumpAndSettle();
 
     await _fillForm(tester, 'Books B');
+    // Alice's existing library shows as her default, not a pending move.
+    expect(find.text('Default library: "Books A"'), findsOneWidget);
     await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
     await tester.pumpAndSettle();
 
-    // Alice is pinned to Books A, so creating must confirm the removal and
-    // spell out where her Books access lands; cancelling creates nothing.
-    expect(find.text('Reassign 1 user?'), findsOneWidget);
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.textContaining(
-              'removes alice from "Books A" and assigns them to "Books B"')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find
-              .textContaining('Books access will come from "Books B" instead')),
-      findsOneWidget,
-    );
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(adapter.requests.where((r) => r.method == 'POST'), isEmpty);
-
-    // Confirming creates the instance and moves alice to it.
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reassign'));
-    await tester.pumpAndSettle();
+    // Additive grant: no reassignment dialog, the create goes straight
+    // through and grants alice the new instance beside Books A.
+    expect(find.byType(AlertDialog), findsNothing);
     final post = adapter.requests
         .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
     expect(post.body['service_type'], 'chaptarr');
-    final putUsers = adapter.requests.singleWhere((r) =>
-        r.method == 'PUT' && r.path == '/api/instances/chaptarr-new/users');
-    expect(putUsers.body, {
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/chaptarr-new/grant-users');
+    expect(putGrants.body, {
       'user_ids': [1]
     });
   });

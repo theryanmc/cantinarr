@@ -33,6 +33,15 @@ var allowedServiceTypes = map[string]bool{
 	"tautulli":     true,
 }
 
+// grantableServiceTypes is the subset a user can hold access-grant rows for.
+// Download clients and Tautulli are admin surfaces with no per-user routing,
+// so granting them would only invite confusion.
+var grantableServiceTypes = map[string]bool{
+	"radarr":   true,
+	"sonarr":   true,
+	"chaptarr": true,
+}
+
 // instanceResponse is the JSON shape returned to clients. All credentials are
 // write-only, including the token used to authenticate arr webhook callbacks.
 type instanceResponse struct {
@@ -422,6 +431,66 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	json.NewEncoder(w).Encode(defaults)
 }
 
+// GetUserInstanceGrants returns a user's access-grant rows as a
+// {service_type: [instance_ids]} map (admin-only). Grants are additive to the
+// user's default: they never move it, they widen what the user may select.
+func (h *Handler) GetUserInstanceGrants(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	grants, err := h.store.ListUserGrants(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if grants == nil {
+		grants = map[string][]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(grants)
+}
+
+// UpdateUserInstanceGrants replaces a user's access-grant rows per service
+// type (admin-only). Body is a {service_type: [instance_id]|null} map; only
+// the listed service types are touched, and a null/empty list clears that
+// type's grants. Each instance id must exist and match its keyed service
+// type. Returns the updated map.
+func (h *Handler) UpdateUserInstanceGrants(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "userID"), 10, 64)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user id"}`, http.StatusBadRequest)
+		return
+	}
+	var body map[string][]string
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	// Reject unknown service types up front so a typo never partially applies.
+	for serviceType := range body {
+		if !grantableServiceTypes[serviceType] {
+			http.Error(w, fmt.Sprintf(`{"error":"unknown service_type: %s"}`, serviceType), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := h.store.SetUserGrants(userID, body); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	grants, err := h.store.ListUserGrants(userID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if grants == nil {
+		grants = map[string][]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(grants)
+}
+
 // instanceUserPin is one user's per-user default row within a service type,
 // as served by the instance-centric assignment endpoints.
 type instanceUserPin struct {
@@ -491,6 +560,89 @@ func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeInstanceUsers(w, serviceType)
+}
+
+// instanceUserGrant is one user's access-grant row within a service type, as
+// served by the instance-centric grant endpoints. A user appears once per
+// granted instance.
+type instanceUserGrant struct {
+	UserID     int64  `json:"user_id"`
+	InstanceID string `json:"instance_id"`
+}
+
+// writeInstanceGrants responds with every access-grant row for the service
+// type — not just the addressed instance — so the admin UI can also show
+// which users hold a grant on a sibling instance.
+func (h *Handler) writeInstanceGrants(w http.ResponseWriter, serviceType string) {
+	grants, err := h.store.ListTypeUserGrants(serviceType)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	resp := make([]instanceUserGrant, 0)
+	for userID, instanceIDs := range grants {
+		for _, instanceID := range instanceIDs {
+			resp = append(resp, instanceUserGrant{UserID: userID, InstanceID: instanceID})
+		}
+	}
+	sort.Slice(resp, func(i, j int) bool {
+		if resp[i].UserID != resp[j].UserID {
+			return resp[i].UserID < resp[j].UserID
+		}
+		return resp[i].InstanceID < resp[j].InstanceID
+	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// GetInstanceGrantUsers returns the access-grant rows for the addressed
+// instance's service type (admin-only).
+func (h *Handler) GetInstanceGrantUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	h.writeInstanceGrants(w, serviceType)
+}
+
+// UpdateInstanceGrantUsers grants the addressed instance to exactly the posted
+// user ids (admin-only). Users previously granted this instance but absent
+// from the list lose the grant; per-user default pins and grants on sibling
+// instances are untouched. Returns the updated grants for the service type.
+func (h *Handler) UpdateInstanceGrantUsers(w http.ResponseWriter, r *http.Request) {
+	instanceID := chi.URLParam(r, "instanceID")
+	serviceType, err := h.store.ServiceTypeOf(instanceID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+		return
+	}
+	if serviceType == "" {
+		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	if !grantableServiceTypes[serviceType] {
+		http.Error(w, fmt.Sprintf(`{"error":"service_type %s does not support grants"}`, serviceType), http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		UserIDs []int64 `json:"user_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if err := h.store.SetInstanceGrantUsers(instanceID, body.UserIDs); err != nil {
+		// Covers unknown user ids too (the user_id foreign key rejects them).
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	h.writeInstanceGrants(w, serviceType)
 }
 
 // validateRequiredFields enforces per-service-type required fields.

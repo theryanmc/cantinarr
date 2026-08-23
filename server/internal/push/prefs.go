@@ -241,7 +241,9 @@ func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
 	if col.defaultVal {
 		def = 1
 	}
-	// Column name comes from the trusted categoryColumn table, never user input.
+	// Column name comes from the trusted categoryColumn table, never user
+	// input. An assignment is a per-user default pin OR an access grant — a
+	// granted sibling library is still this person's library.
 	query := fmt.Sprintf(
 		`SELECT u.id FROM users u
 		 LEFT JOIN notification_prefs p ON p.user_id = u.id
@@ -249,12 +251,19 @@ func (s *PrefsStore) usersOptedIntoNewBook(instanceID string) ([]int64, error) {
 		   AND (EXISTS (
 		     SELECT 1 FROM user_default_instances d
 		     WHERE d.user_id = u.id AND d.instance_id = ?)
+		   OR EXISTS (
+		     SELECT 1 FROM user_instance_grants g
+		     WHERE g.user_id = u.id AND g.instance_id = ?)
 		   OR (u.role = 'admin' AND NOT EXISTS (
 		     SELECT 1 FROM user_default_instances d
-		     WHERE d.user_id = u.id AND d.service_type = 'chaptarr')))`,
+		     WHERE d.user_id = u.id AND d.service_type = 'chaptarr')
+		     AND NOT EXISTS (
+		     SELECT 1 FROM user_instance_grants g
+		     JOIN service_instances si ON si.id = g.instance_id
+		     WHERE g.user_id = u.id AND si.service_type = 'chaptarr')))`,
 		col.column, def,
 	)
-	return s.queryUserIDs(query, instanceID)
+	return s.queryUserIDs(query, instanceID, instanceID)
 }
 
 // queryUserIDs runs a query whose result set is a single user-id column and

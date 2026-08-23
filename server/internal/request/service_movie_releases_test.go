@@ -20,7 +20,7 @@ func TestMovieStatusCarriesReleaseDates(t *testing.T) {
 	srv := newFakeRadarrServer(t, f)
 	s, uid := newHistoryTestService(t, srv.URL, "", "")
 
-	resp, err := s.GetUserStatus(uid, 550, "movie")
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
 	if err != nil {
 		t.Fatalf("GetUserStatus: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestMovieStatusReleasesOmittedWhenUnknown(t *testing.T) {
 	srv := newFakeRadarrServer(t, f)
 	s, uid := newHistoryTestService(t, srv.URL, "", "")
 
-	resp, err := s.GetUserStatus(uid, 550, "movie")
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
 	if err != nil {
 		t.Fatalf("GetUserStatus: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestMovieStatusReleasesOnlyPartiallyKnown(t *testing.T) {
 	srv := newFakeRadarrServer(t, f)
 	s, uid := newHistoryTestService(t, srv.URL, "", "")
 
-	resp, err := s.GetUserStatus(uid, 550, "movie")
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
 	if err != nil {
 		t.Fatalf("GetUserStatus: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestMovieStatusReleasesRideAvailableTitles(t *testing.T) {
 	srv := newFakeRadarrServer(t, f)
 	s, uid := newHistoryTestService(t, srv.URL, "", "")
 
-	resp, err := s.GetUserStatus(uid, 550, "movie")
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
 	if err != nil {
 		t.Fatalf("GetUserStatus: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestMovieStatusUnaddedTitleHasNoReleases(t *testing.T) {
 	srv := newFakeRadarrServer(t, f)
 	s, uid := newHistoryTestService(t, srv.URL, "", "")
 
-	resp, err := s.GetUserStatus(uid, 550, "movie")
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
 	if err != nil {
 		t.Fatalf("GetUserStatus: %v", err)
 	}

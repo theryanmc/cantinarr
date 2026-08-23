@@ -66,7 +66,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		// Service errors are host-free by construction, so the one line that
 		// makes a failed create diagnosable from the container log is safe.
 		log.Printf("request: create %s request failed: %v", req.MediaType, err)
-		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -92,9 +92,9 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		mediaType = "movie" // default
 	}
 
-	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType)
+	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -116,7 +116,7 @@ func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -134,7 +134,7 @@ func (h *Handler) GetBookLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	digest, err := h.service.GetBookLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, digest)
@@ -162,17 +162,17 @@ func (h *Handler) GetBookRecent(w http.ResponseWriter, r *http.Request) {
 	}
 	digest, err := h.service.GetRecentBooksForInstance(claims.UserID, r.URL.Query().Get("instance_id"), limit)
 	if err != nil {
-		writeJSON(w, bookRequestErrorStatus(err), map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, digest)
 }
 
-func bookRequestErrorStatus(err error) int {
+func requestErrorStatus(err error) int {
 	switch {
-	case errors.Is(err, ErrChaptarrInstanceForbidden):
+	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
 		return http.StatusForbidden
-	case errors.Is(err, ErrChaptarrInstanceInvalid):
+	case errors.Is(err, ErrChaptarrInstanceInvalid), errors.Is(err, ErrArrInstanceInvalid):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrBookFormatUnresolved):
 		return http.StatusConflict
@@ -215,9 +215,9 @@ func (h *Handler) Options(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isAdmin := auth.HasPermission(claims.Role, auth.PermissionAdmin)
-	opts, err := h.service.GetRequestOptions(claims.UserID, isAdmin, mediaType)
+	opts, err := h.service.GetRequestOptions(claims.UserID, isAdmin, mediaType, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 
