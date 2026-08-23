@@ -255,7 +255,7 @@ func TestUserCanAccessInstanceUsesEffectiveDefaults(t *testing.T) {
 	bob := createUser(t, s, "effective-bob")
 
 	// Insert the lexically later name first with tied sort order. The fallback
-	// must still select Alpha, matching ListAll/effectiveUserInstanceIDs rather
+	// must still select Alpha, matching ListAll/GrantedInstanceIDs order rather
 	// than SQLite insertion order.
 	zulu := &Instance{
 		ServiceType: "radarr", Name: "Zulu", URL: "http://zulu.invalid",
@@ -397,6 +397,196 @@ func TestUserDefaultInstances(t *testing.T) {
 	}
 	if ok, _ := s.UserHasInstanceAccess(user, chaptarrID); ok {
 		t.Fatal("deleting an instance must revoke its per-user grant")
+	}
+}
+
+// A grant widens a user's reachable set beside their default instead of
+// replacing it, and revoking a grant never moves the default.
+func TestUserInstanceGrantsWidenAccess(t *testing.T) {
+	s := newTestStore(t)
+	alice := createUser(t, s, "grant-alice")
+	bob := createUser(t, s, "grant-bob")
+	hd := mkDefaultInstance(t, s, "radarr", "Movies")
+	uhd := mkInstance(t, s, "radarr", "4K Movies")
+
+	assertAccess := func(userID int64, instanceID string, want bool) {
+		t.Helper()
+		got, err := s.UserCanAccessInstance(userID, instanceID, "radarr")
+		if err != nil {
+			t.Fatalf("UserCanAccessInstance(%d, %s): %v", userID, instanceID, err)
+		}
+		if got != want {
+			t.Fatalf("UserCanAccessInstance(%d, %s) = %v, want %v", userID, instanceID, got, want)
+		}
+	}
+
+	// Baseline: everyone reaches the global default only.
+	assertAccess(alice, hd, true)
+	assertAccess(alice, uhd, false)
+
+	// Granting the sibling alone makes it the user's ONLY explicit row: the
+	// grant set replaces the implicit global fallback, exactly like a pin did.
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {uhd}}); err != nil {
+		t.Fatalf("grant 4K: %v", err)
+	}
+	assertAccess(alice, uhd, true)
+	assertAccess(alice, hd, false)
+
+	// Granting both is the HD/4K shape: both reachable, default untouched.
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {hd, uhd}}); err != nil {
+		t.Fatalf("grant both: %v", err)
+	}
+	assertAccess(alice, hd, true)
+	assertAccess(alice, uhd, true)
+	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
+		t.Fatalf("effective default with both granted = (%q, %v), want global default %q", id, err, hd)
+	}
+	assertAccess(bob, uhd, false)
+
+	// A pin plus a grant coexist: the pin is the default, both stay reachable.
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {uhd}}); err != nil {
+		t.Fatalf("re-grant only 4K: %v", err)
+	}
+	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
+		t.Fatalf("pin HD: %v", err)
+	}
+	assertAccess(alice, hd, true)
+	assertAccess(alice, uhd, true)
+	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
+		t.Fatalf("effective default with pin = (%q, %v), want pinned %q", id, err, hd)
+	}
+
+	// Clearing the grant leaves the pin (and the default) in place.
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": nil}); err != nil {
+		t.Fatalf("clear grants: %v", err)
+	}
+	assertAccess(alice, uhd, false)
+	assertAccess(alice, hd, true)
+	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
+		t.Fatalf("effective default after clearing grants = (%q, %v), want pinned %q", id, err, hd)
+	}
+
+	// Type mismatches and unknown instances are rejected before any write.
+	sonarrID := mkInstance(t, s, "sonarr", "TV")
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {sonarrID}}); err == nil {
+		t.Fatal("SetUserGrants with mismatched service_type should error")
+	}
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {"nope-12345678"}}); err == nil {
+		t.Fatal("SetUserGrants with unknown instance should error")
+	}
+}
+
+// The effective default resolves pin → granted global default → first granted,
+// and chaptarr never falls back past its explicit rows.
+func TestEffectiveDefaultInstanceID(t *testing.T) {
+	s := newTestStore(t)
+	user := createUser(t, s, "effective-default-user")
+	hd := mkDefaultInstance(t, s, "radarr", "Movies")
+	uhd := mkInstance(t, s, "radarr", "4K Movies")
+
+	// No rows: the global default chain answers.
+	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != hd {
+		t.Fatalf("no rows = (%q, %v), want global default %q", id, err, hd)
+	}
+
+	// Grants excluding the global default: the first granted instance wins.
+	if err := s.SetUserGrants(user, map[string][]string{"radarr": {uhd}}); err != nil {
+		t.Fatalf("grant 4K only: %v", err)
+	}
+	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != uhd {
+		t.Fatalf("granted 4K only = (%q, %v), want %q", id, err, uhd)
+	}
+
+	// Grants including the global default: the global default wins even when a
+	// sibling sorts first.
+	if err := s.SetUserGrants(user, map[string][]string{"radarr": {hd, uhd}}); err != nil {
+		t.Fatalf("grant both: %v", err)
+	}
+	if _, err := s.db.Exec("UPDATE service_instances SET sort_order = 5 WHERE id = ?", hd); err != nil {
+		t.Fatalf("re-sort HD after 4K: %v", err)
+	}
+	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != hd {
+		t.Fatalf("both granted = (%q, %v), want global default %q", id, err, hd)
+	}
+
+	// A pin beats everything.
+	if err := s.SetUserDefault(user, "radarr", uhd); err != nil {
+		t.Fatalf("pin 4K: %v", err)
+	}
+	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != uhd {
+		t.Fatalf("pinned = (%q, %v), want %q", id, err, uhd)
+	}
+
+	// Chaptarr: no rows means no instance — never the first-instance fallback
+	// that would leak a library.
+	books := mkInstance(t, s, "chaptarr", "Books")
+	if id, err := s.EffectiveDefaultInstanceID(user, "chaptarr"); err != nil || id != "" {
+		t.Fatalf("chaptarr with no rows = (%q, %v), want empty", id, err)
+	}
+	if err := s.SetUserGrants(user, map[string][]string{"chaptarr": {books}}); err != nil {
+		t.Fatalf("grant books: %v", err)
+	}
+	if id, err := s.EffectiveDefaultInstanceID(user, "chaptarr"); err != nil || id != books {
+		t.Fatalf("chaptarr granted = (%q, %v), want %q", id, err, books)
+	}
+}
+
+// Instance-centric grant assignment edits only this instance's grant rows.
+func TestSetInstanceGrantUsers(t *testing.T) {
+	s := newTestStore(t)
+	alice := createUser(t, s, "ig-alice")
+	bob := createUser(t, s, "ig-bob")
+	hd := mkDefaultInstance(t, s, "radarr", "Movies")
+	uhd := mkInstance(t, s, "radarr", "4K Movies")
+
+	if err := s.SetInstanceGrantUsers(uhd, []int64{alice, bob}); err != nil {
+		t.Fatalf("grant 4K to both: %v", err)
+	}
+	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
+		t.Fatalf("pin Alice to HD: %v", err)
+	}
+
+	grants, err := s.ListTypeUserGrants("radarr")
+	if err != nil {
+		t.Fatalf("ListTypeUserGrants: %v", err)
+	}
+	if len(grants[alice]) != 1 || grants[alice][0] != uhd || len(grants[bob]) != 1 {
+		t.Fatalf("ListTypeUserGrants = %v, want both users granted %s", grants, uhd)
+	}
+
+	// Dropping Bob from the list revokes only Bob's grant; Alice's grant and
+	// pin survive.
+	if err := s.SetInstanceGrantUsers(uhd, []int64{alice}); err != nil {
+		t.Fatalf("revoke Bob: %v", err)
+	}
+	if ok, _ := s.UserCanAccessInstance(bob, uhd, "radarr"); ok {
+		t.Fatal("revoked grant must remove access")
+	}
+	if ok, _ := s.UserCanAccessInstance(alice, uhd, "radarr"); !ok {
+		t.Fatal("Alice must keep her grant")
+	}
+	if id, _, _ := s.GetUserDefault(alice, "radarr"); id != hd {
+		t.Fatalf("Alice's pin moved to %q, want untouched %q", id, hd)
+	}
+
+	// ListUserGrants keys by service type and skips users with no rows.
+	byType, err := s.ListUserGrants(alice)
+	if err != nil {
+		t.Fatalf("ListUserGrants: %v", err)
+	}
+	if len(byType["radarr"]) != 1 || byType["radarr"][0] != uhd {
+		t.Fatalf("ListUserGrants = %v, want radarr=[%s]", byType, uhd)
+	}
+
+	// Unknown instances are rejected; deleting an instance drops its grants.
+	if err := s.SetInstanceGrantUsers("nope-12345678", []int64{alice}); err == nil {
+		t.Fatal("SetInstanceGrantUsers with unknown instance should error")
+	}
+	if err := s.Delete(uhd); err != nil {
+		t.Fatalf("Delete 4K: %v", err)
+	}
+	if ok, _ := s.UserHasInstanceAccess(alice, uhd); ok {
+		t.Fatal("deleting an instance must revoke its grants")
 	}
 }
 

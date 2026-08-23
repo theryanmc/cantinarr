@@ -540,9 +540,14 @@ func (s *Store) Delete(id string) error {
 	}
 	// Drop any per-user defaults/grants that pointed at this instance so a
 	// deleted instance neither lingers as someone's default nor (for chaptarr)
-	// keeps granting access to a now-removed instance.
+	// keeps granting access to a now-removed instance. user_instance_grants
+	// also declares ON DELETE CASCADE; the explicit delete keeps the cleanup
+	// independent of the foreign_keys pragma.
 	if _, err := tx.Exec("DELETE FROM user_default_instances WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance user defaults: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM user_instance_grants WHERE instance_id = ?", id); err != nil {
+		return fmt.Errorf("delete instance user grants: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance queue witness: %w", err)
@@ -738,14 +743,18 @@ func (s *Store) ClearUserDefault(userID int64, serviceType string) error {
 	return nil
 }
 
-// UserHasInstanceAccess reports whether a user has been granted a specific
-// instance via a per-user default row. Used to gate access to service types that
-// have no global default (chaptarr); admins bypass this check at the caller.
+// UserHasInstanceAccess reports whether a user has an explicit row (per-user
+// default pin or access grant) naming a specific instance. Used to gate access
+// to service types that have no global default (chaptarr); admins bypass this
+// check at the caller.
 func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, error) {
 	var one int
 	err := s.db.QueryRow(
-		"SELECT 1 FROM user_default_instances WHERE user_id = ? AND instance_id = ? LIMIT 1",
-		userID, instanceID,
+		`SELECT 1 WHERE EXISTS (
+		     SELECT 1 FROM user_default_instances WHERE user_id = ? AND instance_id = ?)
+		   OR EXISTS (
+		     SELECT 1 FROM user_instance_grants WHERE user_id = ? AND instance_id = ?)`,
+		userID, instanceID, userID, instanceID,
 	).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -756,18 +765,239 @@ func (s *Store) UserHasInstanceAccess(userID int64, instanceID string) (bool, er
 	return true, nil
 }
 
-// UserCanAccessInstance reports whether instanceID is the service instance
-// exposed to a requester: their per-user pin when present, otherwise the global
-// Radarr/Sonarr default. Chaptarr deliberately has no global fallback, so its
-// per-user row is an explicit grant. All lookups are metadata-only and never
-// decrypt the instance's credentials.
-func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
+// GrantedInstanceIDs returns the user's explicitly granted set for a service
+// type — access-grant rows plus the per-user default pin — in deterministic
+// (sort_order, name, id) order. An empty result means the user has no explicit
+// rows: radarr/sonarr callers fall back to the global default, chaptarr
+// callers treat it as no access. Metadata-only; never decrypts credentials.
+func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT si.id FROM service_instances si
+		 WHERE si.service_type = ?
+		   AND (EXISTS (
+		         SELECT 1 FROM user_instance_grants g
+		         WHERE g.user_id = ? AND g.instance_id = si.id)
+		     OR EXISTS (
+		         SELECT 1 FROM user_default_instances d
+		         WHERE d.user_id = ? AND d.instance_id = si.id))
+		 ORDER BY si.sort_order, si.name, si.id`,
+		serviceType, userID, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list granted instances: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan granted instance: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// EffectiveDefaultInstanceID resolves the one instance a user's implicit
+// (no instance selected) operations target: their pin when set; otherwise the
+// global default when the user has no explicit rows, or when it is inside
+// their granted set; otherwise the first granted instance. Chaptarr never
+// falls back past the granted set — no rows means no access, so the
+// first-instance fallback the other types get would leak a library.
+func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
 	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
+	if err != nil {
+		return "", err
+	}
+	if pinned {
+		return pinnedID, nil
+	}
+	granted, err := s.GrantedInstanceIDs(userID, serviceType)
+	if err != nil {
+		return "", err
+	}
+	if len(granted) == 0 {
+		if serviceType == "chaptarr" {
+			return "", nil
+		}
+		return s.defaultInstanceID(serviceType)
+	}
+	if serviceType != "chaptarr" {
+		globalID, err := s.defaultInstanceID(serviceType)
+		if err != nil {
+			return "", err
+		}
+		for _, id := range granted {
+			if id == globalID {
+				return globalID, nil
+			}
+		}
+	}
+	return granted[0], nil
+}
+
+// ListUserGrants returns a user's access-grant rows keyed by service type, in
+// the same deterministic instance order as GrantedInstanceIDs. Pins are NOT
+// included: this is the grants surface the admin endpoints edit, while the
+// effective granted set a requester holds is GrantedInstanceIDs (grants ∪ pin).
+func (s *Store) ListUserGrants(userID int64) (map[string][]string, error) {
+	rows, err := s.db.Query(
+		`SELECT si.service_type, si.id FROM user_instance_grants g
+		 JOIN service_instances si ON si.id = g.instance_id
+		 WHERE g.user_id = ?
+		 ORDER BY si.service_type, si.sort_order, si.name, si.id`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list user instance grants: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string][]string)
+	for rows.Next() {
+		var serviceType, instanceID string
+		if err := rows.Scan(&serviceType, &instanceID); err != nil {
+			return nil, fmt.Errorf("scan user instance grant: %w", err)
+		}
+		out[serviceType] = append(out[serviceType], instanceID)
+	}
+	return out, rows.Err()
+}
+
+// SetUserGrants replaces a user's grant rows per service type. Only the
+// service types present as keys are touched; an empty (or nil) list clears
+// that type's grants. Every instance id must exist and match its keyed
+// service type so a single admin endpoint can accept a {service_type: [ids]}
+// map without risking a mismatched grant.
+func (s *Store) SetUserGrants(userID int64, grants map[string][]string) error {
+	for serviceType, ids := range grants {
+		for _, instanceID := range ids {
+			actual, err := s.ServiceTypeOf(instanceID)
+			if err != nil {
+				return err
+			}
+			if actual == "" {
+				return fmt.Errorf("instance not found: %s", instanceID)
+			}
+			if actual != serviceType {
+				return fmt.Errorf("instance %s is %q, not %q", instanceID, actual, serviceType)
+			}
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("set user instance grants: %w", err)
+	}
+	defer tx.Rollback()
+	for serviceType, ids := range grants {
+		if _, err := tx.Exec(
+			`DELETE FROM user_instance_grants WHERE user_id = ? AND instance_id IN (
+			     SELECT id FROM service_instances WHERE service_type = ?)`,
+			userID, serviceType,
+		); err != nil {
+			return fmt.Errorf("clear user instance grants: %w", err)
+		}
+		for _, instanceID := range ids {
+			if _, err := tx.Exec(
+				"INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?) "+
+					"ON CONFLICT(user_id, instance_id) DO NOTHING",
+				userID, instanceID,
+			); err != nil {
+				// Covers unknown user ids too (the user_id foreign key rejects them).
+				return fmt.Errorf("grant instance for user %d: %w", userID, err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("set user instance grants: %w", err)
+	}
+	return nil
+}
+
+// ListTypeUserGrants returns every access-grant row for a service type as a
+// user id → granted instance ids map, so the instance admin UI can show who
+// holds a grant on this instance and who holds one on a sibling.
+func (s *Store) ListTypeUserGrants(serviceType string) (map[int64][]string, error) {
+	rows, err := s.db.Query(
+		`SELECT g.user_id, si.id FROM user_instance_grants g
+		 JOIN service_instances si ON si.id = g.instance_id
+		 WHERE si.service_type = ?
+		 ORDER BY g.user_id, si.sort_order, si.name, si.id`,
+		serviceType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list user grants for type: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64][]string)
+	for rows.Next() {
+		var userID int64
+		var instanceID string
+		if err := rows.Scan(&userID, &instanceID); err != nil {
+			return nil, fmt.Errorf("scan user grant for type: %w", err)
+		}
+		out[userID] = append(out[userID], instanceID)
+	}
+	return out, rows.Err()
+}
+
+// SetInstanceGrantUsers replaces which users hold an access grant on exactly
+// this instance: listed users gain a grant row, users previously granted THIS
+// instance but absent from the list lose theirs. Grants on sibling instances
+// and per-user default pins are untouched — revoking a grant never moves
+// anyone's default.
+func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error {
+	serviceType, err := s.ServiceTypeOf(instanceID)
+	if err != nil {
+		return err
+	}
+	if serviceType == "" {
+		return fmt.Errorf("instance not found: %s", instanceID)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("set instance grant users: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		"DELETE FROM user_instance_grants WHERE instance_id = ?", instanceID,
+	); err != nil {
+		return fmt.Errorf("set instance grant users: %w", err)
+	}
+	for _, userID := range userIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?) "+
+				"ON CONFLICT(user_id, instance_id) DO NOTHING",
+			userID, instanceID,
+		); err != nil {
+			// Covers unknown user ids too (the user_id foreign key rejects them).
+			return fmt.Errorf("grant instance for user %d: %w", userID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("set instance grant users: %w", err)
+	}
+	return nil
+}
+
+// UserCanAccessInstance reports whether instanceID is a service instance
+// exposed to a requester. A user with explicit rows for the service type (an
+// access grant or their per-user default pin) may reach exactly those
+// instances; a user with none falls back to the global Radarr/Sonarr default.
+// Chaptarr deliberately has no global fallback, so its rows are the entire
+// grant. All lookups are metadata-only and never decrypt the instance's
+// credentials.
+func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
+	granted, err := s.GrantedInstanceIDs(userID, serviceType)
 	if err != nil {
 		return false, err
 	}
-	if pinned {
-		return pinnedID == instanceID, nil
+	if len(granted) > 0 {
+		for _, id := range granted {
+			if id == instanceID {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
 	if serviceType == "chaptarr" {
 		return false, nil

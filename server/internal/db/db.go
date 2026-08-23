@@ -110,6 +110,18 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
     PRIMARY KEY (user_id, service_type)
 );
 
+-- Additional per-user instance access grants (admin-managed). A row lets the
+-- user see and use this instance ALONGSIDE their effective default, so one
+-- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
+-- The user_default_instances pin stays the user's default among their granted
+-- set. With no grant rows the old model applies unchanged: the pin alone, or
+-- the global default (chaptarr stays grant-only, never falling back).
+CREATE TABLE IF NOT EXISTS user_instance_grants (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, instance_id)
+);
+
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id),

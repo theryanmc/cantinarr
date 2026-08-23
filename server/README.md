@@ -147,6 +147,9 @@ DELETE /api/admin/users/{userID}
 POST   /api/admin/users/{userID}/test-push       # delivery diagnostics for one user
 GET|PUT /api/admin/users/{userID}/default-instances  # pin per-user default arr instances;
                                                      # for Chaptarr this doubles as the access grant
+GET|PUT /api/admin/users/{userID}/instance-grants    # additional per-user instance access grants
+                                                     # ({service_type: [ids]}); additive to the default,
+                                                     # so one user can hold e.g. an HD and a 4K library
 POST   /api/admin/users/{userID}/plex-invite     # send the Plex invite for the user's shared email
 ```
 
@@ -364,6 +367,8 @@ GET    /api/instances/media-roots             # admin: deployment-approved Canti
 POST   /api/instances/test                   # admin: dry-run connectivity check, dialed from the server
 PUT|DELETE /api/instances/{instanceID}       # admin: update/delete
 GET|PUT /api/instances/{instanceID}/users    # admin: which users are pinned/assigned here
+GET|PUT /api/instances/{instanceID}/grant-users  # admin: which users hold an access grant here
+                                                 # (additive; never moves anyone's default)
 POST   /api/instances/{instanceID}/webhook   # admin: rotate credentials and upsert a managed arr webhook
 GET    /api/instances/{instanceID}/webhook   # admin: live instant-updates state, read from the arr's Connect list
 ANY    /api/instances/{instanceID}/*         # proxy to the instance's own API; JSON secrets are redacted,
@@ -573,7 +578,7 @@ Notification categories (per-user preferences; admin-scoped ones are enforced in
 | `request_pending` | on | admins | a new request needs review (badge = queue depth) |
 | `new_movie` | on | everyone | a movie finishes importing (collapse-keyed per title) |
 | `new_episode` | on | everyone | new episode(s) import for a series |
-| `new_book` | on | that instance's assigned users — an assignment scopes admins too; an admin with no books assignment hears every instance | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
+| `new_book` | on | that instance's assigned users (pinned or access-granted) — an assignment scopes admins too; an admin with no books assignment hears every instance | a Chaptarr book import lands (witnessed by queue polling; per format, since a title's ebook and audiobook are separate records) |
 | `issue_created` | on | admins | a tracked problem becomes actionable after the quiet recovery window, or durable status proof remains unavailable — held behind a 3-minute confirmation and coalesced per source (see below) |
 | `agent_action_pending` | on | admins | the agent proposed a fix needing approval — held behind the same 3-minute confirmation and coalesced (see below) |
 | `agent_autoapproval_paused` | on (shares the `agent_action_pending` preference) | admins | a standing auto-approval rule disarmed itself after a failed or unverifiable outcome — fixed body, collapse-keyed per rule, deep-links the triggering issue. Rules the boot repair pauses (a restart interrupted an auto-approved fix) are announced once at worker start through this same event |
@@ -679,7 +684,7 @@ The pool holds **exactly one connection** (SQLite is single-writer), so every qu
 |---|---|
 | Accounts & sessions | `users`, `refresh_tokens`, `connect_tokens`, `devices` (hardware-id deduped), `webauthn_credentials` |
 | Requests | `request_log` (approval + season/quality/book-format/instance capture, the fulfilled Chaptarr `book_record_id` so book status survives foreignBookId re-keys, `park_reason` marking server-owned author-import parks, and `add_failure_reason` marking an approval-queue row whose automatic add already failed), `book_request_waiters` (shared pending subscribers + their concrete format coverage), `user_request_settings` |
-| Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + per-instance media path mappings/legacy mode), `user_default_instances`, `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
+| Instances | `service_instances` (encrypted keys/passwords + current/pending server-only webhook credentials + per-instance media path mappings/legacy mode), `user_default_instances`, `user_instance_grants` (additional per-user access grants beside the default, so one person can hold e.g. an HD and a 4K library), `arr_queue_witness` (durable per-instance queue-departure completion witness; its `observed_at` doubles as the import-history catch-up cursor; one row per instance, ignored past 6h) |
 | Push | `push_tokens` (one per device), `notification_prefs`, `content_alert_claims` (durable new-content dedupe, 10-minute window; also counted as the 12-per-window alert storm breaker, per `storm_scope` — broadcast and upgrade alerts spend separate budgets, silent upgrade claims spend none) |
 | AI access | `user_ai_settings` (explicit personal selection), `user_ai_credentials` (per-provider encrypted personal API keys), `user_codex_accounts` (personal encrypted OpenAI OAuth authorization), `shared_codex_account` (singleton encrypted included authorization), `user_grok_accounts` / `shared_grok_account` (the xAI Grok OAuth equivalents); `users.ai_shared_enabled` stores the included-access grant, while `settings` stores the daily health-check switch/timestamp |
 | AI configuration history | `external_setting_changes` (append-only AI/MCP quality-profile/custom-format outcomes, server-held before/applied snapshots, and linked quality-profile restores), `profile_change_proposals` (quality-profile changes parked by external MCP agents awaiting in-app admin approval; server-held plans and drift hashes, one pending per profile) |
