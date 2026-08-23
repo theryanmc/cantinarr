@@ -277,6 +277,151 @@ func TestRequestMediaRoutesToCallersInstanceAndLogsAttribution(t *testing.T) {
 	}
 }
 
+// TestRequestMediaSelectsGrantedLibrary proves the assistant flow for the
+// HD/4K split: get_request_options lists the caller's libraries by name,
+// request_media with a granted sibling's instance_id adds on that library
+// (the default sees no traffic), and a library outside the granted set is
+// refused benignly with no upstream traffic.
+func TestRequestMediaSelectsGrantedLibrary(t *testing.T) {
+	uhd := &callRecorder{}
+	uhdServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie":
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/movie/lookup":
+			_, _ = w.Write([]byte(`[{"title":"Dune","tmdbId":438631,"year":2021}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":42,"name":"4K Remux"}]`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v3/rootfolder":
+			_, _ = w.Write([]byte(`[{"id":1,"path":"/movies"}]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v3/movie":
+			uhd.record(r)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected 4K radarr request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer uhdServer.Close()
+
+	hd := &callRecorder{}
+	hdServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hd.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer hdServer.Close()
+
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+	res, err := database.Exec("INSERT INTO users (username, password_hash, role) VALUES ('requester', '', 'user')")
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	uid, _ := res.LastInsertId()
+
+	cipher, err := secrets.NewCipher(bytes.Repeat([]byte{0x21}, 32))
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	store := instance.NewStore(database, cipher)
+	hdInst := &instance.Instance{ServiceType: "radarr", Name: "Movies", URL: hdServer.URL, APIKey: "hd", IsDefault: true}
+	uhdInst := &instance.Instance{ServiceType: "radarr", Name: "4K Movies", URL: uhdServer.URL, APIKey: "uhd"}
+	ghostInst := &instance.Instance{ServiceType: "radarr", Name: "Kids Movies", URL: hdServer.URL, APIKey: "kids"}
+	for _, inst := range []*instance.Instance{hdInst, uhdInst, ghostInst} {
+		if err := store.Create(inst); err != nil {
+			t.Fatalf("create instance %s: %v", inst.Name, err)
+		}
+	}
+	// The HD/4K shape: the default plus one granted sibling; Kids stays
+	// ungranted.
+	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {uhdInst.ID}}); err != nil {
+		t.Fatalf("grant 4K: %v", err)
+	}
+
+	registry := instance.NewRegistry(store)
+	service := requestsvc.NewService(database, registry, nil, nil)
+	server := NewToolServer(nil, service, registry, nil)
+	server.SetCallAuthorizer(func(context.Context, CallContext) (string, error) {
+		return auth.RoleUser, nil
+	})
+	callCtx := CallContext{UserID: uid, Role: auth.RoleUser, DeviceID: "device-1", Reauthorize: true}
+
+	options, err := server.ExecuteTool(
+		context.Background(),
+		"get_request_options",
+		json.RawMessage(`{"media_type":"movie"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("get_request_options: %v", err)
+	}
+	if !strings.Contains(options.Text, `"libraries"`) ||
+		!strings.Contains(options.Text, `"name":"4K Movies"`) ||
+		!strings.Contains(options.Text, `"name":"Movies"`) {
+		t.Fatalf("options = %q, want the caller's two libraries listed", options.Text)
+	}
+	if strings.Contains(options.Text, "Kids Movies") {
+		t.Fatalf("options = %q, must not list an ungranted library", options.Text)
+	}
+
+	result, err := server.ExecuteTool(
+		context.Background(),
+		"request_media",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+uhdInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("request_media: %v", err)
+	}
+	if !strings.Contains(result.Text, `"status":"requested"`) ||
+		!strings.Contains(result.Text, `"instance_id":"`+uhdInst.ID+`"`) {
+		t.Fatalf("request result = %q, want requested on the 4K library", result.Text)
+	}
+	if adds := uhd.mutations(); len(adds) != 1 {
+		t.Fatalf("4K adds = %+v, want exactly one", adds)
+	}
+	if got := hd.all(); len(got) != 0 {
+		t.Fatalf("default library received %d request(s): %+v", len(got), got)
+	}
+
+	// An ungranted library is refused benignly, with no upstream traffic.
+	result, err = server.ExecuteTool(
+		context.Background(),
+		"request_media",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+ghostInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("request_media forbidden: %v", err)
+	}
+	if !strings.HasPrefix(result.Text, "Request failed:") ||
+		!strings.Contains(result.Text, "not available to you") {
+		t.Fatalf("forbidden result = %q", result.Text)
+	}
+	if got := hd.all(); len(got) != 0 {
+		t.Fatalf("forbidden request reached an arr: %+v", got)
+	}
+
+	// check_request_status honors the selection and carries per-library chips.
+	status, err := server.ExecuteTool(
+		context.Background(),
+		"check_request_status",
+		json.RawMessage(`{"tmdb_id":438631,"media_type":"movie","instance_id":"`+uhdInst.ID+`"}`),
+		callCtx,
+	)
+	if err != nil {
+		t.Fatalf("check_request_status: %v", err)
+	}
+	if !strings.Contains(status.Text, `"instance_statuses"`) {
+		t.Fatalf("status = %q, want per-library instance_statuses", status.Text)
+	}
+}
+
 // --- instance scoping (extends release_capability_test's binding coverage) ---
 
 // TestArrToolsRefuseUnknownInstanceWithoutDefaultFallback pins that a call

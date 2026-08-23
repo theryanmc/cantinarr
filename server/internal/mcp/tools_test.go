@@ -45,6 +45,30 @@ func TestRequestMediaSchemaOffersQualityProfileChoiceOnlyOnRequest(t *testing.T)
 	}
 }
 
+// The per-request library selection (HD/4K splits) is offered on exactly the
+// three request-flow tools, as an OPTIONAL property.
+func TestRequestFlowToolsOfferOptionalInstanceID(t *testing.T) {
+	for _, name := range []string{"request_media", "get_request_options", "check_request_status"} {
+		tool := findToolDefinition(name)
+		if tool == nil {
+			t.Fatalf("%s definition not found", name)
+		}
+		properties, ok := tool.InputSchema["properties"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s properties = %#v", name, tool.InputSchema["properties"])
+		}
+		if _, ok := properties["instance_id"]; !ok {
+			t.Fatalf("%s schema is missing instance_id", name)
+		}
+		required, _ := tool.InputSchema["required"].([]string)
+		for _, field := range required {
+			if field == "instance_id" {
+				t.Fatalf("%s must not require instance_id (omitting it means the default library)", name)
+			}
+		}
+	}
+}
+
 func TestDisplayMediaMismatch(t *testing.T) {
 	if got := displayMediaMismatch("Toy Story 5", "2026", "Toy Story 5", "2026"); got != "" {
 		t.Fatalf("matching item rejected: %s", got)

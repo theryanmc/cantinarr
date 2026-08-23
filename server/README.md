@@ -643,9 +643,9 @@ The registry contains 38 in-app AI tools; 37 are also exposed through `/mcp`. `a
 | `get_movie_details` | Full movie metadata |
 | `get_tv_details` | Full TV show metadata |
 | `get_recommendations` | Similar content suggestions |
-| `check_request_status` | Is this on my server? (movies/TV by tmdb_id; books by foreign_book_id with per-format state) |
-| `get_request_options` | Show the current user's selectable request options and quality profiles |
-| `request_media` | Add to Radarr/Sonarr/Chaptarr (books by foreign_book_id + optional format), optionally choosing an allowed quality profile (honors the approval queue) |
+| `check_request_status` | Is this on my server? (movies/TV by tmdb_id; books by foreign_book_id with per-format state; optional instance_id scopes the read, and multi-library users get per-library statuses) |
+| `get_request_options` | Show the current user's selectable request options and quality profiles (optional instance_id scopes profiles to that library; multi-library users also get their libraries list) |
+| `request_media` | Add to Radarr/Sonarr/Chaptarr (books by foreign_book_id + optional format), optionally choosing an allowed quality profile and, for multi-library users, an instance_id target library (honors the approval queue) |
 | `list_my_requests` | User's request history |
 | `display_media` | Curate the visual results carousel (movies/TV verified via TMDB; books verified against the user's own lookup by foreign_book_id) |
 | `get_queue` | Combined arr download queue (admin) |
