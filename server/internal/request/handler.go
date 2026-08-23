@@ -92,9 +92,9 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		mediaType = "movie" // default
 	}
 
-	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType)
+	resp, err := h.service.GetUserStatus(claims.UserID, tmdbID, mediaType, r.URL.Query().Get("instance_id"))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
 	}
 

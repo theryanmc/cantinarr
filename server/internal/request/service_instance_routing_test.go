@@ -263,6 +263,98 @@ func TestApproveRequestReplaysStoredInstance(t *testing.T) {
 	}
 }
 
+// The status endpoint reads the selected library, never absorbs a sibling's
+// pending rows into an explicit selection, and — because the user holds two
+// granted libraries — carries a digest-grade status chip per library, with
+// each library's own pending request surfacing in its chip.
+func TestGetUserStatusPerInstance(t *testing.T) {
+	// The title is on disk in the default library and absent from the sibling.
+	primaryFake := &fakeRadarr{libraryJSON: `[{"id":9,"tmdbId":550,"title":"Fight Club","hasFile":true,"monitored":true}]`}
+	siblingFake := &fakeRadarr{}
+	primarySrv := newFakeRadarrServer(t, primaryFake)
+	siblingSrv := newFakeRadarrServer(t, siblingFake)
+	s, uid, store, primaryID, siblingID := newTwoRadarrTestService(t, primarySrv.URL, siblingSrv.URL)
+	requireApproval(t, s)
+
+	// A pending request on the sibling library only.
+	if _, err := s.CreateMediaRequest(uid, &CreateRequest{
+		TmdbID: 550, MediaType: "movie", Title: "Fight Club", InstanceID: siblingID,
+	}); err != nil {
+		t.Fatalf("CreateMediaRequest: %v", err)
+	}
+
+	// Default selection: the sibling's pending row must not bleed into the
+	// default library's headline, which reads the live file on disk.
+	resp, err := s.GetUserStatus(uid, 550, "movie", "")
+	if err != nil {
+		t.Fatalf("GetUserStatus(default): %v", err)
+	}
+	if resp.Status != StatusAvailable {
+		t.Fatalf("default headline = %q, want %q (sibling pending must not bleed)", resp.Status, StatusAvailable)
+	}
+	if len(resp.InstanceStatuses) != 2 {
+		t.Fatalf("instance_statuses = %+v, want both granted libraries", resp.InstanceStatuses)
+	}
+	if got := resp.InstanceStatuses[primaryID].Status; got != StatusAvailable {
+		t.Fatalf("primary chip = %q, want %q", got, StatusAvailable)
+	}
+	if got := resp.InstanceStatuses[siblingID].Status; got != StatusPending {
+		t.Fatalf("sibling chip = %q, want %q (its own pending request)", got, StatusPending)
+	}
+
+	// Explicit sibling selection: the pending row owns the headline.
+	resp, err = s.GetUserStatus(uid, 550, "movie", siblingID)
+	if err != nil {
+		t.Fatalf("GetUserStatus(sibling): %v", err)
+	}
+	if resp.Status != StatusPending {
+		t.Fatalf("sibling headline = %q, want %q", resp.Status, StatusPending)
+	}
+
+	// A selection outside the granted set is refused.
+	if err := store.SetUserGrants(uid, map[string][]string{"radarr": {primaryID}}); err != nil {
+		t.Fatalf("revoke sibling: %v", err)
+	}
+	if _, err := s.GetUserStatus(uid, 550, "movie", siblingID); !errors.Is(err, ErrArrInstanceForbidden) {
+		t.Fatalf("revoked selection = %v, want ErrArrInstanceForbidden", err)
+	}
+	// Down to one granted library, the chips disappear.
+	resp, err = s.GetUserStatus(uid, 550, "movie", "")
+	if err != nil {
+		t.Fatalf("GetUserStatus(single grant): %v", err)
+	}
+	if resp.InstanceStatuses != nil {
+		t.Fatalf("instance_statuses with one grant = %+v, want omitted", resp.InstanceStatuses)
+	}
+}
+
+// History rows overlay live state from the library stamped on each row, not
+// from one shared default digest.
+func TestHistoryOverlayFollowsRowInstance(t *testing.T) {
+	// The sibling library has the file; the default library has never heard of
+	// the title.
+	primaryFake := &fakeRadarr{}
+	siblingFake := &fakeRadarr{libraryJSON: `[{"id":9,"tmdbId":550,"title":"Fight Club","hasFile":true,"monitored":true}]`}
+	primarySrv := newFakeRadarrServer(t, primaryFake)
+	siblingSrv := newFakeRadarrServer(t, siblingFake)
+	s, uid, _, _, siblingID := newTwoRadarrTestService(t, primarySrv.URL, siblingSrv.URL)
+
+	if _, err := s.db.Exec(
+		"INSERT INTO request_log (user_id, tmdb_id, instance_id, media_type, title, status) VALUES (?, 550, ?, 'movie', 'Fight Club', ?)",
+		uid, siblingID, StatusRequested,
+	); err != nil {
+		t.Fatalf("insert fulfilled row: %v", err)
+	}
+
+	requests, err := s.GetRequests(uid)
+	if err != nil {
+		t.Fatalf("GetRequests: %v", err)
+	}
+	if got := statusOf(t, requests, "Fight Club"); got != StatusAvailable {
+		t.Fatalf("row status = %q, want %q from the row's own library", got, StatusAvailable)
+	}
+}
+
 // Request options scope quality profiles to the selected library, and refuse a
 // selection outside the granted set instead of answering with the default's
 // profiles.

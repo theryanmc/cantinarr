@@ -220,7 +220,11 @@ GET    /api/requests/book-library          # user: owned/monitored digest; optio
 GET    /api/requests/book-recent           # user: newest book-file imports; optional instance_id, limit (cached)
 GET    /api/requests/{tmdb_id}/status      # user: live availability + download progress; movies
                                            #   already in the library also carry releases
-                                           #   {in_cinemas, digital} as YYYY-MM-DD calendar dates
+                                           #   {in_cinemas, digital} as YYYY-MM-DD calendar dates.
+                                           #   Optional instance_id scopes the read to that granted
+                                           #   library; a user granted >1 library for the media type
+                                           #   also gets instance_statuses {id: {status}} chips
+                                           #   (digest-grade: no downloading state, brief cache)
 GET    /api/admin/requests                 # admin: pending approval queue; rows carry the book's
                                            #   foreign_id, a best-effort TMDB poster_path (movie/tv),
                                            #   and add_failure_reason when the row is not a policy

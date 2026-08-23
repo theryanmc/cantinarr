@@ -702,7 +702,9 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 	if params.TmdbID <= 0 {
 		return &ToolResult{Text: "A movie/TV status check requires the tmdb_id from search results."}, nil
 	}
-	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType)
+	// MCP callers read their effective default library's status; a per-request
+	// instance selection is an app-side flow for now.
+	status, err := s.request.GetUserStatus(userID, params.TmdbID, params.MediaType, "")
 	if err != nil {
 		return nil, err
 	}
