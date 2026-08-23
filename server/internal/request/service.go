@@ -2729,7 +2729,7 @@ func (s *Service) instanceStatuses(userID int64, tmdbID int, mediaType string) m
 	if mediaType == "tv" {
 		serviceType = "sonarr"
 	}
-	granted, err := s.registry.GrantedInstanceIDs(userID, serviceType)
+	granted, err := s.registry.VisibleInstanceIDs(userID, serviceType)
 	if err != nil || len(granted) < 2 {
 		return nil
 	}

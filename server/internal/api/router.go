@@ -584,7 +584,7 @@ func androidAssetLinksHandler(cfg *config.Config) http.HandlerFunc {
 type configInstanceStore interface {
 	ListAll() ([]instance.Instance, error)
 	ListUserDefaults(userID int64) (map[string]string, error)
-	GrantedInstanceIDs(userID int64, serviceType string) ([]string, error)
+	VisibleInstanceIDs(userID int64, serviceType string) ([]string, error)
 	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
@@ -627,7 +627,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		visibleDefault := map[string]string{}
 		if !isAdmin {
 			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr"} {
-				granted, err := store.GrantedInstanceIDs(userID, serviceType)
+				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
 				if err != nil {
 					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
 					return
@@ -638,13 +638,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 					return
 				}
 				ids := map[string]bool{}
-				for _, id := range granted {
+				for _, id := range visibleIDs {
 					ids[id] = true
-				}
-				// No explicit rows: the effective default is the global
-				// fallback (empty for chaptarr, which has none).
-				if defaultID != "" {
-					ids[defaultID] = true
 				}
 				visible[serviceType] = ids
 				visibleDefault[serviceType] = defaultID

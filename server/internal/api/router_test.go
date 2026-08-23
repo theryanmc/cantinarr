@@ -588,7 +588,7 @@ func (s *failingConfigInstanceStore) ListUserDefaults(int64) (map[string]string,
 	return nil, s.defaultsErr
 }
 
-func (s *failingConfigInstanceStore) GrantedInstanceIDs(int64, string) ([]string, error) {
+func (s *failingConfigInstanceStore) VisibleInstanceIDs(int64, string) ([]string, error) {
 	return nil, s.defaultsErr
 }
 

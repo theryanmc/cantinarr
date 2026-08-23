@@ -424,46 +424,46 @@ func TestUserInstanceGrantsWidenAccess(t *testing.T) {
 	assertAccess(alice, hd, true)
 	assertAccess(alice, uhd, false)
 
-	// Granting the sibling alone makes it the user's ONLY explicit row: the
-	// grant set replaces the implicit global fallback, exactly like a pin did.
+	// Granting the sibling ADDS it beside the default — the HD/4K shape needs
+	// exactly one checkbox, and a grant must never silently revoke the
+	// library the user already had.
 	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {uhd}}); err != nil {
 		t.Fatalf("grant 4K: %v", err)
 	}
 	assertAccess(alice, uhd, true)
-	assertAccess(alice, hd, false)
-
-	// Granting both is the HD/4K shape: both reachable, default untouched.
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {hd, uhd}}); err != nil {
-		t.Fatalf("grant both: %v", err)
-	}
 	assertAccess(alice, hd, true)
-	assertAccess(alice, uhd, true)
 	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
-		t.Fatalf("effective default with both granted = (%q, %v), want global default %q", id, err, hd)
+		t.Fatalf("effective default with a sibling grant = (%q, %v), want untouched global default %q", id, err, hd)
 	}
 	assertAccess(bob, uhd, false)
 
-	// A pin plus a grant coexist: the pin is the default, both stay reachable.
-	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {uhd}}); err != nil {
-		t.Fatalf("re-grant only 4K: %v", err)
-	}
-	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
-		t.Fatalf("pin HD: %v", err)
-	}
-	assertAccess(alice, hd, true)
-	assertAccess(alice, uhd, true)
-	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
-		t.Fatalf("effective default with pin = (%q, %v), want pinned %q", id, err, hd)
-	}
-
-	// Clearing the grant leaves the pin (and the default) in place.
+	// A pin keeps its historic exclusive meaning: pinned to the sibling, the
+	// global default drops out unless separately granted.
 	if err := s.SetUserGrants(alice, map[string][]string{"radarr": nil}); err != nil {
 		t.Fatalf("clear grants: %v", err)
 	}
-	assertAccess(alice, uhd, false)
+	if err := s.SetUserDefault(alice, "radarr", uhd); err != nil {
+		t.Fatalf("pin 4K: %v", err)
+	}
+	assertAccess(alice, uhd, true)
+	assertAccess(alice, hd, false)
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": {hd}}); err != nil {
+		t.Fatalf("grant HD beside the pin: %v", err)
+	}
 	assertAccess(alice, hd, true)
-	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != hd {
-		t.Fatalf("effective default after clearing grants = (%q, %v), want pinned %q", id, err, hd)
+	assertAccess(alice, uhd, true)
+	if id, err := s.EffectiveDefaultInstanceID(alice, "radarr"); err != nil || id != uhd {
+		t.Fatalf("effective default with pin = (%q, %v), want pinned %q", id, err, uhd)
+	}
+
+	// Clearing the grant leaves the pin (and its exclusivity) in place.
+	if err := s.SetUserGrants(alice, map[string][]string{"radarr": nil}); err != nil {
+		t.Fatalf("clear grants: %v", err)
+	}
+	assertAccess(alice, hd, false)
+	assertAccess(alice, uhd, true)
+	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
+		t.Fatalf("clear pin: %v", err)
 	}
 
 	// Type mismatches and unknown instances are rejected before any write.
@@ -476,8 +476,8 @@ func TestUserInstanceGrantsWidenAccess(t *testing.T) {
 	}
 }
 
-// The effective default resolves pin → granted global default → first granted,
-// and chaptarr never falls back past its explicit rows.
+// The effective default is the pin, else the global default chain — grants
+// never move it — and chaptarr never falls back past its explicit rows.
 func TestEffectiveDefaultInstanceID(t *testing.T) {
 	s := newTestStore(t)
 	user := createUser(t, s, "effective-default-user")
@@ -489,24 +489,16 @@ func TestEffectiveDefaultInstanceID(t *testing.T) {
 		t.Fatalf("no rows = (%q, %v), want global default %q", id, err, hd)
 	}
 
-	// Grants excluding the global default: the first granted instance wins.
+	// Grants never move the default; they only widen the visible set.
 	if err := s.SetUserGrants(user, map[string][]string{"radarr": {uhd}}); err != nil {
 		t.Fatalf("grant 4K only: %v", err)
 	}
-	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != uhd {
-		t.Fatalf("granted 4K only = (%q, %v), want %q", id, err, uhd)
-	}
-
-	// Grants including the global default: the global default wins even when a
-	// sibling sorts first.
-	if err := s.SetUserGrants(user, map[string][]string{"radarr": {hd, uhd}}); err != nil {
-		t.Fatalf("grant both: %v", err)
-	}
-	if _, err := s.db.Exec("UPDATE service_instances SET sort_order = 5 WHERE id = ?", hd); err != nil {
-		t.Fatalf("re-sort HD after 4K: %v", err)
-	}
 	if id, err := s.EffectiveDefaultInstanceID(user, "radarr"); err != nil || id != hd {
-		t.Fatalf("both granted = (%q, %v), want global default %q", id, err, hd)
+		t.Fatalf("granted 4K only = (%q, %v), want untouched default %q", id, err, hd)
+	}
+	visible, err := s.VisibleInstanceIDs(user, "radarr")
+	if err != nil || len(visible) != 2 {
+		t.Fatalf("VisibleInstanceIDs = (%v, %v), want the grant plus the default", visible, err)
 	}
 
 	// A pin beats everything.
@@ -576,6 +568,38 @@ func TestSetInstanceGrantUsers(t *testing.T) {
 	}
 	if len(byType["radarr"]) != 1 || byType["radarr"][0] != uhd {
 		t.Fatalf("ListUserGrants = %v, want radarr=[%s]", byType, uhd)
+	}
+
+	// An uncheck is a real revocation even for a legacy pin-based assignment:
+	// omitting a user whose only tie to this instance is a PIN clears that
+	// pin too, or the library would keep granting itself.
+	if err := s.SetUserDefault(bob, "radarr", uhd); err != nil {
+		t.Fatalf("pin Bob to 4K: %v", err)
+	}
+	if err := s.SetInstanceGrantUsers(uhd, []int64{alice}); err != nil {
+		t.Fatalf("re-save grants without Bob: %v", err)
+	}
+	if _, pinned, _ := s.GetUserDefault(bob, "radarr"); pinned {
+		t.Fatal("unchecking a pinned user must clear their pin on this instance")
+	}
+	if ok, _ := s.UserCanAccessInstance(bob, uhd, "radarr"); ok {
+		t.Fatal("unchecked pinned user must lose access to this instance")
+	}
+	// A checked user's pin survives the same save.
+	if err := s.SetUserDefault(alice, "radarr", uhd); err != nil {
+		t.Fatalf("pin Alice to 4K: %v", err)
+	}
+	if err := s.SetInstanceGrantUsers(uhd, []int64{alice}); err != nil {
+		t.Fatalf("re-save grants with Alice: %v", err)
+	}
+	if id, pinned, _ := s.GetUserDefault(alice, "radarr"); !pinned || id != uhd {
+		t.Fatalf("checked user's pin = (%q, %v), want kept %q", id, pinned, uhd)
+	}
+	if err := s.ClearUserDefault(alice, "radarr"); err != nil {
+		t.Fatalf("clear Alice pin: %v", err)
+	}
+	if err := s.SetUserDefault(alice, "radarr", hd); err != nil {
+		t.Fatalf("re-pin Alice to HD: %v", err)
 	}
 
 	// Unknown instances are rejected; deleting an instance drops its grants.

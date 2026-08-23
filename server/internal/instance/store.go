@@ -799,11 +799,12 @@ func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, 
 }
 
 // EffectiveDefaultInstanceID resolves the one instance a user's implicit
-// (no instance selected) operations target: their pin when set; otherwise the
-// global default when the user has no explicit rows, or when it is inside
-// their granted set; otherwise the first granted instance. Chaptarr never
-// falls back past the granted set — no rows means no access, so the
-// first-instance fallback the other types get would leak a library.
+// (no instance selected) operations target: their pin when set, else the
+// global Radarr/Sonarr default chain — grants never move the default, they
+// only widen what may be selected. Chaptarr has no global chain: an unpinned
+// user's implicit target is their first granted instance, and no rows means
+// no access (the first-instance fallback the other types get would leak a
+// library).
 func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
 	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
 	if err != nil {
@@ -812,28 +813,43 @@ func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (st
 	if pinned {
 		return pinnedID, nil
 	}
-	granted, err := s.GrantedInstanceIDs(userID, serviceType)
-	if err != nil {
-		return "", err
-	}
-	if len(granted) == 0 {
-		if serviceType == "chaptarr" {
-			return "", nil
-		}
-		return s.defaultInstanceID(serviceType)
-	}
-	if serviceType != "chaptarr" {
-		globalID, err := s.defaultInstanceID(serviceType)
+	if serviceType == "chaptarr" {
+		granted, err := s.GrantedInstanceIDs(userID, serviceType)
 		if err != nil {
 			return "", err
 		}
-		for _, id := range granted {
-			if id == globalID {
-				return globalID, nil
+		if len(granted) == 0 {
+			return "", nil
+		}
+		return granted[0], nil
+	}
+	return s.defaultInstanceID(serviceType)
+}
+
+// VisibleInstanceIDs is the full set of instances one user may see and select
+// for a service type, in deterministic order: their explicit rows (grants ∪
+// pin) plus their effective default. Grants are purely additive — granting a
+// sibling never removes the default — while a pin keeps its historic
+// exclusive behavior: a pinned user's set is their pin plus grants, without
+// the global default.
+func (s *Store) VisibleInstanceIDs(userID int64, serviceType string) ([]string, error) {
+	ids, err := s.GrantedInstanceIDs(userID, serviceType)
+	if err != nil {
+		return nil, err
+	}
+	defaultID, err := s.EffectiveDefaultInstanceID(userID, serviceType)
+	if err != nil {
+		return nil, err
+	}
+	if defaultID != "" {
+		for _, id := range ids {
+			if id == defaultID {
+				return ids, nil
 			}
 		}
+		ids = append(ids, defaultID)
 	}
-	return granted[0], nil
+	return ids, nil
 }
 
 // ListUserGrants returns a user's access-grant rows keyed by service type, in
@@ -940,11 +956,14 @@ func (s *Store) ListTypeUserGrants(serviceType string) (map[int64][]string, erro
 	return out, rows.Err()
 }
 
-// SetInstanceGrantUsers replaces which users hold an access grant on exactly
-// this instance: listed users gain a grant row, users previously granted THIS
-// instance but absent from the list lose theirs. Grants on sibling instances
-// and per-user default pins are untouched — revoking a grant never moves
-// anyone's default.
+// SetInstanceGrantUsers replaces which users have an explicit row on exactly
+// this instance: listed users gain a grant row, users absent from the list
+// lose their grant AND any per-user default pin naming this instance (their
+// default reverts to the global chain; for chaptarr, access is revoked).
+// Clearing the pin too is what makes an admin's uncheck a real revocation —
+// legacy assignments are pin rows, and a surviving pin would silently keep
+// granting the library. Listed users' pins and every sibling instance's rows
+// are untouched.
 func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error {
 	serviceType, err := s.ServiceTypeOf(instanceID)
 	if err != nil {
@@ -963,6 +982,23 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 	); err != nil {
 		return fmt.Errorf("set instance grant users: %w", err)
 	}
+	keep := make([]interface{}, 0, len(userIDs)+1)
+	keep = append(keep, instanceID)
+	placeholders := ""
+	for i, userID := range userIDs {
+		if i > 0 {
+			placeholders += ","
+		}
+		placeholders += "?"
+		keep = append(keep, userID)
+	}
+	pinClear := "DELETE FROM user_default_instances WHERE instance_id = ?"
+	if len(userIDs) > 0 {
+		pinClear += " AND user_id NOT IN (" + placeholders + ")"
+	}
+	if _, err := tx.Exec(pinClear, keep...); err != nil {
+		return fmt.Errorf("clear revoked instance pins: %w", err)
+	}
 	for _, userID := range userIDs {
 		if _, err := tx.Exec(
 			"INSERT INTO user_instance_grants (user_id, instance_id) VALUES (?, ?) "+
@@ -980,37 +1016,25 @@ func (s *Store) SetInstanceGrantUsers(instanceID string, userIDs []int64) error 
 }
 
 // UserCanAccessInstance reports whether instanceID is a service instance
-// exposed to a requester. A user with explicit rows for the service type (an
-// access grant or their per-user default pin) may reach exactly those
-// instances; a user with none falls back to the global Radarr/Sonarr default.
-// Chaptarr deliberately has no global fallback, so its rows are the entire
-// grant. All lookups are metadata-only and never decrypt the instance's
-// credentials.
+// exposed to a requester: exactly membership in VisibleInstanceIDs — their
+// explicit rows (grants are additive, a pin is an exclusive default) plus,
+// for an unpinned Radarr/Sonarr user, the global default. Chaptarr
+// deliberately has no global fallback, so its rows are the entire grant. All
+// lookups are metadata-only and never decrypt the instance's credentials.
 func (s *Store) UserCanAccessInstance(userID int64, instanceID, serviceType string) (bool, error) {
-	granted, err := s.GrantedInstanceIDs(userID, serviceType)
+	if serviceType != "radarr" && serviceType != "sonarr" && serviceType != "chaptarr" {
+		return false, nil
+	}
+	visible, err := s.VisibleInstanceIDs(userID, serviceType)
 	if err != nil {
 		return false, err
 	}
-	if len(granted) > 0 {
-		for _, id := range granted {
-			if id == instanceID {
-				return true, nil
-			}
+	for _, id := range visible {
+		if id == instanceID {
+			return true, nil
 		}
-		return false, nil
 	}
-	if serviceType == "chaptarr" {
-		return false, nil
-	}
-	if serviceType != "radarr" && serviceType != "sonarr" {
-		return false, nil
-	}
-
-	defaultID, err := s.defaultInstanceID(serviceType)
-	if err != nil {
-		return false, err
-	}
-	return defaultID != "" && defaultID == instanceID, nil
+	return false, nil
 }
 
 // defaultInstanceID mirrors GetDefault's explicit-default-then-first fallback

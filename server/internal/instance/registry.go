@@ -508,11 +508,11 @@ func (r *Registry) EffectiveDefaultInstanceID(userID int64, serviceType string) 
 	return r.store.EffectiveDefaultInstanceID(userID, serviceType)
 }
 
-// GrantedInstanceIDs exposes the store's per-user granted set (grants ∪ pin,
-// deterministic order) for callers that fan a read across every library the
-// user may see.
-func (r *Registry) GrantedInstanceIDs(userID int64, serviceType string) ([]string, error) {
-	return r.store.GrantedInstanceIDs(userID, serviceType)
+// VisibleInstanceIDs exposes the store's per-user visible set (explicit rows
+// plus the effective default, deterministic order) for callers that fan a
+// read across every library the user may see.
+func (r *Registry) VisibleInstanceIDs(userID int64, serviceType string) ([]string, error) {
+	return r.store.VisibleInstanceIDs(userID, serviceType)
 }
 
 // InvalidateClient removes a cached client, forcing recreation on next access.
