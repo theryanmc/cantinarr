@@ -37,6 +37,8 @@ const (
 var (
 	ErrChaptarrInstanceForbidden = errors.New("chaptarr instance is not available to you")
 	ErrChaptarrInstanceInvalid   = errors.New("invalid chaptarr instance")
+	ErrArrInstanceForbidden      = errors.New("that library is not available to you")
+	ErrArrInstanceInvalid        = errors.New("unknown library for this media type")
 	ErrBookFormatUnresolved      = errors.New("book format is unsupported or ambiguous")
 	// ErrBookMetadataUnresolved means no Chaptarr metadata record could be found
 	// for the requested foreignBookId, so there is nothing to add a book from.
@@ -387,6 +389,65 @@ func (s *Service) resolveChaptarr(userID int64, instanceID string) (*chaptarr.Cl
 	return nil, "", nil
 }
 
+// resolveRadarr resolves an explicitly selected instance when present and
+// enforces requester access before returning a client. Admins may select any
+// configured Radarr; omitted IDs resolve the user's effective default. The
+// second return is the resolved instance ID ("" when nothing is configured).
+func (s *Service) resolveRadarr(userID int64, instanceID string) (*radarr.Client, string, error) {
+	if s.registry == nil {
+		return nil, "", nil
+	}
+	if instanceID != "" {
+		if !s.userIsAdmin(userID) {
+			allowed, err := s.registry.UserCanAccessInstance(userID, instanceID, "radarr")
+			if err != nil {
+				return nil, "", fmt.Errorf("check radarr access: %w", err)
+			}
+			if !allowed {
+				return nil, "", ErrArrInstanceForbidden
+			}
+		}
+		client, err := s.registry.GetRadarrClient(instanceID)
+		if err != nil {
+			return nil, "", ErrArrInstanceInvalid
+		}
+		return client, instanceID, nil
+	}
+	client, id, err := s.registry.GetUserDefaultRadarrClient(userID)
+	if err != nil {
+		return nil, "", err
+	}
+	return client, id, nil
+}
+
+// resolveSonarr is resolveRadarr's Sonarr twin.
+func (s *Service) resolveSonarr(userID int64, instanceID string) (*sonarr.Client, string, error) {
+	if s.registry == nil {
+		return nil, "", nil
+	}
+	if instanceID != "" {
+		if !s.userIsAdmin(userID) {
+			allowed, err := s.registry.UserCanAccessInstance(userID, instanceID, "sonarr")
+			if err != nil {
+				return nil, "", fmt.Errorf("check sonarr access: %w", err)
+			}
+			if !allowed {
+				return nil, "", ErrArrInstanceForbidden
+			}
+		}
+		client, err := s.registry.GetSonarrClient(instanceID)
+		if err != nil {
+			return nil, "", ErrArrInstanceInvalid
+		}
+		return client, instanceID, nil
+	}
+	client, id, err := s.registry.GetUserDefaultSonarrClient(userID)
+	if err != nil {
+		return nil, "", err
+	}
+	return client, id, nil
+}
+
 type CreateRequest struct {
 	TmdbID    int    `json:"tmdb_id"`
 	MediaType string `json:"media_type"`
@@ -457,6 +518,9 @@ type CreateResponse struct {
 	// record could not be re-found. Clients show it verbatim; empty means the
 	// status speaks for itself.
 	Message string `json:"message,omitempty"`
+	// InstanceID names the library instance the request was routed to (or is
+	// pending for), so clients can reflect the selection without refetching.
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 type StatusResponse struct {
@@ -669,6 +733,10 @@ type resolvedRequest struct {
 	parkReason  string // why a pending row is server-owned (see bookParkReasonAuthorImport)
 	addFailure  string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
 	instanceID  string
+	// instanceIsUserDefault marks a movie/TV request whose resolved instance is
+	// the requester's effective default, which is the only target allowed to
+	// absorb legacy pending rows written before instances were stamped.
+	instanceIsUserDefault bool
 	bookFormats map[string]string
 	// bookRecordIDs maps each fulfilled concrete format to the Chaptarr record
 	// id that satisfies it (created, or monitored in place). The numeric id is
@@ -925,6 +993,31 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		bookLock.Lock()
 		defer bookLock.Unlock()
 	}
+	if resolved.mediaType == "movie" || resolved.mediaType == "tv" {
+		// Resolve and authorize the target library up front so a pending row
+		// stores exactly where approval will send it, and a bad selection
+		// fails the create instead of persisting an unhonored provenance
+		// stamp (or silently dropping the history row on its foreign key).
+		explicit := resolved.instanceID != ""
+		serviceType := "radarr"
+		var instanceID string
+		if resolved.mediaType == "movie" {
+			_, instanceID, err = s.resolveRadarr(userID, resolved.instanceID)
+		} else {
+			serviceType = "sonarr"
+			_, instanceID, err = s.resolveSonarr(userID, resolved.instanceID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		resolved.instanceID = instanceID
+		resolved.instanceIsUserDefault = !explicit
+		if explicit && s.registry != nil {
+			if defaultID, derr := s.registry.EffectiveDefaultInstanceID(userID, serviceType); derr == nil {
+				resolved.instanceIsUserDefault = instanceID == defaultID
+			}
+		}
+	}
 
 	// Season scope (TV only). Honor the client's choice only when allowed;
 	// otherwise the resolved default stands. Movies keep an empty scope so the
@@ -1002,7 +1095,12 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 			pendingResp.Status = collapseBookStatuses(pendingResp.BookFormats, StatusPending)
 			return pendingResp, nil
 		}
-		return s.createPending(resolved)
+		resp, err := s.createPending(resolved)
+		if err != nil {
+			return nil, err
+		}
+		resp.InstanceID = resolved.instanceID
+		return resp, nil
 	}
 
 	status, title, err := s.addToArr(resolved)
@@ -1071,6 +1169,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		Success:            true,
 		Status:             status,
 		Title:              title,
+		InstanceID:         resolved.instanceID,
 		BookFormats:        resolved.bookFormats,
 		CanonicalForeignID: resolved.responseCanonicalForeignID(),
 	}, nil
@@ -1190,14 +1289,23 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 			return nil, fmt.Errorf("commit pending book request: %w", err)
 		}
 	} else {
+		// The duplicate guard is per target library: the same title pending on
+		// a sibling instance is a distinct request, never absorbed. Legacy
+		// rows (NULL instance, written before instances were stamped) are
+		// absorbed only by the user's effective default — the library their
+		// approval would in fact have targeted.
+		dupGuard := "instance_id = ?"
+		if r.instanceIsUserDefault || r.instanceID == "" {
+			dupGuard = "(instance_id = ? OR instance_id IS NULL)"
+		}
 		res, err = s.db.Exec(
-			`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, media_type, title, status, season_scope, quality_profile_id)
-			 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+			`INSERT INTO request_log (user_id, tmdb_id, tvdb_id, instance_id, media_type, title, status, season_scope, quality_profile_id)
+			 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
 			 WHERE NOT EXISTS (
-			     SELECT 1 FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND status = ?
+			     SELECT 1 FROM request_log WHERE user_id = ? AND tmdb_id = ? AND media_type = ? AND status = ? AND `+dupGuard+`
 			 )`,
-			r.userID, r.tmdbID, sqlNullInt(r.tvdbID), r.mediaType, r.title, StatusPending, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
-			r.userID, r.tmdbID, r.mediaType, StatusPending,
+			r.userID, r.tmdbID, sqlNullInt(r.tvdbID), sqlNullStr(r.instanceID), r.mediaType, r.title, StatusPending, sqlNullStr(r.seasonScope), sqlNullInt(r.qualityProfileID),
+			r.userID, r.tmdbID, r.mediaType, StatusPending, sqlNullStr(r.instanceID),
 		)
 	}
 	if err != nil {
@@ -2015,10 +2123,23 @@ func (s *Service) addChaptarrBookRecord(client *chaptarr.Client, match *chaptarr
 }
 
 func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
-	radarrClient := s.getRadarr(r.userID)
+	// A stored/selected library resolves under the acting authority (the
+	// approving admin on replay), so a later requester-grant change cannot
+	// reroute or strand it. A row with no stamped instance (legacy pending)
+	// resolves the requester's own effective default — exactly what its
+	// approval would have done when the row was written.
+	resolveAs := r.userID
+	if r.instanceID != "" && r.actorID != 0 {
+		resolveAs = r.actorID
+	}
+	radarrClient, instanceID, err := s.resolveRadarr(resolveAs, r.instanceID)
+	if err != nil {
+		return "", "", err
+	}
 	if radarrClient == nil {
 		return "", "", fmt.Errorf("radarr is not configured")
 	}
+	r.instanceID = instanceID
 
 	existing, err := radarrClient.GetMovieByTMDB(r.tmdbID)
 	if err == nil && existing != nil {
@@ -2075,10 +2196,20 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 }
 
 func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
-	sonarrClient := s.getSonarr(r.userID)
+	// Same library-resolution rule as addMovie: stored instance under the
+	// acting authority, unstamped legacy rows under the requester's default.
+	resolveAs := r.userID
+	if r.instanceID != "" && r.actorID != 0 {
+		resolveAs = r.actorID
+	}
+	sonarrClient, instanceID, err := s.resolveSonarr(resolveAs, r.instanceID)
+	if err != nil {
+		return "", "", err
+	}
 	if sonarrClient == nil {
 		return "", "", fmt.Errorf("sonarr is not configured")
 	}
+	r.instanceID = instanceID
 
 	tvdbID := r.tvdbID
 	// A request that arrives with only a TMDB ID — e.g. the AI assistant's
@@ -2113,7 +2244,6 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 	}
 
 	var lookup *sonarr.LookupResult
-	var err error
 	if tvdbID != 0 {
 		lookup, err = sonarrClient.LookupByTVDB(tvdbID)
 	}
@@ -3514,7 +3644,7 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 	}
 	rows, err := s.db.Query(
 		`SELECT r.id, r.user_id, COALESCE(u.username, ''), r.tmdb_id, COALESCE(r.tvdb_id, 0), COALESCE(r.foreign_id, ''), r.media_type, r.title, COALESCE(r.book_format, ''), COALESCE(r.instance_id, ''),
-		        CASE WHEN r.media_type = 'book' THEN COALESCE(si.name, '') ELSE '' END,
+		        COALESCE(si.name, ''),
 		        CASE WHEN r.media_type = 'book' THEN 1 + (SELECT COUNT(*) FROM book_request_waiters bw WHERE bw.request_id = r.id AND bw.user_id <> r.user_id) ELSE 1 END,
 		        COALESCE(r.season_scope, ''), COALESCE(r.quality_profile_id, 0), r.requested_at, COALESCE(r.park_reason, ''), COALESCE(r.add_failure_reason, '')
 		 FROM request_log r
@@ -3816,15 +3946,15 @@ func (s *Service) fulfillPendingRequest(actorID, requestID int64, override *Deci
 		bookLock := s.bookLock(r.instanceID + "\x00" + r.foreignID)
 		bookLock.Lock()
 		defer bookLock.Unlock()
-		// The request's instance was authorized and pinned at submission. Execute
-		// approval under the approving admin so a later requester-grant change
-		// cannot reroute or strand it; history remains owned by r.userID. A
-		// system completion executes under the requester themselves instead.
-		if system {
-			r.actorID = r.userID
-		} else {
-			r.actorID = actorID
-		}
+	}
+	// The request's instance was authorized and stamped at submission. Execute
+	// the decision under the approving admin so a later requester-grant change
+	// cannot reroute or strand it; history remains owned by r.userID. A
+	// system completion executes under the requester themselves instead.
+	if system {
+		r.actorID = r.userID
+	} else {
+		r.actorID = actorID
 	}
 	if override != nil {
 		// An admin choosing a coarse scope replaces any explicit season list the
@@ -4490,8 +4620,11 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 }
 
 // GetRequestOptions reports what the current user may choose for a request and
-// (when allowed) the available quality profiles for the relevant service.
-func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string) (*RequestOptions, error) {
+// (when allowed) the available quality profiles for the relevant service. An
+// explicit instanceID scopes the profiles to that library (profiles live
+// inside an instance, so a selection on one library must never offer a
+// sibling's profile ids); empty resolves the user's effective default.
+func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType, instanceID string) (*RequestOptions, error) {
 	eff, err := s.effectiveSettings(userID, isAdmin)
 	if err != nil {
 		return nil, err
@@ -4503,7 +4636,11 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string
 		QualityProfiles:    []QualityProfile{},
 	}
 	if eff.AllowQualityChoice && mediaType != "book" {
-		opts.QualityProfiles = s.qualityProfiles(userID, mediaType)
+		profiles, err := s.qualityProfilesForInstance(userID, mediaType, instanceID)
+		if err != nil {
+			return nil, err
+		}
+		opts.QualityProfiles = profiles
 	}
 	return opts, nil
 }
@@ -4511,25 +4648,42 @@ func (s *Service) GetRequestOptions(userID int64, isAdmin bool, mediaType string
 // qualityProfiles fetches the selectable quality profiles for a media type from
 // userID's source instance (userID 0 = global default).
 func (s *Service) qualityProfiles(userID int64, mediaType string) []QualityProfile {
+	out, _ := s.qualityProfilesForInstance(userID, mediaType, "")
+	return out
+}
+
+// qualityProfilesForInstance is qualityProfiles scoped to a selected library.
+// Authorization failures surface so a forbidden selection is refused rather
+// than answered with the default library's profiles; an unreachable arr still
+// degrades to an empty list.
+func (s *Service) qualityProfilesForInstance(userID int64, mediaType, instanceID string) ([]QualityProfile, error) {
 	out := []QualityProfile{}
 	if mediaType == "tv" {
-		if c := s.getSonarr(userID); c != nil {
+		c, _, err := s.resolveSonarr(userID, instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
 			if ps, err := c.GetQualityProfiles(); err == nil {
 				for _, p := range ps {
 					out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
 				}
 			}
 		}
-		return out
+		return out, nil
 	}
-	if c := s.getRadarr(userID); c != nil {
+	c, _, err := s.resolveRadarr(userID, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if c != nil {
 		if ps, err := c.GetQualityProfiles(); err == nil {
 			for _, p := range ps {
 				out = append(out, QualityProfile{ID: p.ID, Name: p.Name})
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // GetAdminSettings returns the global defaults plus both arrs' quality profiles

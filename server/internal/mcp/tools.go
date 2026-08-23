@@ -720,7 +720,9 @@ func (s *ToolServer) getRequestOptions(input json.RawMessage, userID int64, role
 	if params.MediaType != "movie" && params.MediaType != "tv" && params.MediaType != "book" {
 		return &ToolResult{Text: "Request options require media_type movie, tv, or book."}, nil
 	}
-	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType)
+	// MCP callers get their effective default library's options; a per-request
+	// instance selection is an app-side flow for now.
+	opts, err := s.request.GetRequestOptions(userID, auth.HasPermission(role, auth.PermissionAdmin), params.MediaType, "")
 	if err != nil {
 		return nil, err
 	}

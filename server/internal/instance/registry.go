@@ -501,6 +501,13 @@ func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) 
 	return client, inst.ID, err
 }
 
+// EffectiveDefaultInstanceID exposes the store's per-user effective-default
+// resolution (pin → granted global default → first granted → global chain) to
+// services that need the id without constructing a client.
+func (r *Registry) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
+	return r.store.EffectiveDefaultInstanceID(userID, serviceType)
+}
+
 // InvalidateClient removes a cached client, forcing recreation on next access.
 func (r *Registry) InvalidateClient(instanceID string) {
 	r.mu.Lock()
