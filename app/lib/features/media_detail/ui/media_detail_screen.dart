@@ -85,6 +85,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   String? _downloadInstanceId;
   int _arrResolveGeneration = 0;
 
+  /// The library this screen currently reads and requests against; null means
+  /// the user's default. Only ever set when the connection exposes more than
+  /// one library for this media type (multi-grant users, or admins).
+  String? _selectedLibraryId;
+
   @override
   void initState() {
     super.initState();
@@ -118,6 +123,42 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// Whether the user may pick specific seasons. Defaults to true (the
   /// server's out-of-the-box global setting) until the options load.
   bool get _canChooseSeasons => _requestOptions?.canChooseSeason ?? true;
+
+  /// The libraries this user may aim requests at for this media type, from
+  /// the per-user filtered connection (granted set for requesters, every
+  /// instance for admins). Names are the admin-chosen instance names.
+  List<LibraryChoice> get _libraryChoices {
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    if (connection == null) return const [];
+    final instances = widget.mediaType == MediaType.movie
+        ? connection.radarrInstances
+        : connection.sonarrInstances;
+    return instances
+        .map((i) => LibraryChoice(id: i.id, name: i.name))
+        .toList();
+  }
+
+  /// The connection's default library for this media type.
+  String? get _defaultLibraryId {
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    return widget.mediaType == MediaType.movie
+        ? connection?.defaultRadarrInstance?.id
+        : connection?.defaultSonarrInstance?.id;
+  }
+
+  /// The library id the screen is effectively reading: the explicit selection,
+  /// else the connection's default for this media type.
+  String? get _effectiveLibraryId => _selectedLibraryId ?? _defaultLibraryId;
+
+  /// Switches every read and write on this screen to [libraryId] and
+  /// refreshes what depends on it.
+  void _selectLibrary(String? libraryId) {
+    if (_selectedLibraryId == libraryId) return;
+    setState(() => _selectedLibraryId = libraryId);
+    _requestNotifier.instanceId = libraryId;
+    _requestNotifier.checkStatus();
+    _resolveArrLink();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -250,6 +291,22 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                         releases:
                                             _requestNotifier.state.releases,
                                         status: _requestNotifier.state.status,
+                                      ),
+                                      // One chip per granted library when the
+                                      // user holds more than one (HD vs 4K):
+                                      // each carries that library's own
+                                      // status, and tapping one retargets the
+                                      // whole screen — status, request,
+                                      // downloads — at that library.
+                                      _LibraryStatusChips(
+                                        statuses: _requestNotifier
+                                            .state.instanceStatuses,
+                                        libraries: _libraryChoices,
+                                        selectedId: _effectiveLibraryId,
+                                        onSelect: (id) => _selectLibrary(
+                                            id == _defaultLibraryId
+                                                ? null
+                                                : id),
                                       ),
                                       const SizedBox(height: 10),
                                       Wrap(
@@ -543,17 +600,44 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final title = s.title;
     final tvdbId = s.tvDetail?.externalIds?.tvdbId;
 
+    // A multi-library user gets the sheet even with season/quality choice
+    // off: the library IS a choice.
+    final libraries = _libraryChoices;
+    final hasChoices =
+        (options != null && options.hasChoices) || libraries.length > 1;
+
     String? seasonScope;
     int? qualityProfileId;
-    if (options != null && options.hasChoices) {
+    if (hasChoices) {
       if (!mounted) return;
       final result = await showAppSheet<RequestOptionsResult>(
         context,
-        builder: (_) => RequestOptionsSheet(options: options),
+        builder: (_) => RequestOptionsSheet(
+          options: options ??
+              const RequestOptions(
+                canChooseSeason: false,
+                canChooseQuality: false,
+                defaultSeasonScope: SeasonScope.all,
+                qualityProfiles: [],
+              ),
+          libraries: libraries,
+          selectedLibraryId: _effectiveLibraryId,
+          onLibraryOptions: (libraryId) =>
+              _requestNotifier.fetchOptions(libraryId: libraryId),
+        ),
       );
       if (result == null) return; // cancelled
       seasonScope = result.seasonScope;
       qualityProfileId = result.qualityProfileId;
+      if (result.instanceId != null &&
+          result.instanceId != _selectedLibraryId) {
+        // Adopt the selection without an immediate status refetch — the
+        // submit below produces the authoritative status, and a racing
+        // pre-request read could land after it and overwrite it.
+        setState(() => _selectedLibraryId = result.instanceId);
+        _requestNotifier.instanceId = result.instanceId;
+        _resolveArrLink();
+      }
     }
 
     await _requestNotifier.request(
@@ -602,7 +686,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     }
     try {
       if (widget.mediaType == MediaType.movie) {
-        final instanceId = instances.activeRadarrInstance?.id ??
+        final instanceId = _selectedLibraryId ??
+            instances.activeRadarrInstance?.id ??
             connection?.defaultRadarrInstance?.id;
         if (instanceId == null) return;
         final downloadsEnabled =
@@ -635,7 +720,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           }
         });
       } else {
-        final instanceId = instances.activeSonarrInstance?.id ??
+        final instanceId = _selectedLibraryId ??
+            instances.activeSonarrInstance?.id ??
             connection?.defaultSonarrInstance?.id;
         if (instanceId == null) return;
         final downloadsEnabled =
@@ -956,6 +1042,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   String? get _reportInstanceId {
     final linked = _arrLink?.instanceId;
     if (linked != null && linked.isNotEmpty) return linked;
+    if (_selectedLibraryId != null) return _selectedLibraryId;
 
     final instances = ref.read(instanceProvider);
     final connection = ref.read(authProvider).valueOrNull?.connection;
@@ -1016,6 +1103,59 @@ class _PendingReleaseLine extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// One chip per granted library, each carrying that library's own status
+/// ("Movies · Available", "4K Movies · Not Available"). Renders nothing —
+/// not even padding — unless the server reported statuses for more than one
+/// library, so single-library users keep today's dock exactly.
+class _LibraryStatusChips extends StatelessWidget {
+  final Map<String, RequestStatus> statuses;
+  final List<LibraryChoice> libraries;
+  final String? selectedId;
+  final ValueChanged<String> onSelect;
+
+  const _LibraryStatusChips({
+    required this.statuses,
+    required this.libraries,
+    required this.selectedId,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (statuses.length < 2) return const SizedBox.shrink();
+    // Connection order (the admin's sort order); ignore libraries the server
+    // reported no status for.
+    final chips = libraries
+        .where((library) => statuses.containsKey(library.id))
+        .toList();
+    if (chips.length < 2) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: chips.map((library) {
+          final selected = library.id == selectedId;
+          return ChoiceChip(
+            label: Text('${library.name} · ${statuses[library.id]!.label}'),
+            selected: selected,
+            onSelected: (_) => onSelect(library.id),
+            showCheckmark: false,
+            selectedColor: AppTheme.accent,
+            backgroundColor: AppTheme.surfaceVariant,
+            labelStyle: TextStyle(
+              color: selected ? AppTheme.onAccent : AppTheme.textPrimary,
+              fontSize: 12,
+            ),
+            side: const BorderSide(color: AppTheme.border),
+          );
+        }).toList(),
       ),
     );
   }
