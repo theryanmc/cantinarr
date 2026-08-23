@@ -250,7 +250,9 @@ The approval queue itself holds two unrelated kinds of row, and `add_failure_rea
 
 ### Issues & AI remediation
 ```
-POST   /api/issues                         # user: report a problem; requires instance_id plus media scope — tmdb/tvdb ids
+POST   /api/issues                         # user: report a problem; requires instance_id plus media scope — tmdb/tvdb ids.
+                                           #   Non-admins may only report against a library they can see
+                                           #   (403 in requester vocabulary otherwise); admins may report anywhere
 GET    /api/issues                         # reporter inbox: the caller's OWN reports, newest first, requester copy applied
 GET    /api/admin/agent-digest             # the agent scoreboard. "Resolved" renders as OUTCOME (real-work resolved + self-cleared) with disjoint attribution lanes (by rules / by agent / by admin; remainder "on their own"); "Close without fix" and dismissals counted but never called resolved; plus actions executed, tokens, and needs-a-human/paused counts that are state NOW, not window facts
 GET    /api/admin/agent-approval-rules/candidates  # triples the admin has hand-approved and could automate (grounded; active-ruled triples excluded)
