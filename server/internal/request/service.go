@@ -1374,14 +1374,23 @@ func (zeroRowsResult) RowsAffected() (int64, error) { return 0, nil }
 func (s *Service) addToArr(r *resolvedRequest) (status string, title string, err error) {
 	switch r.mediaType {
 	case "movie":
-		return s.addMovie(r)
+		status, title, err = s.addMovie(r)
 	case "tv":
-		return s.addSeries(r)
+		status, title, err = s.addSeries(r)
 	case "book":
 		return s.addToChaptarr(r)
 	default:
 		return "", "", fmt.Errorf("unsupported media type: %s", r.mediaType)
 	}
+	// The add just changed that library, and this process may have served its
+	// availability digest moments earlier (the per-library status chips read
+	// it), so a requester's own add must not hide behind the digest TTL on
+	// their next history or chip read. Webhooks cover out-of-band changes;
+	// this covers the change Cantinarr itself made.
+	if err == nil {
+		s.InvalidateAvailabilityDigests(r.instanceID)
+	}
+	return status, title, err
 }
 
 // addToChaptarr adds a book to the pinned Chaptarr instance. Books have no TMDB
