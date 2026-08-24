@@ -145,6 +145,15 @@ Testers** was created with "Enable automatic distribution", so it picks up every
 itself; external groups have no such setting, and a build sits in App Store Connect until
 somebody adds it to one.
 
+**There is no checkbox to flip on an existing group, so don't go looking for one.** The
+underlying attribute is `hasAccessToAllBuilds`, and the API is explicit that it is create-only:
+a `PATCH` naming it answers `ENTITY_ERROR.ATTRIBUTE.NOT_ALLOWED` ("can not be included in a
+'UPDATE' operation"), while the same attribute passes schema validation on `POST /v1/betaGroups`.
+Turning it on for Public Beta would mean deleting and recreating the group, which destroys the
+public link every tester joined through and the README advertises — and Apple documents the
+setting only for internal testers, so it may not apply to external groups at all. The
+`distribute` job is the supported path, not a workaround.
+
 The `distribute` job closes that gap for **Public Beta** — the group behind the public
 [TestFlight link](https://testflight.apple.com/join/bCPDwCsD) in the README — so every build cut
 from `main` reaches those testers without anyone opening App Store Connect. It runs
