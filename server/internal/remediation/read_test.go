@@ -3,6 +3,7 @@ package remediation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -166,6 +167,34 @@ func TestReplyReadFlip(t *testing.T) {
 	}
 	if readFlag(t, svc, r.IssueID) {
 		t.Fatal("a reporter reply should re-flag the issue unread")
+	}
+}
+
+// A non-admin report against a library outside their visible set is a 403 in
+// requester vocabulary — never a 400 that would confirm what exists.
+func TestCreateIssueForbiddenInstanceIs403(t *testing.T) {
+	svc, _, _ := setupTestService(t)
+	rowless := seedUser(t, svc.db, "http-rowless")
+	h := NewHandler(svc)
+
+	body := strings.NewReader(fmt.Sprintf(
+		`{"instance_id":%q,"media_type":"movie","tmdb_id":1,"category":%q}`,
+		testRadarrInstanceID2, CategoryOther,
+	))
+	req := httptest.NewRequest(http.MethodPost, "/api/issues", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), auth.ClaimsKey, &auth.Claims{
+		UserID: rowless,
+		Role:   auth.RoleUser,
+	}))
+
+	rec := httptest.NewRecorder()
+	h.Create(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("forbidden-instance report = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not available to you") {
+		t.Fatalf("forbidden body = %q, want requester vocabulary", rec.Body.String())
 	}
 }
 
