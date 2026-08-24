@@ -321,11 +321,33 @@ func assertStrictOpenAISaveRequest(t *testing.T, requests <-chan strictOpenAISav
 		if request.body["model"] != model {
 			t.Fatalf("OpenAI validation model=%v, want %q", request.body["model"], model)
 		}
-		if _, found := request.body["tool_choice"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tool_choice: %#v", request.body)
+		// The probe must carry the same tool payload a real chat serializes —
+		// a provider that rejects a tool schema has to fail at save time, not
+		// on the first real chat (#497) — while tool_choice none keeps the
+		// reply a plain text turn.
+		if choice, found := request.body["tool_choice"]; !found || choice != "none" {
+			t.Fatalf("save validation tool_choice=%v, want \"none\" alongside the tool payload", request.body["tool_choice"])
 		}
-		if _, found := request.body["tools"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tools: %#v", request.body)
+		tools, ok := request.body["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			t.Fatal("save validation sent no tools; the probe must carry the chat tool payload")
+		}
+		seenGrabRelease := false
+		for _, raw := range tools {
+			tool, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tool["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if fn["name"] == "grab_release" {
+				seenGrabRelease = true
+			}
+		}
+		if !seenGrabRelease {
+			t.Fatal("save validation omitted grab_release; the probe must exercise the full admin catalog")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OpenAI save validation did not reach the strict upstream")

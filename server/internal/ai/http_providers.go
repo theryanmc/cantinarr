@@ -422,7 +422,7 @@ func toOpenAITools(tools []mcp.Tool) []openai.ChatCompletionToolUnionParam {
 		for key, value := range t.InputSchema {
 			parameters[key] = value
 		}
-		for _, key := range []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"} {
+		for _, key := range unsupportedToolRootKeywords {
 			delete(parameters, key)
 		}
 		fn := openai.FunctionDefinitionParam{

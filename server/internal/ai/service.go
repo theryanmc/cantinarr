@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -463,6 +464,13 @@ func messageText(content interface{}) string {
 	return ""
 }
 
+// unsupportedToolRootKeywords are JSON Schema keywords the Anthropic and
+// OpenAI APIs reject at the root of a tool input schema ("input_schema does
+// not support oneOf, allOf, or anyOf at the top level"). Their converters drop
+// them from the serialized copy; the canonical mcp.Tool schemas keep them for
+// Gemini, Codex, and /mcp clients.
+var unsupportedToolRootKeywords = []string{"oneOf", "anyOf", "allOf", "enum", "const", "not"}
+
 // toSDKTools converts the in-process tool definitions to SDK tool params.
 func toSDKTools(tools []mcp.Tool) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
@@ -482,18 +490,21 @@ func toSDKTools(tools []mcp.Tool) []anthropic.ToolUnionParam {
 				}
 			}
 		}
-		// The API takes full JSON Schema; carry root keywords beyond the
-		// typed fields (grab_release's oneOf) so the model sees the same
-		// constraints Gemini and Codex get.
+		// Carry remaining root keywords (e.g. additionalProperties) so the
+		// model sees the same constraints Gemini and Codex get — minus the
+		// combinators the Messages API rejects at the input_schema root, where
+		// one bad tool 400s the whole request (#497). grab_release's oneOf
+		// branches stay enforced in Go with precise errors and are restated in
+		// its property descriptions, so the model loses no guidance.
 		for key, value := range t.InputSchema {
-			switch key {
-			case "type", "properties", "required":
-			default:
-				if schema.ExtraFields == nil {
-					schema.ExtraFields = map[string]any{}
-				}
-				schema.ExtraFields[key] = value
+			if key == "type" || key == "properties" || key == "required" ||
+				slices.Contains(unsupportedToolRootKeywords, key) {
+				continue
 			}
+			if schema.ExtraFields == nil {
+				schema.ExtraFields = map[string]any{}
+			}
+			schema.ExtraFields[key] = value
 		}
 		tp := anthropic.ToolParam{
 			Name:        t.Name,
