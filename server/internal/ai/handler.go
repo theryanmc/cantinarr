@@ -420,6 +420,10 @@ func codexClientError(err error, source string) string {
 			return "Included OpenAI OAuth is busy with another request. Try again shortly."
 		}
 		return "Your OpenAI OAuth connection is busy with another request. Try again shortly."
+	case errors.Is(err, codexapp.ErrToolBudget):
+		return "The AI needed more lookups than one question allows and had to stop. Try again, or split the question into smaller parts."
+	case errors.Is(err, context.DeadlineExceeded):
+		return "The AI request took too long and was stopped. Try again with a smaller question."
 	case errors.Is(err, context.Canceled):
 		return "The OpenAI OAuth request was canceled."
 	default:
