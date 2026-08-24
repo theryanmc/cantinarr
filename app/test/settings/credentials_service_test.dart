@@ -1,5 +1,38 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cantinarr/features/settings/data/credentials_service.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// Fake Dio adapter: records the composed request options and returns a
+/// canned JSON body, so tests can pin what actually goes on the wire —
+/// including per-request timeout overrides.
+class _FakeAdapter implements HttpClientAdapter {
+  _FakeAdapter(this.responseJson);
+
+  final dynamic responseJson;
+  RequestOptions? lastRequest;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    lastRequest = options;
+    return ResponseBody.fromString(
+      jsonEncode(responseJson),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
 
 void main() {
   group('CredentialsStatus', () {
@@ -99,6 +132,37 @@ void main() {
       expect(provider.supportsBaseUrl, isFalse);
       expect(provider.supportsReasoningEffort, isFalse);
       expect(provider.sharedOnly, isFalse);
+    });
+  });
+
+  group('update', () {
+    // The save-time probe now round-trips the full tool catalog through the
+    // provider (issue #497), so headers can take well past the 15s base
+    // timeout to arrive. The long-call options are what raise the web
+    // connectTimeout alongside receiveTimeout — a bare receiveTimeout raise
+    // silently keeps the 15s time-to-first-headers bound on web, and the
+    // browser aborts into "Failed to save settings.".
+    test('uses the long-call receive timeout, keeping the base connect timeout',
+        () async {
+      final adapter = _FakeAdapter({'status': 'ok'});
+      final dio = Dio(BaseOptions(
+        baseUrl: 'http://localhost',
+        connectTimeout: const Duration(seconds: 15),
+        receiveTimeout: const Duration(seconds: 15),
+      ))
+        ..httpClientAdapter = adapter;
+
+      await CredentialsService(backendDio: dio).update({
+        'anthropic_key': 'sk-ant-test',
+        'ai_provider': 'anthropic',
+        'ai_model': 'claude-haiku-4-5',
+      });
+
+      expect(adapter.lastRequest?.uri.path, '/api/admin/credentials');
+      expect(adapter.lastRequest?.receiveTimeout, const Duration(seconds: 75));
+      // connectTimeout stays the base default on native: longRequestOptions
+      // passes null and Options.compose falls back to BaseOptions.
+      expect(adapter.lastRequest?.connectTimeout, const Duration(seconds: 15));
     });
   });
 }
