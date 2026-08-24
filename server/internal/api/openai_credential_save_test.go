@@ -257,6 +257,35 @@ func TestLiveOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
+// TestCredentialSaveErrorsAreJSON pins the error transport through the real
+// router: the app renders body["error"] only when the response is labeled
+// application/json, so a text/plain error means users see a generic "Failed
+// to save settings." with the actual reason discarded.
+func TestCredentialSaveErrorsAreJSON(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+
+	resp := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/admin/credentials",
+		harness.adminToken,
+		`{"ai_provider":"not-a-provider"}`,
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("unknown-provider save status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+	if ct := resp.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("error Content-Type = %q, want application/json so the app can show the reason", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not valid JSON: %v (%s)", err, resp.Body.String())
+	}
+	if body["error"] == "" {
+		t.Fatalf("error body missing the error field: %s", resp.Body.String())
+	}
+}
+
 func newStrictOpenAISaveUpstream(t *testing.T) (*httptest.Server, <-chan strictOpenAISaveRequest) {
 	t.Helper()
 	requests := make(chan strictOpenAISaveRequest, 4)
