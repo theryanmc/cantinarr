@@ -257,6 +257,35 @@ func TestLiveOpenAIAPIKeySavesThroughAuthenticatedRouter(t *testing.T) {
 	}
 }
 
+// TestCredentialSaveErrorsAreJSON pins the error transport through the real
+// router: the app renders body["error"] only when the response is labeled
+// application/json, so a text/plain error means users see a generic "Failed
+// to save settings." with the actual reason discarded.
+func TestCredentialSaveErrorsAreJSON(t *testing.T) {
+	harness := newRBACRouterHarness(t, false)
+
+	resp := serveRBACRequestWithBody(
+		harness.router,
+		http.MethodPut,
+		"/api/admin/credentials",
+		harness.adminToken,
+		`{"ai_provider":"not-a-provider"}`,
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("unknown-provider save status=%d, want 400; body=%s", resp.Code, resp.Body.String())
+	}
+	if ct := resp.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("error Content-Type = %q, want application/json so the app can show the reason", ct)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not valid JSON: %v (%s)", err, resp.Body.String())
+	}
+	if body["error"] == "" {
+		t.Fatalf("error body missing the error field: %s", resp.Body.String())
+	}
+}
+
 func newStrictOpenAISaveUpstream(t *testing.T) (*httptest.Server, <-chan strictOpenAISaveRequest) {
 	t.Helper()
 	requests := make(chan strictOpenAISaveRequest, 4)
@@ -321,11 +350,33 @@ func assertStrictOpenAISaveRequest(t *testing.T, requests <-chan strictOpenAISav
 		if request.body["model"] != model {
 			t.Fatalf("OpenAI validation model=%v, want %q", request.body["model"], model)
 		}
-		if _, found := request.body["tool_choice"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tool_choice: %#v", request.body)
+		// The probe must carry the same tool payload a real chat serializes —
+		// a provider that rejects a tool schema has to fail at save time, not
+		// on the first real chat (#497) — while tool_choice none keeps the
+		// reply a plain text turn.
+		if choice, found := request.body["tool_choice"]; !found || choice != "none" {
+			t.Fatalf("save validation tool_choice=%v, want \"none\" alongside the tool payload", request.body["tool_choice"])
 		}
-		if _, found := request.body["tools"]; found {
-			t.Fatalf("tool-free OpenAI save validation sent tools: %#v", request.body)
+		tools, ok := request.body["tools"].([]any)
+		if !ok || len(tools) == 0 {
+			t.Fatal("save validation sent no tools; the probe must carry the chat tool payload")
+		}
+		seenGrabRelease := false
+		for _, raw := range tools {
+			tool, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			fn, ok := tool["function"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if fn["name"] == "grab_release" {
+				seenGrabRelease = true
+			}
+		}
+		if !seenGrabRelease {
+			t.Fatal("save validation omitted grab_release; the probe must exercise the full admin catalog")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("OpenAI save validation did not reach the strict upstream")

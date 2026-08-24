@@ -117,7 +117,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body map[string]string
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCredentialSettingsBody)).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		writeJSONError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	// Keep the validated snapshot and its transaction indivisible from another
@@ -140,7 +140,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	for key := range body {
 		if !valid[key] {
-			http.Error(w, `{"error":"unknown credential key: `+key+`"}`, http.StatusBadRequest)
+			writeJSONError(w, "unknown credential key: "+key, http.StatusBadRequest)
 			return
 		}
 		if key == KeyAIProvider || key == KeyAIModel || key == KeyAIHealthCheckEnabled {
@@ -159,7 +159,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			provider = current.Provider
 		}
 		if !IsValidAIProvider(provider) {
-			http.Error(w, `{"error":"unknown AI provider"}`, http.StatusBadRequest)
+			writeJSONError(w, "unknown AI provider", http.StatusBadRequest)
 			return
 		}
 		if !modelSet || model == "" {
@@ -170,7 +170,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(model) > maxAIModelLength {
-			http.Error(w, `{"error":"AI model is too long"}`, http.StatusBadRequest)
+			writeJSONError(w, "AI model is too long", http.StatusBadRequest)
 			return
 		}
 		candidate = AIConfig{Provider: provider, Model: model}
@@ -181,7 +181,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if healthSet {
 		parsed, err := strconv.ParseBool(strings.TrimSpace(healthValue))
 		if err != nil {
-			http.Error(w, `{"error":"ai_health_check_enabled must be true or false"}`, http.StatusBadRequest)
+			writeJSONError(w, "ai_health_check_enabled must be true or false", http.StatusBadRequest)
 			return
 		}
 		healthEnabled = parsed
@@ -206,11 +206,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// catalog to fall back on: selecting it demands both, explicitly.
 	if candidate.Provider == AIProviderLocalOpenAI {
 		if localEndpoint.baseURL == "" {
-			http.Error(w, `{"error":"local_openai_base_url is required for the local provider"}`, http.StatusBadRequest)
+			writeJSONError(w, "local_openai_base_url is required for the local provider", http.StatusBadRequest)
 			return
 		}
 		if strings.TrimSpace(candidate.Model) == "" {
-			http.Error(w, `{"error":"a model ID is required for the local provider"}`, http.StatusBadRequest)
+			writeJSONError(w, "a model ID is required for the local provider", http.StatusBadRequest)
 			return
 		}
 	}
@@ -222,7 +222,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		if value := strings.TrimSpace(body[option.CredentialKey]); value != "" {
 			if len(value) > maxAIKeyLength {
-				http.Error(w, `{"error":"AI credential is too long"}`, http.StatusBadRequest)
+				writeJSONError(w, "AI credential is too long", http.StatusBadRequest)
 				return
 			}
 			if option.ID == AIProviderLocalOpenAI && option.ID != candidate.Provider {
@@ -284,7 +284,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(profiles) > 0 && h.validateSharedAI == nil {
-		http.Error(w, `{"error":"AI settings validation is unavailable"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "AI settings validation is unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	for _, profile := range profiles {
@@ -304,7 +304,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		{key: KeyLocalOpenAIReasoningEffort, value: localEndpoint.effort, set: localEndpoint.effortSet},
 	}
 	if err := h.applyUpdate(body, candidate, providerSet || modelSet, healthEnabled, healthSet, plainWrites); err != nil {
-		http.Error(w, `{"error":"failed to save settings"}`, http.StatusInternalServerError)
+		writeJSONError(w, "failed to save settings", http.StatusInternalServerError)
 		return
 	}
 
@@ -320,22 +320,33 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) reauthorizeSharedAIWrite(w http.ResponseWriter, r *http.Request) bool {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
 	if h.authorizePermission == nil {
-		http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+		writeJSONError(w, "credential authorization is temporarily unavailable", http.StatusServiceUnavailable)
 		return false
 	}
 	if err := h.authorizePermission(r.Context(), claims.UserID, claims.DeviceID, auth.PermissionCredentialsManage); err != nil {
 		if errors.Is(err, auth.ErrAuthUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			http.Error(w, `{"error":"credential authorization is temporarily unavailable"}`, http.StatusServiceUnavailable)
+			writeJSONError(w, "credential authorization is temporarily unavailable", http.StatusServiceUnavailable)
 		} else {
-			http.Error(w, `{"error":"permission denied"}`, http.StatusForbidden)
+			writeJSONError(w, "permission denied", http.StatusForbidden)
 		}
 		return false
 	}
 	return true
+}
+
+// writeJSONError sends {"error": message} with a JSON content type. http.Error
+// would label the body text/plain, which the app's client refuses to decode —
+// every failure on this handler then rendered as a generic "Failed to save
+// settings." instead of the real reason (an expired key sat behind exactly
+// that copy in the #497 report).
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 func writeCredentialValidationError(w http.ResponseWriter, err error) {
@@ -344,12 +355,7 @@ func writeCredentialValidationError(w http.ResponseWriter, err error) {
 	if errors.As(err, &safe) && strings.TrimSpace(safe.SafeUserMessage()) != "" {
 		message = safe.SafeUserMessage()
 	}
-	payload, marshalErr := json.Marshal(map[string]string{"error": message})
-	if marshalErr != nil {
-		http.Error(w, `{"error":"AI settings validation failed. Nothing was saved."}`, http.StatusUnprocessableEntity)
-		return
-	}
-	http.Error(w, string(payload), http.StatusUnprocessableEntity)
+	writeJSONError(w, message, http.StatusUnprocessableEntity)
 }
 
 func credentialValidationDiagnostic(err error) string {
@@ -385,13 +391,13 @@ func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[stri
 		settings.baseURLSet = true
 		settings.baseURL = strings.TrimSpace(value)
 		if len(settings.baseURL) > maxAIBaseURLLength {
-			http.Error(w, `{"error":"`+baseURLKey+` is too long"}`, http.StatusBadRequest)
+			writeJSONError(w, baseURLKey+" is too long", http.StatusBadRequest)
 			return settings, false
 		}
 		if settings.baseURL != "" {
 			parsed, err := url.Parse(settings.baseURL)
 			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-				http.Error(w, `{"error":"`+baseURLKey+` must be an absolute http or https URL"}`, http.StatusBadRequest)
+				writeJSONError(w, baseURLKey+" must be an absolute http or https URL", http.StatusBadRequest)
 				return settings, false
 			}
 		}
@@ -400,7 +406,7 @@ func (h *Handler) effectiveEndpointSettings(w http.ResponseWriter, body map[stri
 		settings.effortSet = true
 		settings.effort = strings.ToLower(strings.TrimSpace(value))
 		if !IsValidAIReasoningEffort(settings.effort) {
-			http.Error(w, `{"error":"`+effortKey+` must be one of none, minimal, low, medium, high, or empty for auto"}`, http.StatusBadRequest)
+			writeJSONError(w, effortKey+" must be one of none, minimal, low, medium, high, or empty for auto", http.StatusBadRequest)
 			return settings, false
 		}
 	}
@@ -481,12 +487,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !valid {
-		http.Error(w, `{"error":"unknown credential key"}`, http.StatusBadRequest)
+		writeJSONError(w, "unknown credential key", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.registry.DeleteCredential(key); err != nil {
-		http.Error(w, `{"error":"failed to delete credential"}`, http.StatusInternalServerError)
+		writeJSONError(w, "failed to delete credential", http.StatusInternalServerError)
 		return
 	}
 

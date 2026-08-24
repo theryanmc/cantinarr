@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../../core/network/long_request_options.dart';
 import '../../ai_assistant/data/ai_provider_models.dart';
 
 export '../../ai_assistant/data/ai_provider_models.dart'
@@ -144,7 +145,7 @@ class CredentialsService {
     await _dio.put(
       '/api/admin/credentials',
       data: credentials,
-      options: Options(receiveTimeout: _aiValidationReceiveTimeout),
+      options: longRequestOptions(timeout: _aiValidationReceiveTimeout),
     );
   }
 
