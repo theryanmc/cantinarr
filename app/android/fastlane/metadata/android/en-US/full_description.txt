@@ -32,4 +32,5 @@ PRIVACY
 The app connects to your own server. API keys stay server-side, availability is computed live from your services, and there are no ads, analytics, or tracking. Poster art loads from the TMDB image CDN. When you use the assistant, your server sends its prompt and context to your personal AI provider or an included provider granted by your admin. If you choose to link ChatGPT, the app opens OpenAI's sign-in page in your browser; your password never passes through Cantinarr.
 
 Website: https://cantinarr.com
+Community: https://discord.gg/zAgRwGwmVB
 Cantinarr is open source (AGPL-3.0): https://github.com/windoze95/cantinarr

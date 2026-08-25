@@ -474,6 +474,16 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateEveryone,
   ),
   SettingsSearchEntry(
+    id: 'root.discord',
+    title: 'Discord',
+    icon: Icons.forum_outlined,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'About',
+    keywords: ['community', 'chat', 'help', 'questions'],
+    gate: gateEveryone,
+  ),
+  SettingsSearchEntry(
     id: 'root.roadmap',
     title: 'Request a feature',
     icon: Icons.how_to_vote_outlined,
