@@ -192,6 +192,19 @@ void main() {
     expect(find.text('Donate'), findsNothing);
   }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
 
+  // A community link is not an external-payment link, so unlike Donate the
+  // Discord tile is deliberately ungated and ships into store review.
+  testWidgets('the Discord tile ships in the store binaries', (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    await _dragSettingsUntilFound(tester, find.text('Discord'));
+    expect(find.text('Discord'), findsOneWidget);
+    expect(
+      find.text('Questions, help, and news from other users'),
+      findsOneWidget,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
   testWidgets('Donate appears outside the iOS/Android store binaries',
       (tester) async {
     await _pumpSettings(tester, _settings(source: AiAccessSource.shared));

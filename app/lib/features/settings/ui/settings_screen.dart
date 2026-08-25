@@ -458,6 +458,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
             ),
             _SettingsTile(
+              icon: Icons.forum_outlined,
+              title: 'Discord',
+              subtitle: 'Questions, help, and news from other users',
+              onTap: () => launchUrl(
+                Uri.parse(_discordUrl),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
+            _SettingsTile(
               icon: Icons.how_to_vote_outlined,
               title: 'Request a feature',
               subtitle: 'Vote on the roadmap — no account needed',
@@ -565,6 +574,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         return;
       case 'root.github':
         launchUrl(Uri.parse(_githubUrl),
+            mode: LaunchMode.externalApplication);
+        return;
+      case 'root.discord':
+        launchUrl(Uri.parse(_discordUrl),
             mode: LaunchMode.externalApplication);
         return;
       case 'root.roadmap':
@@ -913,6 +926,7 @@ String _aiAccessSubtitle(AiSettings? settings) {
 }
 
 const _githubUrl = 'https://github.com/windoze95/cantinarr';
+const _discordUrl = 'https://discord.gg/zAgRwGwmVB';
 const _roadmapUrl = 'https://cantinarr.com/roadmap/';
 const _donateUrl = 'https://github.com/sponsors/windoze95';
 
