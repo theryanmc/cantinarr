@@ -86,8 +86,12 @@ class LibraryAuthorsRow extends ConsumerWidget {
 }
 
 /// The row's fixed height for a given avatar size: the circle, plus room for a
-/// two-line name and the count line beneath it.
-double authorAvatarRowHeight(double avatarSize) => avatarSize + 62;
+/// two-line name and a two-line count beneath it.
+///
+/// The count gets two lines because it is the line that must not be cut off:
+/// "2 of 4 books available" says what the number counted, and an ellipsis
+/// turns it back into a bare number that reads as the whole library.
+double authorAvatarRowHeight(double avatarSize) => avatarSize + 76;
 
 /// One author in the browse row: a circular portrait, the name, and what the
 /// library holds by them.
@@ -144,12 +148,13 @@ class AuthorAvatarCard extends StatelessWidget {
               const SizedBox(height: 2),
               Text(
                 count,
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 11,
+                  height: 1.25,
                 ),
               ),
             ],
