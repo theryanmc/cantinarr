@@ -17,10 +17,12 @@ import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../request/data/book_ownership.dart';
 import '../data/book_authors_service.dart';
+import '../data/book_series_service.dart';
 import '../data/book_library_service.dart';
 import '../data/recent_books_service.dart';
 import '../logic/book_ownership_matcher.dart';
 import 'library_authors_row.dart';
+import 'library_series_row.dart';
 import 'recently_added_books_row.dart';
 
 /// Dashboard Books tab: search Chaptarr's catalog (books/authors) and request a
@@ -71,6 +73,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ref.invalidate(recentBooksForInstanceProvider(instanceId));
     ref.invalidate(recentBooksProvider);
     ref.invalidate(bookAuthorsProvider);
+    ref.invalidate(bookSeriesProvider);
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
@@ -303,6 +306,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
                 if (idle) ...[
                   const RecentlyAddedBooksRow(),
                   const LibraryAuthorsRow(),
+                  const LibrarySeriesRow(),
                 ],
                 Padding(
                   padding: const EdgeInsets.all(32),

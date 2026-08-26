@@ -7,6 +7,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/section_header.dart';
+import '../../../core/widgets/section_sort_menu.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../data/book_authors_service.dart';
 
@@ -62,22 +63,15 @@ class LibraryAuthorsRow extends ConsumerWidget {
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // A row that simply stops at its cap reads as the whole
-                  // library. When it is holding some back, it says how many
-                  // rather than letting the shelf's end imply there are none.
-                  if ((page?.hiddenCount ?? 0) > 0) ...[
-                    Text(
-                      '${authors.length} of ${page!.total}',
-                      style: const TextStyle(
-                        color: AppTheme.textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  _AuthorSortMenu(
+                  SectionTruncationNote(
+                    shown: authors.length,
+                    total: page?.total ?? authors.length,
+                  ),
+                  SectionSortMenu<AuthorSort>(
+                    tooltip: 'Sort authors',
+                    options: AuthorSort.values,
                     selected: ref.watch(bookAuthorsSortProvider),
+                    labelOf: (option) => option.label,
                     onSelected: (next) =>
                         ref.read(bookAuthorsSortProvider.notifier).state = next,
                   ),
@@ -107,68 +101,6 @@ class LibraryAuthorsRow extends ConsumerWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// The Authors row's order control, anchored to the right of its heading.
-///
-/// It names the current order rather than showing a bare icon: the row's order
-/// is not self-evident from a shelf of faces, and an unlabelled control leaves
-/// the user to infer it from the cards.
-class _AuthorSortMenu extends StatelessWidget {
-  final AuthorSort selected;
-  final ValueChanged<AuthorSort> onSelected;
-
-  const _AuthorSortMenu({required this.selected, required this.onSelected});
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<AuthorSort>(
-      tooltip: 'Sort authors',
-      initialValue: selected,
-      onSelected: onSelected,
-      position: PopupMenuPosition.under,
-      itemBuilder: (_) => [
-        for (final option in AuthorSort.values)
-          PopupMenuItem(
-            value: option,
-            child: Row(
-              children: [
-                if (option == selected)
-                  const Icon(Icons.check, size: 18, color: AppTheme.accent)
-                else
-                  const SizedBox(width: 18),
-                const SizedBox(width: 8),
-                Text(option.label),
-              ],
-            ),
-          ),
-      ],
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
-        decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.border),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              selected.label,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 4),
-            const Icon(Icons.arrow_drop_down,
-                size: 18, color: AppTheme.textSecondary),
-          ],
-        ),
       ),
     );
   }
