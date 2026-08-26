@@ -181,7 +181,6 @@ var AIProviders = []AIProviderOption{
 			{ID: "gemini-3.1-pro-preview-customtools", Label: "Gemini 3.1 Pro Preview Custom Tools", Description: "Gemini 3.1 Pro endpoint tuned for custom tool-heavy workflows"},
 			{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Description: "Advanced reasoning and coding"},
 			{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Description: "Low-latency reasoning"},
-			{ID: "gemini-2.5-flash-lite", Label: "Gemini 2.5 Flash-Lite", Description: "Fastest budget Gemini option"},
 		},
 	},
 	{
