@@ -299,6 +299,47 @@ class _StubAdapter implements HttpClientAdapter {
               audiobook: (monitored: true, downloaded: true)),
         ],
       };
+    } else if (path.endsWith('/api/requests/book-authors')) {
+      // Four cards covering every state the Books tab's Authors row can
+      // render: fully collected, partly collected, tracked but nothing on
+      // disk, and an author the library has not keyed yet (shown, not
+      // openable). Server order is preserved by the row, so these arrive
+      // already sorted the way the server sorts them.
+      body = {
+        'authors': [
+          _libraryAuthor('fa-1', 'Imogen Vale', titles: 6, available: 6),
+          _libraryAuthor('fa-2', 'Marcus Oyelaran', titles: 4, available: 2),
+          _libraryAuthor('fa-3', 'Sonya Petrov', titles: 3, available: 0),
+          _libraryAuthor('', 'Unkeyed Import', titles: 1, available: 0),
+        ],
+      };
+    } else if (path.endsWith('/api/requests/book-author')) {
+      // One author page carrying every per-title verdict at once: both formats
+      // on disk, a format still on the way, something on disk with nothing
+      // pending, a title nobody has requested, and a record whose format truth
+      // could not be resolved (which must render no pill at all).
+      body = {
+        'author': _libraryAuthor('fa-2', 'Marcus Oyelaran',
+            titles: 5, available: 3),
+        'titles': [
+          _ownedTitle('fb-a1', 'The Salt Road', year: 2025,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: true)),
+          _ownedTitle('fb-a2', 'Ninth Harbour', year: 2024,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: false)),
+          _ownedTitle('fb-a3', 'Lantern Season', year: 2022,
+              ebook: (monitored: false, downloaded: true),
+              audiobook: (monitored: false, downloaded: false)),
+          _ownedTitle('fb-a4', 'A Quiet Inventory', year: 2019,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)),
+          _ownedTitle('fb-a5', 'Uncatalogued Edition', year: 0,
+              statusKnown: false,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: false, downloaded: false)),
+        ],
+      };
     } else if (path.contains('/requests')) {
       body = {'requests': []};
     } else if (path.endsWith('/api/admin/credentials')) {
@@ -425,17 +466,39 @@ Map<String, dynamic> _ownedTitle(
   String title, {
   required ({bool monitored, bool downloaded}) ebook,
   required ({bool monitored, bool downloaded}) audiobook,
+  int year = 0,
+  bool statusKnown = true,
 }) =>
     {
       'title': title,
       'author': 'Preview Author',
+      'year': year,
       'foreign_book_id': foreignBookId,
+      'cover': '',
       'ebook': {'monitored': ebook.monitored, 'downloaded': ebook.downloaded},
       'audiobook': {
         'monitored': audiobook.monitored,
         'downloaded': audiobook.downloaded,
       },
-      'status_known': true,
+      'status_known': statusKnown,
+    };
+
+/// One `/api/requests/book-authors` entry. An empty [foreignAuthorId] is the
+/// not-yet-keyed author the row shows but refuses to open.
+Map<String, dynamic> _libraryAuthor(
+  String foreignAuthorId,
+  String name, {
+  required int titles,
+  required int available,
+}) =>
+    {
+      'foreign_author_id': foreignAuthorId,
+      'name': name,
+      // Empty image: the card falls back to its placeholder icon, so the
+      // preview needs no image host.
+      'image': '',
+      'title_count': titles,
+      'available_count': available,
     };
 
 /// A `YYYY-MM-DD` calendar date [days] from today (negative for the past), so

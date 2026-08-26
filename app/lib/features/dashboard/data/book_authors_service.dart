@@ -1,0 +1,159 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/network/backend_client.dart';
+import '../../../core/providers/instance_provider.dart';
+import '../../request/data/book_ownership.dart';
+
+/// One author the book library holds titles for.
+///
+/// Counts are per *title*, not per record: a title owned as both an ebook and an
+/// audiobook is two Chaptarr records sharing a foreignBookId, and the server
+/// reduces them the same way the ownership digest does before counting.
+class LibraryAuthor {
+  /// The metadata-provider id this author is addressed by. Empty for a record
+  /// the library has not keyed yet, which leaves the author visible but not
+  /// openable — the same treatment a book with no foreignBookId gets.
+  final String foreignAuthorId;
+  final String name;
+
+  /// The author's image path — relative (`/MediaCover/...`) for library art, or
+  /// an absolute metadata-CDN URL. Resolve it through [chaptarrImageSource].
+  final String image;
+
+  /// How many distinct titles by this author the library tracks.
+  final int titleCount;
+
+  /// How many of those have a file on disk in some format.
+  final int availableCount;
+
+  const LibraryAuthor({
+    required this.foreignAuthorId,
+    required this.name,
+    this.image = '',
+    this.titleCount = 0,
+    this.availableCount = 0,
+  });
+
+  factory LibraryAuthor.fromJson(Map<String, dynamic> json) => LibraryAuthor(
+        foreignAuthorId: json['foreign_author_id'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        image: json['image'] as String? ?? '',
+        titleCount: (json['title_count'] as num?)?.toInt() ?? 0,
+        availableCount: (json['available_count'] as num?)?.toInt() ?? 0,
+      );
+
+  /// The card's one-line count, in requester vocabulary. It always says what the
+  /// number counted, so "3 of 12 available" can never be misread as a library
+  /// that only holds three books.
+  String get countLabel {
+    if (titleCount <= 0) return '';
+    final books = titleCount == 1 ? 'book' : 'books';
+    if (availableCount <= 0) return '$titleCount $books';
+    if (availableCount >= titleCount) return '$titleCount $books · all available';
+    return '$availableCount of $titleCount $books available';
+  }
+}
+
+/// One author plus every title of theirs the library tracks.
+class BookAuthorDetail {
+  final LibraryAuthor author;
+
+  /// The author's titles, newest first, each carrying the same per-format
+  /// ownership the search digest uses — so the page renders the same pills.
+  final List<OwnedTitle> titles;
+
+  const BookAuthorDetail({required this.author, required this.titles});
+
+  factory BookAuthorDetail.fromJson(Map<String, dynamic> json) {
+    final rawTitles = json['titles'];
+    return BookAuthorDetail(
+      author: LibraryAuthor.fromJson(
+          json['author'] as Map<String, dynamic>? ?? const {}),
+      titles: rawTitles is List
+          ? rawTitles
+              .whereType<Map<String, dynamic>>()
+              .map(OwnedTitle.fromJson)
+              .toList()
+          : const [],
+    );
+  }
+}
+
+/// Fetches the book library's authors, so the Books tab can offer a browse row
+/// and an author page.
+class BookAuthorsService {
+  final Dio _dio;
+
+  BookAuthorsService({required Dio backendDio}) : _dio = backendDio;
+
+  Future<List<LibraryAuthor>> fetchAuthors({String? instanceId}) async {
+    final resp = await _dio.get(
+      '/api/requests/book-authors',
+      queryParameters: {
+        if (instanceId != null && instanceId.isNotEmpty)
+          'instance_id': instanceId,
+      },
+    );
+    final data = resp.data;
+    final authors = data is Map ? data['authors'] : null;
+    if (authors is! List) {
+      throw const FormatException('Book authors response is invalid');
+    }
+    return authors
+        .whereType<Map<String, dynamic>>()
+        .map(LibraryAuthor.fromJson)
+        .toList();
+  }
+
+  Future<BookAuthorDetail> fetchAuthor(
+    String foreignAuthorId, {
+    String? instanceId,
+  }) async {
+    final resp = await _dio.get(
+      '/api/requests/book-author',
+      queryParameters: {
+        'foreign_id': foreignAuthorId,
+        if (instanceId != null && instanceId.isNotEmpty)
+          'instance_id': instanceId,
+      },
+    );
+    final data = resp.data;
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('Book author response is invalid');
+    }
+    return BookAuthorDetail.fromJson(data);
+  }
+}
+
+/// The authors of one book library. Keyed on the instance id so switching
+/// libraries can never show the previous library's authors.
+final bookAuthorsForInstanceProvider = FutureProvider.autoDispose
+    .family<List<LibraryAuthor>, String?>((ref, instanceId) async {
+  final dio = ref.read(backendClientProvider);
+  return BookAuthorsService(backendDio: dio).fetchAuthors(instanceId: instanceId);
+});
+
+/// The row follows the drawer's active Chaptarr instance, like search does.
+final bookAuthorsProvider =
+    FutureProvider.autoDispose<List<LibraryAuthor>>((ref) async {
+  final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
+  return ref.watch(bookAuthorsForInstanceProvider(instanceId).future);
+});
+
+/// The author a detail page is pinned to: an explicit instance id plus the
+/// author's foreignAuthorId, so a pinned page can never read another library's
+/// answer for the same author.
+typedef BookAuthorRef = ({String? instanceId, String foreignAuthorId});
+
+/// One author's page data. Deliberately uncached server-side — the page is
+/// opened to decide what to request, so it must show a book requested seconds
+/// ago as Requested.
+final bookAuthorDetailProvider = FutureProvider.autoDispose
+    .family<BookAuthorDetail, BookAuthorRef>((ref, target) async {
+  final dio = ref.read(backendClientProvider);
+  return BookAuthorsService(backendDio: dio).fetchAuthor(
+    target.foreignAuthorId,
+    instanceId: target.instanceId,
+  );
+});
