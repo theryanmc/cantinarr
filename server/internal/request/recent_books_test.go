@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,28 +49,83 @@ func TestBuildRecentBooksOrdersByFileImportNotRecordAge(t *testing.T) {
 	}
 }
 
-// TestBuildRecentBooksKeepsEbookAndAudiobookSeparate: the two formats are
-// distinct arrivals at distinct times. Merging them would hide the second.
-func TestBuildRecentBooksKeepsEbookAndAudiobookSeparate(t *testing.T) {
+// TestBuildRecentBooksMergesTheFormatsOfOneTitle: a title's ebook and audiobook
+// are separate records sharing a foreignBookId. They were once two cards,
+// because each announced its own format. The card now leads with the title's
+// ownership — the same text and the same link for both records — so a second
+// card says nothing the first did not.
+func TestBuildRecentBooksMergesTheFormatsOfOneTitle(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	books := []chaptarr.Book{
 		recentBook(1, "fb-1", "Ahsoka", "ebook"),
 		recentBook(2, "fb-1", "Ahsoka", "audiobook"),
 	}
 	files := map[int][]chaptarr.BookFile{
-		1: {{BookID: 1, DateAdded: at(now.AddDate(0, 0, -2))}},
+		1: {{BookID: 1, DateAdded: at(now.AddDate(0, 0, -30))}},
 		2: {{BookID: 2, DateAdded: at(now)}},
 	}
 
 	items := buildRecentBooks(books, files, 10)
-	if len(items) != 2 {
-		t.Fatalf("items = %+v, want both formats", items)
+
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want one card for the title", items)
 	}
-	if items[0].Format != "audiobook" || items[1].Format != "ebook" {
-		t.Errorf("formats = %q,%q, want audiobook then ebook", items[0].Format, items[1].Format)
+	// Merging must not bury the late arrival: the card carries the newest
+	// date, so an audiobook landing today floats a title whose ebook arrived a
+	// month ago back to the front of the row.
+	if !items[0].ImportedAt.Equal(now) {
+		t.Errorf("ImportedAt = %v, want the newest arrival %v", items[0].ImportedAt, now)
 	}
-	if items[0].ForeignBookID != items[1].ForeignBookID {
-		t.Error("the two records should share one foreignBookId")
+	// No single format describes the card, and naming either would be wrong.
+	if items[0].Format != "" {
+		t.Errorf("Format = %q, want empty for a card covering both formats", items[0].Format)
+	}
+	if items[0].ForeignBookID != "fb-1" {
+		t.Errorf("ForeignBookID = %q, want the shared id", items[0].ForeignBookID)
+	}
+}
+
+// TestBuildRecentBooksMergesDuplicateRecordsOfOneFormat: a library really does
+// hold two ebook records of the same title. They share a foreignBookId, so they
+// are the same book by the library's own identity rule — and they render the
+// same text behind the same link.
+func TestBuildRecentBooksMergesDuplicateRecordsOfOneFormat(t *testing.T) {
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	books := []chaptarr.Book{
+		recentBook(11185, "fb-hobbit", "The Hobbit", "ebook"),
+		recentBook(11179, "fb-hobbit", "The Hobbit", "ebook"),
+	}
+	files := map[int][]chaptarr.BookFile{
+		11185: {{BookID: 11185, DateAdded: at(now)}},
+		11179: {{BookID: 11179, DateAdded: at(now)}},
+	}
+
+	items := buildRecentBooks(books, files, 10)
+
+	if len(items) != 1 {
+		t.Fatalf("items = %+v, want one card", items)
+	}
+	// Every record agreed on the format, so the card can still name it.
+	if items[0].Format != "ebook" {
+		t.Errorf("Format = %q, want ebook", items[0].Format)
+	}
+}
+
+// TestBuildRecentBooksNeverMergesRecordsWithoutAForeignBookID: an unkeyed record
+// has no identity to share, so it can never be folded into another title.
+func TestBuildRecentBooksNeverMergesRecordsWithoutAForeignBookID(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	books := []chaptarr.Book{
+		recentBook(1, "", "One Unkeyed Book", "ebook"),
+		recentBook(2, "", "Another Unkeyed Book", "ebook"),
+	}
+	files := map[int][]chaptarr.BookFile{
+		1: {{BookID: 1, DateAdded: at(now)}},
+		2: {{BookID: 2, DateAdded: at(now.AddDate(0, 0, -1))}},
+	}
+
+	if items := buildRecentBooks(books, files, 10); len(items) != 2 {
+		t.Fatalf("items = %+v, want both unkeyed records kept apart", items)
 	}
 }
 
@@ -202,7 +258,9 @@ func TestBuildRecentBooksRespectsLimit(t *testing.T) {
 	var books []chaptarr.Book
 	files := map[int][]chaptarr.BookFile{}
 	for i := 1; i <= 12; i++ {
-		books = append(books, recentBook(i, "fb", "Book", "ebook"))
+		// Distinct ids: same-id records are one title now, so a shared id here
+		// would be measuring the merge rather than the limit.
+		books = append(books, recentBook(i, fmt.Sprintf("fb-%d", i), "Book", "ebook"))
 		files[i] = []chaptarr.BookFile{{BookID: i, DateAdded: at(now.Add(-time.Duration(i) * time.Hour))}}
 	}
 

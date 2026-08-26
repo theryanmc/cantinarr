@@ -16,9 +16,11 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../request/data/book_ownership.dart';
+import '../data/book_authors_service.dart';
 import '../data/book_library_service.dart';
 import '../data/recent_books_service.dart';
 import '../logic/book_ownership_matcher.dart';
+import 'library_authors_row.dart';
 import 'recently_added_books_row.dart';
 
 /// Dashboard Books tab: search Chaptarr's catalog (books/authors) and request a
@@ -68,6 +70,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ref.invalidate(ownedBooksProvider);
     ref.invalidate(recentBooksForInstanceProvider(instanceId));
     ref.invalidate(recentBooksProvider);
+    ref.invalidate(bookAuthorsProvider);
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 
@@ -284,9 +287,9 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ];
 
     if (ordered.isEmpty) {
-      // The Recently Added row belongs to the idle tab only. A search that
-      // found nothing should say so plainly, not bury the message under a row
-      // of unrelated books.
+      // The browse rows belong to the idle tab only. A search that found
+      // nothing should say so plainly, not bury the message under rows of
+      // unrelated books and authors.
       final idle = !_searched && _controller.text.trim().isEmpty;
       return LayoutBuilder(
         builder: (context, constraints) => SingleChildScrollView(
@@ -297,7 +300,10 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
               mainAxisAlignment:
                   idle ? MainAxisAlignment.start : MainAxisAlignment.center,
               children: [
-                if (idle) const RecentlyAddedBooksRow(),
+                if (idle) ...[
+                  const RecentlyAddedBooksRow(),
+                  const LibraryAuthorsRow(),
+                ],
                 Padding(
                   padding: const EdgeInsets.all(32),
                   child: Column(

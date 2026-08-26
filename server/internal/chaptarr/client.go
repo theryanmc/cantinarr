@@ -98,9 +98,12 @@ type AuthorStatistics struct {
 }
 
 type Author struct {
-	ID                         int              `json:"id"`
-	AuthorName                 string           `json:"authorName"`
-	ForeignAuthorID            string           `json:"foreignAuthorId"`
+	ID              int    `json:"id"`
+	AuthorName      string `json:"authorName"`
+	ForeignAuthorID string `json:"foreignAuthorId"`
+	// Added is when this author entered the library. Chaptarr sets it on every
+	// author record; it is the only date an author carries.
+	Added                      *time.Time       `json:"added,omitempty"`
 	TitleSlug                  string           `json:"titleSlug"`
 	Overview                   string           `json:"overview"`
 	Status                     string           `json:"status"`
