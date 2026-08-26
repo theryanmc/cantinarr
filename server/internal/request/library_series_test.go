@@ -309,3 +309,159 @@ func TestBookSeriesNotFoundMapsTo404(t *testing.T) {
 		t.Errorf("status = %d, want 404", got)
 	}
 }
+
+// coverBook is an owned series book with art, for the front-cover tests.
+func coverBook(id int, foreignID, seriesTitle, url string) chaptarr.Book {
+	b := seriesBook(id, 10, foreignID, seriesTitle, 1)
+	b.Title = url // distinct, deterministic titles for the final tie-break
+	b.Images = []chaptarr.Image{{CoverType: "cover", URL: url}}
+	return b
+}
+
+// unownedCoverBook is the same, for a book the library knows about but holds
+// no file for.
+func unownedCoverBook(id int, foreignID, seriesTitle, url string) chaptarr.Book {
+	b := coverBook(id, foreignID, seriesTitle, url)
+	b.Statistics.BookFileCount = 0
+	return b
+}
+
+// TestSeriesCoversLeadWithBookOne is the rule a real library made necessary.
+// Boxed sets, companions and omnibus collections are filed at position 0, and
+// 0 sorts before 1 — so ranking on the raw number put a photograph of book
+// spines on the front of Discworld instead of its first book.
+func TestSeriesCoversLeadWithBookOne(t *testing.T) {
+	covers := seriesCovers([]chaptarr.Book{
+		coverBook(1, "fb-box", "Discworld #0", "/MediaCover/boxed-set.jpg"),
+		coverBook(2, "fb-2", "Discworld #2", "/MediaCover/2.jpg"),
+		coverBook(3, "fb-1", "Discworld #1", "/MediaCover/1.jpg"),
+	})
+
+	want := []string{"/MediaCover/1.jpg", "/MediaCover/2.jpg", "/MediaCover/boxed-set.jpg"}
+	if len(covers) != len(want) {
+		t.Fatalf("covers = %v, want %v", covers, want)
+	}
+	for i, url := range want {
+		if covers[i] != url {
+			t.Fatalf("covers = %v, want %v — book one leads, the collection trails", covers, want)
+		}
+	}
+}
+
+// TestSeriesCoversFallToTheLowestNumberedBook: a library that holds book 4 but
+// not books 1-3 leads with 4, not with whatever unnumbered extra it happens to
+// have.
+func TestSeriesCoversFallToTheLowestNumberedBook(t *testing.T) {
+	covers := seriesCovers([]chaptarr.Book{
+		coverBook(1, "fb-companion", "Discworld Companion", "/MediaCover/companion.jpg"),
+		coverBook(2, "fb-9", "Discworld #9", "/MediaCover/9.jpg"),
+		coverBook(3, "fb-box", "Discworld #0", "/MediaCover/boxed-set.jpg"),
+		coverBook(4, "fb-4", "Discworld #4", "/MediaCover/4.jpg"),
+	})
+
+	if len(covers) == 0 || covers[0] != "/MediaCover/4.jpg" {
+		t.Fatalf("covers = %v, want the lowest numbered book (4) at the front", covers)
+	}
+	if covers[1] != "/MediaCover/9.jpg" {
+		t.Errorf("covers = %v, want the rest of the run before the extras", covers)
+	}
+}
+
+// TestSeriesCoversSkipABookOneWithNoArt: book one leads only if the library can
+// actually draw it. A missing cover hands the front to the next in the run
+// rather than leaving an empty frame.
+func TestSeriesCoversSkipABookOneWithNoArt(t *testing.T) {
+	first := seriesBook(1, 10, "fb-1", "Discworld #1", 1) // no images
+	covers := seriesCovers([]chaptarr.Book{
+		first,
+		coverBook(2, "fb-3", "Discworld #3", "/MediaCover/3.jpg"),
+		coverBook(3, "fb-2", "Discworld #2", "/MediaCover/2.jpg"),
+	})
+
+	if len(covers) != 2 || covers[0] != "/MediaCover/2.jpg" {
+		t.Fatalf("covers = %v, want book two at the front", covers)
+	}
+}
+
+// TestSeriesCoversPreferAPrequelOverAnUnnumberedExtra: a 0.5 novella is still
+// part of the story; a record with no stated position is the last resort.
+func TestSeriesCoversPreferAPrequelOverAnUnnumberedExtra(t *testing.T) {
+	covers := seriesCovers([]chaptarr.Book{
+		coverBook(1, "fb-x", "Discworld Companion Books", "/MediaCover/extra.jpg"),
+		coverBook(2, "fb-half", "Discworld #0.5", "/MediaCover/half.jpg"),
+	})
+
+	if len(covers) != 2 || covers[0] != "/MediaCover/half.jpg" {
+		t.Errorf("covers = %v, want the numbered prequel ahead of the extra", covers)
+	}
+}
+
+func TestSeriesCoverRankTiers(t *testing.T) {
+	cases := map[string]int{
+		"1": 0, "2": 0, "13": 0, "1.5": 0, "2A": 0,
+		"0": 1, "0.5": 1,
+		"": 2, "下": 2,
+	}
+	for position, want := range cases {
+		t.Run(position, func(t *testing.T) {
+			if tier, _ := seriesCoverRank(position); tier != want {
+				t.Errorf("seriesCoverRank(%q) tier = %d, want %d", position, tier, want)
+			}
+		})
+	}
+}
+
+// TestSeriesCoversLeadWithTheFirstBookOnDisk: this row is a library, not a
+// bibliography. Discworld's front cover was a 1520-page omnibus the library
+// holds no file for, while the book one it does hold sat behind it — a picture
+// of something you do not own, next to a count that already says what is
+// missing.
+func TestSeriesCoversLeadWithTheFirstBookOnDisk(t *testing.T) {
+	covers := seriesCovers([]chaptarr.Book{
+		unownedCoverBook(1, "fb-1", "Discworld #1", "/MediaCover/omnibus.jpg"),
+		coverBook(2, "fb-4", "Discworld #4", "/MediaCover/4.jpg"),
+		coverBook(3, "fb-2", "Discworld #2", "/MediaCover/2.jpg"),
+	})
+
+	if len(covers) == 0 || covers[0] != "/MediaCover/2.jpg" {
+		t.Fatalf("covers = %v, want the lowest-numbered owned book at the front", covers)
+	}
+	// The un-owned one still has a place in the stack; it just does not lead.
+	if covers[len(covers)-1] != "/MediaCover/omnibus.jpg" {
+		t.Errorf("covers = %v, want the un-owned cover to trail", covers)
+	}
+}
+
+// TestSeriesCoversFallBackToUnownedArt: a series page can be opened for a
+// series the library holds no files of at all, and an empty frame says less
+// than the metadata's own art.
+func TestSeriesCoversFallBackToUnownedArt(t *testing.T) {
+	covers := seriesCovers([]chaptarr.Book{
+		unownedCoverBook(1, "fb-2", "Discworld #2", "/MediaCover/2.jpg"),
+		unownedCoverBook(2, "fb-1", "Discworld #1", "/MediaCover/1.jpg"),
+	})
+
+	if len(covers) != 2 || covers[0] != "/MediaCover/1.jpg" {
+		t.Fatalf("covers = %v, want book one even though nothing is on disk", covers)
+	}
+}
+
+// TestSeriesCoversAreStableAcrossFetches: Discworld files twenty records at
+// position 1. Nothing in the library says which is "really" book one, so the
+// choice must at least be the same one every time rather than following
+// whatever order the arr answered in.
+func TestSeriesCoversAreStableAcrossFetches(t *testing.T) {
+	forward := []chaptarr.Book{
+		coverBook(1, "fb-a", "Discworld #1", "/MediaCover/equal-rites.jpg"),
+		coverBook(2, "fb-b", "Discworld #1", "/MediaCover/guards.jpg"),
+		coverBook(3, "fb-c", "Discworld #1", "/MediaCover/colour.jpg"),
+	}
+	reversed := []chaptarr.Book{forward[2], forward[1], forward[0]}
+
+	first := seriesCovers(forward)
+	second := seriesCovers(reversed)
+
+	if len(first) == 0 || len(second) == 0 || first[0] != second[0] {
+		t.Fatalf("front cover = %v then %v, want the same either way", first, second)
+	}
+}

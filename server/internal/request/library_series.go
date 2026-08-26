@@ -335,41 +335,82 @@ func buildLibrarySeries(books []chaptarr.Book) []LibrarySeries {
 	return items
 }
 
-// seriesCovers picks the covers a series card stacks: the earliest books
-// first, because a series is recognised by where it starts, and the stack must
-// stay put as later books arrive.
+// seriesCoverRank places a book in the running for the front of the stack.
+//
+// A series is recognised by book one, so the main numbered run leads: any
+// position of 1 or more sorts ahead of everything else, ascending. Everything
+// outside that run follows, and that matters more than it sounds — real
+// libraries file boxed sets, companions and omnibus collections at position 0,
+// and 0 sorts before 1, so ranking on the raw number alone put a photograph of
+// book spines on the front of Discworld and "The Complete Wheel of Time" on
+// the front of that one.
+//
+// Tier 0 is the numbered run (>= 1), tier 1 the sub-one positions (0 for
+// collections, 0.5 for the occasional prequel novella), tier 2 the records the
+// series states no position for at all.
+func seriesCoverRank(position string) (tier int, key float64) {
+	value, ok := seriesPositionKey(position)
+	switch {
+	case !ok:
+		return 2, 0
+	case value >= 1:
+		return 0, value
+	default:
+		return 1, value
+	}
+}
+
+// seriesCovers picks the covers a series card stacks: the first book the
+// library actually holds, then the run in order behind it.
+//
+// Ownership outranks position, because this row is about a library rather than
+// a bibliography — showing book one's art for a book nobody has is a picture of
+// something you do not own, and the count beside it already says how much of
+// the series is missing. So book one leads whenever it is on disk; otherwise
+// the lowest-numbered book that is; and only if the library holds none of them
+// with art does an un-owned cover fill the frame.
 //
 // Duplicates are dropped — several records of one title share its art, and
 // stacking the same cover three times reads as a rendering fault rather than a
-// series. Books the series states no position for can still supply a cover,
-// but only once the positioned ones are exhausted.
+// series. The final tie-break is the title, so a series whose metadata files
+// several records at the same position (Discworld has twenty at #1, including
+// two omnibuses) picks the same one on every fetch instead of following
+// whatever order the arr happened to answer in.
 func seriesCovers(books []chaptarr.Book) []string {
 	type candidate struct {
-		key    float64
-		hasKey bool
-		order  int
-		cover  string
+		owned bool
+		tier  int
+		key   float64
+		title string
+		cover string
 	}
 	candidates := make([]candidate, 0, len(books))
-	for i, book := range books {
+	for _, book := range books {
 		cover := clientReachableCover(book)
 		if cover == "" {
 			continue
 		}
 		_, position := parseSeriesTitle(book.SeriesTitle)
-		value, ok := seriesPositionKey(position)
+		tier, key := seriesCoverRank(position)
 		candidates = append(candidates, candidate{
-			key: value, hasKey: ok, order: i, cover: cover,
+			owned: book.Statistics.BookFileCount > 0,
+			tier:  tier,
+			key:   key,
+			title: strings.ToLower(strings.TrimSpace(book.Title)),
+			cover: cover,
 		})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].hasKey != candidates[j].hasKey {
-			return candidates[i].hasKey
+		if candidates[i].owned != candidates[j].owned {
+			return candidates[i].owned
 		}
-		if candidates[i].hasKey && candidates[i].key != candidates[j].key {
+		if candidates[i].tier != candidates[j].tier {
+			return candidates[i].tier < candidates[j].tier
+		}
+		if candidates[i].key != candidates[j].key {
 			return candidates[i].key < candidates[j].key
 		}
-		return candidates[i].order < candidates[j].order
+		return candidates[i].title < candidates[j].title
 	})
 
 	covers := make([]string, 0, seriesCoverDepth)
