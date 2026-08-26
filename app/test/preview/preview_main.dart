@@ -351,7 +351,9 @@ class _StubAdapter implements HttpClientAdapter {
           for (final s in ordered)
             {
               'name': s.$1,
-              'cover': '',
+              // Empty covers: the card draws its placeholder frames, so the
+              // preview needs no image host and still shows the stack.
+              'covers': const <String>[],
               'title_count': s.$2,
               'available_count': s.$3,
             },
@@ -365,7 +367,7 @@ class _StubAdapter implements HttpClientAdapter {
       body = {
         'series': {
           'name': 'Riverwatch Chronicles',
-          'cover': '',
+          'covers': <String>[],
           'title_count': 6,
           'available_count': 2,
         },

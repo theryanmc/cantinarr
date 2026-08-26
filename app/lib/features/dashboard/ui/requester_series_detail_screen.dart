@@ -157,9 +157,9 @@ class _SeriesHeader extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final cover = instanceId == null
+    final cover = instanceId == null || series.covers.isEmpty
         ? null
-        : chaptarrImageSource(ref, series.cover, instanceId!);
+        : chaptarrImageSource(ref, series.covers.first, instanceId!);
     final count = series.countLabel;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),

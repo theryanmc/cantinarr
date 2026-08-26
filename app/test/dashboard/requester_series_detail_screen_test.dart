@@ -101,7 +101,7 @@ Map<String, dynamic> _title({
 Map<String, dynamic> _detailBody(List<Map<String, dynamic>> titles) => {
       'series': {
         'name': 'The Dresden Files',
-        'cover': '',
+        'covers': <String>[],
         'title_count': 61,
         'available_count': 6,
       },

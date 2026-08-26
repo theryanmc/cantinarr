@@ -5,7 +5,8 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
-import 'package:cantinarr/core/widgets/media_card.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:cantinarr/features/dashboard/ui/library_series_row.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_books_tab.dart';
 import 'package:dio/dio.dart';
@@ -106,13 +107,13 @@ const _authState = AuthState(
 
 Map<String, dynamic> _series({
   String name = 'The Dresden Files',
-  String cover = '',
+  List<String> covers = const [],
   int titleCount = 61,
   int availableCount = 6,
 }) =>
     {
       'name': name,
-      'cover': cover,
+      'covers': covers,
       'title_count': titleCount,
       'available_count': availableCount,
     };
@@ -232,9 +233,10 @@ void main() {
     });
 
     String firstCard() => tester
-        .widgetList<MediaCard>(find.byType(MediaCard))
+        .widgetList<SeriesStackCard>(find.byType(SeriesStackCard))
         .first
-        .title;
+        .series
+        .name;
     expect(firstCard(), 'Zed Holds Many');
 
     await tester.tap(find.text('Most books'));
@@ -272,6 +274,8 @@ void main() {
     expect(find.text('Series'), findsNothing);
   });
 
+  _mainStackTests();
+
   testWidgets('hides the row while a search is active', (tester) async {
     _sizeViewport(tester);
 
@@ -285,5 +289,54 @@ void main() {
     await tester.enterText(find.byType(TextField), '');
     await tester.pumpAndSettle(const Duration(milliseconds: 600));
     expect(find.text('Series'), findsOneWidget);
+  });
+}
+
+void _mainStackTests() {
+  testWidgets('stacks a series\' earliest covers', (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(tester, series: [
+      _series(covers: const [
+        '/MediaCover/1.jpg',
+        '/MediaCover/2.jpg',
+        '/MediaCover/3.jpg',
+      ]),
+    ]);
+
+    final card = tester.widget<SeriesStackCard>(find.byType(SeriesStackCard));
+    expect(card.covers, hasLength(3));
+    // The stack is the whole point: one cover is indistinguishable from the
+    // book cards in the row directly above this one.
+    expect(find.byType(CachedImage), findsNWidgets(3));
+  });
+
+  testWidgets('a series with one cover draws one, in the same frame',
+      (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(
+        tester, series: [_series(covers: const ['/MediaCover/1.jpg'])]);
+
+    final card = tester.widget<SeriesStackCard>(find.byType(SeriesStackCard));
+    expect(card.covers, hasLength(1));
+    expect(find.byType(CachedImage), findsOneWidget);
+    // Same reserved width either way, so a row mixing one-cover and
+    // three-cover series stays even instead of ragged.
+    expect(
+      tester.getSize(find.byType(SeriesStackCard)).width,
+      SeriesStackCard.totalWidth(card.width),
+    );
+  });
+
+  testWidgets('a series with no art still occupies the frame', (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(tester, series: [_series(covers: const [])]);
+
+    // One placeholder frame rather than a collapsed, ragged card.
+    expect(find.byType(SeriesStackCard), findsOneWidget);
+    expect(find.byType(CachedImage), findsOneWidget);
+    expect(find.text('The Dresden Files'), findsOneWidget);
   });
 }

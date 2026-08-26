@@ -1,6 +1,7 @@
 package request
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -141,20 +142,86 @@ func TestBuildLibrarySeriesUnifiesASeriesAcrossAuthors(t *testing.T) {
 	}
 }
 
-// TestBuildLibrarySeriesTakesTheEarliestBooksCover: the first book's art is
-// what a reader recognises a series by, and it must not change as later books
-// arrive.
-func TestBuildLibrarySeriesTakesTheEarliestBooksCover(t *testing.T) {
-	fifth := seriesBook(1, 10, "fb-5", "Discworld #5", 1)
-	fifth.Images = []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/5.jpg"}}
-	first := seriesBook(2, 10, "fb-1", "Discworld #1", 1)
-	first.Images = []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/1.jpg"}}
-
+// TestBuildLibrarySeriesStacksTheEarliestCovers: a series is recognised by
+// where it starts, so the card stacks its earliest books — and the stack must
+// stay put as later ones arrive.
+func TestBuildLibrarySeriesStacksTheEarliestCovers(t *testing.T) {
+	cover := func(id int, foreignID, series, url string) chaptarr.Book {
+		b := seriesBook(id, 10, foreignID, series, 1)
+		b.Images = []chaptarr.Image{{CoverType: "cover", URL: url}}
+		return b
+	}
 	// Fed in the "wrong" order on purpose: position decides, not arrival.
-	got := buildLibrarySeries([]chaptarr.Book{fifth, first})
+	got := buildLibrarySeries([]chaptarr.Book{
+		cover(1, "fb-5", "Discworld #5", "/MediaCover/5.jpg"),
+		cover(2, "fb-1", "Discworld #1", "/MediaCover/1.jpg"),
+		cover(3, "fb-9", "Discworld #9", "/MediaCover/9.jpg"),
+		cover(4, "fb-2", "Discworld #2", "/MediaCover/2.jpg"),
+	})
 
-	if len(got) != 1 || got[0].Cover != "/MediaCover/1.jpg" {
-		t.Fatalf("cover = %+v, want the first book's", got)
+	if len(got) != 1 {
+		t.Fatalf("series = %+v, want one", got)
+	}
+	want := []string{"/MediaCover/1.jpg", "/MediaCover/2.jpg", "/MediaCover/5.jpg"}
+	if len(got[0].Covers) != len(want) {
+		t.Fatalf("covers = %v, want the three earliest %v", got[0].Covers, want)
+	}
+	for i, url := range want {
+		if got[0].Covers[i] != url {
+			t.Fatalf("covers = %v, want %v", got[0].Covers, want)
+		}
+	}
+}
+
+// TestSeriesCoversDropDuplicateArt: a title's ebook and audiobook records share
+// one cover, so an unguarded stack would draw the same image three times and
+// read as a rendering fault rather than a series.
+func TestSeriesCoversDropDuplicateArt(t *testing.T) {
+	same := func(id int, foreignID, series string) chaptarr.Book {
+		b := seriesBook(id, 10, foreignID, series, 1)
+		b.Images = []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/1.jpg"}}
+		return b
+	}
+	different := seriesBook(3, 10, "fb-2", "Discworld #2", 1)
+	different.Images = []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/2.jpg"}}
+
+	covers := seriesCovers([]chaptarr.Book{
+		same(1, "fb-1", "Discworld #1"),
+		same(2, "fb-1", "Discworld #1"),
+		different,
+	})
+
+	if len(covers) != 2 || covers[0] != "/MediaCover/1.jpg" || covers[1] != "/MediaCover/2.jpg" {
+		t.Errorf("covers = %v, want each distinct cover once", covers)
+	}
+}
+
+// TestSeriesCoversFallBackToUnpositionedBooks: a series whose numbered books
+// carry no art still gets a stack rather than an empty frame.
+func TestSeriesCoversFallBackToUnpositionedBooks(t *testing.T) {
+	numbered := seriesBook(1, 10, "fb-1", "Discworld #1", 1) // no images
+	companion := seriesBook(2, 10, "fb-2", "Discworld Companion", 1)
+	companion.Images = []chaptarr.Image{{CoverType: "cover", URL: "/MediaCover/c.jpg"}}
+
+	covers := seriesCovers([]chaptarr.Book{numbered, companion})
+
+	if len(covers) != 1 || covers[0] != "/MediaCover/c.jpg" {
+		t.Errorf("covers = %v, want the companion's art", covers)
+	}
+}
+
+// TestSeriesCoversStopAtTheStackDepth keeps a long series from shipping art the
+// card will never draw.
+func TestSeriesCoversStopAtTheStackDepth(t *testing.T) {
+	var books []chaptarr.Book
+	for i := 1; i <= 10; i++ {
+		b := seriesBook(i, 10, fmt.Sprintf("fb-%d", i), fmt.Sprintf("Discworld #%d", i), 1)
+		b.Images = []chaptarr.Image{{CoverType: "cover", URL: fmt.Sprintf("/MediaCover/%d.jpg", i)}}
+		books = append(books, b)
+	}
+
+	if got := seriesCovers(books); len(got) != seriesCoverDepth {
+		t.Errorf("covers = %v, want %d", got, seriesCoverDepth)
 	}
 }
 

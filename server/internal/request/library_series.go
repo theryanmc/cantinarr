@@ -19,6 +19,9 @@ var ErrBookSeriesNotFound = errors.New("series is not in this book library")
 // drops this key on any library change.
 const bookSeriesCacheTTL = 60 * time.Second
 
+// seriesCoverDepth is how many covers a series card stacks.
+const seriesCoverDepth = 3
+
 // bookSeriesMaxItems caps the browse row, applied after the requested order for
 // the same reason the authors row does it.
 const bookSeriesMaxItems = 200
@@ -52,9 +55,12 @@ type LibrarySeries struct {
 	// unifies the 25-odd series that legitimately span authors, which a
 	// per-author id could not.
 	Name string `json:"name"`
-	// Cover is the earliest book's cover, under the same client-reachable rule
-	// as every other image the server hands out.
-	Cover string `json:"cover"`
+	// Covers are the earliest books' covers, in reading order, under the same
+	// client-reachable rule as every other image the server hands out. The row
+	// stacks them so a series looks like a run of books rather than one of
+	// them; a series with a single cover simply has one. Capped at
+	// [seriesCoverDepth] because a deeper stack renders as a smudge.
+	Covers []string `json:"covers"`
 	// TitleCount is how many distinct titles of the series the library tracks.
 	TitleCount int `json:"title_count"`
 	// AvailableCount is how many of those have a file on disk in any format.
@@ -264,7 +270,7 @@ func (s *Service) GetLibrarySeriesDetailForInstance(userID int64, name, requeste
 		detail.Series = LibrarySeries{
 			Name:       wanted,
 			TitleCount: len(titles),
-			Cover:      firstSeriesCover(matched, positions),
+			Covers:     seriesCovers(matched),
 		}
 	}
 	return detail, nil
@@ -279,23 +285,22 @@ func (s *Service) GetLibrarySeriesDetailForInstance(userID int64, name, requeste
 // of mostly things you do not.
 func buildLibrarySeries(books []chaptarr.Book) []LibrarySeries {
 	type group struct {
-		item      LibrarySeries
-		titles    map[string]bool // group key -> has a file
-		coverKey  float64
-		coverSeen bool
+		name    string
+		titles  map[string]bool // group key -> has a file
+		records []chaptarr.Book
 	}
 	groups := make(map[string]*group)
 	order := make([]string, 0, 32)
 
 	for _, book := range books {
-		name, position := parseSeriesTitle(book.SeriesTitle)
+		name, _ := parseSeriesTitle(book.SeriesTitle)
 		if name == "" {
 			continue
 		}
 		key := strings.ToLower(name)
 		g, ok := groups[key]
 		if !ok {
-			g = &group{item: LibrarySeries{Name: name}, titles: map[string]bool{}}
+			g = &group{name: name, titles: map[string]bool{}}
 			groups[key] = g
 			order = append(order, key)
 		}
@@ -305,20 +310,7 @@ func buildLibrarySeries(books []chaptarr.Book) []LibrarySeries {
 		} else if _, seen := g.titles[titleKey]; !seen {
 			g.titles[titleKey] = false
 		}
-
-		// The earliest book carries the series' face: it is the cover a reader
-		// recognises the series by, and it stays put as later books arrive.
-		if cover := clientReachableCover(book); cover != "" {
-			if value, ok := seriesPositionKey(position); ok {
-				if !g.coverSeen || value < g.coverKey {
-					g.item.Cover = cover
-					g.coverKey = value
-					g.coverSeen = true
-				}
-			} else if g.item.Cover == "" {
-				g.item.Cover = cover
-			}
-		}
+		g.records = append(g.records, book)
 	}
 
 	items := make([]LibrarySeries, 0, len(order))
@@ -333,35 +325,66 @@ func buildLibrarySeries(books []chaptarr.Book) []LibrarySeries {
 		if available == 0 {
 			continue
 		}
-		g.item.TitleCount = len(g.titles)
-		g.item.AvailableCount = available
-		items = append(items, g.item)
+		items = append(items, LibrarySeries{
+			Name:           g.name,
+			Covers:         seriesCovers(g.records),
+			TitleCount:     len(g.titles),
+			AvailableCount: available,
+		})
 	}
 	return items
 }
 
-// firstSeriesCover picks a cover for a series the library holds no files for.
-func firstSeriesCover(books []chaptarr.Book, positions map[string]string) string {
-	best := ""
-	bestKey := 0.0
-	seen := false
-	for _, book := range books {
+// seriesCovers picks the covers a series card stacks: the earliest books
+// first, because a series is recognised by where it starts, and the stack must
+// stay put as later books arrive.
+//
+// Duplicates are dropped — several records of one title share its art, and
+// stacking the same cover three times reads as a rendering fault rather than a
+// series. Books the series states no position for can still supply a cover,
+// but only once the positioned ones are exhausted.
+func seriesCovers(books []chaptarr.Book) []string {
+	type candidate struct {
+		key    float64
+		hasKey bool
+		order  int
+		cover  string
+	}
+	candidates := make([]candidate, 0, len(books))
+	for i, book := range books {
 		cover := clientReachableCover(book)
 		if cover == "" {
 			continue
 		}
-		value, ok := seriesPositionKey(positions[strings.TrimSpace(book.ForeignBookID)])
-		if !ok {
-			if best == "" {
-				best = cover
-			}
+		_, position := parseSeriesTitle(book.SeriesTitle)
+		value, ok := seriesPositionKey(position)
+		candidates = append(candidates, candidate{
+			key: value, hasKey: ok, order: i, cover: cover,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].hasKey != candidates[j].hasKey {
+			return candidates[i].hasKey
+		}
+		if candidates[i].hasKey && candidates[i].key != candidates[j].key {
+			return candidates[i].key < candidates[j].key
+		}
+		return candidates[i].order < candidates[j].order
+	})
+
+	covers := make([]string, 0, seriesCoverDepth)
+	seen := make(map[string]struct{}, seriesCoverDepth)
+	for _, c := range candidates {
+		if _, dup := seen[c.cover]; dup {
 			continue
 		}
-		if !seen || value < bestKey {
-			best, bestKey, seen = cover, value, true
+		seen[c.cover] = struct{}{}
+		covers = append(covers, c.cover)
+		if len(covers) == seriesCoverDepth {
+			break
 		}
 	}
-	return best
+	return covers
 }
 
 // sortLibrarySeries orders the row and then caps it, with the same name

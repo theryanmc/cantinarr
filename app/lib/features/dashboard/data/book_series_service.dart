@@ -28,8 +28,10 @@ class LibrarySeries {
   /// keeps a series that spans several authors in one piece.
   final String name;
 
-  /// The earliest book's cover path, resolved through [chaptarrImageSource].
-  final String cover;
+  /// The earliest books' cover paths, in reading order, each resolved through
+  /// [chaptarrImageSource]. The card stacks them so a series looks like a run
+  /// of books rather than one of them; a series with one cover has one.
+  final List<String> covers;
 
   /// How many distinct titles of the series the library tracks.
   final int titleCount;
@@ -39,14 +41,18 @@ class LibrarySeries {
 
   const LibrarySeries({
     required this.name,
-    this.cover = '',
+    this.covers = const [],
     this.titleCount = 0,
     this.availableCount = 0,
   });
 
   factory LibrarySeries.fromJson(Map<String, dynamic> json) => LibrarySeries(
         name: json['name'] as String? ?? '',
-        cover: json['cover'] as String? ?? '',
+        covers: (json['covers'] as List?)
+                ?.whereType<String>()
+                .where((url) => url.isNotEmpty)
+                .toList() ??
+            const [],
         titleCount: (json['title_count'] as num?)?.toInt() ?? 0,
         availableCount: (json['available_count'] as num?)?.toInt() ?? 0,
       );
