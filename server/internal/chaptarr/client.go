@@ -164,7 +164,12 @@ type Book struct {
 	// MediaType is the book-level format Chaptarr returns on library books
 	// ("ebook"/"audiobook"); this fork tracks a title's ebook and audiobook as
 	// separate records sharing a foreignBookId, distinguished by this field.
-	MediaType    string         `json:"mediaType"`
+	MediaType string `json:"mediaType"`
+	// SeriesTitle is the series and position as one display string
+	// ("Discworld #13"). Chaptarr exposes no library-wide series read — GET
+	// /series returns nothing without an author — so this string is the only
+	// series identity available from a full-library fetch.
+	SeriesTitle  string         `json:"seriesTitle"`
 	AnyEditionOk bool           `json:"anyEditionOk"`
 	PageCount    int            `json:"pageCount"`
 	Author       *AuthorContext `json:"author,omitempty"`

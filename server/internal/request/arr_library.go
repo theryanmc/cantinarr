@@ -205,6 +205,7 @@ func (s *Service) InvalidateBookDigests(instanceID string) {
 	s.libraryCache.Delete("book-live:" + instanceID)
 	s.libraryCache.Delete("book-recent:" + instanceID)
 	s.libraryCache.Delete("book-authors:" + instanceID)
+	s.libraryCache.Delete("book-series:" + instanceID)
 }
 
 // getRadarrWithID resolves the same Radarr client as getRadarr but also

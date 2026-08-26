@@ -333,6 +333,62 @@ class _StubAdapter implements HttpClientAdapter {
         // the header's "showing N of M" state a big library produces.
         'total': 137,
       };
+    } else if (path.endsWith('/api/requests/book-series')) {
+      // Four series covering the row's states: complete, a big gap, a single
+      // book, and a name long enough to test the card's wrapping.
+      const stubSeries = [
+        ('The Ember Cycle', 12, 12),
+        ('Riverwatch Chronicles', 41, 6),
+        ('The Salt Road Standalones', 3, 1),
+        ('Le Comte de Monte-Cristo / The Count of Monte Cristo', 6, 2),
+      ];
+      final ordered = [...stubSeries];
+      if (options.queryParameters['sort'] == 'name') {
+        ordered.sort((a, b) => a.$1.compareTo(b.$1));
+      }
+      body = {
+        'series': [
+          for (final s in ordered)
+            {
+              'name': s.$1,
+              // Empty covers: the card draws its placeholder frames, so the
+              // preview needs no image host and still shows the stack.
+              'covers': const <String>[],
+              'title_count': s.$2,
+              'available_count': s.$3,
+            },
+        ],
+        // Larger than the list, so the preview also shows the truncation note.
+        'total': 143,
+      };
+    } else if (path.endsWith('/api/requests/book-series-detail')) {
+      // Every per-title state a series page can render, in reading order,
+      // including an unnumbered companion volume and an odd position label.
+      body = {
+        'series': {
+          'name': 'Riverwatch Chronicles',
+          'covers': <String>[],
+          'title_count': 6,
+          'available_count': 2,
+        },
+        'titles': [
+          {..._ownedTitle('fb-s1', 'The Ninth Harbour', year: 2019,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: true)), 'position': '1'},
+          {..._ownedTitle('fb-s2', 'Salt and Lantern', year: 2020,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: false)), 'position': '2'},
+          {..._ownedTitle('fb-s3', 'A Quiet Inventory', year: 2021,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': '2A'},
+          {..._ownedTitle('fb-s4', 'The Long Tide', year: 2022,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': '3'},
+          {..._ownedTitle('fb-s5', 'Companion to Riverwatch', year: 0,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': ''},
+        ],
+      };
     } else if (path.endsWith('/api/requests/book-author')) {
       // One author page carrying every per-title verdict at once: both formats
       // on disk, a format still on the way, something on disk with nothing
