@@ -154,6 +154,10 @@ func (s *Service) GetLibraryAuthorDetailForInstance(userID int64, foreignAuthorI
 		return nil, err
 	}
 	titles := reduceLibrary(books).Titles
+	// The reduction fills the author name from each record's embedded author
+	// object, which this list does not carry. We looked this author up by id,
+	// so stamp what we already know rather than emitting blank authors.
+	stampAuthorName(titles, match.AuthorName)
 	sortAuthorTitles(titles)
 
 	author := libraryAuthorFrom(*match)
@@ -237,6 +241,19 @@ func countAuthorTitles(books []chaptarr.Book) (titles, available int) {
 		}
 	}
 	return titles, available
+}
+
+// stampAuthorName fills in the author on titles the reduction left blank.
+func stampAuthorName(titles []LibraryTitle, name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	for i := range titles {
+		if strings.TrimSpace(titles[i].Author) == "" {
+			titles[i].Author = name
+		}
+	}
 }
 
 // sortAuthorTitles orders a bibliography newest-first. Undated records sort

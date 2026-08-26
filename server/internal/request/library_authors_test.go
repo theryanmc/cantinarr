@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
@@ -283,5 +284,85 @@ func TestBookAuthorEndpointsRequireAuthentication(t *testing.T) {
 				t.Fatalf("status = %d, want 401", resp.Code)
 			}
 		})
+	}
+}
+
+// TestReduceLibraryKeepsTheYearWhenRecordsCarryNoAuthorObject is the defect a
+// real library found: Chaptarr's per-author book list omits the embedded author
+// object entirely (includeAuthor=true does not change that), so a reduction that
+// only reads the year off an author-carrying record leaves every title undated —
+// which silently turns the author page's newest-first order into alphabetical.
+func TestReduceLibraryKeepsTheYearWhenRecordsCarryNoAuthorObject(t *testing.T) {
+	released := time.Date(2010, 1, 18, 17, 0, 0, 0, time.UTC)
+	book := authorBook(10, 1, "fb-1", "ebook", 1)
+	book.Title = "Unseen Academicals"
+	book.Author = nil // exactly what /book?authorId= returns
+	book.ReleaseDate = &released
+
+	digest := reduceLibrary([]chaptarr.Book{book})
+
+	if len(digest.Titles) != 1 {
+		t.Fatalf("titles = %+v, want one", digest.Titles)
+	}
+	if got := digest.Titles[0].Year; got != 2010 {
+		t.Errorf("Year = %d, want 2010 from the record's own releaseDate", got)
+	}
+}
+
+// TestReduceLibraryPrefersTheFirstDatedRecordInAGroup keeps the year stable when
+// a title's two format records disagree, matching how the reduction already
+// takes the first record that carries metadata.
+func TestReduceLibraryPrefersTheFirstDatedRecordInAGroup(t *testing.T) {
+	first := time.Date(2019, 6, 1, 0, 0, 0, 0, time.UTC)
+	second := time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC)
+	undated := authorBook(10, 1, "fb-1", "ebook", 1)
+	ebook := authorBook(11, 1, "fb-1", "ebook", 1)
+	ebook.ReleaseDate = &first
+	audiobook := authorBook(12, 1, "fb-1", "audiobook", 1)
+	audiobook.ReleaseDate = &second
+
+	digest := reduceLibrary([]chaptarr.Book{undated, ebook, audiobook})
+
+	if got := digest.Titles[0].Year; got != 2019 {
+		t.Errorf("Year = %d, want the first dated record's 2019", got)
+	}
+}
+
+// TestStampAuthorNameFillsOnlyWhatTheReductionLeftBlank: the author page looked
+// this author up by id, so a blank author on its own titles is noise, not truth.
+// A name the reduction did resolve is never overwritten.
+func TestStampAuthorNameFillsOnlyWhatTheReductionLeftBlank(t *testing.T) {
+	titles := []LibraryTitle{
+		{Title: "Unseen Academicals"},
+		{Title: "Good Omens", Author: "Terry Pratchett & Neil Gaiman"},
+	}
+
+	stampAuthorName(titles, "  Terry Pratchett  ")
+
+	if titles[0].Author != "Terry Pratchett" {
+		t.Errorf("Author = %q, want the stamped name", titles[0].Author)
+	}
+	if titles[1].Author != "Terry Pratchett & Neil Gaiman" {
+		t.Errorf("Author = %q, want the resolved name kept", titles[1].Author)
+	}
+}
+
+// TestSortAuthorTitlesOrdersRealDatesNewestFirst pins the ordering the year fix
+// restores: without a year every title falls into the undated bucket and the
+// page silently reads alphabetical.
+func TestSortAuthorTitlesOrdersRealDatesNewestFirst(t *testing.T) {
+	titles := []LibraryTitle{
+		{Title: "A Blink of the Screen", Year: 2012},
+		{Title: "Zebra Ending", Year: 2021},
+		{Title: "A Hat Full of Sky", Year: 2004},
+	}
+
+	sortAuthorTitles(titles)
+
+	want := []string{"Zebra Ending", "A Blink of the Screen", "A Hat Full of Sky"}
+	for i, name := range want {
+		if titles[i].Title != name {
+			t.Fatalf("order = %+v, want %v", titles, want)
+		}
 	}
 }
