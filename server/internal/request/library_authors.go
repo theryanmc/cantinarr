@@ -84,6 +84,10 @@ type LibraryAuthor struct {
 // non-nil slice.
 type BookAuthorsDigest struct {
 	Authors []LibraryAuthor `json:"authors"`
+	// Total is how many authors the library holds, before the row's cap. A
+	// client that shows fewer than this is showing a truncated row and needs to
+	// be able to say so — a shelf that just stops reads as the whole library.
+	Total int `json:"total"`
 }
 
 // BookAuthorDetail is one author plus every title of theirs the library tracks,
@@ -121,6 +125,7 @@ func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID
 			if err := json.Unmarshal(data, &digest); err == nil {
 				return &BookAuthorsDigest{
 					Authors: sortLibraryAuthors(digest.Authors, order, bookAuthorsMaxItems),
+					Total:   len(digest.Authors),
 				}, nil
 			}
 		}
@@ -146,6 +151,7 @@ func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID
 	}
 	return &BookAuthorsDigest{
 		Authors: sortLibraryAuthors(all, order, bookAuthorsMaxItems),
+		Total:   len(all),
 	}, nil
 }
 

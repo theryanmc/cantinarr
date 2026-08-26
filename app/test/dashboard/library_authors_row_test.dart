@@ -17,10 +17,18 @@ import 'package:go_router/go_router.dart';
 
 /// Serves the Books tab's backend calls, with the authors body under test.
 class _AuthorsAdapter implements HttpClientAdapter {
-  _AuthorsAdapter({this.authorsStatus = 200, this.authors, this.bySort});
+  _AuthorsAdapter({
+    this.authorsStatus = 200,
+    this.authors,
+    this.bySort,
+    this.total,
+  });
 
   final int authorsStatus;
   final List<Map<String, dynamic>>? authors;
+
+  /// The library's untruncated author count, as the server reports it.
+  final int? total;
 
   /// Per-sort bodies, so a test can prove the row shows what the server
   /// returned for the requested order rather than reordering it locally.
@@ -44,7 +52,8 @@ class _AuthorsAdapter implements HttpClientAdapter {
       authorsSorts.add(sort);
       if (gate != null) await gate!.future;
       if (bySort != null) {
-        return _json({'authors': bySort![sort] ?? const []});
+        final rows = bySort![sort] ?? const <Map<String, dynamic>>[];
+        return _json({'authors': rows, 'total': total ?? rows.length});
       }
       if (authorsStatus != 200) {
         return ResponseBody.fromString(
@@ -55,7 +64,8 @@ class _AuthorsAdapter implements HttpClientAdapter {
           },
         );
       }
-      return _json({'authors': authors ?? const []});
+      final rows = authors ?? const <Map<String, dynamic>>[];
+      return _json({'authors': rows, 'total': total ?? rows.length});
     }
     if (options.path == '/api/requests/book-recent') {
       return _json({'items': const []});
@@ -131,6 +141,7 @@ Future<_AuthorsAdapter> _pumpBooksTab(
   int authorsStatus = 200,
   List<Map<String, dynamic>>? authors,
   Map<String, List<Map<String, dynamic>>>? bySort,
+  int? total,
 }) async {
   lastPushedLocation = null;
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
@@ -138,6 +149,7 @@ Future<_AuthorsAdapter> _pumpBooksTab(
     authorsStatus: authorsStatus,
     authors: authors,
     bySort: bySort,
+    total: total,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -264,6 +276,7 @@ void main() {
   });
 
   _mainSortTests();
+  _mainTruncationTests();
 
   testWidgets('hides the row while a search is active', (tester) async {
     _sizeViewport(tester);
@@ -352,5 +365,43 @@ void _mainSortTests() {
     adapter.gate!.complete();
     await tester.pumpAndSettle();
     expect(find.byType(AuthorAvatarCard), findsOneWidget);
+  });
+}
+
+void _mainTruncationTests() {
+  testWidgets('a library bigger than the row says how much it is holding back',
+      (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(
+      tester,
+      authors: [_author(), _author(foreignAuthorId: 'fa-2', name: 'Ann Leckie')],
+      total: 337,
+    );
+
+    // A shelf that simply stops at its cap reads as the whole library.
+    expect(find.text('2 of 337'), findsOneWidget);
+  });
+
+  testWidgets('a library that fits says nothing about counts', (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(tester, authors: [_author()]);
+
+    // Anchored: an author card's own "2 of 4 books available" is not a
+    // truncation notice.
+    expect(find.textContaining(RegExp(r'^\d+ of \d+$')), findsNothing);
+    expect(find.text('Most books'), findsOneWidget);
+  });
+
+  testWidgets('a server too old to report a total claims no truncation',
+      (tester) async {
+    _sizeViewport(tester);
+
+    await _pumpBooksTab(tester, authors: [_author()], total: 0);
+
+    // total:0 is what an older server sends. Reading that as "0 authors, so
+    // this row is hiding some" would put a nonsense count in the header.
+    expect(find.textContaining(RegExp(r'^\d+ of \d+$')), findsNothing);
   });
 }

@@ -80,6 +80,23 @@ class LibraryAuthor {
   }
 }
 
+/// One page of the Authors row: the authors to show, and how many the library
+/// actually holds.
+///
+/// The two differ once a library outgrows the row's cap, and the row has to be
+/// able to say so — a shelf that simply stops reads as the whole library.
+class BookAuthorsPage {
+  final List<LibraryAuthor> authors;
+
+  /// How many authors the library holds, before the row's cap.
+  final int total;
+
+  const BookAuthorsPage({required this.authors, this.total = 0});
+
+  /// How many authors this page is not showing.
+  int get hiddenCount => total > authors.length ? total - authors.length : 0;
+}
+
 /// One author plus every title of theirs the library tracks.
 class BookAuthorDetail {
   final LibraryAuthor author;
@@ -112,7 +129,7 @@ class BookAuthorsService {
 
   BookAuthorsService({required Dio backendDio}) : _dio = backendDio;
 
-  Future<List<LibraryAuthor>> fetchAuthors({
+  Future<BookAuthorsPage> fetchAuthors({
     String? instanceId,
     AuthorSort sort = AuthorSort.mostBooks,
   }) async {
@@ -129,10 +146,17 @@ class BookAuthorsService {
     if (authors is! List) {
       throw const FormatException('Book authors response is invalid');
     }
-    return authors
+    final parsed = authors
         .whereType<Map<String, dynamic>>()
         .map(LibraryAuthor.fromJson)
         .toList();
+    // A server too old to report a total says nothing about truncation, so the
+    // row claims none rather than inventing one.
+    final total = (data is Map ? (data['total'] as num?)?.toInt() : null) ?? 0;
+    return BookAuthorsPage(
+      authors: parsed,
+      total: total > parsed.length ? total : parsed.length,
+    );
   }
 
   Future<BookAuthorDetail> fetchAuthor(
@@ -170,7 +194,7 @@ final bookAuthorsSortProvider =
 /// previous list on screen while the new one loads instead of collapsing the
 /// row (and the menu that was just used) to nothing.
 final bookAuthorsProvider =
-    FutureProvider.autoDispose<List<LibraryAuthor>>((ref) async {
+    FutureProvider.autoDispose<BookAuthorsPage>((ref) async {
   final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
   final sort = ref.watch(bookAuthorsSortProvider);
   final dio = ref.read(backendClientProvider);

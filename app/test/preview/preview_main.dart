@@ -329,6 +329,9 @@ class _StubAdapter implements HttpClientAdapter {
             _libraryAuthor(a.$1, a.$2,
                 titles: a.$3, available: a.$4, daysAgo: a.$5),
         ],
+        // Deliberately larger than the list above, so the preview also shows
+        // the header's "showing N of M" state a big library produces.
+        'total': 137,
       };
     } else if (path.endsWith('/api/requests/book-author')) {
       // One author page carrying every per-title verdict at once: both formats

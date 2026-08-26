@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -473,5 +474,58 @@ func TestNormalizeAuthorSortFallsBackInsteadOfFailing(t *testing.T) {
 		if got := normalizeAuthorSort(in); got != want {
 			t.Errorf("normalizeAuthorSort(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestBuildLibraryAuthorsCachesEveryAuthorSoTheOrderSeesTheWholeLibrary is the
+// invariant that makes the sort correct on a library larger than the row.
+//
+// What gets cached must stay uncapped: the cache is read once per request and
+// ordered on the way out, so a capped cache would pin every order to whichever
+// authors won the order that happened to populate it — "by name" would silently
+// mean "the most-collected authors, alphabetised" for the whole TTL.
+func TestBuildLibraryAuthorsCachesEveryAuthorSoTheOrderSeesTheWholeLibrary(t *testing.T) {
+	const total = 250
+	var authors []chaptarr.Author
+	var books []chaptarr.Book
+	bookID := 1000
+	for i := 1; i <= total; i++ {
+		// Ownership rises with the name, so the two orders disagree end to end
+		// and a cap applied before the wrong one is unmistakable: "Author 001"
+		// owns a single title, "Author 250" owns 250.
+		authors = append(authors, authorRecord(i, fmt.Sprintf("fa-%d", i), fmt.Sprintf("Author %03d", i)))
+		for j := 1; j <= i; j++ {
+			bookID++
+			books = append(books,
+				authorBook(bookID, i, fmt.Sprintf("fb-%d-%d", i, j), "ebook", 1))
+		}
+	}
+
+	built := buildLibraryAuthors(authors, books)
+	if len(built) != total {
+		t.Fatalf("cached authors = %d, want all %d — the cap belongs on the way out", len(built), total)
+	}
+
+	byName := sortLibraryAuthors(built, AuthorSortName, bookAuthorsMaxItems)
+	if len(byName) != bookAuthorsMaxItems {
+		t.Fatalf("len = %d, want the row cap of %d", len(byName), bookAuthorsMaxItems)
+	}
+	// The alphabetically first author owns the least, so it appears only
+	// because the whole library was ordered before the cap was applied.
+	if byName[0].Name != "Author 001" {
+		t.Errorf("first = %q, want %q — the least-owned author still leads a name sort",
+			byName[0].Name, "Author 001")
+	}
+	if byName[0].AvailableCount != 1 {
+		t.Errorf("AvailableCount = %d, want the least-owned author (1)", byName[0].AvailableCount)
+	}
+
+	byBooks := sortLibraryAuthors(built, AuthorSortBooks, bookAuthorsMaxItems)
+	if byBooks[0].AvailableCount != total {
+		t.Errorf("AvailableCount = %d, want the most-owned author (%d)", byBooks[0].AvailableCount, total)
+	}
+	// Same input, same cache entry, two genuinely different rows.
+	if byName[0].Name == byBooks[0].Name {
+		t.Error("both orders led with the same author; the cached list is not being reordered")
 	}
 }

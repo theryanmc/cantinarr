@@ -30,7 +30,8 @@ class LibraryAuthorsRow extends ConsumerWidget {
     if (instanceId == null) return const SizedBox.shrink();
 
     final authorsAsync = ref.watch(bookAuthorsProvider);
-    final authors = authorsAsync.valueOrNull ?? const <LibraryAuthor>[];
+    final page = authorsAsync.valueOrNull;
+    final authors = page?.authors ?? const <LibraryAuthor>[];
     // hasError also covers a failed refresh that retained stale authors: an
     // unreadable library must not keep claiming it holds these authors.
     //
@@ -58,10 +59,29 @@ class LibraryAuthorsRow extends ConsumerWidget {
             ),
             child: SectionHeader(
               title: 'Authors',
-              trailing: _AuthorSortMenu(
-                selected: ref.watch(bookAuthorsSortProvider),
-                onSelected: (next) =>
-                    ref.read(bookAuthorsSortProvider.notifier).state = next,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // A row that simply stops at its cap reads as the whole
+                  // library. When it is holding some back, it says how many
+                  // rather than letting the shelf's end imply there are none.
+                  if ((page?.hiddenCount ?? 0) > 0) ...[
+                    Text(
+                      '${authors.length} of ${page!.total}',
+                      style: const TextStyle(
+                        color: AppTheme.textMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  _AuthorSortMenu(
+                    selected: ref.watch(bookAuthorsSortProvider),
+                    onSelected: (next) =>
+                        ref.read(bookAuthorsSortProvider.notifier).state = next,
+                  ),
+                ],
               ),
             ),
           ),
