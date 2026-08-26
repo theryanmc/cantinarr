@@ -23,7 +23,35 @@ const bookAuthorsCacheTTL = 60 * time.Second
 
 // bookAuthorsMaxItems caps the browse row. This is a shelf to scan, not the
 // library — a user looking for one specific author searches for them.
-const bookAuthorsMaxItems = 60
+//
+// The cap is applied *after* the requested sort, never before: capping first
+// would make "by name" mean "the most-collected authors, alphabetised", which
+// looks complete and silently omits everyone below the cut.
+const bookAuthorsMaxItems = 200
+
+// The orders the browse row can be read in. An unknown value is treated as
+// [AuthorSortBooks] rather than rejected — a newer client asking for a sort
+// this server does not have should get a usable row, not an error.
+const (
+	// AuthorSortBooks leads with the authors the library actually holds.
+	AuthorSortBooks = "books"
+	// AuthorSortName is alphabetical by the name the card displays.
+	AuthorSortName = "name"
+	// AuthorSortAdded is newest arrival in the library first.
+	AuthorSortAdded = "added"
+)
+
+// normalizeAuthorSort maps a requested sort onto one this server implements.
+func normalizeAuthorSort(sort string) string {
+	switch strings.ToLower(strings.TrimSpace(sort)) {
+	case AuthorSortName:
+		return AuthorSortName
+	case AuthorSortAdded:
+		return AuthorSortAdded
+	default:
+		return AuthorSortBooks
+	}
+}
 
 // LibraryAuthor is one author the Chaptarr library holds books for.
 //
@@ -46,6 +74,10 @@ type LibraryAuthor struct {
 	TitleCount int `json:"title_count"`
 	// AvailableCount is how many of those have a file on disk in any format.
 	AvailableCount int `json:"available_count"`
+	// Added is when the author entered the library, for the "date added" order.
+	// Nil when the record carries no date, which sorts last rather than as the
+	// beginning of time.
+	Added *time.Time `json:"added,omitempty"`
 }
 
 // BookAuthorsDigest is the authors browse row's payload. Authors is always a
@@ -67,7 +99,7 @@ type BookAuthorDetail struct {
 //
 // A user with no Chaptarr grant gets an empty list rather than an error: the
 // authors row is simply absent for them, which is not a failure.
-func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID string) (*BookAuthorsDigest, error) {
+func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID, sort string) (*BookAuthorsDigest, error) {
 	client, instanceID, err := s.resolveChaptarr(userID, requestedInstanceID)
 	if err != nil {
 		return nil, err
@@ -76,15 +108,20 @@ func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID
 		return &BookAuthorsDigest{Authors: []LibraryAuthor{}}, nil
 	}
 
+	order := normalizeAuthorSort(sort)
+
+	// The cache holds every author in no particular order: building the list is
+	// what costs two library reads, while ordering it is free. One entry
+	// therefore serves all three orders, and switching order in the app never
+	// refetches the library.
 	cacheKey := "book-authors:" + instanceID
 	if s.libraryCache != nil {
 		if data, ok := s.libraryCache.Get(cacheKey); ok {
 			var digest BookAuthorsDigest
 			if err := json.Unmarshal(data, &digest); err == nil {
-				if digest.Authors == nil {
-					digest.Authors = []LibraryAuthor{}
-				}
-				return &digest, nil
+				return &BookAuthorsDigest{
+					Authors: sortLibraryAuthors(digest.Authors, order, bookAuthorsMaxItems),
+				}, nil
 			}
 		}
 	}
@@ -101,15 +138,15 @@ func (s *Service) GetLibraryAuthorsForInstance(userID int64, requestedInstanceID
 		return nil, err
 	}
 
-	digest := BookAuthorsDigest{
-		Authors: buildLibraryAuthors(authors, books, bookAuthorsMaxItems),
-	}
+	all := buildLibraryAuthors(authors, books)
 	if s.libraryCache != nil {
-		if data, err := json.Marshal(digest); err == nil {
+		if data, err := json.Marshal(BookAuthorsDigest{Authors: all}); err == nil {
 			s.libraryCache.Set(cacheKey, data, bookAuthorsCacheTTL)
 		}
 	}
-	return &digest, nil
+	return &BookAuthorsDigest{
+		Authors: sortLibraryAuthors(all, order, bookAuthorsMaxItems),
+	}, nil
 }
 
 // GetLibraryAuthorDetailForInstance returns one author and their library titles.
@@ -172,7 +209,7 @@ func (s *Service) GetLibraryAuthorDetailForInstance(userID int64, foreignAuthorI
 // and an author with nothing behind them opens onto an empty page. That happens
 // for real — a failed or still-pending metadata import leaves the author record
 // behind — so it is a state to omit, not one to render as an empty shelf.
-func buildLibraryAuthors(authors []chaptarr.Author, books []chaptarr.Book, limit int) []LibraryAuthor {
+func buildLibraryAuthors(authors []chaptarr.Author, books []chaptarr.Book) []LibraryAuthor {
 	byAuthor := make(map[int][]chaptarr.Book, len(authors))
 	for _, book := range books {
 		if book.AuthorID <= 0 {
@@ -195,21 +232,53 @@ func buildLibraryAuthors(authors []chaptarr.Author, books []chaptarr.Book, limit
 		items = append(items, entry)
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AvailableCount != items[j].AvailableCount {
-			return items[i].AvailableCount > items[j].AvailableCount
-		}
-		if items[i].TitleCount != items[j].TitleCount {
-			return items[i].TitleCount > items[j].TitleCount
-		}
-		// Name is the tie-break so the row does not reshuffle between fetches
-		// of an unchanged library.
-		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
-	})
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
 	return items
+}
+
+// sortLibraryAuthors orders the row and then caps it. Every order ends in the
+// same name tie-break so an unchanged library never reshuffles between fetches.
+func sortLibraryAuthors(items []LibraryAuthor, order string, limit int) []LibraryAuthor {
+	if items == nil {
+		return []LibraryAuthor{}
+	}
+	sorted := make([]LibraryAuthor, len(items))
+	copy(sorted, items)
+
+	byName := func(i, j int) bool {
+		return strings.ToLower(sorted[i].Name) < strings.ToLower(sorted[j].Name)
+	}
+	switch normalizeAuthorSort(order) {
+	case AuthorSortName:
+		sort.Slice(sorted, byName)
+	case AuthorSortAdded:
+		sort.Slice(sorted, func(i, j int) bool {
+			a, b := sorted[i].Added, sorted[j].Added
+			// A record with no date makes no recency claim, so it trails the
+			// ones that do rather than leading as the beginning of time.
+			if (a == nil) != (b == nil) {
+				return b == nil
+			}
+			if a != nil && !a.Equal(*b) {
+				return a.After(*b)
+			}
+			return byName(i, j)
+		})
+	default:
+		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].AvailableCount != sorted[j].AvailableCount {
+				return sorted[i].AvailableCount > sorted[j].AvailableCount
+			}
+			if sorted[i].TitleCount != sorted[j].TitleCount {
+				return sorted[i].TitleCount > sorted[j].TitleCount
+			}
+			return byName(i, j)
+		})
+	}
+
+	if limit > 0 && len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	return sorted
 }
 
 func libraryAuthorFrom(a chaptarr.Author) LibraryAuthor {
@@ -217,6 +286,7 @@ func libraryAuthorFrom(a chaptarr.Author) LibraryAuthor {
 		ForeignAuthorID: strings.TrimSpace(a.ForeignAuthorID),
 		Name:            strings.TrimSpace(a.AuthorName),
 		Image:           clientReachableAuthorImage(a),
+		Added:           a.Added,
 	}
 }
 

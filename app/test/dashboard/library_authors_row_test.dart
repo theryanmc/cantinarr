@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -5,6 +6,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/dashboard/data/book_authors_service.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_books_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
 import 'package:dio/dio.dart';
@@ -15,11 +17,20 @@ import 'package:go_router/go_router.dart';
 
 /// Serves the Books tab's backend calls, with the authors body under test.
 class _AuthorsAdapter implements HttpClientAdapter {
-  _AuthorsAdapter({this.authorsStatus = 200, this.authors});
+  _AuthorsAdapter({this.authorsStatus = 200, this.authors, this.bySort});
 
   final int authorsStatus;
   final List<Map<String, dynamic>>? authors;
+
+  /// Per-sort bodies, so a test can prove the row shows what the server
+  /// returned for the requested order rather than reordering it locally.
+  final Map<String, List<Map<String, dynamic>>>? bySort;
   final authorsInstanceIds = <String?>[];
+  final authorsSorts = <String?>[];
+
+  /// Gates the next authors response until the test releases it, so the
+  /// in-flight state is observable.
+  Completer<void>? gate;
 
   @override
   Future<ResponseBody> fetch(
@@ -29,6 +40,12 @@ class _AuthorsAdapter implements HttpClientAdapter {
   ) async {
     if (options.path == '/api/requests/book-authors') {
       authorsInstanceIds.add(options.queryParameters['instance_id'] as String?);
+      final sort = options.queryParameters['sort'] as String?;
+      authorsSorts.add(sort);
+      if (gate != null) await gate!.future;
+      if (bySort != null) {
+        return _json({'authors': bySort![sort] ?? const []});
+      }
       if (authorsStatus != 200) {
         return ResponseBody.fromString(
           jsonEncode({'error': 'unreachable'}),
@@ -113,12 +130,14 @@ Future<_AuthorsAdapter> _pumpBooksTab(
   WidgetTester tester, {
   int authorsStatus = 200,
   List<Map<String, dynamic>>? authors,
+  Map<String, List<Map<String, dynamic>>>? bySort,
 }) async {
   lastPushedLocation = null;
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _AuthorsAdapter(
     authorsStatus: authorsStatus,
     authors: authors,
+    bySort: bySort,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -244,6 +263,8 @@ void main() {
     expect(find.text('Authors'), findsNothing);
   });
 
+  _mainSortTests();
+
   testWidgets('hides the row while a search is active', (tester) async {
     _sizeViewport(tester);
 
@@ -259,5 +280,77 @@ void main() {
     await tester.enterText(find.byType(TextField), '');
     await tester.pumpAndSettle(const Duration(milliseconds: 600));
     expect(find.text('Authors'), findsOneWidget);
+  });
+}
+
+void _mainSortTests() {
+  testWidgets('names the current order and asks the server for it',
+      (tester) async {
+    _sizeViewport(tester);
+
+    final adapter = await _pumpBooksTab(tester, authors: [_author()]);
+
+    // The order is not self-evident from a shelf of faces, so the control says
+    // which one is active rather than showing a bare icon.
+    expect(find.text('Most books'), findsOneWidget);
+    expect(adapter.authorsSorts, ['books']);
+  });
+
+  testWidgets('picking an order refetches it from the server', (tester) async {
+    _sizeViewport(tester);
+
+    final adapter = await _pumpBooksTab(tester, bySort: {
+      'books': [
+        _author(foreignAuthorId: 'fa-1', name: 'Zed Owns Most', titleCount: 9, availableCount: 9),
+        _author(foreignAuthorId: 'fa-2', name: 'Aaron Owns One', titleCount: 1, availableCount: 1),
+      ],
+      'name': [
+        _author(foreignAuthorId: 'fa-2', name: 'Aaron Owns One', titleCount: 1, availableCount: 1),
+        _author(foreignAuthorId: 'fa-1', name: 'Zed Owns Most', titleCount: 9, availableCount: 9),
+      ],
+    });
+
+    LibraryAuthor firstCard() => tester
+        .widgetList<AuthorAvatarCard>(find.byType(AuthorAvatarCard))
+        .first
+        .author;
+    expect(firstCard().name, 'Zed Owns Most');
+
+    await tester.tap(find.text('Most books'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Name').last);
+    await tester.pumpAndSettle();
+
+    // The row must show what the server returned for that order. Sorting the
+    // capped list locally would mean "the most-collected authors, alphabetised".
+    expect(adapter.authorsSorts, ['books', 'name']);
+    expect(firstCard().name, 'Aaron Owns One');
+    expect(find.text('Name'), findsOneWidget);
+  });
+
+  testWidgets('the row and its menu survive the refetch', (tester) async {
+    _sizeViewport(tester);
+
+    final adapter = await _pumpBooksTab(tester, bySort: {
+      'books': [_author(name: 'Imogen Vale')],
+      'name': [_author(name: 'Imogen Vale')],
+    });
+    expect(find.byType(AuthorAvatarCard), findsOneWidget);
+
+    // Hold the next response open so the in-flight state is observable.
+    adapter.gate = Completer<void>();
+    await tester.tap(find.text('Most books'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Name').last);
+    await tester.pump();
+
+    // Collapsing to nothing here would take the control the user just used
+    // with it, and bounce everything below the row up and back down.
+    expect(find.text('Authors'), findsOneWidget);
+    expect(find.byType(AuthorAvatarCard), findsOneWidget);
+
+    adapter.gate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.byType(AuthorAvatarCard), findsOneWidget);
   });
 }

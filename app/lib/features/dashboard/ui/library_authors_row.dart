@@ -56,7 +56,14 @@ class LibraryAuthorsRow extends ConsumerWidget {
             padding: EdgeInsets.symmetric(
               horizontal: viewportWidth >= 900 ? 24 : 16,
             ),
-            child: const SectionHeader(title: 'Authors'),
+            child: SectionHeader(
+              title: 'Authors',
+              trailing: _AuthorSortMenu(
+                selected: ref.watch(bookAuthorsSortProvider),
+                onSelected: (next) =>
+                    ref.read(bookAuthorsSortProvider.notifier).state = next,
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           HorizontalItemRow<LibraryAuthor>(
@@ -80,6 +87,68 @@ class LibraryAuthorsRow extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The Authors row's order control, anchored to the right of its heading.
+///
+/// It names the current order rather than showing a bare icon: the row's order
+/// is not self-evident from a shelf of faces, and an unlabelled control leaves
+/// the user to infer it from the cards.
+class _AuthorSortMenu extends StatelessWidget {
+  final AuthorSort selected;
+  final ValueChanged<AuthorSort> onSelected;
+
+  const _AuthorSortMenu({required this.selected, required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<AuthorSort>(
+      tooltip: 'Sort authors',
+      initialValue: selected,
+      onSelected: onSelected,
+      position: PopupMenuPosition.under,
+      itemBuilder: (_) => [
+        for (final option in AuthorSort.values)
+          PopupMenuItem(
+            value: option,
+            child: Row(
+              children: [
+                if (option == selected)
+                  const Icon(Icons.check, size: 18, color: AppTheme.accent)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Text(option.label),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppTheme.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              selected.label,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.arrow_drop_down,
+                size: 18, color: AppTheme.textSecondary),
+          ],
+        ),
       ),
     );
   }

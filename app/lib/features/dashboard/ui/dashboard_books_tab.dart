@@ -70,7 +70,6 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ref.invalidate(ownedBooksProvider);
     ref.invalidate(recentBooksForInstanceProvider(instanceId));
     ref.invalidate(recentBooksProvider);
-    ref.invalidate(bookAuthorsForInstanceProvider(instanceId));
     ref.invalidate(bookAuthorsProvider);
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }

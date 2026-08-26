@@ -5,6 +5,25 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../request/data/book_ownership.dart';
 
+/// The orders the Authors row can be read in.
+///
+/// The order is applied by the server, not here: the row is capped, so sorting
+/// an already-capped list would mean "the most-collected authors, alphabetised"
+/// — a row that looks complete while omitting everyone below the cut.
+enum AuthorSort {
+  mostBooks('books', 'Most books'),
+  name('name', 'Name'),
+  dateAdded('added', 'Date added');
+
+  const AuthorSort(this.wire, this.label);
+
+  /// The value the API expects.
+  final String wire;
+
+  /// What the menu shows.
+  final String label;
+}
+
 /// One author the book library holds titles for.
 ///
 /// Counts are per *title*, not per record: a title owned as both an ebook and an
@@ -27,12 +46,17 @@ class LibraryAuthor {
   /// How many of those have a file on disk in some format.
   final int availableCount;
 
+  /// When the author entered the library. Null when the record carries no date
+  /// — it makes no recency claim, and the server sorts it last accordingly.
+  final DateTime? added;
+
   const LibraryAuthor({
     required this.foreignAuthorId,
     required this.name,
     this.image = '',
     this.titleCount = 0,
     this.availableCount = 0,
+    this.added,
   });
 
   factory LibraryAuthor.fromJson(Map<String, dynamic> json) => LibraryAuthor(
@@ -41,6 +65,7 @@ class LibraryAuthor {
         image: json['image'] as String? ?? '',
         titleCount: (json['title_count'] as num?)?.toInt() ?? 0,
         availableCount: (json['available_count'] as num?)?.toInt() ?? 0,
+        added: DateTime.tryParse(json['added'] as String? ?? ''),
       );
 
   /// The card's one-line count, in requester vocabulary. It always says what the
@@ -87,12 +112,16 @@ class BookAuthorsService {
 
   BookAuthorsService({required Dio backendDio}) : _dio = backendDio;
 
-  Future<List<LibraryAuthor>> fetchAuthors({String? instanceId}) async {
+  Future<List<LibraryAuthor>> fetchAuthors({
+    String? instanceId,
+    AuthorSort sort = AuthorSort.mostBooks,
+  }) async {
     final resp = await _dio.get(
       '/api/requests/book-authors',
       queryParameters: {
         if (instanceId != null && instanceId.isNotEmpty)
           'instance_id': instanceId,
+        'sort': sort.wire,
       },
     );
     final data = resp.data;
@@ -126,19 +155,27 @@ class BookAuthorsService {
   }
 }
 
-/// The authors of one book library. Keyed on the instance id so switching
-/// libraries can never show the previous library's authors.
-final bookAuthorsForInstanceProvider = FutureProvider.autoDispose
-    .family<List<LibraryAuthor>, String?>((ref, instanceId) async {
-  final dio = ref.read(backendClientProvider);
-  return BookAuthorsService(backendDio: dio).fetchAuthors(instanceId: instanceId);
-});
+/// The order the Authors row is currently read in.
+///
+/// Deliberately session state, not a stored preference: it is a way to look
+/// through the shelf right now, and a row that silently remembers last week's
+/// ordering is harder to trust than one that starts where everyone else's does.
+final bookAuthorsSortProvider =
+    StateProvider<AuthorSort>((ref) => AuthorSort.mostBooks);
 
-/// The row follows the drawer's active Chaptarr instance, like search does.
+/// The authors of the drawer's active Chaptarr library, in the selected order.
+///
+/// Sort and instance are watched here rather than being family keys on purpose:
+/// one provider instance spans every order, so changing the order keeps the
+/// previous list on screen while the new one loads instead of collapsing the
+/// row (and the menu that was just used) to nothing.
 final bookAuthorsProvider =
     FutureProvider.autoDispose<List<LibraryAuthor>>((ref) async {
   final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
-  return ref.watch(bookAuthorsForInstanceProvider(instanceId).future);
+  final sort = ref.watch(bookAuthorsSortProvider);
+  final dio = ref.read(backendClientProvider);
+  return BookAuthorsService(backendDio: dio)
+      .fetchAuthors(instanceId: instanceId, sort: sort);
 });
 
 /// The author a detail page is pinned to: an explicit instance id plus the

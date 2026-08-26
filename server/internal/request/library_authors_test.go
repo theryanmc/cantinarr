@@ -45,7 +45,7 @@ func TestBuildLibraryAuthorsCountsTitlesNotRecords(t *testing.T) {
 		authorBook(12, 1, "fb-2", "ebook", 0),
 	}
 
-	got := buildLibraryAuthors(authors, books, 10)
+	got := sortLibraryAuthors(buildLibraryAuthors(authors, books), AuthorSortBooks, 10)
 	if len(got) != 1 {
 		t.Fatalf("authors = %+v, want one", got)
 	}
@@ -67,7 +67,7 @@ func TestBuildLibraryAuthorsDropsAuthorsWithNoBooks(t *testing.T) {
 	}
 	books := []chaptarr.Book{authorBook(10, 1, "fb-1", "ebook", 1)}
 
-	got := buildLibraryAuthors(authors, books, 10)
+	got := sortLibraryAuthors(buildLibraryAuthors(authors, books), AuthorSortBooks, 10)
 	if len(got) != 1 || got[0].Name != "Has Books" {
 		t.Fatalf("authors = %+v, want only the author with books", got)
 	}
@@ -93,7 +93,7 @@ func TestBuildLibraryAuthorsOrdersByWhatIsOnDisk(t *testing.T) {
 
 	want := []string{"Adams Owns Two", "Zed Owns One", "Ames Owns None", "Bell Owns None"}
 	for run := 0; run < 2; run++ {
-		got := buildLibraryAuthors(authors, books, 10)
+		got := sortLibraryAuthors(buildLibraryAuthors(authors, books), AuthorSortBooks, 10)
 		if len(got) != len(want) {
 			t.Fatalf("authors = %+v, want %d", got, len(want))
 		}
@@ -113,7 +113,7 @@ func authorNames(items []LibraryAuthor) []string {
 	return names
 }
 
-func TestBuildLibraryAuthorsRespectsLimit(t *testing.T) {
+func TestSortLibraryAuthorsRespectsLimit(t *testing.T) {
 	var authors []chaptarr.Author
 	var books []chaptarr.Book
 	for i := 1; i <= 12; i++ {
@@ -121,7 +121,8 @@ func TestBuildLibraryAuthorsRespectsLimit(t *testing.T) {
 		books = append(books, authorBook(100+i, i, "fb", "ebook", 1))
 	}
 
-	if got := buildLibraryAuthors(authors, books, 5); len(got) != 5 {
+	built := buildLibraryAuthors(authors, books)
+	if got := sortLibraryAuthors(built, AuthorSortBooks, 5); len(got) != 5 {
 		t.Errorf("len = %d, want 5", len(got))
 	}
 }
@@ -201,7 +202,7 @@ func TestGetLibraryAuthorsWithoutChaptarrGrantReturnsEmpty(t *testing.T) {
 	// A nil registry is how resolveChaptarr reports "no client for this user".
 	svc := &Service{}
 
-	digest, err := svc.GetLibraryAuthorsForInstance(1, "")
+	digest, err := svc.GetLibraryAuthorsForInstance(1, "", "")
 	if err != nil {
 		t.Fatalf("err = %v, want nil for an ungranted user", err)
 	}
@@ -363,6 +364,114 @@ func TestSortAuthorTitlesOrdersRealDatesNewestFirst(t *testing.T) {
 	for i, name := range want {
 		if titles[i].Title != name {
 			t.Fatalf("order = %+v, want %v", titles, want)
+		}
+	}
+}
+
+func addedAuthor(id int, name string, added *time.Time, titles, available int) LibraryAuthor {
+	return LibraryAuthor{
+		ForeignAuthorID: name,
+		Name:            name,
+		TitleCount:      titles,
+		AvailableCount:  available,
+		Added:           added,
+	}
+}
+
+// TestSortLibraryAuthorsCapsAfterOrdering is the reason the order lives on the
+// server at all. A real library holds more authors than the row shows, so
+// capping first and sorting the survivors would make "by name" mean "the
+// most-collected authors, alphabetised" — a list that looks complete while
+// silently omitting the very authors the chosen order was meant to surface.
+func TestSortLibraryAuthorsCapsAfterOrdering(t *testing.T) {
+	items := []LibraryAuthor{
+		addedAuthor(1, "Zed Owns Everything", nil, 400, 400),
+		addedAuthor(2, "Yves Owns Plenty", nil, 300, 300),
+		addedAuthor(3, "Aaron Owns Nothing", nil, 1, 0),
+	}
+
+	byName := sortLibraryAuthors(items, AuthorSortName, 2)
+
+	if len(byName) != 2 {
+		t.Fatalf("len = %d, want the cap of 2", len(byName))
+	}
+	if byName[0].Name != "Aaron Owns Nothing" {
+		t.Fatalf("order = %v, want the alphabetically first author to survive the cap", authorNames(byName))
+	}
+}
+
+// TestSortLibraryAuthorsByAddedPutsNewestFirstAndUndatedLast: a record with no
+// date makes no recency claim, so it trails the dated ones instead of leading
+// the row as the beginning of time.
+func TestSortLibraryAuthorsByAddedPutsNewestFirstAndUndatedLast(t *testing.T) {
+	older := time.Date(2026, 5, 29, 21, 28, 6, 0, time.UTC)
+	newer := time.Date(2026, 6, 7, 3, 28, 7, 0, time.UTC)
+	items := []LibraryAuthor{
+		addedAuthor(1, "No Date", nil, 5, 5),
+		addedAuthor(2, "Older", &older, 5, 5),
+		addedAuthor(3, "Newer", &newer, 1, 0),
+	}
+
+	got := sortLibraryAuthors(items, AuthorSortAdded, 10)
+
+	want := []string{"Newer", "Older", "No Date"}
+	for i, name := range want {
+		if got[i].Name != name {
+			t.Fatalf("order = %v, want %v", authorNames(got), want)
+		}
+	}
+}
+
+// TestSortLibraryAuthorsIsStableAcrossFetches: every order ends in the same name
+// tie-break, so an unchanged library never reshuffles under the user.
+func TestSortLibraryAuthorsIsStableAcrossFetches(t *testing.T) {
+	same := time.Date(2026, 6, 7, 3, 28, 7, 0, time.UTC)
+	items := []LibraryAuthor{
+		addedAuthor(1, "Beta", &same, 3, 1),
+		addedAuthor(2, "Alpha", &same, 3, 1),
+	}
+
+	for _, order := range []string{AuthorSortBooks, AuthorSortName, AuthorSortAdded} {
+		t.Run(order, func(t *testing.T) {
+			first := sortLibraryAuthors(items, order, 10)
+			second := sortLibraryAuthors(items, order, 10)
+			if first[0].Name != "Alpha" || second[0].Name != "Alpha" {
+				t.Errorf("order = %v then %v, want a stable name tie-break",
+					authorNames(first), authorNames(second))
+			}
+		})
+	}
+}
+
+// TestSortLibraryAuthorsDoesNotMutateItsInput keeps the cached list — which is
+// shared by every order — from being reordered under the next request.
+func TestSortLibraryAuthorsDoesNotMutateItsInput(t *testing.T) {
+	items := []LibraryAuthor{
+		addedAuthor(1, "Zed", nil, 9, 9),
+		addedAuthor(2, "Aaron", nil, 1, 0),
+	}
+
+	sortLibraryAuthors(items, AuthorSortName, 10)
+
+	if items[0].Name != "Zed" {
+		t.Errorf("input reordered to %v; the cached list must be left alone", authorNames(items))
+	}
+}
+
+// TestNormalizeAuthorSortFallsBackInsteadOfFailing: a client asking for a sort
+// this server does not implement should still get a usable row.
+func TestNormalizeAuthorSortFallsBackInsteadOfFailing(t *testing.T) {
+	cases := map[string]string{
+		"":             AuthorSortBooks,
+		"books":        AuthorSortBooks,
+		"NAME":         AuthorSortName,
+		"  added  ":    AuthorSortAdded,
+		"popularity":   AuthorSortBooks,
+		"; drop table": AuthorSortBooks,
+	}
+	for in, want := range cases {
+		if got := normalizeAuthorSort(in); got != want {
+			t.Errorf("normalizeAuthorSort(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

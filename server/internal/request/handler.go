@@ -171,6 +171,12 @@ func (h *Handler) GetBookRecent(w http.ResponseWriter, r *http.Request) {
 // GetBookAuthors returns the authors of the Chaptarr library this user may
 // see, so the Books tab can offer an authors browse row.
 //
+// The optional sort selects the row's order (books, name, added); an unknown
+// value falls back to the default rather than erroring, so a newer client never
+// breaks the row here. The order is applied server-side because the row is
+// capped: sorting a capped list would silently drop the authors the chosen
+// order was meant to surface.
+//
 // A user with no Chaptarr access gets an empty list, not an error: the row is
 // simply absent for them.
 func (h *Handler) GetBookAuthors(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +185,11 @@ func (h *Handler) GetBookAuthors(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	digest, err := h.service.GetLibraryAuthorsForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
+	digest, err := h.service.GetLibraryAuthorsForInstance(
+		claims.UserID,
+		r.URL.Query().Get("instance_id"),
+		r.URL.Query().Get("sort"),
+	)
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return

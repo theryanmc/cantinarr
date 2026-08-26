@@ -305,12 +305,29 @@ class _StubAdapter implements HttpClientAdapter {
       // disk, and an author the library has not keyed yet (shown, not
       // openable). Server order is preserved by the row, so these arrive
       // already sorted the way the server sorts them.
+      // The server owns the order, so the stub answers each sort with the row
+      // that sort would really produce — otherwise the preview's menu would
+      // look broken for the two orders it never changes.
+      const stubAuthors = [
+        ('fa-1', 'Imogen Vale', 6, 6, 3),
+        ('fa-2', 'Marcus Oyelaran', 4, 2, 1),
+        ('fa-3', 'Sonya Petrov', 3, 0, 12),
+        ('', 'Unkeyed Import', 1, 0, 40),
+      ];
+      final ordered = [...stubAuthors];
+      switch (options.queryParameters['sort'] as String?) {
+        case 'name':
+          ordered.sort((a, b) => a.$2.compareTo(b.$2));
+        case 'added':
+          ordered.sort((a, b) => a.$5.compareTo(b.$5));
+        default:
+          break; // already most-collected first
+      }
       body = {
         'authors': [
-          _libraryAuthor('fa-1', 'Imogen Vale', titles: 6, available: 6),
-          _libraryAuthor('fa-2', 'Marcus Oyelaran', titles: 4, available: 2),
-          _libraryAuthor('fa-3', 'Sonya Petrov', titles: 3, available: 0),
-          _libraryAuthor('', 'Unkeyed Import', titles: 1, available: 0),
+          for (final a in ordered)
+            _libraryAuthor(a.$1, a.$2,
+                titles: a.$3, available: a.$4, daysAgo: a.$5),
         ],
       };
     } else if (path.endsWith('/api/requests/book-author')) {
@@ -490,6 +507,7 @@ Map<String, dynamic> _libraryAuthor(
   String name, {
   required int titles,
   required int available,
+  int daysAgo = 0,
 }) =>
     {
       'foreign_author_id': foreignAuthorId,
@@ -499,6 +517,7 @@ Map<String, dynamic> _libraryAuthor(
       'image': '',
       'title_count': titles,
       'available_count': available,
+      'added': '${_previewDate(-daysAgo)}T12:00:00Z',
     };
 
 /// A `YYYY-MM-DD` calendar date [days] from today (negative for the past), so
