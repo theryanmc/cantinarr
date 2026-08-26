@@ -203,22 +203,29 @@ func buildRecentBooks(books []chaptarr.Book, filesByBook map[int][]chaptarr.Book
 }
 
 // clientReachableCover returns a cover the app can actually load.
+func clientReachableCover(book chaptarr.Book) string {
+	return clientReachableImage(book.Images, "cover")
+}
+
+// clientReachableImage picks one image from an arr record that a client is
+// allowed to dereference.
 //
 // Clients must never dereference an arr-origin URL, so only the relative
 // /MediaCover path (which the app resolves through the authenticated instance
 // proxy) is passed through. An absolute arr-origin URL falls back to the
 // metadata provider's CDN copy, and anything else yields "" so the app draws
-// its placeholder instead of a broken image.
-func clientReachableCover(book chaptarr.Book) string {
+// its placeholder instead of a broken image. The preferred cover type wins when
+// the record carries it; otherwise the first usable image does.
+func clientReachableImage(images []chaptarr.Image, preferred string) string {
 	pick := func(match func(chaptarr.Image) bool) (chaptarr.Image, bool) {
-		for _, img := range book.Images {
+		for _, img := range images {
 			if img.URL != "" && match(img) {
 				return img, true
 			}
 		}
 		return chaptarr.Image{}, false
 	}
-	img, ok := pick(func(i chaptarr.Image) bool { return i.CoverType == "cover" })
+	img, ok := pick(func(i chaptarr.Image) bool { return i.CoverType == preferred })
 	if !ok {
 		img, ok = pick(func(chaptarr.Image) bool { return true })
 	}

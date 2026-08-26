@@ -168,6 +168,47 @@ func (h *Handler) GetBookRecent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, digest)
 }
 
+// GetBookAuthors returns the authors of the Chaptarr library this user may
+// see, so the Books tab can offer an authors browse row.
+//
+// A user with no Chaptarr access gets an empty list, not an error: the row is
+// simply absent for them.
+func (h *Handler) GetBookAuthors(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetLibraryAuthorsForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetBookAuthor returns one author of the Chaptarr library plus every title of
+// theirs it tracks, with the per-format ownership the requester-facing author
+// page renders.
+func (h *Handler) GetBookAuthor(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
+	if foreignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
+		return
+	}
+	detail, err := h.service.GetLibraryAuthorDetailForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func requestErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
@@ -176,6 +217,8 @@ func requestErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrBookFormatUnresolved):
 		return http.StatusConflict
+	case errors.Is(err, ErrBookAuthorNotFound):
+		return http.StatusNotFound
 	default:
 		return http.StatusInternalServerError
 	}
