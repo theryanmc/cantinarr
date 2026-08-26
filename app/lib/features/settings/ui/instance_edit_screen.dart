@@ -24,6 +24,14 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
   final String? initialUsername;
   final bool initialIsDefault;
 
+  /// Opens a NEW instance form with the service-type selector unchosen,
+  /// showing this prompt as its disabled placeholder until one is picked.
+  /// For the setup checklist's download-client row: it names a category of
+  /// four services, and preselecting any one of them would be a guess the
+  /// admin then has to correct — the same correction the Radarr default used
+  /// to force on every row. Ignored when editing.
+  final String? serviceTypePrompt;
+
   const InstanceEditScreen({
     super.key,
     this.instanceId,
@@ -33,6 +41,7 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
     this.initialApiKey,
     this.initialUsername,
     this.initialIsDefault = false,
+    this.serviceTypePrompt,
   });
 
   bool get isEditing => instanceId != null;
@@ -145,6 +154,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool get _showUserSelect =>
       _supportsUserAssignment && (_isChaptarr || !_isDefault);
 
+  /// The type selector is still on its disabled placeholder (see
+  /// [InstanceEditScreen.serviceTypePrompt]): the form asked for a choice
+  /// and nothing has been picked yet, so no type-dependent affordance may
+  /// render, and nothing may be tested or saved.
+  bool get _serviceTypeUnchosen => !widget.isEditing && _serviceType.isEmpty;
+
   String get _serviceLabel {
     for (final t in _serviceTypes) {
       if (t.$1 == _serviceType) return t.$2;
@@ -161,7 +176,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _usernameController =
         TextEditingController(text: widget.initialUsername ?? '');
     _passwordController = TextEditingController();
-    _serviceType = widget.initialServiceType ?? 'radarr';
+    // A prompted new-instance form opens on the selector's disabled
+    // placeholder ('') instead of a guessed type; every type-dependent
+    // affordance stays hidden until a real one is picked (see
+    // [_serviceTypeUnchosen]).
+    _serviceType = (!widget.isEditing && widget.serviceTypePrompt != null)
+        ? ''
+        : (widget.initialServiceType ?? 'radarr');
     _isDefault = widget.initialIsDefault;
     if (widget.isEditing) _loadDetails();
     _loadMediaRoots();
@@ -482,6 +503,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   Future<void> _testConnection() async {
+    if (_serviceTypeUnchosen) {
+      setState(() {
+        _testSucceeded = false;
+        _testResult = 'Choose a service type first.';
+      });
+      return;
+    }
     setState(() {
       _isTesting = true;
       _testResult = null;
@@ -518,6 +546,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   String? _validate() {
+    if (_serviceTypeUnchosen) {
+      return 'Choose a service type';
+    }
     if (_nameController.text.trim().isEmpty ||
         _urlController.text.trim().isEmpty) {
       return 'Name and URL are required';
@@ -977,6 +1008,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// (compose/k8s) distribution. LAN IPs and FQDNs work just as well.
   String get _urlHint {
     switch (_serviceType) {
+      case '':
+        return 'http://service-name:port';
       case 'sonarr':
         return 'http://sonarr:8989';
       case 'chaptarr':
@@ -1427,12 +1460,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               initialValue: _serviceType,
               isExpanded: true,
               dropdownColor: AppTheme.surfaceVariant,
-              items: _serviceTypes
-                  .map((t) => DropdownMenuItem(
-                        value: t.$1,
-                        child: Text(t.$2),
-                      ))
-                  .toList(),
+              items: [
+                // The prompted form opens on this disabled placeholder: the
+                // checklist row named a category (download clients), not a
+                // member, and a real value must be chosen before saving.
+                if (widget.serviceTypePrompt != null)
+                  DropdownMenuItem<String>(
+                    value: '',
+                    enabled: false,
+                    child: Text(widget.serviceTypePrompt!),
+                  ),
+                ..._serviceTypes.map(
+                  (t) => DropdownMenuItem(
+                    value: t.$1,
+                    child: Text(t.$2),
+                  ),
+                ),
+              ],
               onChanged: (value) {
                 if (value == null) return;
                 setState(() {
@@ -1475,10 +1519,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
           const SizedBox(height: 16),
 
+          // Credentials need a real type before they can ask for the right
+          // shape (API key vs username/password), so the prompted form shows
+          // nothing here until one is picked.
+          //
           // qBittorrent, NZBGet and Transmission authenticate with
           // username/password; everything else uses an API key. Credentials
           // are write-only: when editing, blank keeps the existing value.
-          if (_usesUserPass) ...[
+          if (_serviceTypeUnchosen)
+            const SizedBox.shrink()
+          else if (_usesUserPass) ...[
             TextField(
               controller: _usernameController,
               decoration: InputDecoration(
@@ -1528,8 +1578,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           const SizedBox(height: 16),
 
           // Chaptarr has no global default: its instances are assigned
-          // directly to users below instead.
-          if (!_isChaptarr)
+          // directly to users below instead. The prompted form hides the
+          // toggle entirely until a type is chosen.
+          if (!_serviceTypeUnchosen && !_isChaptarr)
             SwitchListTile(
               title: const Text('Default Instance',
                   style: TextStyle(color: AppTheme.textPrimary)),

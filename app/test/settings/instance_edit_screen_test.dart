@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -870,6 +871,88 @@ void main() {
         .singleWhere((r) => r.path == '/api/instances/test');
     expect(test.body['service_type'], 'sabnzbd');
     expect(find.text(reason), findsOneWidget);
+  });
+
+  // The setup checklist's download-client row names a category, not a
+  // service, so the form opens on the selector's disabled placeholder and
+  // refuses to act until a real type is picked — a guess here is exactly the
+  // guess the prompt exists to prevent, so neither Save nor Test Connection
+  // may reach the server before the choice.
+  testWidgets('a prompted form holds every action until a type is picked',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        serviceTypePrompt: 'Select a download client',
+      ),
+    );
+
+    // The selector opens on the prompt itself…
+    expect(find.text('Select a download client'), findsOneWidget);
+    // …and nothing that depends on a type renders: credentials need to know
+    // their shape (key vs username/password) first, and the default toggle
+    // needs a service to be the default of.
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Username'), findsNothing);
+    expect(find.widgetWithText(TextField, 'Password'), findsNothing);
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    // The type-independent basics stay.
+    expect(find.widgetWithText(TextField, 'Name'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'URL'), findsOneWidget);
+
+    final requestsBefore = adapter.requests.length;
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Choose a service type'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test Connection'));
+    await tester.pumpAndSettle();
+    // A refusal, in red — not a connection result.
+    final result =
+        tester.widget<Text>(find.text('Choose a service type first.'));
+    expect(result.style?.color, AppTheme.error);
+
+    // Neither action may have reached the server.
+    expect(adapter.requests.length, requestsBefore);
+  });
+
+  testWidgets('picking a type in a prompted form restores the normal fields',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        serviceTypePrompt: 'Select a download client',
+      ),
+    );
+
+    // Open the selector from its placeholder and pick a real member; the
+    // placeholder itself is disabled, so the menu must still offer a choice.
+    await tester.tap(find.text('Select a download client'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('qBittorrent'));
+    await tester.pumpAndSettle();
+
+    // qBittorrent authenticates with username/password, not an API key.
+    expect(find.widgetWithText(TextField, 'Username'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Password'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'API Key'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, 'Default Instance'),
+        findsOneWidget);
+
+    // Save now fails on the ordinary empty-form check instead of the type
+    // prompt: a choice has been made and the form believes it.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Name and URL are required'), findsOneWidget);
+    expect(find.text('Choose a service type'), findsNothing);
   });
 
   testWidgets('offers instant updates for a Chaptarr instance',
