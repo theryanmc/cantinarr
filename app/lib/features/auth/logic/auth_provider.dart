@@ -577,36 +577,99 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           normalizedUrl, token, identity.displayName, identity.hardwareId);
       final config =
           await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
-
-      await _saveTokens(
-        normalizedUrl,
-        authResp.accessToken,
-        authResp.refreshToken,
-        authResp.deviceId,
-      );
-
-      final connection = BackendConnection(
-        serverUrl: normalizedUrl,
-        accessToken: authResp.accessToken,
-        refreshToken: authResp.refreshToken,
-        serverName: config.serverName,
-        serverVersion: config.serverVersion,
-        minAppVersion: config.minAppVersion,
-        services: config.services,
-        instances: config.instances,
-        issuesEnabled: config.issuesEnabled,
-        allowReporting: config.allowReporting,
-      );
-
-      await _persistSession(connection, authResp.user);
-      state = AsyncData(AuthState(connection: connection, user: authResp.user));
-      _registerForPush();
+      await _adoptSession(normalizedUrl, authResp, config);
     } catch (e) {
       state = AsyncData(AuthState(error: _parseConnectError(e)));
     }
   }
 
-  /// Handle a cantinarr:// deep link. If already authenticated, ignores it.
+  /// Replace this device's session with one redeemed from a connect link —
+  /// the path for a link tapped while already signed in. The new server must
+  /// accept the link BEFORE the current session is touched: a passwordless
+  /// user may have no way back in, so an expired or superseded link has to
+  /// leave them exactly where they were. Returns false on rejection (the
+  /// current session is untouched); the old session's teardown mirrors
+  /// [logout] and is best-effort — an unreachable old server never blocks
+  /// the switch.
+  Future<bool> switchServer(String serverUrl, String token) async {
+    final oldConn = state.valueOrNull?.connection;
+
+    final String normalizedUrl;
+    final AuthResponse authResp;
+    final ServerConfig config;
+    try {
+      normalizedUrl = _normalizeUrl(serverUrl);
+      final identity = await ref.read(deviceIdentityProvider).resolve();
+      authResp = await _authService.redeemConnectToken(
+          normalizedUrl, token, identity.displayName, identity.hardwareId);
+      config =
+          await _authService.fetchConfig(normalizedUrl, authResp.accessToken);
+    } catch (e) {
+      debugPrint('Switch server: link rejected, keeping current session: $e');
+      return false;
+    }
+
+    // The new server accepted us. End the old session while its access token
+    // and the stored device_id are still in place (same order as logout()).
+    if (oldConn != null) {
+      try {
+        await ref
+            .read(pushServiceProvider)
+            .unregister()
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        debugPrint('Switch server: push unregister skipped: $e');
+      }
+      try {
+        await _authService
+            .logout(oldConn.serverUrl, oldConn.accessToken)
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        debugPrint('Switch server: old-session revoke skipped: $e');
+      }
+    }
+
+    await _adoptSession(normalizedUrl, authResp, config);
+    return true;
+  }
+
+  /// The single session-adoption path: persist the redeemed tokens and the
+  /// snapshot, swap state, register push. Both first-connect and a server
+  /// switch end here, so storage is always fully overwritten (the isolation
+  /// contract server_switch_isolation_test pins).
+  Future<void> _adoptSession(
+    String normalizedUrl,
+    AuthResponse authResp,
+    ServerConfig config,
+  ) async {
+    await _saveTokens(
+      normalizedUrl,
+      authResp.accessToken,
+      authResp.refreshToken,
+      authResp.deviceId,
+    );
+
+    final connection = BackendConnection(
+      serverUrl: normalizedUrl,
+      accessToken: authResp.accessToken,
+      refreshToken: authResp.refreshToken,
+      serverName: config.serverName,
+      serverVersion: config.serverVersion,
+      minAppVersion: config.minAppVersion,
+      services: config.services,
+      instances: config.instances,
+      issuesEnabled: config.issuesEnabled,
+      allowReporting: config.allowReporting,
+    );
+
+    await _persistSession(connection, authResp.user);
+    state = AsyncData(AuthState(connection: connection, user: authResp.user));
+    _registerForPush();
+  }
+
+  /// Handle a cantinarr:// deep link while signed out. Links that arrive
+  /// while authenticated are the app shell's job — it prompts and calls
+  /// [switchServer] — so this guard stays as a backstop for direct callers.
   Future<void> connectWithLink(String link) async {
     final current = state.valueOrNull;
     if (current?.isAuthenticated == true) return;
