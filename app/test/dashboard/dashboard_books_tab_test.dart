@@ -1,10 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/network/websocket_client.dart';
+import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/providers/library_refresh_provider.dart';
+import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
@@ -461,6 +465,126 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Format needs attention'), findsNWidgets(2));
   });
+
+  testWidgets(
+      'the Books tab browse rows still refresh on resume, library-changed '
+      'events and an instance switch', (tester) async {
+    _usePhoneSize(tester);
+    final events = StreamController<WsEvent>.broadcast();
+    addTearDown(events.close);
+
+    final (:router, :container, :adapter) = await _pumpRouter(
+      tester,
+      events: events.stream,
+      authState: _twoInstanceBooksState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    // Baseline after the idle tab's initial mount, before any trigger fires.
+    var libraryBefore = adapter.libraryRequests;
+    var recentBefore = adapter.recentRequests;
+    var authorBefore = adapter.authorRequests;
+    var seriesBefore = adapter.seriesRequests;
+
+    // Trigger 1: app resume -> didChangeAppLifecycleState -> _refreshBookTruth().
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.libraryRequests,
+      greaterThan(libraryBefore),
+      reason:
+          'TAB-02 (app resume): owned-books truth re-pulls on app resume',
+    );
+    expect(
+      adapter.recentRequests,
+      greaterThan(recentBefore),
+      reason: 'TAB-02 (app resume): recently-added row re-pulls on resume',
+    );
+    expect(
+      adapter.authorRequests,
+      greaterThan(authorBefore),
+      reason: 'TAB-02 (app resume): authors row re-pulls on resume',
+    );
+    expect(
+      adapter.seriesRequests,
+      greaterThan(seriesBefore),
+      reason: 'TAB-02 (app resume): series row re-pulls on resume',
+    );
+
+    libraryBefore = adapter.libraryRequests;
+    recentBefore = adapter.recentRequests;
+    authorBefore = adapter.authorRequests;
+    seriesBefore = adapter.seriesRequests;
+
+    // Trigger 2: a library-changed websocket event ->
+    // libraryChangedEventsProvider listener -> _refreshBookTruth().
+    events.add(const WsEvent(type: 'request_status_changed', data: {}));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.libraryRequests,
+      greaterThan(libraryBefore),
+      reason: 'TAB-02 (library-changed event): owned-books truth re-pulls',
+    );
+    expect(
+      adapter.recentRequests,
+      greaterThan(recentBefore),
+      reason: 'TAB-02 (library-changed event): recently-added row re-pulls',
+    );
+    expect(
+      adapter.authorRequests,
+      greaterThan(authorBefore),
+      reason: 'TAB-02 (library-changed event): authors row re-pulls',
+    );
+    expect(
+      adapter.seriesRequests,
+      greaterThan(seriesBefore),
+      reason: 'TAB-02 (library-changed event): series row re-pulls',
+    );
+
+    libraryBefore = adapter.libraryRequests;
+    recentBefore = adapter.recentRequests;
+    authorBefore = adapter.authorRequests;
+    seriesBefore = adapter.seriesRequests;
+
+    // Trigger 3: switching the active Chaptarr instance. The browse-row
+    // providers (ownedBooksProvider/recentBooksProvider/bookAuthorsProvider/
+    // bookSeriesProvider) each `ref.watch(instanceProvider)` directly, so a
+    // state change re-runs all four against the new instance even though
+    // DashboardBooksTab's own instance-switch listener only explicitly
+    // invalidates ownedBooksProvider.
+    container
+        .read(instanceProvider.notifier)
+        .setActiveChaptarrInstance('books-2');
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.libraryRequests,
+      greaterThan(libraryBefore),
+      reason: 'TAB-02 (instance switch): owned-books truth re-pulls against '
+          'the new instance',
+    );
+    expect(
+      adapter.recentRequests,
+      greaterThan(recentBefore),
+      reason: 'TAB-02 (instance switch): recently-added row re-pulls '
+          'against the new instance',
+    );
+    expect(
+      adapter.authorRequests,
+      greaterThan(authorBefore),
+      reason: 'TAB-02 (instance switch): authors row re-pulls against the '
+          'new instance',
+    );
+    expect(
+      adapter.seriesRequests,
+      greaterThan(seriesBefore),
+      reason: 'TAB-02 (instance switch): series row re-pulls against the '
+          'new instance',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -490,6 +614,31 @@ const _booksState = AuthState(
   user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
+/// TAB-02 instance-switch fixture: two Chaptarr instances so
+/// `setActiveChaptarrInstance` has a second instance to switch to.
+const _twoInstanceBooksState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'books-2',
+        serviceType: 'chaptarr',
+        name: 'Books 2',
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
 Future<({
   ProviderContainer container,
   GoRouter router,
@@ -503,6 +652,8 @@ Future<({
   bool aliasSibling = false,
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
+  Stream<WsEvent>? events,
+  AuthState? authState,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _BooksSearchAdapter(
@@ -517,8 +668,12 @@ Future<({
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_booksState)),
+      authProvider.overrideWith(
+        () => _FakeAuthNotifier(authState ?? _booksState),
+      ),
       backendClientProvider.overrideWithValue(dio),
+      realtimeEventsProvider
+          .overrideWithValue(events ?? const Stream<WsEvent>.empty()),
     ],
   );
   addTearDown(container.dispose);
@@ -568,6 +723,9 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   final bool blankIdentity;
   int statusRequests = 0;
   int libraryRequests = 0;
+  int recentRequests = 0;
+  int authorRequests = 0;
+  int seriesRequests = 0;
   bool ebookSubmitted = false;
   final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
@@ -747,6 +905,15 @@ class _BooksSearchAdapter implements HttpClientAdapter {
           },
         },
             ];
+    } else if (options.path == '/api/requests/book-recent') {
+      recentRequests++;
+      body = {'items': <Object>[]};
+    } else if (options.path == '/api/requests/book-authors') {
+      authorRequests++;
+      body = {'authors': <Object>[], 'total': 0};
+    } else if (options.path == '/api/requests/book-series') {
+      seriesRequests++;
+      body = {'series': <Object>[], 'total': 0};
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
     } else {

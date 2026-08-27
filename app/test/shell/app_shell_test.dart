@@ -706,6 +706,96 @@ void main() {
     );
     expect(issuesTile.trailing, isNull);
   });
+
+  testWidgets(
+      'the Movies tab toolbar still returns combined movie, TV and person results with their availability pills',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = const _SearchPinAdapter();
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_searchPinState),
+          ),
+          backendClientProvider.overrideWithValue(dio),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'matrix');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Fight Club'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Movies toolbar still returns combined TMDB '
+          'multi-search results',
+    );
+    expect(
+      find.text('The Matrix'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Movies toolbar still returns combined TMDB '
+          'multi-search results',
+    );
+    expect(
+      find.text('Game of Thrones'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Movies toolbar still returns combined TMDB '
+          'multi-search results',
+    );
+    expect(
+      find.text('Brad Pitt'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Movies toolbar still returns combined TMDB '
+          'multi-search results',
+    );
+
+    expect(
+      find.text('Available'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Available pill still renders on the Movies tab',
+    );
+    expect(
+      find.text('Requested'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Requested pill still renders on the Movies tab',
+    );
+    expect(
+      find.text('Partial'),
+      findsOneWidget,
+      reason: 'SEARCH-05: the Partial pill still renders on the Movies tab',
+    );
+  });
 }
 
 Future<void> _pumpAdminDrawer(
@@ -820,6 +910,35 @@ const _authenticatedAiState = AuthState(
     services: AvailableServices(ai: true),
   ),
   user: UserProfile(id: 1, username: 'tester', role: 'admin'),
+);
+
+/// SEARCH-05 pin fixture: AI is off (all services false) so `SearchMode`
+/// stays `SearchMode.search` and the pin never races the Ask AI
+/// pause-detector heuristic. Carries a default Radarr and Sonarr instance so
+/// `AppShell._initLibraries` builds real library notifiers for
+/// `buildSearchLibraryStatus` to compute pills from.
+const _searchPinState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(),
+    instances: [
+      ServiceInstance(
+        id: 'radarr-1',
+        serviceType: 'radarr',
+        name: 'Radarr',
+        isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'sonarr-1',
+        serviceType: 'sonarr',
+        name: 'Sonarr',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
 AuthState _multiRadarrState({required bool isAdmin}) {
@@ -958,6 +1077,95 @@ class _JsonAdapter implements HttpClientAdapter {
       body = {'proposals': []};
     } else {
       body = [];
+    }
+    return ResponseBody.fromString(
+      jsonEncode(body),
+      200,
+      headers: {
+        'content-type': ['application/json'],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+/// SEARCH-05 pin fixture. Dispatches on `options.path`: TMDB multi-search
+/// (movie/tv/person, matching `/api/search`) plus the Radarr/Sonarr library
+/// reads `AppShell._initLibraries` issues for the default instances in
+/// `_searchPinState`, so `buildSearchLibraryStatus` computes real
+/// Available/Partial/Requested pills. Mirrors `_BooksSearchAdapter` in
+/// dashboard_books_tab_test.dart.
+class _SearchPinAdapter implements HttpClientAdapter {
+  const _SearchPinAdapter();
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    final path = options.path;
+    Object body;
+    if (path == '/api/search') {
+      body = {
+        'page': 1,
+        'total_pages': 1,
+        'total_results': 4,
+        'results': [
+          {'id': 550, 'title': 'Fight Club', 'media_type': 'movie'},
+          {'id': 603, 'title': 'The Matrix', 'media_type': 'movie'},
+          {
+            'id': 1399,
+            'name': 'Game of Thrones',
+            'media_type': 'tv',
+            'first_air_date': '2011-04-17',
+          },
+          {'id': 287, 'name': 'Brad Pitt', 'media_type': 'person'},
+        ],
+      };
+    } else if (path == '/api/instances/radarr-1/api/v3/movie') {
+      // tmdbId 550 -> Available (hasFile). tmdbId 603 -> Requested
+      // (monitored, no file).
+      body = [
+        {
+          'id': 1,
+          'title': 'Fight Club',
+          'year': 1999,
+          'tmdbId': 550,
+          'hasFile': true,
+        },
+        {
+          'id': 2,
+          'title': 'The Matrix',
+          'year': 1999,
+          'tmdbId': 603,
+          'hasFile': false,
+          'monitored': true,
+        },
+      ];
+    } else if (path == '/api/instances/sonarr-1/api/v3/series') {
+      // tmdbId 1399 -> Partial: files (4) strictly below total (10), both
+      // non-zero, via SonarrSeries.episodeTotals reading top-level
+      // `statistics` (no seasons on this fixture).
+      body = [
+        {
+          'id': 1,
+          'title': 'Game of Thrones',
+          'tmdbId': 1399,
+          'monitored': true,
+          'statistics': {
+            'episodeFileCount': 4,
+            'episodeCount': 10,
+            'totalEpisodeCount': 10,
+          },
+        },
+      ];
+    } else if (path.endsWith('/movie') || path.endsWith('/series')) {
+      body = <Object>[];
+    } else {
+      body = <String, Object>{};
     }
     return ResponseBody.fromString(
       jsonEncode(body),
