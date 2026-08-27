@@ -1316,6 +1316,57 @@ void main() {
           'later frame',
     );
   });
+
+  testWidgets(
+      'WR-01 parity: emptying the toolbar by typing leaves AI mode on the '
+      'Books tab, as it does on every other discovery tab', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    // The shimmer border repeats while aiReady, so bounded pumps only —
+    // pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    expect(
+      tester.widget<TextField>(toolbar).decoration!.hintText,
+      'Ask the AI anything...',
+      reason: 'precondition: the explicit pill put the Books tab in AI mode',
+    );
+
+    // Backspace to empty by TYPING — deliberately not the clear button, which
+    // routes through _exitAiMode and was never the broken path.
+    await tester.enterText(toolbar, '');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(
+      tester.widget<TextField>(toolbar).decoration!.hintText,
+      isNot('Ask the AI anything...'),
+      reason: 'WR-01: an emptied field leaves AI mode on the Books tab too. '
+          'Only ShellSearchNotifier.updateSearch("") clears _manualAiMode, so '
+          'the empty string must still reach it while the rest of exclusive '
+          'dispatch keeps every non-empty Books query away from that notifier.',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'WR-01: leaving AI mode via an emptied field surfaces no book '
+          'overlay — an empty query is not a search',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {

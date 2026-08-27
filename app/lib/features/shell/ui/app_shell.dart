@@ -543,13 +543,26 @@ class _AppShellState extends ConsumerState<AppShell>
             _resetAskAiIdle();
             // Exclusive dispatch: exactly one notifier is ever fed by a
             // keystroke, chosen by the active discovery tab. While AI mode
-            // is active on the Books tab, neither notifier is fed —
-            // `_manualAiMode` keeps `searchMode` sticky without a feed, the
-            // book overlay is suppressed anyway, and `_submitSearchBarToAi`
-            // reads `_searchController.text`, not provider state.
+            // is active on the Books tab, neither notifier is fed a non-empty
+            // query — `_manualAiMode` keeps `searchMode` sticky without a
+            // feed, the book overlay is suppressed anyway, and
+            // `_submitSearchBarToAi` reads `_searchController.text`, not
+            // provider state.
             if (booksTab) {
               if (!isAiReady) {
                 bookSearchNotifier.updateSearch(q);
+              } else if (q.trim().isEmpty) {
+                // The one exception, for parity with every other discovery
+                // tab: emptying the field by typing leaves AI mode. Only
+                // `ShellSearchNotifier.updateSearch('')` clears
+                // `_manualAiMode`, so without this the Books tab could be
+                // left only via the explicit clear button. The empty string
+                // cannot reopen the escalation path exclusive dispatch
+                // closed: `updateSearch` short-circuits on empty — it resets
+                // `searchMode` to `search` and returns before
+                // `_executeSearch`, so neither `isAiPromptQuery` nor the
+                // empty-results auto-escalation is ever consulted.
+                searchNotifier.updateSearch('');
               }
             } else {
               searchNotifier.updateSearch(q);
