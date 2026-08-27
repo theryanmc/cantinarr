@@ -24,6 +24,7 @@ class _FakeAdapter implements HttpClientAdapter {
     this.grants = const [],
     this.mediaRoots = const ['/media'],
     this.arrRootFolders = const [],
+    this.instancesError,
     this.webhookError,
     this.webhookStatus,
     this.testError,
@@ -34,6 +35,10 @@ class _FakeAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> grants;
   final List<String> mediaRoots;
   final List<String> arrRootFolders;
+
+  /// GET /api/instances answers 500 with this message when set — mimics the
+  /// backend being down at screen mount.
+  final String? instancesError;
   final String? webhookError;
 
   /// GET /webhook status body; null mimics an older server (404), which the
@@ -65,6 +70,17 @@ class _FakeAdapter implements HttpClientAdapter {
           {'id': i + 1, 'path': arrRootFolders[i]},
       ];
     } else if (options.method == 'GET' && path == '/api/instances') {
+      final error = instancesError;
+      if (error != null) {
+        // Mirrors Go's http.Error: JSON-shaped body, text/plain content type.
+        return ResponseBody.fromString(
+          '${jsonEncode({'error': error})}\n',
+          500,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
       response = instances;
     } else if (options.method == 'GET' && path.endsWith('/grant-users')) {
       response = grants;
@@ -140,9 +156,13 @@ class _FakeAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier(this.users);
+  _FakeAuthNotifier(this.users, {this.listUsersError});
 
   final List<UserSummary> users;
+
+  /// listUsers throws this when set — mimics the backend being down at
+  /// screen mount.
+  final Object? listUsersError;
 
   @override
   Future<AuthState> build() async => const AuthState(
@@ -155,7 +175,11 @@ class _FakeAuthNotifier extends AuthNotifier {
       );
 
   @override
-  Future<List<UserSummary>> listUsers() async => users;
+  Future<List<UserSummary>> listUsers() async {
+    final error = listUsersError;
+    if (error != null) throw error;
+    return users;
+  }
 
   @override
   Future<void> refreshConfig() async {}
@@ -196,6 +220,7 @@ Future<void> _pumpEdit(
   WidgetTester tester, {
   required _FakeAdapter adapter,
   required List<UserSummary> users,
+  Object? listUsersError,
   InstanceEditScreen screen = const InstanceEditScreen(),
   Size viewSize = const Size(800, 1800),
   double textScaleFactor = 1,
@@ -218,7 +243,8 @@ Future<void> _pumpEdit(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(() => _FakeAuthNotifier(users)),
+        authProvider.overrideWith(
+            () => _FakeAuthNotifier(users, listUsersError: listUsersError)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp.router(
@@ -245,6 +271,24 @@ Future<void> _fillForm(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets(
+      'backend down at mount shows a friendly error and no unhandled error '
+      'leaks', (tester) async {
+    // Both directory loads fail: the instance list 500s and the user list
+    // throws. _loadDirectory used to await the two futures sequentially, so
+    // when the first await threw, the second future's error had no listener
+    // and escaped as an unhandled zone error — failing this test pre-fix.
+    final adapter = _FakeAdapter(instancesError: 'connection refused');
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      listUsersError: StateError('backend down'),
+    );
+
+    expect(find.text('Could not load users'), findsOneWidget);
+  });
+
   testWidgets('first instance of a type starts as the default', (tester) async {
     final adapter = _FakeAdapter();
     await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'alice')]);

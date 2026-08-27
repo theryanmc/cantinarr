@@ -296,8 +296,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           InstanceApiService(backendDio: ref.read(backendClientProvider));
       final instancesFuture = service.listInstances();
       final usersFuture = ref.read(authProvider.notifier).listUsers();
-      final instances = await instancesFuture;
-      final users = await usersFuture;
+      // Attach listeners to both futures now: awaiting them sequentially
+      // would leave the second future's error unhandled when the first
+      // await throws, leaking it as an unhandled zone error. Future.wait
+      // (eagerError: false) waits for both, throws the first error, and
+      // drops the rest — the single catch below stays correct.
+      final results =
+          await Future.wait<Object>([instancesFuture, usersFuture]);
+      final instances = results[0] as List<ServiceInstance>;
+      final users = results[1] as List<UserSummary>;
       users.sort((a, b) =>
           a.username.toLowerCase().compareTo(b.username.toLowerCase()));
       if (!mounted) return;
