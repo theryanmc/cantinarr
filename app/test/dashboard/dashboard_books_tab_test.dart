@@ -121,8 +121,7 @@ void main() {
     expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.byKey(
-        const ValueKey(
-            'book-result:lookup-flock:library-flock:lookup:0'),
+        const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
       ),
       findsOneWidget,
     );
@@ -275,14 +274,14 @@ void main() {
     );
     expect(firstAmbiguous, findsOneWidget);
     expect(
-      find.byKey(const ValueKey(
-          'book-result:lookup-flock:lookup-flock:lookup:1')),
+      find.byKey(
+          const ValueKey('book-result:lookup-flock:lookup-flock:lookup:1')),
       findsOneWidget,
     );
     // The record the guidance points at is on screen, above both lookup rows.
     expect(
-      find.byKey(const ValueKey(
-          'book-result:library-flock:library-flock:library:0')),
+      find.byKey(
+          const ValueKey('book-result:library-flock:library-flock:library:0')),
       findsOneWidget,
     );
     expect(adapter.statusForeignIds, isEmpty);
@@ -348,22 +347,22 @@ void main() {
     // The row carrying the library's own id binds to it and reports its state;
     // the sibling's resemblance no longer cancels that identity.
     expect(
-      find.byKey(const ValueKey(
-          'book-result:library-flock:library-flock:lookup:0')),
+      find.byKey(
+          const ValueKey('book-result:library-flock:library-flock:lookup:0')),
       findsOneWidget,
     );
     expect(find.text('Audiobook requested'), findsOneWidget);
     // With the record spoken for, the sibling is simply a book they don't have.
     expect(
-      find.byKey(const ValueKey(
-          'book-result:lookup-flock:lookup-flock:lookup:1')),
+      find.byKey(
+          const ValueKey('book-result:lookup-flock:lookup-flock:lookup:1')),
       findsOneWidget,
     );
     expect(find.text('May be the same as a book listed above'), findsNothing);
     // The bound record is not repeated as a library row of its own.
     expect(
-      find.byKey(const ValueKey(
-          'book-result:library-flock:library-flock:library:0')),
+      find.byKey(
+          const ValueKey('book-result:library-flock:library-flock:library:0')),
       findsNothing,
     );
     expect(adapter.statusForeignIds, isEmpty);
@@ -391,13 +390,11 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(
-          const ValueKey('book-result:library-a:library-a:library:0')),
+      find.byKey(const ValueKey('book-result:library-a:library-a:library:0')),
       findsOneWidget,
     );
     expect(
-      find.byKey(
-          const ValueKey('book-result:library-b:library-b:library:1')),
+      find.byKey(const ValueKey('book-result:library-b:library-b:library:1')),
       findsOneWidget,
     );
     expect(adapter.statusForeignIds, isEmpty);
@@ -425,8 +422,7 @@ void main() {
     expect(
       find.descendant(
         of: row,
-        matching:
-            find.text('Ask an admin to check this book’s library record'),
+        matching: find.text('Ask an admin to check this book’s library record'),
       ),
       findsOneWidget,
     );
@@ -496,8 +492,7 @@ void main() {
     expect(
       adapter.libraryRequests,
       greaterThan(libraryBefore),
-      reason:
-          'TAB-02 (app resume): owned-books truth re-pulls on app resume',
+      reason: 'TAB-02 (app resume): owned-books truth re-pulls on app resume',
     );
     expect(
       adapter.recentRequests,
@@ -636,6 +631,111 @@ void main() {
     );
     expect(screen.searchTerm, 'meditations');
   });
+
+  const noInstanceMessage = 'No Chaptarr instance is available.';
+  const forbiddenMessage =
+      'You do not have access to search this book library.';
+  const requestFailedMessage =
+      'Books could not be searched. Check the connection and try again.';
+  const noBooksMessage = 'No books found. Try a different search.';
+
+  Finder overlayText(String message) => find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text(message),
+      );
+
+  testWidgets(
+      'a book search with no Chaptarr instance says so instead of showing '
+      'an empty list', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      authState: _noInstanceBooksState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noInstanceMessage), findsOneWidget);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+  });
+
+  testWidgets(
+      'a book search rejected for access says the user has no access to '
+      'that book library', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, forbidden: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(forbiddenMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+  });
+
+  testWidgets('a book search that fails for any other reason invites a retry',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, serverError: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(requestFailedMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+  });
+
+  testWidgets(
+      'a book search that ran and matched nothing says no books were found',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, emptyLookup: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noBooksMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -690,11 +790,26 @@ const _twoInstanceBooksState = AuthState(
   user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
-Future<({
-  ProviderContainer container,
-  GoRouter router,
-  _BooksSearchAdapter adapter,
-})> _pumpRouter(
+/// FAIL-01 fixture: the books grant is present (so the route stays
+/// reachable — app_router.dart:155-165 keys off the grant, not the instance
+/// list) but zero Chaptarr instances are configured.
+const _noInstanceBooksState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true),
+    instances: [],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+Future<
+    ({
+      ProviderContainer container,
+      GoRouter router,
+      _BooksSearchAdapter adapter,
+    })> _pumpRouter(
   WidgetTester tester, {
   bool mismatchedIdentity = false,
   bool unresolvedIdentity = false,
@@ -703,6 +818,9 @@ Future<({
   bool aliasSibling = false,
   bool duplicateLibraryRecords = false,
   bool blankIdentity = false,
+  bool forbidden = false,
+  bool serverError = false,
+  bool emptyLookup = false,
   Stream<WsEvent>? events,
   AuthState? authState,
 }) async {
@@ -715,6 +833,9 @@ Future<({
     aliasSibling: aliasSibling,
     duplicateLibraryRecords: duplicateLibraryRecords,
     blankIdentity: blankIdentity,
+    forbidden: forbidden,
+    serverError: serverError,
+    emptyLookup: emptyLookup,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -760,12 +881,24 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.aliasSibling = false,
     this.duplicateLibraryRecords = false,
     this.blankIdentity = false,
+    this.forbidden = false,
+    this.serverError = false,
+    this.emptyLookup = false,
   });
 
   final bool mismatchedIdentity;
   final bool unresolvedIdentity;
   final bool mixedOwnership;
   final bool ambiguousLookup;
+
+  /// FAIL-02 (access): book/lookup answers 403.
+  final bool forbidden;
+
+  /// FAIL-02 (retry): book/lookup answers 500.
+  final bool serverError;
+
+  /// FAIL-03: book/lookup succeeds with an empty list.
+  final bool emptyLookup;
 
   /// Two lookup rows for one title where the first carries the library's own
   /// foreignBookId and the second is a same-title provider sibling.
@@ -824,46 +957,49 @@ class _BooksSearchAdapter implements HttpClientAdapter {
               ],
             }
           : unresolvedIdentity
-          ? {
-              'titles': [
-                {
-                  'title': 'Flock',
-                  'author': 'Kate Stewart',
-                  'foreign_book_id': 'library-flock',
-                  'status_known': false,
-                  'ebook': {'monitored': false, 'downloaded': false},
-                  'audiobook': {'monitored': false, 'downloaded': false},
-                },
-              ],
-            }
-          : (mismatchedIdentity || ambiguousLookup || aliasSibling)
-          ? {
-              'titles': [
-                {
-                  'title': 'Flock',
-                  'author': 'Kate Stewart',
-                  'foreign_book_id': 'library-flock',
-                  'ebook': {
-                    'monitored': ebookSubmitted,
-                    'downloaded': false,
-                  },
-                  'audiobook': {'monitored': true, 'downloaded': false},
-                },
-              ],
-            }
-          : mixedOwnership
-          ? {
-              'titles': [
-                {
-                  'title': 'Meditations',
-                  'author': 'Marcus Aurelius',
-                  'foreign_book_id': 'book-1',
-                  'ebook': {'monitored': true, 'downloaded': true},
-                  'audiobook': {'monitored': true, 'downloaded': false},
-                },
-              ],
-            }
-          : {'titles': <Object>[]};
+              ? {
+                  'titles': [
+                    {
+                      'title': 'Flock',
+                      'author': 'Kate Stewart',
+                      'foreign_book_id': 'library-flock',
+                      'status_known': false,
+                      'ebook': {'monitored': false, 'downloaded': false},
+                      'audiobook': {'monitored': false, 'downloaded': false},
+                    },
+                  ],
+                }
+              : (mismatchedIdentity || ambiguousLookup || aliasSibling)
+                  ? {
+                      'titles': [
+                        {
+                          'title': 'Flock',
+                          'author': 'Kate Stewart',
+                          'foreign_book_id': 'library-flock',
+                          'ebook': {
+                            'monitored': ebookSubmitted,
+                            'downloaded': false,
+                          },
+                          'audiobook': {'monitored': true, 'downloaded': false},
+                        },
+                      ],
+                    }
+                  : mixedOwnership
+                      ? {
+                          'titles': [
+                            {
+                              'title': 'Meditations',
+                              'author': 'Marcus Aurelius',
+                              'foreign_book_id': 'book-1',
+                              'ebook': {'monitored': true, 'downloaded': true},
+                              'audiobook': {
+                                'monitored': true,
+                                'downloaded': false
+                              },
+                            },
+                          ],
+                        }
+                      : {'titles': <Object>[]};
     } else if (options.path == '/api/requests/book-status') {
       statusRequests++;
       final foreignId = options.queryParameters['foreign_id'].toString();
@@ -878,23 +1014,41 @@ class _BooksSearchAdapter implements HttpClientAdapter {
             }
           : (mismatchedIdentity || ambiguousLookup) &&
                   foreignId == 'library-flock'
-          ? {
-              'status': 'requested',
-              'book_formats': {
-                if (ebookSubmitted) 'ebook': 'requested',
-                'audiobook': 'requested',
-              },
-            }
-          : foreignId == 'book-1'
-          ? {
-              'status': 'requested',
-              'book_formats': {
-                'ebook': 'requested',
-                'audiobook': 'requested',
-              },
-            }
-          : {'status': 'unavailable'};
+              ? {
+                  'status': 'requested',
+                  'book_formats': {
+                    if (ebookSubmitted) 'ebook': 'requested',
+                    'audiobook': 'requested',
+                  },
+                }
+              : foreignId == 'book-1'
+                  ? {
+                      'status': 'requested',
+                      'book_formats': {
+                        'ebook': 'requested',
+                        'audiobook': 'requested',
+                      },
+                    }
+                  : {'status': 'unavailable'};
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
+      // FAIL-02/FAIL-03 widget cases: these short-circuit with their own
+      // status code rather than falling through to the shared 200 return
+      // below.
+      if (forbidden) {
+        return ResponseBody.fromString('forbidden', 403);
+      }
+      if (serverError) {
+        return ResponseBody.fromString('server error', 500);
+      }
+      if (emptyLookup) {
+        return ResponseBody.fromString(
+          '[]',
+          200,
+          headers: {
+            'content-type': ['application/json'],
+          },
+        );
+      }
       body = (mismatchedIdentity ||
               unresolvedIdentity ||
               ambiguousLookup ||
@@ -929,32 +1083,32 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 },
             ]
           : [
-        {
-          'title': 'Meditations',
-          'foreignBookId': 'book-1',
-          'year': 2002,
-          'pageCount': 304,
-          'overview': 'A practical guide to Stoic philosophy.',
-          'genres': ['Philosophy'],
-          'author': {
-            'id': 0,
-            'authorName': 'Marcus Aurelius',
-            'foreignAuthorId': 'author-1',
-          },
-        },
-        {
-          'title': 'Letters from a Stoic',
-          'foreignBookId': 'book-2',
-          'year': 1965,
-          'pageCount': 254,
-          'overview': 'Seneca on living with wisdom and courage.',
-          'genres': ['Philosophy'],
-          'author': {
-            'id': 0,
-            'authorName': 'Seneca',
-            'foreignAuthorId': 'author-2',
-          },
-        },
+              {
+                'title': 'Meditations',
+                'foreignBookId': 'book-1',
+                'year': 2002,
+                'pageCount': 304,
+                'overview': 'A practical guide to Stoic philosophy.',
+                'genres': ['Philosophy'],
+                'author': {
+                  'id': 0,
+                  'authorName': 'Marcus Aurelius',
+                  'foreignAuthorId': 'author-1',
+                },
+              },
+              {
+                'title': 'Letters from a Stoic',
+                'foreignBookId': 'book-2',
+                'year': 1965,
+                'pageCount': 254,
+                'overview': 'Seneca on living with wisdom and courage.',
+                'genres': ['Philosophy'],
+                'author': {
+                  'id': 0,
+                  'authorName': 'Seneca',
+                  'foreignAuthorId': 'author-2',
+                },
+              },
             ];
     } else if (options.path == '/api/requests/book-recent') {
       recentRequests++;

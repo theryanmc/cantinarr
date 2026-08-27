@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/app_config.dart';
@@ -102,34 +103,52 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
     required String query,
     required int generation,
   }) async {
-    // Tracer path: a single generic catch classifies any failure —
-    // including no active instance — as BookSearchError.requestFailed. Task
-    // 2 replaces this with the no-instance short-circuit and the
-    // DioException 401/403-vs-other classification.
-    try {
-      final instance = _ref.read(instanceProvider).activeChaptarrInstance;
-      final service = ChaptarrApiService(
-        backendDio: _ref.read(backendClientProvider),
-        instanceId: instance!.id,
+    bool superseded() =>
+        !mounted ||
+        generation != _searchGeneration ||
+        state.searchQuery != query;
+
+    // The no-instance check runs first and short-circuits before any
+    // ChaptarrApiService is constructed or request issued — mirroring
+    // dashboard_books_tab.dart's `_chaptarr() == null` guard — so no
+    // 401/403 or generic failure can ever supersede FAIL-01.
+    final instance = _ref.read(instanceProvider).activeChaptarrInstance;
+    if (instance == null) {
+      if (superseded()) return;
+      state = state.copyWith(
+        isLoadingSearch: false,
+        searched: false,
+        error: BookSearchError.noInstance,
       );
+      return;
+    }
+
+    final service = ChaptarrApiService(
+      backendDio: _ref.read(backendClientProvider),
+      instanceId: instance.id,
+    );
+
+    try {
       final books = await service.lookupBook(query.trim());
-      if (!mounted ||
-          generation != _searchGeneration ||
-          state.searchQuery != query) {
-        return;
-      }
+      if (superseded()) return;
       state = state.copyWith(
         results: books,
         isLoadingSearch: false,
         searched: true,
         clearError: true,
       );
+    } on DioException catch (e) {
+      if (superseded()) return;
+      final code = e.response?.statusCode;
+      state = state.copyWith(
+        isLoadingSearch: false,
+        searched: false,
+        error: code == 401 || code == 403
+            ? BookSearchError.forbidden
+            : BookSearchError.requestFailed,
+      );
     } catch (_) {
-      if (!mounted ||
-          generation != _searchGeneration ||
-          state.searchQuery != query) {
-        return;
-      }
+      if (superseded()) return;
       state = state.copyWith(
         isLoadingSearch: false,
         searched: false,
