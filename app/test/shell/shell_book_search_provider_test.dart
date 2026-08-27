@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -7,6 +6,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/shell/logic/shell_book_search_provider.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -146,6 +146,67 @@ void main() {
       const ShellBookSearchState(),
     );
     expect(adapter.lookupRequests, 0);
+  });
+
+  test(
+      'a malformed lookup payload is distinguishable from a transport '
+      'failure in a debug build', () async {
+    // A string in place of the int `id` field makes ChaptarrBook.fromJson's
+    // `json['id'] as int?` cast throw a TypeError — a non-Dio exception
+    // caught by the generic `catch` clause, distinct from a DioException.
+    final malformedBooks = [
+      {
+        'id': 'not-an-int',
+        'title': 'Meditations',
+        'foreignBookId': 'book-1',
+      },
+    ];
+    final adapter = _LookupAdapter(books: malformedBooks);
+    final container = await _makeContainer(adapter: adapter);
+    addTearDown(container.dispose);
+
+    final captured = <String>[];
+    final originalDebugPrint = debugPrint;
+    debugPrint = (String? message, {int? wrapWidth}) {
+      if (message != null) captured.add(message);
+    };
+    addTearDown(() => debugPrint = originalDebugPrint);
+
+    final notifier = container.read(shellBookSearchProvider.notifier);
+    notifier.updateSearch('meditations');
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    expect(
+      container.read(shellBookSearchProvider).error,
+      BookSearchError.requestFailed,
+      reason: 'IN-02: the user-facing state is unchanged by the diagnostic',
+    );
+
+    final output = captured.join('\n');
+    expect(
+      output,
+      contains('TypeError'),
+      reason: 'T-03-12/IN-02: the parse failure is now nameable in a debug '
+          'build via the caught object\'s runtimeType (TypeError, from the '
+          "malformed 'id' field's failed cast) — distinguishable from a "
+          'transport failure, which would instead name a DioException',
+    );
+    expect(
+      output,
+      isNot(contains('http')),
+      reason: 'T-03-12: the diagnostic must never emit a host or URL',
+    );
+    expect(
+      output,
+      isNot(contains('books')),
+      reason: 'T-03-12: the diagnostic must never emit the active instance '
+          'id used by this harness',
+    );
+    expect(
+      output,
+      isNot(contains('meditations')),
+      reason: 'T-03-12: the diagnostic must never emit the search term',
+    );
   });
 }
 

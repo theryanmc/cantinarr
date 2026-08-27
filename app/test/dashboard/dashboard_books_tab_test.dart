@@ -674,9 +674,10 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    // The in-page field still exists at this point in the phase, so
-    // find.byType(TextField).first would be ambiguous — locate the shell
-    // toolbar specifically via its CantinarrSearchBar ancestor.
+    // Locate the shell toolbar specifically via its CantinarrSearchBar
+    // ancestor, naming the widget the locator targets, rather than relying
+    // on there being exactly one TextField on the route — that stays correct
+    // even if another text field is ever added elsewhere on this page.
     final toolbar = find.descendant(
       of: find.byType(CantinarrSearchBar),
       matching: find.byType(TextField),
@@ -1027,6 +1028,63 @@ void main() {
     expect(find.byType(LibrarySeriesRow), findsOneWidget,
         reason: 'TAB-01: the tab body is its browse rows');
   });
+
+  testWidgets(
+    'the browse rows stay in the tree underneath an active book-search overlay',
+    (tester) async {
+      _usePhoneSize(tester);
+      final (:router, container: _, adapter: _) = await _pumpRouter(tester);
+      router.go('/dashboard/books');
+      await tester.pumpAndSettle();
+
+      expect(find.byType(RecentlyAddedBooksRow), findsOneWidget);
+      expect(find.byType(LibraryAuthorsRow), findsOneWidget);
+      expect(find.byType(LibrarySeriesRow), findsOneWidget);
+
+      final toolbar = find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(toolbar, 'meditations');
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(BookSearchResultsView),
+        findsOneWidget,
+        reason: 'the shell overlay is on screen while the search is active',
+      );
+      expect(
+        find.descendant(
+          of: find.byType(BookSearchResultsView),
+          matching: find.text('Meditations'),
+        ),
+        findsOneWidget,
+      );
+
+      expect(
+        find.byType(RecentlyAddedBooksRow),
+        findsOneWidget,
+        reason: 'the row stays in the tree, covered by the overlay rather '
+            'than removed — a future change that re-hides it during an '
+            'active search must fail here',
+      );
+      expect(
+        find.byType(LibraryAuthorsRow),
+        findsOneWidget,
+        reason: 'the row stays in the tree, covered by the overlay rather '
+            'than removed — a future change that re-hides it during an '
+            'active search must fail here',
+      );
+      expect(
+        find.byType(LibrarySeriesRow),
+        findsOneWidget,
+        reason: 'the row stays in the tree, covered by the overlay rather '
+            'than removed — a future change that re-hides it during an '
+            'active search must fail here',
+      );
+    },
+  );
 
   testWidgets(
       'GAP-SC1: an AI-prompt-shaped book term still brings up book results '
