@@ -286,11 +286,22 @@ class _AppShellState extends ConsumerState<AppShell>
   void _exitAiMode() {
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
+    // GAP-SC1 desync: reset the book notifier too, so a book result hidden
+    // by an AI-mode entry can never reappear stale after a clear.
+    ref.read(shellBookSearchProvider.notifier).reset();
     _dismissKeyboard();
   }
 
   /// Explicit entry into AI mode from the search bar's "Ask AI" pill.
   void _enterAiMode() {
+    // Reset unconditionally (not only on the Books tab): on other tabs the
+    // book notifier is already at its default, so this is a no-op there,
+    // and unconditional is what makes "at most one notifier ever holds a
+    // live query" true by construction. On the Books tab this cancels the
+    // pending debounce and drops any in-flight lookup via the generation
+    // bump, so no Chaptarr request is issued for a query the user just
+    // converted into an AI question.
+    ref.read(shellBookSearchProvider.notifier).reset();
     ref.read(shellSearchProvider.notifier).enterAiMode();
     // The pill sits in a TextFieldTapRegion so tapping it doesn't blur the
     // field; re-assert focus anyway so typing can continue immediately.
@@ -551,11 +562,11 @@ class _AppShellState extends ConsumerState<AppShell>
                   // notifiers are reset in both directions so a stale query
                   // can never linger in the one that wasn't being fed.
                   if (booksTab) {
-                    bookSearchNotifier.reset();
+                    ref.read(shellBookSearchProvider.notifier).reset();
                     searchNotifier.updateSearch('');
                   } else {
                     searchNotifier.updateSearch('');
-                    bookSearchNotifier.reset();
+                    ref.read(shellBookSearchProvider.notifier).reset();
                   }
                 },
         ),
@@ -745,7 +756,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       ),
                                       const SizedBox(height: 8),
                                       Text(
-                                        searchState.isSearching
+                                        _searchController.text.trim().isNotEmpty
                                             ? 'Press send to ask AI'
                                             : 'Type anything, then press send',
                                         style: const TextStyle(
@@ -847,9 +858,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       final visible =
                                           _searchFocusNode.hasFocus &&
                                               _searchIdle &&
-                                              _searchController.text
-                                                  .trim()
-                                                  .isNotEmpty;
+                                              _searchController.text.trim().isNotEmpty;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;

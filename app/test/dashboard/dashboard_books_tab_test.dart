@@ -949,6 +949,136 @@ void main() {
           'once',
     );
   });
+
+  testWidgets('the explicit Ask AI door still opens on the Books tab',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: book results are on screen before the '
+          'explicit AI door is opened',
+    );
+
+    // Arm the pause detector behind the Ask AI pill.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      find.text('Ask AI').hitTestable(),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: the explicit Ask AI door still opens on the '
+          'Books tab',
+    );
+
+    // The shimmer border repeats while aiReady, so bounded pumps only from
+    // here — pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    expect(
+      find.text('Press send to ask AI'),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: the takeover copy reads the typed text from '
+          'the controller, not the (now unfed) TMDB notifier',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: AI mode was explicitly requested, so the '
+          'book overlay is suppressed',
+    );
+  });
+
+  testWidgets('clearing out of AI mode leaves no stale book results',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    // The shimmer border repeats while aiReady, so a bounded pump only —
+    // pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    // Reach the pre-clear state the SC1 gap describes: AI mode entered from
+    // a Books-tab query with a previously-hidden book result underneath.
+    expect(find.byType(BookSearchResultsView), findsNothing);
+
+    final clearIcon = find.byTooltip('Clear message');
+    if (clearIcon.evaluate().isNotEmpty) {
+      await tester.tap(clearIcon);
+    } else {
+      // Fallback entry into _exitAiMode if no clear icon is hit-testable in
+      // this widget-test harness.
+      await tester.enterText(toolbar, '');
+    }
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(toolbar).controller!.text,
+      isEmpty,
+      reason: 'GAP-SC1 desync: clearing empties the toolbar',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: no stale book overlay reappears after the '
+          'clear',
+    );
+    expect(
+      find.text('Meditations'),
+      findsNothing,
+      reason: 'GAP-SC1 desync: no stale lookup result reappears after the '
+          'clear',
+    );
+
+    // The exact re-appearance the gap describes must not happen on a later
+    // frame either.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(toolbar).controller!.text,
+      isEmpty,
+      reason: 'GAP-SC1 desync: still empty after a further pump',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: the overlay does not reappear on a later '
+          'frame',
+    );
+    expect(
+      find.text('Meditations'),
+      findsNothing,
+      reason: 'GAP-SC1 desync: the stale result does not reappear on a '
+          'later frame',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
