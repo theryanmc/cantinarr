@@ -196,11 +196,73 @@ class _CantinarrAppState extends ConsumerState<CantinarrApp>
   void _handleLink(Uri uri) {
     if (uri.scheme != 'cantinarr') return;
     if (uri.host == 'connect') {
-      ref.read(authProvider.notifier).connectWithLink(uri.toString());
+      _handleConnectLink(uri);
       return;
     }
     if (uri.host == 'passkeys') {
       _openPasskeyCreate(uri);
+    }
+  }
+
+  /// A connect link while signed out connects directly. While signed in it is
+  /// a request to replace this device's session, so it asks first — and the
+  /// switch redeems the link before touching the current session, so a dead
+  /// link never signs anyone out.
+  Future<void> _handleConnectLink(Uri uri) async {
+    final auth = await ref.read(authProvider.future);
+    if (!mounted) return;
+    if (!auth.isAuthenticated) {
+      ref.read(authProvider.notifier).connectWithLink(uri.toString());
+      return;
+    }
+
+    final token = uri.queryParameters['token'];
+    final server = uri.queryParameters['server'];
+    if (token == null || server == null) return;
+
+    final conn = auth.connection!;
+    final currentLabel = conn.serverName ?? conn.serverUrl;
+    // The dialog needs a context under MaterialApp.router; this state sits
+    // above it, so borrow the root navigator's (same reason _openPasskeyCreate
+    // navigates through the router instance).
+    final dialogContext = ref
+        .read(appRouterProvider)
+        .routerDelegate
+        .navigatorKey
+        .currentContext;
+    if (dialogContext == null || !dialogContext.mounted) return;
+
+    final confirmed = await showDialog<bool>(
+      context: dialogContext,
+      builder: (context) => AlertDialog(
+        title: const Text('Switch Server'),
+        content: Text(
+          'This connect link is for $server. Connect there instead? '
+          'This device will be signed out of $currentLabel.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Switch'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final switched =
+        await ref.read(authProvider.notifier).switchServer(server, token);
+    if (!switched) {
+      _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
+        content: Text(
+          'Could not connect with that link. It may have expired. '
+          'You are still signed in to $currentLabel.',
+        ),
+      ));
     }
   }
 
