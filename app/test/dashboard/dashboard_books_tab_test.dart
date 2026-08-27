@@ -819,6 +819,185 @@ void main() {
     expect(overlayText(requestFailedMessage), findsNothing);
   });
 
+  // GAP-SC3: the same four contracted messages, re-proven reachable at the
+  // AvailableServices(chaptarr: true, ai: true) fixture combination — the
+  // condition under which the CR-01 gate previously suppressed all four
+  // (and the ordinary success case) behind the "Ask AI" takeover.
+
+  testWidgets(
+      'GAP-SC3: no Chaptarr instance still says so with AI available, for '
+      'an AI-prompt-shaped term', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      authState: _noInstanceBooksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'books like meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noInstanceMessage), findsOneWidget);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'GAP-SC3: a forbidden book search still says so with AI available',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      forbidden: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(forbiddenMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'GAP-SC3: a generic book-search failure still invites a retry with '
+      'AI available, idempotently', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      serverError: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(requestFailedMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+
+    // FAIL-02 idempotency: re-entering the identical failing term must
+    // still yield exactly one message, never a duplicated or accumulated
+    // one.
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(requestFailedMessage), findsOneWidget);
+  });
+
+  testWidgets(
+      'GAP-SC3: a book search that matched nothing still says so with AI '
+      'available', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      emptyLookup: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noBooksMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'FAIL-02 concurrency: entering AI mode mid-lookup drops the '
+      'in-flight Chaptarr response', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    // Only 200ms — the 400ms AppConfig.searchDebounce has not fired yet, so
+    // the Chaptarr lookup is still pending.
+    await tester.pump(const Duration(milliseconds: 200));
+    // Arm the pause detector and open the explicit Ask AI door while the
+    // lookup is in flight.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    // The shimmer border repeats while aiReady, so a bounded pump only —
+    // pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    // Exit AI mode (the text is still non-empty, so the clear affordance's
+    // tooltip is 'Clear message', not 'Exit AI mode') and give the debounce
+    // window a chance to fire, if the dropped response were ever going to
+    // land.
+    await tester.tap(find.byTooltip('Clear message'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'FAIL-02 concurrency: the response in flight when AI mode was '
+          'entered was dropped by the generation bump and never lands',
+    );
+  });
+
   testWidgets('the Books tab body has no search field of its own',
       (tester) async {
     _usePhoneSize(tester);
@@ -848,6 +1027,237 @@ void main() {
     expect(find.byType(LibrarySeriesRow), findsOneWidget,
         reason: 'TAB-01: the tab body is its browse rows');
   });
+
+  testWidgets(
+      'GAP-SC1: an AI-prompt-shaped book term still brings up book results '
+      'on the Books tab', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'books like dune');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsOneWidget,
+      reason: 'GAP-SC1: the book overlay is on screen, not the AI takeover',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Meditations'),
+      ),
+      findsOneWidget,
+      reason: 'GAP-SC1: the Chaptarr lookup result renders even though the '
+          'typed text matches the TMDB AI-intent heuristic',
+    );
+    expect(
+      find.text('Type anything, then press send'),
+      findsNothing,
+      reason: 'GAP-SC1: no AI takeover covers the Books tab',
+    );
+    expect(
+      find.text('Press send to ask AI'),
+      findsNothing,
+      reason: 'GAP-SC1: no AI takeover covers the Books tab',
+    );
+  });
+
+  testWidgets(
+      'GAP-SC1: an ordinary book term brings up book results with AI '
+      'available', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Meditations'),
+      ),
+      findsOneWidget,
+      reason: 'GAP-SC1: the empty-TMDB auto-escalation must not hijack an '
+          'ordinary Books-tab term either',
+    );
+  });
+
+  testWidgets(
+      'one keystroke on the Books tab reaches exactly one search notifier',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: adapter) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.tmdbSearchRequests,
+      0,
+      reason: 'a Books-tab keystroke must never reach the TMDB notifier',
+    );
+    expect(
+      adapter.bookLookupPaths.length,
+      1,
+      reason: 'a Books-tab keystroke reaches the Chaptarr notifier exactly '
+          'once',
+    );
+  });
+
+  testWidgets('the explicit Ask AI door still opens on the Books tab',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: book results are on screen before the '
+          'explicit AI door is opened',
+    );
+
+    // Arm the pause detector behind the Ask AI pill.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(
+      find.text('Ask AI').hitTestable(),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: the explicit Ask AI door still opens on the '
+          'Books tab',
+    );
+
+    // The shimmer border repeats while aiReady, so bounded pumps only from
+    // here — pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    expect(
+      find.text('Press send to ask AI'),
+      findsOneWidget,
+      reason: 'GAP-SC1 desync: the takeover copy reads the typed text from '
+          'the controller, not the (now unfed) TMDB notifier',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: AI mode was explicitly requested, so the '
+          'book overlay is suppressed',
+    );
+  });
+
+  testWidgets('clearing out of AI mode leaves no stale book results',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    // The shimmer border repeats while aiReady, so a bounded pump only —
+    // pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    // Reach the pre-clear state the SC1 gap describes: AI mode entered from
+    // a Books-tab query with a previously-hidden book result underneath.
+    expect(find.byType(BookSearchResultsView), findsNothing);
+
+    final clearIcon = find.byTooltip('Clear message');
+    if (clearIcon.evaluate().isNotEmpty) {
+      await tester.tap(clearIcon);
+    } else {
+      // Fallback entry into _exitAiMode if no clear icon is hit-testable in
+      // this widget-test harness.
+      await tester.enterText(toolbar, '');
+    }
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(toolbar).controller!.text,
+      isEmpty,
+      reason: 'GAP-SC1 desync: clearing empties the toolbar',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: no stale book overlay reappears after the '
+          'clear',
+    );
+    expect(
+      find.text('Meditations'),
+      findsNothing,
+      reason: 'GAP-SC1 desync: no stale lookup result reappears after the '
+          'clear',
+    );
+
+    // The exact re-appearance the gap describes must not happen on a later
+    // frame either.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(toolbar).controller!.text,
+      isEmpty,
+      reason: 'GAP-SC1 desync: still empty after a further pump',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'GAP-SC1 desync: the overlay does not reappear on a later '
+          'frame',
+    );
+    expect(
+      find.text('Meditations'),
+      findsNothing,
+      reason: 'GAP-SC1 desync: the stale result does not reappear on a '
+          'later frame',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -873,6 +1283,45 @@ const _booksState = AuthState(
         isDefault: true,
       ),
     ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+/// CR-01 fixture: the AvailableServices(chaptarr: true, ai: true) combination
+/// that no test in the repo had before this task. With AI available, the
+/// shell toolbar's TMDB AI-intent heuristic (`isAiPromptQuery`) and its
+/// empty-TMDB auto-escalation are both live — this is the fixture that
+/// proves neither can hijack a Books-tab search once dispatch is exclusive.
+const _booksWithAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, ai: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+/// GAP-SC3 fixture: the books grant is present (so the route stays
+/// reachable — app_router.dart:155-165 keys off the grant, not the instance
+/// list) but zero Chaptarr instances are configured, with AI also
+/// available — proves FAIL-01's message is still reachable at the CR-01
+/// fixture combination.
+const _noInstanceBooksWithAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, ai: true),
+    instances: [],
   ),
   user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
@@ -1035,6 +1484,11 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   int recentRequests = 0;
   int authorRequests = 0;
   int seriesRequests = 0;
+
+  /// Count of `/api/search` (TMDB multi-search) requests served. Proves the
+  /// CR-01 fix: with dispatch exclusive, no Books-tab keystroke should ever
+  /// reach this counter.
+  int tmdbSearchRequests = 0;
   bool ebookSubmitted = false;
   final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
@@ -1276,8 +1730,10 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
     } else if (options.path == '/api/search') {
-      // The dual dispatch (assumption A-05) means the TMDB call fires on
-      // this route too, even though nothing here renders it.
+      // Assumption A-05 (dual dispatch) is retired: no TMDB call reaches
+      // this route any more. This counter exists to prove that — it must
+      // stay 0 across every Books-tab keystroke this file drives.
+      tmdbSearchRequests++;
       body = {
         'page': 1,
         'results': <Object>[],
