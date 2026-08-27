@@ -718,7 +718,7 @@ void main() {
     });
 
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
-    dio.httpClientAdapter = const _SearchPinAdapter();
+    dio.httpClientAdapter = _SearchPinAdapter();
 
     final router = GoRouter(
       initialLocation: '/dashboard/movies',
@@ -794,6 +794,144 @@ void main() {
       find.text('Partial'),
       findsOneWidget,
       reason: 'SEARCH-05: the Partial pill still renders on the Movies tab',
+    );
+  });
+
+  testWidgets(
+      'switching discovery tabs clears the search bar and closes the '
+      'results overlay without firing a search',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    final adapter = _SearchPinAdapter();
+    dio.httpClientAdapter = adapter;
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Movies tab')),
+            ),
+            GoRoute(
+              path: '/dashboard/books',
+              builder: (_, __) => const Scaffold(body: Text('Books tab')),
+            ),
+          ],
+        ),
+        GoRoute(
+          path: '/detail/anything',
+          builder: (_, __) => const Scaffold(body: Text('Detail page')),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_searchPinState),
+          ),
+          backendClientProvider.overrideWithValue(dio),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'matrix');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Fight Club'),
+      findsOneWidget,
+      reason: 'SEARCH-04: typing on the Movies tab returns a result before '
+          'the tab switch this case is about to make',
+    );
+
+    final searchesBeforeSwitch = adapter.searchRequests;
+    final bookLookupsBeforeSwitch = adapter.bookLookupRequests;
+
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+      isEmpty,
+      reason: 'SEARCH-04: switching discovery tabs clears the toolbar text',
+    );
+    expect(
+      find.text('Fight Club'),
+      findsNothing,
+      reason: 'SEARCH-04: switching discovery tabs closes the results '
+          'overlay',
+    );
+    expect(
+      adapter.searchRequests,
+      searchesBeforeSwitch,
+      reason: 'SEARCH-04: the clear-on-switch itself must not fire a TMDB '
+          'search',
+    );
+    expect(
+      adapter.bookLookupRequests,
+      bookLookupsBeforeSwitch,
+      reason: 'SEARCH-04: the clear-on-switch itself must not fire a book '
+          'lookup',
+    );
+
+    router.go('/dashboard/movies');
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+      isEmpty,
+      reason: 'SEARCH-04: the clear works switching back the other '
+          'direction too',
+    );
+    expect(
+      find.text('Fight Club'),
+      findsNothing,
+      reason: 'SEARCH-04: the overlay stays closed after switching back',
+    );
+    expect(
+      adapter.searchRequests,
+      searchesBeforeSwitch,
+      reason: 'SEARCH-04: switching back fires no TMDB search either',
+    );
+    expect(
+      adapter.bookLookupRequests,
+      bookLookupsBeforeSwitch,
+      reason: 'SEARCH-04: switching back fires no book lookup either',
+    );
+
+    await tester.enterText(find.byType(TextField).first, 'inception');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    router.push('/detail/anything');
+    await tester.pumpAndSettle();
+    expect(find.text('Detail page'), findsOneWidget);
+    router.pop();
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+      'inception',
+      reason: 'SEARCH-04: a pushed-route push/pop is not a discovery-tab '
+          'switch — the toolbar query survives it',
     );
   });
 }
@@ -1098,7 +1236,16 @@ class _JsonAdapter implements HttpClientAdapter {
 /// Available/Partial/Requested pills. Mirrors `_BooksSearchAdapter` in
 /// dashboard_books_tab_test.dart.
 class _SearchPinAdapter implements HttpClientAdapter {
-  const _SearchPinAdapter();
+  _SearchPinAdapter();
+
+  /// Count of `/api/search` (TMDB multi-search) requests served — used by
+  /// SEARCH-04's clear-on-tab-switch pin to prove the clear itself never
+  /// fires a search.
+  int searchRequests = 0;
+
+  /// Count of Chaptarr `book/lookup` requests served — same purpose as
+  /// [searchRequests], for the book-search side of the toolbar.
+  int bookLookupRequests = 0;
 
   @override
   Future<ResponseBody> fetch(
@@ -1109,6 +1256,7 @@ class _SearchPinAdapter implements HttpClientAdapter {
     final path = options.path;
     Object body;
     if (path == '/api/search') {
+      searchRequests++;
       body = {
         'page': 1,
         'total_pages': 1,
@@ -1125,6 +1273,9 @@ class _SearchPinAdapter implements HttpClientAdapter {
           {'id': 287, 'name': 'Brad Pitt', 'media_type': 'person'},
         ],
       };
+    } else if (path.contains('/api/v1/book/lookup')) {
+      bookLookupRequests++;
+      body = <Object>[];
     } else if (path == '/api/instances/radarr-1/api/v3/movie') {
       // tmdbId 550 -> Available (hasFile). tmdbId 603 -> Requested
       // (monitored, no file).
