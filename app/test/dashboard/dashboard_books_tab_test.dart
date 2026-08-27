@@ -13,6 +13,9 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
+import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
+import 'package:cantinarr/features/dashboard/ui/library_series_row.dart';
+import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/discover/ui/book_search_results_view.dart';
 import 'package:cantinarr/navigation/app_router.dart';
@@ -30,10 +33,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     expect(searchField, findsOneWidget);
     await tester.enterText(searchField, 'meditations');
@@ -71,10 +73,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'meditations');
     await tester.pump(const Duration(milliseconds: 450));
@@ -109,10 +110,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -179,10 +179,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -232,10 +231,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'meditations');
     await tester.pump(const Duration(milliseconds: 450));
@@ -256,10 +254,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -335,10 +332,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -376,10 +372,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -408,10 +403,9 @@ void main() {
     router.go('/dashboard/books');
     await tester.pumpAndSettle();
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -447,10 +441,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    final searchField = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Search books or authors…',
+    final searchField = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
     );
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
@@ -824,6 +817,36 @@ void main() {
     expect(overlayText(noInstanceMessage), findsNothing);
     expect(overlayText(forbiddenMessage), findsNothing);
     expect(overlayText(requestFailedMessage), findsNothing);
+  });
+
+  testWidgets('the Books tab body has no search field of its own',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(tester);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(TextField),
+      findsOneWidget,
+      reason: 'TAB-01: the shell toolbar is the only text field on the '
+          'Books tab route — the in-page search field is gone',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byType(TextField),
+      ),
+      findsOneWidget,
+      reason: 'TAB-01: the one remaining text field is the shell toolbar',
+    );
+
+    expect(find.byType(RecentlyAddedBooksRow), findsOneWidget,
+        reason: 'TAB-01: the tab body is its browse rows');
+    expect(find.byType(LibraryAuthorsRow), findsOneWidget,
+        reason: 'TAB-01: the tab body is its browse rows');
+    expect(find.byType(LibrarySeriesRow), findsOneWidget,
+        reason: 'TAB-01: the tab body is its browse rows');
   });
 }
 

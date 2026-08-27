@@ -276,20 +276,13 @@ void main() {
 
   _mainStackTests();
 
-  testWidgets('hides the row while a search is active', (tester) async {
-    _sizeViewport(tester);
-
-    await _pumpBooksTab(tester, series: [_series()]);
-    expect(find.text('Series'), findsOneWidget);
-
-    await tester.enterText(find.byType(TextField), 'dune');
-    await tester.pumpAndSettle(const Duration(milliseconds: 600));
-    expect(find.text('Series'), findsNothing);
-
-    await tester.enterText(find.byType(TextField), '');
-    await tester.pumpAndSettle(const Duration(milliseconds: 600));
-    expect(find.text('Series'), findsOneWidget);
-  });
+  // "hides the row while a search is active" was removed in Phase 3 (TAB-01):
+  // DashboardBooksTab no longer has a search field of its own — search moved
+  // to the shell toolbar, an entirely separate widget this file's harness
+  // never pumps — so there is no in-widget "search active" state left for
+  // this row to hide behind. The old idle gate that hid the row is gone with
+  // it; the row is now covered by the shell's overlay instead. See
+  // 03-03-SUMMARY.md.
 }
 
 void _mainStackTests() {
