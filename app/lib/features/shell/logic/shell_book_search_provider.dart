@@ -163,6 +163,34 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
     state = const ShellBookSearchState();
   }
 
+  /// BOOK-07: the active Chaptarr instance changed. Discard whatever the
+  /// previous instance's results were and re-run the currently typed query
+  /// against the new instance — an instance switch is a deliberate act, not
+  /// a keystroke, so this issues the request immediately rather than
+  /// re-debouncing. Bumping the generation before touching state means any
+  /// in-flight response from the *old* instance lands on a stale generation
+  /// and is dropped by [_executeSearch]'s existing guard.
+  void rerunForInstance() {
+    _searchDebounce?.cancel();
+    final generation = ++_searchGeneration;
+    final query = state.searchQuery;
+
+    if (query.trim().isEmpty) {
+      // Switching instances with an empty toolbar discards nothing and
+      // searches nothing.
+      state = const ShellBookSearchState();
+      return;
+    }
+
+    state = state.copyWith(
+      results: const [],
+      isLoadingSearch: true,
+      searched: false,
+      clearError: true,
+    );
+    _executeSearch(query: query, generation: generation);
+  }
+
   @override
   void dispose() {
     _searchDebounce?.cancel();

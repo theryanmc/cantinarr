@@ -419,6 +419,22 @@ class _AppShellState extends ConsumerState<AppShell>
         _initLibraries();
       }
     });
+    // BOOK-07: an instance switch re-runs the currently typed book search
+    // against the new Chaptarr instance rather than stranding it against the
+    // old one. Tells the *existing* notifier instance to redo its work —
+    // does not `ref.watch(instanceProvider...)` inside the provider's own
+    // definition, which would tear down and rebuild the notifier and drop
+    // the query under stale-looking typed text.
+    ref.listen(
+      instanceProvider.select((state) => state.activeChaptarrInstance?.id),
+      (previous, next) {
+        if (previous == next) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ref.read(shellBookSearchProvider.notifier).rerunForInstance();
+        });
+      },
+    );
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);

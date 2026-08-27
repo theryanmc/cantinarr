@@ -584,6 +584,95 @@ void main() {
   });
 
   testWidgets(
+      'switching the active Chaptarr instance re-runs the book search '
+      'against the new library', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, :container, :adapter) = await _pumpRouter(
+      tester,
+      authState: _twoInstanceBooksState,
+      perInstanceBooks: true,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    expect(toolbar, findsOneWidget);
+    await tester.enterText(toolbar, 'library book');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('First Library Book'),
+      ),
+      findsOneWidget,
+      reason: 'BOOK-07: the first instance\'s book is on screen before the '
+          'switch',
+    );
+
+    container
+        .read(instanceProvider.notifier)
+        .setActiveChaptarrInstance('books-2');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('First Library Book'),
+      ),
+      findsNothing,
+      reason:
+          'BOOK-07: the old instance\'s results are discarded, not merged',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Second Library Book'),
+      ),
+      findsOneWidget,
+      reason: 'BOOK-07: the new instance\'s results replace them',
+    );
+    expect(
+      adapter.bookLookupPaths.length,
+      2,
+      reason: 'BOOK-07: a second book/lookup call was issued for the switch',
+    );
+    expect(
+      adapter.bookLookupPaths.last,
+      contains('/instances/books-2/'),
+      reason: 'BOOK-07: the second call targeted the new instance',
+    );
+
+    // Second scenario: with the toolbar empty, switching instances discards
+    // nothing and issues no lookup at all.
+    await tester.enterText(toolbar, '');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    final lookupsBeforeEmptySwitch = adapter.bookLookupPaths.length;
+
+    container
+        .read(instanceProvider.notifier)
+        .setActiveChaptarrInstance('books');
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.bookLookupPaths.length,
+      lookupsBeforeEmptySwitch,
+      reason: 'BOOK-07: switching instances with an empty toolbar issues no '
+          'book lookup',
+    );
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'BOOK-07: the overlay is not on screen with an empty query',
+    );
+  });
+
+  testWidgets(
       'a book typed in the top bar opens the requester book detail carrying '
       'the term that found it', (tester) async {
     _usePhoneSize(tester);
@@ -821,6 +910,7 @@ Future<
   bool forbidden = false,
   bool serverError = false,
   bool emptyLookup = false,
+  bool perInstanceBooks = false,
   Stream<WsEvent>? events,
   AuthState? authState,
 }) async {
@@ -836,6 +926,7 @@ Future<
     forbidden: forbidden,
     serverError: serverError,
     emptyLookup: emptyLookup,
+    perInstanceBooks: perInstanceBooks,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -884,7 +975,18 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.forbidden = false,
     this.serverError = false,
     this.emptyLookup = false,
+    this.perInstanceBooks = false,
   });
+
+  /// BOOK-07 fixture: book/lookup answers with a title that depends on which
+  /// instance the request's `/api/instances/{id}/...` path segment names, so
+  /// a test can prove an instance switch discards the old library's rows and
+  /// re-runs against the new one, rather than merging or ignoring them.
+  final bool perInstanceBooks;
+
+  /// Every `book/lookup` request path served, in order — lets a test assert
+  /// exactly how many lookups fired and which instance each one targeted.
+  final bookLookupPaths = <String>[];
 
   final bool mismatchedIdentity;
   final bool unresolvedIdentity;
@@ -1031,6 +1133,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                     }
                   : {'status': 'unavailable'};
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
+      bookLookupPaths.add(options.path);
       // FAIL-02/FAIL-03 widget cases: these short-circuit with their own
       // status code rather than falling through to the shared 200 return
       // below.
@@ -1049,7 +1152,34 @@ class _BooksSearchAdapter implements HttpClientAdapter {
           },
         );
       }
-      body = (mismatchedIdentity ||
+      if (perInstanceBooks) {
+        body = options.path.contains('/instances/books-2/')
+            ? [
+                {
+                  'title': 'Second Library Book',
+                  'foreignBookId': 'book-2i',
+                  'year': 2021,
+                  'author': {
+                    'id': 0,
+                    'authorName': 'Author Two',
+                    'foreignAuthorId': 'author-2i',
+                  },
+                },
+              ]
+            : [
+                {
+                  'title': 'First Library Book',
+                  'foreignBookId': 'book-1i',
+                  'year': 2020,
+                  'author': {
+                    'id': 0,
+                    'authorName': 'Author One',
+                    'foreignAuthorId': 'author-1i',
+                  },
+                },
+              ];
+      } else {
+        body = (mismatchedIdentity ||
               unresolvedIdentity ||
               ambiguousLookup ||
               aliasSibling ||
@@ -1110,6 +1240,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                 },
               },
             ];
+      }
     } else if (options.path == '/api/requests/book-recent') {
       recentRequests++;
       body = {'items': <Object>[]};
