@@ -923,6 +923,40 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState());
   }
 
+  /// Explicit, deliberate sign-out — the counterpart to [onAuthExpired]'s
+  /// server-initiated expiry. This is the one path where push deregistration
+  /// and server-side revocation belong: the access token is still valid, so
+  /// both calls can authenticate. Each is best-effort with a short timeout —
+  /// the local clear always runs, so signing out works fully offline (at the
+  /// cost of leaving the token alive server-side until an admin revokes it).
+  Future<void> logout() async {
+    final conn = state.valueOrNull?.connection;
+
+    // Before the token clear: unregister() reads device_id from storage and
+    // its DELETE must still authenticate.
+    try {
+      await ref
+          .read(pushServiceProvider)
+          .unregister()
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('Logout: push unregister skipped: $e');
+    }
+
+    if (conn != null) {
+      try {
+        await _authService
+            .logout(conn.serverUrl, conn.accessToken)
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        debugPrint('Logout: server-side revoke skipped: $e');
+      }
+    }
+
+    await _clearStorage();
+    state = const AsyncData(AuthState());
+  }
+
   void clearError() {
     final current = state.valueOrNull;
     if (current != null) {

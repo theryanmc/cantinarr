@@ -210,6 +210,24 @@ func (h *Handler) HandleRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
+// HandleLogout is the self-serve counterpart to HandleRevokeDevice: it revokes
+// only the calling device's own session, identified by the token's device
+// claim. Idempotent — an already-revoked or missing device is the goal state.
+func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil || claims.DeviceID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "no device session"})
+		return
+	}
+
+	if err := h.service.RevokeDevice(claims.DeviceID); err != nil && !errors.Is(err, ErrDeviceNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign out"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
+}
+
 func (h *Handler) HandleListUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	users, err := h.service.ListUsers()

@@ -130,6 +130,14 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<AuthState> build() async => authState;
+
+  // The real logout()'s teardown needs the storage/service fields the real
+  // build() wires up; here only its end state matters — the router redirect
+  // to the connect screen.
+  @override
+  Future<void> logout() async {
+    state = const AsyncData(AuthState());
+  }
 }
 
 Dio _stubDio() {

@@ -198,6 +198,17 @@ class AuthService {
     );
   }
 
+  /// Revoke this device's own session (sign out). Uses a bare client on
+  /// purpose: the intercepted one would run its 401→refresh→expire machinery
+  /// during teardown.
+  Future<void> logout(String serverUrl, String accessToken) async {
+    final dio = _createDio(serverUrl);
+    await dio.post(
+      '/api/auth/logout',
+      options: Options(headers: {'Authorization': 'Bearer $accessToken'}),
+    );
+  }
+
   /// List all user accounts (admin only).
   Future<List<UserSummary>> listUsers(
     String serverUrl,

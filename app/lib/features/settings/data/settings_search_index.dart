@@ -212,6 +212,22 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
+    id: 'root.sign-out',
+    title: 'Sign out',
+    icon: Icons.logout,
+    route: '/settings',
+    screenTitle: 'Settings',
+    section: 'Server',
+    keywords: [
+      'log out',
+      'logout',
+      'disconnect',
+      'switch server',
+      'leave server',
+    ],
+    gate: gateEveryone,
+  ),
+  SettingsSearchEntry(
     id: 'root.connect-link',
     title: 'Generate Connect Link',
     icon: Icons.link,

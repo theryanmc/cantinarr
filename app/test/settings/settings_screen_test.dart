@@ -238,6 +238,37 @@ void main() {
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
+  testWidgets('Sign out is offered to non-admins and asks before acting',
+      (tester) async {
+    final container =
+        await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+    final notifier =
+        container.read(authProvider.notifier) as _FakeAuthNotifier;
+
+    // The tile sits in the Server section, above the fold for every role —
+    // this is the only way off a server, so it must not hide behind a gate.
+    expect(find.text('Sign out'), findsOneWidget);
+    expect(
+      find.text('Disconnect this device from the server'),
+      findsOneWidget,
+    );
+
+    // Cancelling the dialog must leave the session untouched.
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sign Out'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(notifier.logoutCalls, 0);
+
+    // Confirming signs out.
+    await tester.tap(find.text('Sign out'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign out'));
+    await tester.pumpAndSettle();
+    expect(notifier.logoutCalls, 1);
+  });
+
   group('Setup Checklist tile', _setupChecklistTileTests);
 }
 
@@ -381,6 +412,13 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<void> refreshUser() async {}
+
+  int logoutCalls = 0;
+
+  @override
+  Future<void> logout() async {
+    logoutCalls++;
+  }
 }
 
 class _SettingsAdapter implements HttpClientAdapter {

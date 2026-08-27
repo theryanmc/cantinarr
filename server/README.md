@@ -129,6 +129,7 @@ POST   /api/auth/passkey/register/begin|finish  # user: add passkey (admin-enabl
 POST   /api/auth/passkey/setup-link        # user: mint a browser passkey-setup URL
 GET    /api/auth/passkeys                  # user: list own passkeys
 DELETE /api/auth/passkeys/{credentialID}   # user: remove own passkey
+POST   /api/auth/logout                    # user: revoke this device's own session (sign out)
 ```
 
 ### Users, devices & connect links (admin)

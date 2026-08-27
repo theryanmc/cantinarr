@@ -155,6 +155,9 @@ func NewRouter(
 				r.Post("/passkey/setup-link", authHandler.CreatePasskeySetupLink)
 				r.Get("/passkeys", authHandler.ListPasskeys)
 				r.Delete("/passkeys/{credentialID}", authHandler.DeletePasskey)
+
+				// Sign out: revoke the calling device's own session.
+				r.Post("/logout", authHandler.HandleLogout)
 			})
 		})
 

@@ -141,6 +141,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     : AppTheme.error,
               ),
             ),
+            // Every role gets this — it is the only way off a server the
+            // user no longer wants (there is no other path back to the
+            // connect screen while a session exists).
+            _SettingsTile(
+              icon: Icons.logout,
+              title: 'Sign out',
+              subtitle: 'Disconnect this device from the server',
+              onTap: () => _confirmSignOut(context),
+            ),
 
             const SizedBox(height: 16),
 
@@ -554,6 +563,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Action tiles on the root screen run their own handler; results with an
     // anchor dismiss search and reveal their row in place.
     switch (entry.id) {
+      case 'root.sign-out':
+        _confirmSignOut(context);
+        return;
       case 'root.connect-link':
         _showGenerateConnectLinkDialog(context);
         return;
@@ -594,6 +606,37 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _query = '';
       _pendingRootHighlight = entry.anchorId;
     });
+  }
+
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text(
+          'This device will be disconnected. To sign back in you may need '
+          'a new connect link, or your password or passkey.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    // No navigation here: clearing the session flips the router's
+    // refreshListenable and the redirect lands on the connect screen.
+    await ref.read(authProvider.notifier).logout();
   }
 
   void _showGenerateConnectLinkDialog(BuildContext context) {
