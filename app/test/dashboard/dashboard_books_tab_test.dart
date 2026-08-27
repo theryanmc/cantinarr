@@ -819,6 +819,185 @@ void main() {
     expect(overlayText(requestFailedMessage), findsNothing);
   });
 
+  // GAP-SC3: the same four contracted messages, re-proven reachable at the
+  // AvailableServices(chaptarr: true, ai: true) fixture combination — the
+  // condition under which the CR-01 gate previously suppressed all four
+  // (and the ordinary success case) behind the "Ask AI" takeover.
+
+  testWidgets(
+      'GAP-SC3: no Chaptarr instance still says so with AI available, for '
+      'an AI-prompt-shaped term', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      authState: _noInstanceBooksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'books like meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noInstanceMessage), findsOneWidget);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'GAP-SC3: a forbidden book search still says so with AI available',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      forbidden: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(forbiddenMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'GAP-SC3: a generic book-search failure still invites a retry with '
+      'AI available, idempotently', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      serverError: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(requestFailedMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+
+    // FAIL-02 idempotency: re-entering the identical failing term must
+    // still yield exactly one message, never a duplicated or accumulated
+    // one.
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(requestFailedMessage), findsOneWidget);
+  });
+
+  testWidgets(
+      'GAP-SC3: a book search that matched nothing still says so with AI '
+      'available', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      emptyLookup: true,
+      authState: _booksWithAiState,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(overlayText(noBooksMessage), findsOneWidget);
+    expect(overlayText(noInstanceMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(find.byType(BookSearchResultsView), findsOneWidget,
+        reason: 'GAP-SC3: the overlay carrying the message is on screen at '
+            'all');
+    expect(find.text('Type anything, then press send'), findsNothing);
+    expect(find.text('Press send to ask AI'), findsNothing);
+  });
+
+  testWidgets(
+      'FAIL-02 concurrency: entering AI mode mid-lookup drops the '
+      'in-flight Chaptarr response', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    // Only 200ms — the 400ms AppConfig.searchDebounce has not fired yet, so
+    // the Chaptarr lookup is still pending.
+    await tester.pump(const Duration(milliseconds: 200));
+    // Arm the pause detector and open the explicit Ask AI door while the
+    // lookup is in flight.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    // The shimmer border repeats while aiReady, so a bounded pump only —
+    // pumpAndSettle would never settle.
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    // Exit AI mode (the text is still non-empty, so the clear affordance's
+    // tooltip is 'Clear message', not 'Exit AI mode') and give the debounce
+    // window a chance to fire, if the dropped response were ever going to
+    // land.
+    await tester.tap(find.byTooltip('Clear message'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'FAIL-02 concurrency: the response in flight when AI mode was '
+          'entered was dropped by the generation bump and never lands',
+    );
+  });
+
   testWidgets('the Books tab body has no search field of its own',
       (tester) async {
     _usePhoneSize(tester);
@@ -1127,6 +1306,22 @@ const _booksWithAiState = AuthState(
         isDefault: true,
       ),
     ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+/// GAP-SC3 fixture: the books grant is present (so the route stays
+/// reachable — app_router.dart:155-165 keys off the grant, not the instance
+/// list) but zero Chaptarr instances are configured, with AI also
+/// available — proves FAIL-01's message is still reachable at the CR-01
+/// fixture combination.
+const _noInstanceBooksWithAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, ai: true),
+    instances: [],
   ),
   user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
