@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/app_config.dart';
@@ -138,6 +139,12 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
         clearError: true,
       );
     } on DioException catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'ShellBookSearchNotifier: book lookup failed with '
+          '${e.runtimeType}, status ${e.response?.statusCode}',
+        );
+      }
       if (superseded()) return;
       final code = e.response?.statusCode;
       state = state.copyWith(
@@ -147,7 +154,13 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
             ? BookSearchError.forbidden
             : BookSearchError.requestFailed,
       );
-    } catch (_) {
+    } catch (error) {
+      if (kDebugMode) {
+        debugPrint(
+          'ShellBookSearchNotifier: book lookup failed with '
+          '${error.runtimeType}',
+        );
+      }
       if (superseded()) return;
       state = state.copyWith(
         isLoadingSearch: false,
