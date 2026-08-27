@@ -130,6 +130,21 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path != null && path != _searchBarPath) {
       _searchBarPath = path;
       _searchBarAnim.forward();
+
+      // SEARCH-04: a query must not outlive the discovery tab that produced
+      // it. Clear the controller synchronously (no onChanged fires from a
+      // programmatic clear, so this alone triggers no search) and cancel any
+      // pending Ask AI idle timer. Both search notifiers are reset on the
+      // next frame regardless of which tab is being entered or left, so no
+      // stale debounce from the outgoing context can fire into the
+      // incoming one.
+      _searchController.clear();
+      _cancelAskAiIdle();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref.read(shellSearchProvider.notifier).updateSearch('');
+        ref.read(shellBookSearchProvider.notifier).reset();
+      });
     }
   }
 
