@@ -10,9 +10,11 @@ import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/discover/ui/book_search_results_view.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -585,6 +587,55 @@ void main() {
           'new instance',
     );
   });
+
+  testWidgets(
+      'a book typed in the top bar opens the requester book detail carrying '
+      'the term that found it', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, mixedOwnership: true);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    // The in-page field still exists at this point in the phase, so
+    // find.byType(TextField).first would be ambiguous — locate the shell
+    // toolbar specifically via its CantinarrSearchBar ancestor.
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    expect(toolbar, findsOneWidget);
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Meditations'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('eBook available · Audiobook requested'),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('book-result:book-1:book-1:lookup:0')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
+    // context.push (not router.go) doesn't update
+    // router.routeInformationProvider in this harness, so read the pushed
+    // route's own resolved q= param off the screen it built instead — the
+    // same signal BOOK-04 promises the request carries.
+    final screen = tester.widget<RequesterBookDetailScreen>(
+      find.byType(RequesterBookDetailScreen),
+    );
+    expect(screen.searchTerm, 'meditations');
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -916,6 +967,15 @@ class _BooksSearchAdapter implements HttpClientAdapter {
       body = {'series': <Object>[], 'total': 0};
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
+    } else if (options.path == '/api/search') {
+      // The dual dispatch (assumption A-05) means the TMDB call fires on
+      // this route too, even though nothing here renders it.
+      body = {
+        'page': 1,
+        'results': <Object>[],
+        'total_pages': 1,
+        'total_results': 0,
+      };
     } else {
       body = {
         'page': 1,
