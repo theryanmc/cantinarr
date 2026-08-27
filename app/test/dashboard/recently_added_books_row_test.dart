@@ -209,8 +209,11 @@ void main() {
   // to the shell toolbar, an entirely separate widget this file's harness
   // never pumps — so there is no in-widget "search active" state left for
   // this row to hide behind. The old idle gate that hid the row is gone with
-  // it; the row is now covered by the shell's overlay instead. See
-  // 03-03-SUMMARY.md.
+  // it. Proof that the row is now covered by the shell's overlay instead of
+  // being removed lives in app/test/dashboard/dashboard_books_tab_test.dart's
+  // 'the browse rows stay in the tree underneath an active book-search overlay'
+  // case — the only harness in this phase that pumps the real AppShell and
+  // can see the overlay at all.
 
   testWidgets('stays silent when the user has no book access', (tester) async {
     await _pumpBooksTab(tester, recentStatus: 403);
