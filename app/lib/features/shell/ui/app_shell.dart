@@ -21,6 +21,7 @@ import '../../ai_assistant/logic/ai_chat_provider.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
+import '../../discover/ui/book_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../profile_proposals/logic/profile_proposals_provider.dart';
@@ -31,6 +32,7 @@ import '../../settings/logic/plex_invites_provider.dart';
 import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
+import '../logic/shell_book_search_provider.dart';
 import '../logic/shell_search_provider.dart';
 
 /// The root shell widget with persistent search bar and navigation chrome.
@@ -317,6 +319,10 @@ class _AppShellState extends ConsumerState<AppShell>
     return null;
   }
 
+  /// True on the Books discovery tab, where the toolbar searches Chaptarr
+  /// books instead of TMDB.
+  static bool _isBooksTab(String path) => path.startsWith('/dashboard/books');
+
   bool _handleScrollNotification(ScrollNotification notification) {
     // Side-scrolling shelves (poster rows, chip strips) bubble their
     // notifications up to this listener too. Only the page's own vertical
@@ -401,6 +407,8 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
+    final bookSearchState = ref.watch(shellBookSearchProvider);
+    final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     // Admin approval queue depth — drives the hamburger dot (here) and the
@@ -477,9 +485,18 @@ class _AppShellState extends ConsumerState<AppShell>
           onChanged: (q) {
             _resetAskAiIdle();
             searchNotifier.updateSearch(q);
+            if (_isBooksTab(widget.currentPath)) {
+              bookSearchNotifier.updateSearch(q);
+            }
           },
-          onClear:
-              isAiReady ? _exitAiMode : () => searchNotifier.updateSearch(''),
+          onClear: isAiReady
+              ? _exitAiMode
+              : () {
+                  searchNotifier.updateSearch('');
+                  if (_isBooksTab(widget.currentPath)) {
+                    bookSearchNotifier.reset();
+                  }
+                },
         ),
       ),
     );
@@ -698,21 +715,34 @@ class _AppShellState extends ConsumerState<AppShell>
                         ),
                       // Search lives in the same measured content region as
                       // the module, so it always begins below the actual top
-                      // bar height (including text scaling).
+                      // bar height (including text scaling). On the Books tab
+                      // this slot renders Chaptarr book results instead of
+                      // TMDB results — one overlay, chosen by route.
                       if (showGlobalSearch &&
                           searchState.searchMode == SearchMode.search &&
-                          searchState.isSearching)
+                          (_isBooksTab(widget.currentPath)
+                              ? bookSearchState.isSearching
+                              : searchState.isSearching))
                         Positioned.fill(
                           child: ColoredBox(
                             color: AppTheme.background.withValues(alpha: 0.97),
-                            child: SearchResultsView(
-                              results: searchState.searchResults,
-                              isLoading: searchState.isLoadingSearch,
-                              query: searchState.searchQuery,
-                              onLoadMore: searchNotifier.loadMoreSearch,
-                              libraryStatus: libraryStatus,
-                              onResultTap: _dismissKeyboard,
-                            ),
+                            child: _isBooksTab(widget.currentPath)
+                                ? BookSearchResultsView(
+                                    results: bookSearchState.results,
+                                    query: bookSearchState.searchQuery,
+                                    isLoading: bookSearchState.isLoadingSearch,
+                                    searched: bookSearchState.searched,
+                                    error: bookSearchState.error,
+                                    onResultTap: _dismissKeyboard,
+                                  )
+                                : SearchResultsView(
+                                    results: searchState.searchResults,
+                                    isLoading: searchState.isLoadingSearch,
+                                    query: searchState.searchQuery,
+                                    onLoadMore: searchNotifier.loadMoreSearch,
+                                    libraryStatus: libraryStatus,
+                                    onResultTap: _dismissKeyboard,
+                                  ),
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
