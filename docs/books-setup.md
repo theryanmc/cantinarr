@@ -21,7 +21,7 @@ One thing that carries straight over: if Chaptarr shares a gateway's network sta
 
 ## 2. Add the instance
 
-**Settings → Add Instance**, service type `chaptarr`, then the URL and API key. Save runs a live connection check from the server — the same host that will dial it in production — so a green result means what it says.
+**Settings → Add Instance**, service type `chaptarr` (the Setup Checklist's **Books** row opens this same form with Chaptarr already selected), then the URL and API key. Save runs a live connection check from the server — the same host that will dial it in production — so a green result means what it says.
 
 Chaptarr speaks the Readarr `/api/v1` API. Enter just the base URL; Cantinarr appends the API path.
 

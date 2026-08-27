@@ -656,8 +656,19 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/instance/new',
-            builder: (_, __) =>
-                const AppAmbientBackground(child: InstanceEditScreen()),
+            builder: (context, state) {
+              // The setup checklist names the service type (or, for the
+              // download-client category, a selection prompt) when it sends
+              // an admin here; the generic Add Instance button sends none
+              // and keeps the Radarr default.
+              final extra = state.extra as Map<String, dynamic>?;
+              return AppAmbientBackground(
+                child: InstanceEditScreen(
+                  initialServiceType: extra?['service_type'] as String?,
+                  serviceTypePrompt: extra?['service_type_prompt'] as String?,
+                ),
+              );
+            },
           ),
           GoRoute(
             path: '/settings/instance/:id',

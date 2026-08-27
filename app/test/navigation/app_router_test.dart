@@ -7,11 +7,13 @@ import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/ai_assistant/ui/codex_connection_screen.dart';
+import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
 import 'package:cantinarr/navigation/app_router.dart';
@@ -228,6 +230,46 @@ void main() {
     expect(screen.instanceId, 'books-two');
   });
 
+  testWidgets('instance/new carries the checklist extras into the form',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+
+    // The setup checklist names the service type when it sends an admin
+    // here; the form must open already on it.
+    router.go('/settings/instance/new', extra: {'service_type': 'sonarr'});
+    await tester.pumpAndSettle();
+    var screen =
+        tester.widget<InstanceEditScreen>(find.byType(InstanceEditScreen));
+    expect(screen.initialServiceType, 'sonarr');
+    expect(screen.serviceTypePrompt, isNull);
+
+    // Step off and back so each case arrives like a fresh navigation.
+    router.go('/settings/password');
+    await tester.pumpAndSettle();
+
+    // The download-client row names a category, not a member, so it sends a
+    // selection prompt instead of a type the admin then has to correct.
+    router.go('/settings/instance/new',
+        extra: {'service_type_prompt': 'Select a download client'});
+    await tester.pumpAndSettle();
+    screen =
+        tester.widget<InstanceEditScreen>(find.byType(InstanceEditScreen));
+    expect(screen.initialServiceType, isNull);
+    expect(screen.serviceTypePrompt, 'Select a download client');
+
+    router.go('/settings/password');
+    await tester.pumpAndSettle();
+
+    // The generic Add Instance button sends no extra at all: both fields
+    // stay null and the form falls back to its old Radarr default.
+    router.go('/settings/instance/new');
+    await tester.pumpAndSettle();
+    screen =
+        tester.widget<InstanceEditScreen>(find.byType(InstanceEditScreen));
+    expect(screen.initialServiceType, isNull);
+    expect(screen.serviceTypePrompt, isNull);
+  });
+
   testWidgets('a blank book detail id degrades to the Books tab',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _booksState);
@@ -425,6 +467,12 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<AuthState> build() async => _initial;
 
   void push(AuthState next) => state = AsyncData(next);
+
+  // InstanceEditScreen (now reachable via /settings/instance/new) reads the
+  // user directory on mount; the base impl needs an AuthService this harness
+  // never wires up, so answer an empty directory instead.
+  @override
+  Future<List<UserSummary>> listUsers() async => const [];
 }
 
 Dio _fakeDio() {
