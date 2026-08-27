@@ -934,6 +934,71 @@ void main() {
           'switch — the toolbar query survives it',
     );
   });
+
+  testWidgets('typing on the Movies tab fires no Chaptarr book lookup',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    final adapter = _SearchPinAdapter();
+    dio.httpClientAdapter = adapter;
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Movies tab')),
+            ),
+            GoRoute(
+              path: '/dashboard/books',
+              builder: (_, __) => const Scaffold(body: Text('Books tab')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_searchPinState),
+          ),
+          backendClientProvider.overrideWithValue(dio),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'matrix');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.bookLookupRequests,
+      0,
+      reason: 'WR-04: typing on the Movies tab must never reach the '
+          'Chaptarr book-lookup notifier',
+    );
+    expect(
+      adapter.searchRequests,
+      greaterThan(0),
+      reason: 'the Movies tab keystroke reaches the TMDB notifier as usual',
+    );
+  });
 }
 
 Future<void> _pumpAdminDrawer(

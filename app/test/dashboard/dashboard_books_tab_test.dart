@@ -848,6 +848,107 @@ void main() {
     expect(find.byType(LibrarySeriesRow), findsOneWidget,
         reason: 'TAB-01: the tab body is its browse rows');
   });
+
+  testWidgets(
+      'GAP-SC1: an AI-prompt-shaped book term still brings up book results '
+      'on the Books tab', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'books like dune');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsOneWidget,
+      reason: 'GAP-SC1: the book overlay is on screen, not the AI takeover',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Meditations'),
+      ),
+      findsOneWidget,
+      reason: 'GAP-SC1: the Chaptarr lookup result renders even though the '
+          'typed text matches the TMDB AI-intent heuristic',
+    );
+    expect(
+      find.text('Type anything, then press send'),
+      findsNothing,
+      reason: 'GAP-SC1: no AI takeover covers the Books tab',
+    );
+    expect(
+      find.text('Press send to ask AI'),
+      findsNothing,
+      reason: 'GAP-SC1: no AI takeover covers the Books tab',
+    );
+  });
+
+  testWidgets(
+      'GAP-SC1: an ordinary book term brings up book results with AI '
+      'available', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(BookSearchResultsView),
+        matching: find.text('Meditations'),
+      ),
+      findsOneWidget,
+      reason: 'GAP-SC1: the empty-TMDB auto-escalation must not hijack an '
+          'ordinary Books-tab term either',
+    );
+  });
+
+  testWidgets(
+      'one keystroke on the Books tab reaches exactly one search notifier',
+      (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: adapter) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'meditations');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.tmdbSearchRequests,
+      0,
+      reason: 'a Books-tab keystroke must never reach the TMDB notifier',
+    );
+    expect(
+      adapter.bookLookupPaths.length,
+      1,
+      reason: 'a Books-tab keystroke reaches the Chaptarr notifier exactly '
+          'once',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -865,6 +966,29 @@ const _booksState = AuthState(
     accessToken: 'access',
     refreshToken: 'refresh',
     services: AvailableServices(chaptarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'books',
+        serviceType: 'chaptarr',
+        name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+/// CR-01 fixture: the AvailableServices(chaptarr: true, ai: true) combination
+/// that no test in the repo had before this task. With AI available, the
+/// shell toolbar's TMDB AI-intent heuristic (`isAiPromptQuery`) and its
+/// empty-TMDB auto-escalation are both live — this is the fixture that
+/// proves neither can hijack a Books-tab search once dispatch is exclusive.
+const _booksWithAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(chaptarr: true, ai: true),
     instances: [
       ServiceInstance(
         id: 'books',
@@ -1035,6 +1159,11 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   int recentRequests = 0;
   int authorRequests = 0;
   int seriesRequests = 0;
+
+  /// Count of `/api/search` (TMDB multi-search) requests served. Proves the
+  /// CR-01 fix: with dispatch exclusive, no Books-tab keystroke should ever
+  /// reach this counter.
+  int tmdbSearchRequests = 0;
   bool ebookSubmitted = false;
   final statusForeignIds = <String>[];
   final requestBodies = <Map<String, dynamic>>[];
@@ -1276,8 +1405,10 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     } else if (options.path == '/api/trakt/anticipated') {
       body = <Object>[];
     } else if (options.path == '/api/search') {
-      // The dual dispatch (assumption A-05) means the TMDB call fires on
-      // this route too, even though nothing here renders it.
+      // Assumption A-05 (dual dispatch) is retired: no TMDB call reaches
+      // this route any more. This counter exists to prove that — it must
+      // stay 0 across every Books-tab keystroke this file drives.
+      tmdbSearchRequests++;
       body = {
         'page': 1,
         'results': <Object>[],

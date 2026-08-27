@@ -335,8 +335,13 @@ class _AppShellState extends ConsumerState<AppShell>
   }
 
   /// True on the Books discovery tab, where the toolbar searches Chaptarr
-  /// books instead of TMDB.
-  static bool _isBooksTab(String path) => path.startsWith('/dashboard/books');
+  /// books instead of TMDB. Requires the same route-boundary check
+  /// `_isWithinRoute` uses in `app_router.dart` — a bare prefix match would
+  /// let a future sibling route sharing the `/dashboard/books` prefix
+  /// silently impersonate the Books tab and have its query rerouted to
+  /// Chaptarr (WR-01).
+  static bool _isBooksTab(String path) =>
+      path == '/dashboard/books' || path.startsWith('/dashboard/books/');
 
   bool _handleScrollNotification(ScrollNotification notification) {
     // Side-scrolling shelves (poster rows, chip strips) bubble their
@@ -485,6 +490,16 @@ class _AppShellState extends ConsumerState<AppShell>
     );
 
     final isAiReady = searchState.searchMode == SearchMode.aiReady;
+    // Single resolution point for the route decision (was five scattered
+    // `_isBooksTab(widget.currentPath)` call sites) — every gate below reads
+    // this local rather than re-deriving it.
+    final booksTab = _isBooksTab(widget.currentPath);
+    // Books-aware "a search is active" predicate: on the Books tab this
+    // reads the Chaptarr notifier, never the TMDB one, so the overlay and
+    // scroll gates cannot be driven by a notifier that no longer receives
+    // Books-tab keystrokes.
+    final searchOverlayActive =
+        booksTab ? bookSearchState.isSearching : searchState.isSearching;
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
@@ -515,16 +530,31 @@ class _AppShellState extends ConsumerState<AppShell>
           onSend: isAiReady ? _submitSearchBarToAi : null,
           onChanged: (q) {
             _resetAskAiIdle();
-            searchNotifier.updateSearch(q);
-            if (_isBooksTab(widget.currentPath)) {
-              bookSearchNotifier.updateSearch(q);
+            // Exclusive dispatch: exactly one notifier is ever fed by a
+            // keystroke, chosen by the active discovery tab. While AI mode
+            // is active on the Books tab, neither notifier is fed —
+            // `_manualAiMode` keeps `searchMode` sticky without a feed, the
+            // book overlay is suppressed anyway, and `_submitSearchBarToAi`
+            // reads `_searchController.text`, not provider state.
+            if (booksTab) {
+              if (!isAiReady) {
+                bookSearchNotifier.updateSearch(q);
+              }
+            } else {
+              searchNotifier.updateSearch(q);
             }
           },
           onClear: isAiReady
               ? _exitAiMode
               : () {
-                  searchNotifier.updateSearch('');
-                  if (_isBooksTab(widget.currentPath)) {
+                  // Clear means "nothing is being searched anywhere" — both
+                  // notifiers are reset in both directions so a stale query
+                  // can never linger in the one that wasn't being fed.
+                  if (booksTab) {
+                    bookSearchNotifier.reset();
+                    searchNotifier.updateSearch('');
+                  } else {
+                    searchNotifier.updateSearch('');
                     bookSearchNotifier.reset();
                   }
                 },
@@ -691,7 +721,7 @@ class _AppShellState extends ConsumerState<AppShell>
                     children: [
                       NotificationListener<ScrollNotification>(
                         onNotification:
-                            mobile && !searchState.isSearching && !isAiReady
+                            mobile && !searchOverlayActive && !isAiReady
                                 ? _handleScrollNotification
                                 : null,
                         child: widget.child,
@@ -748,16 +778,20 @@ class _AppShellState extends ConsumerState<AppShell>
                       // the module, so it always begins below the actual top
                       // bar height (including text scaling). On the Books tab
                       // this slot renders Chaptarr book results instead of
-                      // TMDB results — one overlay, chosen by route.
-                      if (showGlobalSearch &&
-                          searchState.searchMode == SearchMode.search &&
-                          (_isBooksTab(widget.currentPath)
-                              ? bookSearchState.isSearching
-                              : searchState.isSearching))
+                      // TMDB results — one overlay, chosen by route. The
+                      // gate itself is books-aware (`searchOverlayActive`)
+                      // rather than reading the TMDB notifier's `searchMode`,
+                      // so a completed Chaptarr search can never be
+                      // suppressed by an AI-mode flip the Books tab no
+                      // longer feeds. `!isAiReady` is equivalent to the old
+                      // `searchMode == SearchMode.search` comparison
+                      // (exactly two members), so Movies/TV/Releases
+                      // behavior is bit-identical.
+                      if (showGlobalSearch && !isAiReady && searchOverlayActive)
                         Positioned.fill(
                           child: ColoredBox(
                             color: AppTheme.background.withValues(alpha: 0.97),
-                            child: _isBooksTab(widget.currentPath)
+                            child: booksTab
                                 ? BookSearchResultsView(
                                     results: bookSearchState.results,
                                     query: bookSearchState.searchQuery,
