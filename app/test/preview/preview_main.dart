@@ -299,6 +299,123 @@ class _StubAdapter implements HttpClientAdapter {
               audiobook: (monitored: true, downloaded: true)),
         ],
       };
+    } else if (path.endsWith('/api/requests/book-authors')) {
+      // Four cards covering every state the Books tab's Authors row can
+      // render: fully collected, partly collected, tracked but nothing on
+      // disk, and an author the library has not keyed yet (shown, not
+      // openable). Server order is preserved by the row, so these arrive
+      // already sorted the way the server sorts them.
+      // The server owns the order, so the stub answers each sort with the row
+      // that sort would really produce — otherwise the preview's menu would
+      // look broken for the two orders it never changes.
+      const stubAuthors = [
+        ('fa-1', 'Imogen Vale', 6, 6, 3),
+        ('fa-2', 'Marcus Oyelaran', 4, 2, 1),
+        ('fa-3', 'Sonya Petrov', 3, 0, 12),
+        ('', 'Unkeyed Import', 1, 0, 40),
+      ];
+      final ordered = [...stubAuthors];
+      switch (options.queryParameters['sort'] as String?) {
+        case 'name':
+          ordered.sort((a, b) => a.$2.compareTo(b.$2));
+        case 'added':
+          ordered.sort((a, b) => a.$5.compareTo(b.$5));
+        default:
+          break; // already most-collected first
+      }
+      body = {
+        'authors': [
+          for (final a in ordered)
+            _libraryAuthor(a.$1, a.$2,
+                titles: a.$3, available: a.$4, daysAgo: a.$5),
+        ],
+        // Deliberately larger than the list above, so the preview also shows
+        // the header's "showing N of M" state a big library produces.
+        'total': 137,
+      };
+    } else if (path.endsWith('/api/requests/book-series')) {
+      // Four series covering the row's states: complete, a big gap, a single
+      // book, and a name long enough to test the card's wrapping.
+      const stubSeries = [
+        ('The Ember Cycle', 12, 12),
+        ('Riverwatch Chronicles', 41, 6),
+        ('The Salt Road Standalones', 3, 1),
+        ('Le Comte de Monte-Cristo / The Count of Monte Cristo', 6, 2),
+      ];
+      final ordered = [...stubSeries];
+      if (options.queryParameters['sort'] == 'name') {
+        ordered.sort((a, b) => a.$1.compareTo(b.$1));
+      }
+      body = {
+        'series': [
+          for (final s in ordered)
+            {
+              'name': s.$1,
+              // Empty covers: the card draws its placeholder frames, so the
+              // preview needs no image host and still shows the stack.
+              'covers': const <String>[],
+              'title_count': s.$2,
+              'available_count': s.$3,
+            },
+        ],
+        // Larger than the list, so the preview also shows the truncation note.
+        'total': 143,
+      };
+    } else if (path.endsWith('/api/requests/book-series-detail')) {
+      // Every per-title state a series page can render, in reading order,
+      // including an unnumbered companion volume and an odd position label.
+      body = {
+        'series': {
+          'name': 'Riverwatch Chronicles',
+          'covers': <String>[],
+          'title_count': 6,
+          'available_count': 2,
+        },
+        'titles': [
+          {..._ownedTitle('fb-s1', 'The Ninth Harbour', year: 2019,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: true)), 'position': '1'},
+          {..._ownedTitle('fb-s2', 'Salt and Lantern', year: 2020,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: false)), 'position': '2'},
+          {..._ownedTitle('fb-s3', 'A Quiet Inventory', year: 2021,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': '2A'},
+          {..._ownedTitle('fb-s4', 'The Long Tide', year: 2022,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': '3'},
+          {..._ownedTitle('fb-s5', 'Companion to Riverwatch', year: 0,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)), 'position': ''},
+        ],
+      };
+    } else if (path.endsWith('/api/requests/book-author')) {
+      // One author page carrying every per-title verdict at once: both formats
+      // on disk, a format still on the way, something on disk with nothing
+      // pending, a title nobody has requested, and a record whose format truth
+      // could not be resolved (which must render no pill at all).
+      body = {
+        'author': _libraryAuthor('fa-2', 'Marcus Oyelaran',
+            titles: 5, available: 3),
+        'titles': [
+          _ownedTitle('fb-a1', 'The Salt Road', year: 2025,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: true)),
+          _ownedTitle('fb-a2', 'Ninth Harbour', year: 2024,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: true, downloaded: false)),
+          _ownedTitle('fb-a3', 'Lantern Season', year: 2022,
+              ebook: (monitored: false, downloaded: true),
+              audiobook: (monitored: false, downloaded: false)),
+          _ownedTitle('fb-a4', 'A Quiet Inventory', year: 2019,
+              ebook: (monitored: false, downloaded: false),
+              audiobook: (monitored: false, downloaded: false)),
+          _ownedTitle('fb-a5', 'Uncatalogued Edition', year: 0,
+              statusKnown: false,
+              ebook: (monitored: true, downloaded: true),
+              audiobook: (monitored: false, downloaded: false)),
+        ],
+      };
     } else if (path.contains('/requests')) {
       body = {'requests': []};
     } else if (path.endsWith('/api/admin/credentials')) {
@@ -425,17 +542,41 @@ Map<String, dynamic> _ownedTitle(
   String title, {
   required ({bool monitored, bool downloaded}) ebook,
   required ({bool monitored, bool downloaded}) audiobook,
+  int year = 0,
+  bool statusKnown = true,
 }) =>
     {
       'title': title,
       'author': 'Preview Author',
+      'year': year,
       'foreign_book_id': foreignBookId,
+      'cover': '',
       'ebook': {'monitored': ebook.monitored, 'downloaded': ebook.downloaded},
       'audiobook': {
         'monitored': audiobook.monitored,
         'downloaded': audiobook.downloaded,
       },
-      'status_known': true,
+      'status_known': statusKnown,
+    };
+
+/// One `/api/requests/book-authors` entry. An empty [foreignAuthorId] is the
+/// not-yet-keyed author the row shows but refuses to open.
+Map<String, dynamic> _libraryAuthor(
+  String foreignAuthorId,
+  String name, {
+  required int titles,
+  required int available,
+  int daysAgo = 0,
+}) =>
+    {
+      'foreign_author_id': foreignAuthorId,
+      'name': name,
+      // Empty image: the card falls back to its placeholder icon, so the
+      // preview needs no image host.
+      'image': '',
+      'title_count': titles,
+      'available_count': available,
+      'added': '${_previewDate(-daysAgo)}T12:00:00Z',
     };
 
 /// A `YYYY-MM-DD` calendar date [days] from today (negative for the past), so

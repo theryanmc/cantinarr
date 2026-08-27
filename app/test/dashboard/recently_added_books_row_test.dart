@@ -183,7 +183,9 @@ Map<String, dynamic> _digestEntry({
     };
 
 void main() {
-  testWidgets('shows each format of a title as its own card', (tester) async {
+  // The server now sends one card per title. These two cases keep the row
+  // honest against an *older* server, which still sends a card per format.
+  testWidgets('an older server\'s per-format cards still render', (tester) async {
     tester.view.physicalSize = const Size(900, 1400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -193,10 +195,14 @@ void main() {
 
     expect(find.text('Recently Added'), findsOneWidget);
     expect(find.byType(MediaCard), findsNWidgets(2));
-    // The two formats arrive at different times and must not be merged.
+    // With no ownership to show, each card falls back to its own record's
+    // format label — which is what made two cards worth showing before the
+    // card started leading with title-level ownership instead.
     expect(find.text('Audiobook'), findsOneWidget);
     expect(find.text('eBook'), findsOneWidget);
   });
+
+  _mainMergedCardTests();
 
   testWidgets('hides the row while a search is active', (tester) async {
     tester.view.physicalSize = const Size(900, 1400);
@@ -464,8 +470,8 @@ void main() {
   });
 
   testWidgets(
-      'two records sharing one foreignBookId stay two cards and cannot '
-      'contradict each other', (tester) async {
+      'an older server\'s two cards for one title cannot contradict each other',
+      (tester) async {
     tester.view.physicalSize = const Size(900, 1400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -494,5 +500,35 @@ void main() {
     expect(cards[0].statusLabel, 'Requested');
     expect(cards[0].statusColor, AppTheme.requested);
     expect(cards[0].subtitle, 'eBook + Audiobook requested');
+  });
+}
+
+void _mainMergedCardTests() {
+  testWidgets('a card covering both formats claims neither on its own',
+      (tester) async {
+    tester.view.physicalSize = const Size(900, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    // What the server sends for a title whose ebook and audiobook both landed:
+    // one card, and no single format that describes it.
+    await _pumpBooksTab(tester, items: [
+      {
+        'book_id': 8,
+        'foreign_book_id': 'fb-1',
+        'title': 'Ahsoka',
+        'format': '',
+        'cover': '',
+        'imported_at': '2026-07-24T12:00:00Z',
+      },
+    ]);
+
+    expect(find.byType(MediaCard), findsOneWidget);
+    final card = tester.widget<MediaCard>(find.byType(MediaCard));
+    // No ownership resolved and no single format: saying "eBook" here would
+    // name one half of a card that covers both.
+    expect(card.subtitle, isNull);
+    expect(card.statusLabel, isNull);
   });
 }

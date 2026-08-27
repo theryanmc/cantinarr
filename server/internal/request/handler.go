@@ -168,6 +168,103 @@ func (h *Handler) GetBookRecent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, digest)
 }
 
+// GetBookAuthors returns the authors of the Chaptarr library this user may
+// see, so the Books tab can offer an authors browse row.
+//
+// The optional sort selects the row's order (books, name, added); an unknown
+// value falls back to the default rather than erroring, so a newer client never
+// breaks the row here. The order is applied server-side because the row is
+// capped: sorting a capped list would silently drop the authors the chosen
+// order was meant to surface.
+//
+// A user with no Chaptarr access gets an empty list, not an error: the row is
+// simply absent for them.
+func (h *Handler) GetBookAuthors(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetLibraryAuthorsForInstance(
+		claims.UserID,
+		r.URL.Query().Get("instance_id"),
+		r.URL.Query().Get("sort"),
+	)
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetBookAuthor returns one author of the Chaptarr library plus every title of
+// theirs it tracks, with the per-format ownership the requester-facing author
+// page renders.
+func (h *Handler) GetBookAuthor(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	foreignID := strings.TrimSpace(r.URL.Query().Get("foreign_id"))
+	if foreignID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
+		return
+	}
+	detail, err := h.service.GetLibraryAuthorDetailForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// GetBookSeries returns the series this user's Chaptarr library holds books
+// of, for the Books tab's series browse row.
+//
+// The optional sort selects the row's order (books, name); like the authors
+// row it is applied server-side, before the cap. A user with no Chaptarr access
+// gets an empty list, not an error.
+func (h *Handler) GetBookSeries(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	digest, err := h.service.GetLibrarySeriesForInstance(
+		claims.UserID,
+		r.URL.Query().Get("instance_id"),
+		r.URL.Query().Get("sort"),
+	)
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, digest)
+}
+
+// GetBookSeriesDetail returns one series and every title of it the library
+// tracks, in reading order, with the per-format ownership the page renders.
+func (h *Handler) GetBookSeriesDetail(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
+		return
+	}
+	detail, err := h.service.GetLibrarySeriesDetailForInstance(
+		claims.UserID, name, r.URL.Query().Get("instance_id"))
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func requestErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrChaptarrInstanceForbidden), errors.Is(err, ErrArrInstanceForbidden):
@@ -176,6 +273,8 @@ func requestErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, ErrBookFormatUnresolved):
 		return http.StatusConflict
+	case errors.Is(err, ErrBookAuthorNotFound), errors.Is(err, ErrBookSeriesNotFound):
+		return http.StatusNotFound
 	default:
 		return http.StatusInternalServerError
 	}

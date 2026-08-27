@@ -95,6 +95,16 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		if g.title.Title == "" {
 			g.title.Title = book.Title
 		}
+		// A record's release date is a fact about the record, not about whether
+		// the payload happened to embed an author object. Chaptarr's per-author
+		// book list (`/book?authorId=`) omits that object entirely — even with
+		// includeAuthor=true — so gating the year on it drops every year on that
+		// path, which in turn collapses any newest-first ordering into
+		// "everything is undated". First date wins, matching how the block above
+		// treats the first record carrying metadata.
+		if g.title.Year == 0 && book.ReleaseDate != nil {
+			g.title.Year = book.ReleaseDate.Year()
+		}
 		// Take the cover from the first record in the group that has one.
 		if g.title.Cover == "" {
 			g.title.Cover = clientReachableCover(book)
