@@ -11,6 +11,10 @@ import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
+import 'package:cantinarr/features/ai_assistant/data/ai_chat_service.dart';
+import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
+import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
+import 'package:cantinarr/features/ai_assistant/ui/ai_chat_screen.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
 import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
@@ -1425,6 +1429,60 @@ void main() {
       reason: 'the Books icon still renders even when the server has AI',
     );
   });
+
+  testWidgets(
+      'AI-01/D-03: a Books-tab question reaches the assistant framed while '
+      'the bubble would still show the raw text', (tester) async {
+    _usePhoneSize(tester);
+    final chatNotifier = _FakeAiChatNotifier();
+    final (:router, container: _, adapter: _) = await _pumpRouter(
+      tester,
+      authState: _booksWithAiState,
+      aiChatNotifier: chatNotifier,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(toolbar, 'what should I read next?');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    // Arm the pause detector behind the Ask AI pill; the shimmer border
+    // repeats forever while aiReady, so bounded pumps only from here —
+    // pumpAndSettle would never return.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      chatNotifier.sentMessage,
+      'what should I read next?',
+      reason: 'D-03: the display value the bubble renders carries no '
+          'framing — whole-string equality',
+    );
+    expect(chatNotifier.sentWireContent, isNotNull);
+    expect(
+      chatNotifier.sentWireContent,
+      startsWith('Context: this question was asked from the Books tab'),
+    );
+    expect(
+      chatNotifier.sentWireContent,
+      endsWith('what should I read next?'),
+      reason: 'the user\'s own words are appended unchanged, never reworded',
+    );
+    expect(
+      find.byType(AiChatScreen),
+      findsOneWidget,
+      reason: 'AI-01: the assistant still opens with the prompt in flight',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {
@@ -1552,6 +1610,7 @@ Future<
   bool perInstanceBooks = false,
   Stream<WsEvent>? events,
   AuthState? authState,
+  AiChatNotifier? aiChatNotifier,
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   final adapter = _BooksSearchAdapter(
@@ -1576,8 +1635,24 @@ Future<
       backendClientProvider.overrideWithValue(dio),
       realtimeEventsProvider
           .overrideWithValue(events ?? const Stream<WsEvent>.empty()),
+      if (aiChatNotifier != null) ...[
+        aiChatProvider.overrideWith((ref) {
+          ref.keepAlive();
+          return aiChatNotifier;
+        }),
+        // `/assistant` renders AiChatScreen, which reads this provider; the
+        // real Codex OAuth flow it drives isn't under test here.
+        codexConnectionStatusProvider.overrideWith(
+          (_) => const CodexConnectionStatus(
+            selected: false,
+            available: false,
+            connected: false,
+          ),
+        ),
+      ],
     ],
   );
+
   addTearDown(container.dispose);
 
   await container.read(authProvider.future);
@@ -1591,6 +1666,22 @@ Future<
   );
   await tester.pumpAndSettle();
   return (container: container, router: router, adapter: adapter);
+}
+
+/// Captures the arguments a Books-tab AI hand-off passes to
+/// [AiChatNotifier.sendMessage] — modelled on
+/// `app_shell_test.dart`'s `_FakeAiChatNotifier`.
+class _FakeAiChatNotifier extends AiChatNotifier {
+  String? sentMessage;
+  String? sentWireContent;
+
+  _FakeAiChatNotifier() : super(chatService: AiChatService(backendDio: Dio()));
+
+  @override
+  Future<void> sendMessage(String text, {String? wireContent}) async {
+    sentMessage = text;
+    sentWireContent = wireContent;
+  }
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
