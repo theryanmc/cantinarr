@@ -462,6 +462,9 @@ func NewRouter(
 				// actually dials instance URLs — so cluster-internal names the
 				// admin's device cannot resolve still test truthfully.
 				r.Post("/instances/test", instanceHandler.TestConnection)
+				// Libraries a media server reports, for the shared-libraries
+				// picker; same candidate body and credential fallback as /test.
+				r.Post("/instances/media-server/libraries", instanceHandler.MediaServerLibraries)
 				r.Put("/instances/{instanceID}", instanceHandler.Update)
 				r.Delete("/instances/{instanceID}", instanceHandler.Delete)
 				// Instance-centric view of user_default_instances (the static
@@ -633,7 +636,10 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		visible := map[string]map[string]bool{}
 		visibleDefault := map[string]string{}
 		if !isAdmin {
-			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr"} {
+			// Media servers are listed too so a granted user's app can offer
+			// the account guide; their grant-only rules make the visible set
+			// exactly the grants (see EffectiveDefaultInstanceID).
+			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr"}, instance.MediaServerTypes()...) {
 				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
 				if err != nil {
 					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
