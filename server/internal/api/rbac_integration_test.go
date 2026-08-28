@@ -31,6 +31,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
@@ -86,6 +87,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/instances"},
 		{http.MethodGet, "/api/downloads/missing/queue"},
 		{http.MethodGet, "/api/tautulli/missing/activity"},
+		{http.MethodGet, "/api/admin/media-servers/accounts"},
 	}
 	for _, route := range adminRoutes {
 		recorder := serveRBACRequest(harness.router, route.method, route.path, harness.adminToken)
@@ -106,6 +108,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		}{
 			{http.MethodGet, "/api/ai/available", "", http.StatusOK},
 			{http.MethodGet, "/api/ai/settings", "", http.StatusOK},
+			{http.MethodGet, "/api/media-servers", "", http.StatusOK},
 			{http.MethodPost, "/api/ai/chat", `{"messages":[{"role":"user","content":"hello"}]}`, http.StatusServiceUnavailable},
 		} {
 			recorder := serveRBACRequestWithBody(harness.router, route.method, route.path, token, route.body)
@@ -467,6 +470,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	hub := ws.NewHub(authService, instanceRegistry, store, nil, nil, nil)
 	plexService := plex.NewService(database, cipher, plex.NewClient(), nil, logger)
 	plexHandler := plex.NewHandler(plexService, logger)
+	mediaAccessHandler := mediaaccess.NewHandler(mediaaccess.NewService(database, store, instance.NewMediaServerProvider, logger), logger)
 	webhookHandler := webhooks.NewHandler(store, instanceRegistry, hub, requestService, nil)
 	discoverCache := cache.New()
 	t.Cleanup(discoverCache.Close)
@@ -502,6 +506,7 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		webhookHandler,
 		plexHandler,
 		plexService,
+		mediaAccessHandler,
 		update.NewChecker("dev", true),
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),
 	)

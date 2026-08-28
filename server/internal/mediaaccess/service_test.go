@@ -25,6 +25,7 @@ type fakeProvider struct {
 	nextID         int
 	hang           bool   // GetUser blocks until the context ends
 	getErr         error  // GetUser fails with this
+	createErr      error  // CreateUser fails with this before creating anything
 	onCreate       func() // runs inside CreateUser, after the remote account exists
 	creates        int
 	deletes        int
@@ -88,6 +89,9 @@ func (f *fakeProvider) GetUser(ctx context.Context, id string) (mediaserver.Remo
 }
 
 func (f *fakeProvider) CreateUser(ctx context.Context, name, password string, libraryIDs []string) (mediaserver.RemoteUser, error) {
+	if f.createErr != nil {
+		return mediaserver.RemoteUser{}, f.createErr
+	}
 	if !mediaserver.ValidUsername(name) {
 		return mediaserver.RemoteUser{}, mediaserver.ErrInvalidName
 	}
@@ -175,9 +179,13 @@ func (e *env) user(name string) int64 {
 	return id
 }
 
+const testInstanceKey = "instance-key-SENTINEL"
+
+func itoa(id int64) string { return fmt.Sprintf("%d", id) }
+
 func (e *env) jellyfin(name string, cfg instance.MediaServerConfig) string {
 	e.t.Helper()
-	inst := &instance.Instance{ServiceType: "jellyfin", Name: name, URL: "http://jellyfin.internal:8096", APIKey: "key", MediaServerConfig: cfg}
+	inst := &instance.Instance{ServiceType: "jellyfin", Name: name, URL: "http://jellyfin.internal:8096", APIKey: testInstanceKey, MediaServerConfig: cfg}
 	if err := e.store.Create(inst); err != nil {
 		e.t.Fatalf("create jellyfin: %v", err)
 	}

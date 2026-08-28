@@ -37,6 +37,7 @@ type setupFacts struct {
 	HasDownloadClient bool
 	MediaDownloads    bool
 	HasTautulli       bool
+	HasMediaServer    bool
 	TMDB              bool
 	Trakt             bool
 	AI                bool
@@ -119,6 +120,13 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "media_servers",
+			Title:       "Media server accounts",
+			Description: "Connect Jellyfin so users can create their own accounts from the app.",
+			Configured:  f.HasMediaServer,
+			Optional:    true,
+		},
+		{
 			Key:         "trakt",
 			Title:       "Trakt discovery",
 			Description: "Trending, popular lists, and the release calendar run on Cantinarr's built-in Trakt app out of the box; add your own client ID in the Discover settings to use yours instead.",
@@ -198,6 +206,10 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasTautulli = true
 				case "sabnzbd", "qbittorrent", "nzbget", "transmission":
 					facts.HasDownloadClient = true
+				default:
+					if instance.IsMediaServerType(inst.ServiceType) {
+						facts.HasMediaServer = true
+					}
 				}
 			}
 		}

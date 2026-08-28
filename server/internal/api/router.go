@@ -17,6 +17,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
+	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
@@ -55,6 +56,7 @@ func NewRouter(
 	webhookHandler *webhooks.Handler,
 	plexHandler *plex.Handler,
 	plexService *plex.Service,
+	mediaAccessHandler *mediaaccess.Handler,
 	updateChecker *update.Checker,
 	serverSettings *serversettings.Service,
 ) http.Handler {
@@ -208,6 +210,14 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex/settings", plexHandler.UpdateSettings)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/plex-invite", plexHandler.InviteUser)
 
+			// Media-server accounts (Jellyfin): the linked-account rows the
+			// Users screen tags, the server's own account list for the link
+			// picker, and link/unlink. Access itself is the instance grant.
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
+
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —
 			// for service types with no global default (chaptarr) — grants the
@@ -309,6 +319,17 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
+		})
+
+		// Media-server accounts (authenticated, self-scoped): a granted user
+		// sees their media servers and creates their own account there. The
+		// create is rate-limited like the other self-service credential
+		// writes; eligibility is checked inside, with one answer for every
+		// "not for you" case.
+		r.Group(func(r chi.Router) {
+			r.Use(authService.AuthMiddleware)
+			r.Get("/media-servers", mediaAccessHandler.List)
+			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
 		})
 
 		// Completed-media ticket issuance (authenticated requester/admin). The
