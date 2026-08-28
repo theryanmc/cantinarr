@@ -41,6 +41,81 @@ class InstanceWebhookStatus {
   });
 }
 
+/// Media-server (Jellyfin) settings an instance carries: the address granted
+/// users are told to sign in at, and which libraries a new account may see.
+/// An empty [libraryIds] shares every library, including ones added later.
+class MediaServerConfig {
+  final String publicAddress;
+  final List<String> libraryIds;
+
+  const MediaServerConfig({
+    this.publicAddress = '',
+    this.libraryIds = const [],
+  });
+
+  factory MediaServerConfig.fromJson(Map<String, dynamic> json) =>
+      MediaServerConfig(
+        publicAddress: json['public_address'] as String? ?? '',
+        libraryIds: (json['library_ids'] as List<dynamic>?)
+                ?.map((id) => id.toString())
+                .toList(growable: false) ??
+            const [],
+      );
+
+  Map<String, dynamic> toJson() => {
+        'public_address': publicAddress,
+        'library_ids': libraryIds,
+      };
+}
+
+/// One library a media server reports right now. [collectionType] is the
+/// server's own kind label ('movies', 'tvshows', ...), '' when it has none.
+class MediaServerLibrary {
+  final String id;
+  final String name;
+  final String collectionType;
+
+  const MediaServerLibrary({
+    required this.id,
+    required this.name,
+    this.collectionType = '',
+  });
+
+  factory MediaServerLibrary.fromJson(Map<String, dynamic> json) =>
+      MediaServerLibrary(
+        id: json['id']?.toString() ?? '',
+        name: json['name'] as String? ?? '',
+        collectionType: json['collection_type'] as String? ?? '',
+      );
+}
+
+/// What a media server answered when the backend dialed it: identity plus
+/// the libraries it reports. Never stored; the editor re-reads it live.
+class MediaServerProbe {
+  final String serverName;
+  final String version;
+  final List<MediaServerLibrary> libraries;
+
+  const MediaServerProbe({
+    this.serverName = '',
+    this.version = '',
+    this.libraries = const [],
+  });
+
+  factory MediaServerProbe.fromJson(Map<String, dynamic> json) =>
+      MediaServerProbe(
+        serverName: json['server_name'] as String? ?? '',
+        version: json['version'] as String? ?? '',
+        libraries: (json['libraries'] as List<dynamic>?)
+                ?.whereType<Map>()
+                .map((raw) => MediaServerLibrary.fromJson(
+                      Map<String, dynamic>.from(raw),
+                    ))
+                .toList(growable: false) ??
+            const [],
+      );
+}
+
 /// Calls the backend instance CRUD API endpoints.
 class InstanceApiService {
   final Dio _dio;
@@ -110,6 +185,7 @@ class InstanceApiService {
     String password = '',
     bool isDefault = false,
     List<MediaPathMapping>? mediaPathMappings,
+    MediaServerConfig? mediaServerConfig,
   }) async {
     final resp = await _dio.post('/api/instances', data: {
       'service_type': serviceType,
@@ -122,6 +198,8 @@ class InstanceApiService {
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
+      if (mediaServerConfig != null)
+        'media_server_config': mediaServerConfig.toJson(),
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -135,6 +213,7 @@ class InstanceApiService {
     String password = '',
     bool isDefault = false,
     List<MediaPathMapping>? mediaPathMappings,
+    MediaServerConfig? mediaServerConfig,
   }) async {
     final resp = await _dio.put('/api/instances/$id', data: {
       'name': name,
@@ -146,6 +225,9 @@ class InstanceApiService {
       if (mediaPathMappings != null)
         'media_path_mappings':
             mediaPathMappings.map((mapping) => mapping.toJson()).toList(),
+      // Omitted (null) keeps the stored media-server settings untouched.
+      if (mediaServerConfig != null)
+        'media_server_config': mediaServerConfig.toJson(),
     });
     return ServiceInstance.fromJson(resp.data as Map<String, dynamic>);
   }
@@ -243,5 +325,34 @@ class InstanceApiService {
       'username': username,
       'password': password,
     });
+  }
+
+  /// Ask the server to dial a media server (Jellyfin) and report the
+  /// libraries it has right now. Same body and credential fallback as
+  /// [testConnection]: with [id] set, a blank key uses the stored one, so an
+  /// edit form can list libraries without retyping the key. Throws on failure
+  /// with the server's host-free reason.
+  Future<MediaServerProbe> listMediaServerLibraries({
+    String? id,
+    required String serviceType,
+    required String url,
+    String apiKey = '',
+  }) async {
+    final resp =
+        await _dio.post('/api/instances/media-server/libraries', data: {
+      if (id != null) 'id': id,
+      'service_type': serviceType,
+      'url': url,
+      'api_key': apiKey,
+      'username': '',
+      'password': '',
+    });
+    dynamic data = resp.data;
+    if (data is String && data.trim().isNotEmpty) {
+      data = jsonDecode(data);
+    }
+    return MediaServerProbe.fromJson(
+      data is Map ? Map<String, dynamic>.from(data) : const {},
+    );
   }
 }

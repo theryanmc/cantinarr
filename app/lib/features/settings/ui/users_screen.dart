@@ -4,14 +4,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../media_access/data/media_access_service.dart';
+import '../../media_access/ui/media_server_link_sheet.dart';
 import '../../notifications/push_service.dart';
 import '../data/plex_admin_service.dart';
 import '../data/credentials_service.dart';
+import '../data/request_settings_service.dart';
 import '../logic/plex_invites_provider.dart';
 
 /// Admin screen for managing user accounts: change roles, remove users, and
@@ -29,6 +33,18 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   String? _error;
   String _sharedAiProvider = '';
   bool _sharedAiConfigured = true;
+
+  // Media-server (Jellyfin) account rows, one per linked (user, server).
+  // A failed read is said as such: an empty list would read as "nobody has
+  // an account", which is a different answer.
+  List<MediaServerAccountRow> _mediaAccounts = const [];
+  bool _mediaAccountsFailed = false;
+
+  /// The media servers this admin's config lists (admins see every
+  /// instance), which is what the per-user tags and menu entries iterate.
+  List<ServiceInstance> get _mediaServers =>
+      ref.read(authProvider).valueOrNull?.connection?.mediaServerInstances ??
+      const [];
 
   @override
   void initState() {
@@ -53,11 +69,23 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
         // User management remains usable if provider status is temporarily
         // unavailable. The confirmation falls back to a generic quota warning.
       }
+      var mediaAccounts = const <MediaServerAccountRow>[];
+      var mediaAccountsFailed = false;
+      if (_mediaServers.isNotEmpty) {
+        try {
+          mediaAccounts =
+              await ref.read(mediaAccessServiceProvider).listAccounts();
+        } catch (_) {
+          mediaAccountsFailed = true;
+        }
+      }
       // Keep the drawer's "Plex invites" badge in step with what this
       // screen just learned (e.g. an invite sent here clears the count).
       ref.read(plexInvitesWaitingProvider.notifier).refresh();
       setState(() {
         _users = users;
+        _mediaAccounts = mediaAccounts;
+        _mediaAccountsFailed = mediaAccountsFailed;
         _isLoading = false;
       });
     } catch (e) {
@@ -463,6 +491,125 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     }
   }
 
+  /// Records that this user is an existing account on [server]. The picker
+  /// lists what the server reports (administrators excluded); linking only
+  /// records the connection and changes nothing on the server.
+  Future<void> _linkMediaAccount(
+      UserSummary user, ServiceInstance server) async {
+    final remote = await showMediaServerLinkSheet(
+      context,
+      instanceId: server.id,
+      instanceName: server.name,
+      serviceType: server.serviceType,
+      username: user.username,
+    );
+    if (remote == null || !mounted) return;
+    try {
+      await ref.read(mediaAccessServiceProvider).link(
+            userId: user.id,
+            instanceId: server.id,
+            remoteUserId: remote.id,
+          );
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Linked ${remote.name} on ${server.name} to ${user.username}'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_mediaAccessError(e, "Couldn't link the account")),
+      ));
+    }
+  }
+
+  /// Access to a media server IS the instance grant, so this edits the
+  /// user's grants for that service type: off removes this instance (the
+  /// server then switches the account off, keeping it), on adds it back
+  /// (the account comes back). There is no second switch anywhere.
+  Future<void> _setMediaAccess(
+    UserSummary user,
+    ServiceInstance server, {
+    required bool enabled,
+  }) async {
+    try {
+      final service =
+          RequestSettingsService(backendDio: ref.read(backendClientProvider));
+      final grants = await service.getUserInstanceGrants(user.id);
+      final current = grants[server.serviceType] ?? const <String>[];
+      final next = enabled
+          ? {...current, server.id}.toList()
+          : current.where((id) => id != server.id).toList();
+      await service
+          .updateUserInstanceGrants(user.id, {server.serviceType: next});
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Turned ${server.name} access ${enabled ? 'on' : 'off'} '
+            'for ${user.username}'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            _friendlyError(e, "Couldn't change ${server.name} access")),
+      ));
+    }
+  }
+
+  /// Forgets the link only. The account on the server and the user's grant
+  /// both stay as they are, so this asks first and says exactly that.
+  Future<void> _unlinkMediaAccount(
+    UserSummary user,
+    ServiceInstance server,
+    MediaServerAccountRow account,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Unlink account?'),
+        content: Text(
+          'Cantinarr will forget that ${user.username} is '
+          '${account.remoteUsername} on ${server.name}. The account on '
+          '${server.name} stays as it is, and Cantinarr stops managing it '
+          'until you link it again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Unlink'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ref
+          .read(mediaAccessServiceProvider)
+          .unlink(userId: user.id, instanceId: server.id);
+      await _loadUsers();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Unlinked ${account.remoteUsername} on ${server.name} '
+            'from ${user.username}'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_mediaAccessError(e, "Couldn't unlink the account")),
+      ));
+    }
+  }
+
+  String _mediaAccessError(Object e, String fallback) =>
+      e is MediaAccessException && e.message.isNotEmpty ? e.message : fallback;
+
   String _friendlyError(Object e, String fallback) {
     final msg = e.toString();
     // Surface the backend's error message when present.
@@ -509,20 +656,46 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final currentUserId = ref.read(authProvider).valueOrNull?.user?.id;
     final plexConfigured =
         ref.watch(plexInviteConfiguredProvider).valueOrNull ?? false;
+    final mediaServers =
+        ref.watch(authProvider).valueOrNull?.connection?.mediaServerInstances ??
+            const <ServiceInstance>[];
+    // The notice takes the first row when the account read failed, so the
+    // list still renders every user and the gap is named, not implied.
+    final noticeRows = _mediaAccountsFailed ? 1 : 0;
 
     return RefreshIndicator(
       onRefresh: _loadUsers,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: users.length,
+        itemCount: users.length + noticeRows,
         separatorBuilder: (_, __) =>
             const Divider(height: 1, color: AppTheme.border),
         itemBuilder: (context, index) {
-          final user = users[index];
+          if (index < noticeRows) {
+            return const ListTile(
+              leading: Icon(Icons.sync_problem_outlined,
+                  color: AppTheme.warning),
+              title: Text(
+                "Couldn't load media server accounts. Pull to refresh.",
+                style: TextStyle(color: AppTheme.warning, fontSize: 13),
+              ),
+            );
+          }
+          final user = users[index - noticeRows];
           return _UserTile(
             user: user,
             isSelf: user.id == currentUserId,
             plexInviteConfigured: plexConfigured,
+            mediaServers: mediaServers,
+            mediaAccounts: {
+              for (final row in _mediaAccounts)
+                if (row.userId == user.id) row.instanceId: row,
+            },
+            onLinkMediaAccount: (server) => _linkMediaAccount(user, server),
+            onSetMediaAccess: (server, enabled) =>
+                _setMediaAccess(user, server, enabled: enabled),
+            onUnlinkMediaAccount: (server, account) =>
+                _unlinkMediaAccount(user, server, account),
             onChangeRole: (role) => _changeRole(user, role),
             onDelete: () => _deleteUser(user),
             onResendInvite: () => _resendInvite(user),
@@ -554,6 +727,11 @@ class _UserTile extends StatelessWidget {
     required this.user,
     required this.isSelf,
     required this.plexInviteConfigured,
+    required this.mediaServers,
+    required this.mediaAccounts,
+    required this.onLinkMediaAccount,
+    required this.onSetMediaAccess,
+    required this.onUnlinkMediaAccount,
     required this.onChangeRole,
     required this.onDelete,
     required this.onResendInvite,
@@ -570,6 +748,15 @@ class _UserTile extends StatelessWidget {
   final UserSummary user;
   final bool isSelf;
   final bool plexInviteConfigured;
+
+  /// Every media server the admin's config lists, and this user's linked
+  /// account on each (by instance id; absent = no account linked).
+  final List<ServiceInstance> mediaServers;
+  final Map<String, MediaServerAccountRow> mediaAccounts;
+  final void Function(ServiceInstance server) onLinkMediaAccount;
+  final void Function(ServiceInstance server, bool enabled) onSetMediaAccess;
+  final void Function(ServiceInstance server, MediaServerAccountRow account)
+      onUnlinkMediaAccount;
   final ValueChanged<String> onChangeRole;
   final VoidCallback onDelete;
   final VoidCallback onResendInvite;
@@ -652,6 +839,20 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'Plex invite sent', color: AppTheme.available)
             else if (user.plexEmail.isNotEmpty)
               const _Tag(label: 'Needs Plex invite', color: AppTheme.requested),
+            // One tag per linked media-server account: the server's name
+            // alone when the account name matches the Cantinarr username,
+            // the remote name otherwise, and ": off" while access is off.
+            for (final server in mediaServers)
+              if (mediaAccounts[server.id] case final account?)
+                account.disabled
+                    ? _Tag(
+                        label: '${server.name}: off',
+                        color: AppTheme.unavailable)
+                    : _Tag(
+                        label: account.remoteUsername == user.username
+                            ? server.name
+                            : '${server.name}: ${account.remoteUsername}',
+                        color: AppTheme.available),
           ],
         ),
       ),
@@ -663,6 +864,28 @@ class _UserTile extends StatelessWidget {
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert, color: AppTheme.textSecondary),
       onSelected: (value) {
+        // Media-server entries carry the instance id after the action.
+        final separator = value.indexOf(':');
+        if (separator > 0) {
+          final action = value.substring(0, separator);
+          final instanceId = value.substring(separator + 1);
+          for (final server in mediaServers) {
+            if (server.id != instanceId) continue;
+            final account = mediaAccounts[server.id];
+            switch (action) {
+              case 'media_link':
+                onLinkMediaAccount(server);
+              case 'media_access':
+                if (account != null) {
+                  onSetMediaAccess(server, account.disabled);
+                }
+              case 'media_unlink':
+                if (account != null) onUnlinkMediaAccount(server, account);
+            }
+            return;
+          }
+          return;
+        }
         switch (value) {
           case 'make_admin':
             onChangeRole('admin');
@@ -781,6 +1004,40 @@ class _UserTile extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
             ),
           ),
+        // Media servers, one set per shared server: link an existing
+        // account when none is recorded; otherwise flip access (the grant,
+        // which the server mirrors onto the account) or forget the link.
+        for (final server in mediaServers)
+          if (mediaAccounts[server.id] case final account?) ...[
+            PopupMenuItem(
+              value: 'media_access:${server.id}',
+              child: ListTile(
+                leading: Icon(account.disabled
+                    ? Icons.play_circle_outline
+                    : Icons.block_outlined),
+                title: Text(account.disabled
+                    ? 'Turn ${server.name} access on'
+                    : 'Turn ${server.name} access off'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: 'media_unlink:${server.id}',
+              child: ListTile(
+                leading: const Icon(Icons.link_off),
+                title: Text('Unlink ${server.name} account'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ] else
+            PopupMenuItem(
+              value: 'media_link:${server.id}',
+              child: ListTile(
+                leading: const Icon(Icons.live_tv_outlined),
+                title: Text('Link ${server.name} account…'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
         if (!isSelf)
           const PopupMenuItem(
             value: 'test_push',

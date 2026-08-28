@@ -9,8 +9,8 @@ import (
 
 func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 	items := buildSetupItems(setupFacts{})
-	if len(items) != 13 {
-		t.Fatalf("items = %d, want 13", len(items))
+	if len(items) != 14 {
+		t.Fatalf("items = %d, want 14", len(items))
 	}
 	for _, item := range items {
 		if item.Configured {
@@ -54,6 +54,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		"tmdb":            true,
 		"push":            false,
 		"plex_invites":    true,
+		"media_servers":   false,
 		"download_client": true,
 		"media_downloads": true,
 		"tautulli":        false,

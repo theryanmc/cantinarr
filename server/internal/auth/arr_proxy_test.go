@@ -269,6 +269,7 @@ func TestRequireArrProxyAccess_ServiceBoundary(t *testing.T) {
 		{"nzbget rejects arr-shaped path", "nzbget", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"transmission rejects arr-shaped path", "transmission", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"tautulli rejects arr-shaped path", "tautulli", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
+		{"jellyfin rejects arr-shaped path", "jellyfin", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"unknown service rejects arr-shaped path", "future-service", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"empty service rejects arr-shaped path", "", true, nil, "/api/instances/abc/api/v3/movie", http.StatusForbidden},
 		{"missing instance is not found", "", false, nil, "/api/instances/abc/api/v3/movie", http.StatusNotFound},

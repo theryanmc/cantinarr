@@ -37,11 +37,16 @@ class SettingsSearchGates {
   /// advertises, so they hide it).
   final bool phoneAppsVisible;
 
+  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin)
+  /// is shared with this account, so the access guide has something to show.
+  final bool mediaServersVisible;
+
   const SettingsSearchGates({
     required this.user,
     this.chaptarrEnabled = false,
     this.donateVisible = false,
     this.phoneAppsVisible = false,
+    this.mediaServersVisible = false,
   });
 }
 
@@ -60,6 +65,7 @@ bool gatePassword(SettingsSearchGates g) => g.user?.canUsePassword == true;
 bool gateChaptarr(SettingsSearchGates g) => g.chaptarrEnabled;
 bool gateDonate(SettingsSearchGates g) => g.donateVisible;
 bool gatePhoneApps(SettingsSearchGates g) => g.phoneAppsVisible;
+bool gateMediaServers(SettingsSearchGates g) => g.mediaServersVisible;
 
 /// One searchable setting.
 class SettingsSearchEntry {
@@ -206,6 +212,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'chaptarr',
       'download client',
       'tautulli',
+      'jellyfin',
+      'media server',
       'connect',
       'server',
     ],
@@ -449,6 +457,24 @@ const List<SettingsSearchEntry> _rootEntries = [
     keywords: ['guide', 'install', 'plex app', 'menu', 'hide', 'show'],
     gate: gateEveryone,
     anchorId: SettingsAnchors.rootShowPlexGuide,
+  ),
+  SettingsSearchEntry(
+    id: 'screen.media-servers',
+    title: 'Media server access',
+    icon: Icons.live_tv_outlined,
+    route: '/media-servers',
+    screenTitle: 'Settings',
+    section: 'Guides',
+    keywords: [
+      'jellyfin',
+      'media server',
+      'account',
+      'sign in',
+      'password',
+      'watch',
+      'guide',
+    ],
+    gate: gateMediaServers,
   ),
   SettingsSearchEntry(
     id: 'root.about',

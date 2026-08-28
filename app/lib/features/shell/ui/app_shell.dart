@@ -23,6 +23,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
+import '../../media_access/data/media_access_service.dart';
 import '../../profile_proposals/logic/profile_proposals_provider.dart';
 import '../../radarr/data/radarr_api_service.dart';
 import '../../radarr/logic/radarr_movies_provider.dart';
@@ -862,6 +863,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/assistant')) return 'AI assistant';
     if (path.startsWith('/setup')) return 'Setup';
     if (path.startsWith('/plex-guide')) return 'Watch on Plex';
+    if (path.startsWith('/media-servers')) return 'Media server access';
     return 'Cantinarr';
   }
 
@@ -875,6 +877,14 @@ class _AppShellState extends ConsumerState<AppShell>
     final hasChaptarrService =
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
             false;
+    // The backend lists a media server only for users an admin granted it,
+    // so its presence alone decides whether the access guide is offered.
+    final mediaServerInstances = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.mediaServerInstances ??
+        const <ServiceInstance>[];
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
     final approvalsStale = ref.watch(pendingApprovalsStaleProvider);
     final openIssues = ref.watch(openIssuesProvider);
@@ -1194,6 +1204,18 @@ class _AppShellState extends ConsumerState<AppShell>
               onTap: () {
                 if (isOverlay) Navigator.pop(context);
                 context.push('/plex-guide');
+              },
+            ),
+          if (mediaServerInstances.isNotEmpty)
+            _DrawerItem(
+              icon: Icons.live_tv_outlined,
+              title: mediaServerGuideTitle(
+                mediaServerInstances.map((i) => i.serviceType),
+              ),
+              semanticsIdentifier: 'nav-action-media-servers',
+              onTap: () {
+                if (isOverlay) Navigator.pop(context);
+                context.push('/media-servers');
               },
             ),
           _DrawerItem(

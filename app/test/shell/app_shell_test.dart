@@ -463,6 +463,112 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets('the drawer offers the media server guide only when one is shared',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    Future<void> pump(AuthState state) async {
+      final router = GoRouter(
+        initialLocation: '/dashboard/movies',
+        routes: [
+          ShellRoute(
+            builder: (context, state, child) =>
+                AppShell(currentPath: state.uri.path, child: child),
+            routes: [
+              GoRoute(
+                path: '/dashboard/movies',
+                builder: (_, __) =>
+                    const Scaffold(body: Text('Dashboard home')),
+              ),
+            ],
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authProvider.overrideWith(() => _FakeAuthNotifier(state)),
+            backendClientProvider.overrideWithValue(_fakeDio()),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.menu));
+      await tester.pumpAndSettle();
+    }
+
+    // A granted media server (the backend lists it only for granted
+    // users) puts the guide in the menu, titled by the product.
+    await pump(_mediaServerState());
+    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
+        findsOneWidget);
+    expect(find.text('Watch on Jellyfin'), findsOneWidget);
+
+    // Without one there is nothing to open. Tear the first tree down first:
+    // pumping into it would keep its ProviderScope overrides and state.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await pump(_multiRadarrState(isAdmin: false));
+    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
+        findsNothing);
+    expect(find.text('Watch on Jellyfin'), findsNothing);
+    semantics.dispose();
+  });
+
+  testWidgets('the media server guide route carries its own breadcrumb',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Dashboard home')),
+            ),
+            GoRoute(
+              path: '/media-servers',
+              builder: (_, __) => const Scaffold(body: Text('Guide body')),
+            ),
+          ],
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_mediaServerState()),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    router.push('/media-servers');
+    await tester.pumpAndSettle();
+
+    expect(find.text('MEDIA SERVER ACCESS'), findsOneWidget);
+  });
+
   testWidgets('admin drawer selector switches the active app instance',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -847,6 +953,25 @@ AuthState _multiRadarrState({required bool isAdmin}) {
       username: isAdmin ? 'admin' : 'viewer',
       role: isAdmin ? 'admin' : 'user',
     ),
+  );
+}
+
+/// A requester whose only listed instance is a granted media server.
+AuthState _mediaServerState() {
+  return const AuthState(
+    connection: BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(
+          id: 'jf-a',
+          serviceType: 'jellyfin',
+          name: 'Home Jellyfin',
+        ),
+      ],
+    ),
+    user: UserProfile(id: 2, username: 'viewer', role: 'user'),
   );
 }
 

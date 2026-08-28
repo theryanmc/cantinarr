@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS service_instances (
     sort_order INTEGER DEFAULT 0,
     media_download_mode TEXT NOT NULL DEFAULT 'disabled',
     media_path_mappings TEXT NOT NULL DEFAULT '[]',
+    media_server_config TEXT NOT NULL DEFAULT '{}',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -120,6 +121,21 @@ CREATE TABLE IF NOT EXISTS user_instance_grants (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
     PRIMARY KEY (user_id, instance_id)
+);
+
+-- Media-server accounts Cantinarr created or an admin linked (Jellyfin/Emby).
+-- Rows are an action log: what Cantinarr did and when access was switched
+-- off. The media server itself is the live truth and is re-read on view.
+CREATE TABLE IF NOT EXISTS user_media_server_accounts (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    remote_user_id TEXT NOT NULL,
+    remote_username TEXT NOT NULL,
+    created_by_cantinarr INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    disabled_at DATETIME,
+    PRIMARY KEY (user_id, instance_id),
+    UNIQUE (instance_id, remote_user_id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -953,6 +969,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// bypassing approval policy. This answers what already went wrong, which
 		// is a different question and must not move a row out of the queue.
 		{alter: "ALTER TABLE request_log ADD COLUMN add_failure_reason TEXT"},
+		// Media-server instances (Jellyfin/Emby): the client-reachable sign-in
+		// address shown to granted users plus the shared library ids, as one
+		// JSON document; '{}' for every other service type.
+		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
@@ -969,15 +989,15 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr has no global default — instances are granted per user — but
-	// older versions let the flag be set. Zero any legacy rows so the
-	// admin/AI fallback (GetDefault) resolves purely by sort order. Runs every
-	// boot; idempotent and the table is tiny.
+	// Chaptarr and the media servers (Jellyfin) have no global default —
+	// instances are granted per user — but older versions let the flag be
+	// set. Zero any legacy rows so the admin/AI fallback (GetDefault) resolves
+	// purely by sort order. Runs every boot; idempotent and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type = 'chaptarr' AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'jellyfin') AND is_default = 1",
 	); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("clear chaptarr default flags: %w", err)
+		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
 	}
 
 	// Auto-detected issues used to store the *arr service type in media_type

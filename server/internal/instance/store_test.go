@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
@@ -209,6 +210,7 @@ func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"tautulli",
+		"jellyfin",
 	}
 
 	for _, serviceType := range serviceTypes {
@@ -754,5 +756,144 @@ func TestSetInstanceUsers(t *testing.T) {
 	pins, _ = s.ListTypeUserDefaults("radarr")
 	if pins[alice] != r1 || pins[bob] != r1 {
 		t.Fatalf("pins after failed call = %v, want alice/bob still on %s", pins, r1)
+	}
+}
+
+func TestMediaServerConfigRoundTripAndFailClosed(t *testing.T) {
+	s := newTestStore(t)
+	inst := &Instance{
+		ServiceType: "jellyfin", Name: "Home", URL: "http://localhost", APIKey: "key",
+		MediaServerConfig: MediaServerConfig{PublicAddress: "https://jf.example.com", LibraryIDs: []string{"lib-shows", "lib-movies", "lib-shows"}},
+	}
+	if err := s.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := MediaServerConfig{PublicAddress: "https://jf.example.com", LibraryIDs: []string{"lib-movies", "lib-shows"}}
+	if !reflect.DeepEqual(got.MediaServerConfig, want) || got.MediaServerConfigInvalid {
+		t.Fatalf("stored config = %+v (invalid %t), want %+v", got.MediaServerConfig, got.MediaServerConfigInvalid, want)
+	}
+	listed, err := s.List("jellyfin")
+	if err != nil || len(listed) != 1 || !reflect.DeepEqual(listed[0].MediaServerConfig, want) {
+		t.Fatalf("listed config = %+v, %v", listed, err)
+	}
+
+	got.MediaServerConfig = MediaServerConfig{}
+	if err := s.Update(got); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(inst.ID)
+	if got.MediaServerConfig.PublicAddress != "" || len(got.MediaServerConfig.LibraryIDs) != 0 || got.MediaServerConfig.LibraryIDs == nil {
+		t.Fatalf("cleared config = %+v, want empty with [] ids", got.MediaServerConfig)
+	}
+
+	// A document nobody can decode fails closed: zero config, flagged, still listed.
+	if _, err := s.db.Exec("UPDATE service_instances SET media_server_config = 'not-json' WHERE id = ?", inst.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.MediaServerConfigInvalid || got.MediaServerConfig.PublicAddress != "" || len(got.MediaServerConfig.LibraryIDs) != 0 {
+		t.Fatalf("corrupt config did not fail closed: %+v invalid=%t", got.MediaServerConfig, got.MediaServerConfigInvalid)
+	}
+	// Re-saving repairs the row.
+	got.MediaServerConfig = want
+	if err := s.Update(got); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.Get(inst.ID)
+	if got.MediaServerConfigInvalid || !reflect.DeepEqual(got.MediaServerConfig, want) {
+		t.Fatalf("re-save did not repair: %+v invalid=%t", got.MediaServerConfig, got.MediaServerConfigInvalid)
+	}
+
+	// Other types store '{}' whatever the struct carried.
+	radarr := &Instance{ServiceType: "radarr", Name: "Movies", URL: "http://localhost", APIKey: "key",
+		MediaServerConfig: MediaServerConfig{PublicAddress: "https://leak.example.com", LibraryIDs: []string{"x"}}}
+	if err := s.Create(radarr); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := s.db.QueryRow("SELECT media_server_config FROM service_instances WHERE id = ?", radarr.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "{}" {
+		t.Fatalf("radarr media_server_config = %q, want {}", raw)
+	}
+}
+
+func TestMediaServerNeverGlobalDefault(t *testing.T) {
+	s := newTestStore(t)
+	inst := &Instance{ServiceType: "jellyfin", Name: "Home", URL: "http://localhost", APIKey: "key", IsDefault: true}
+	if err := s.Create(inst); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if inst.IsDefault || isDefault(t, s, inst.ID) {
+		t.Fatal("jellyfin instance must not be stored as default")
+	}
+	got, _ := s.Get(inst.ID)
+	got.IsDefault = true
+	if err := s.Update(got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if isDefault(t, s, inst.ID) {
+		t.Fatal("Update must not store a jellyfin default flag")
+	}
+}
+
+// A media-server grant makes the instance visible to its user for the
+// account guide, never proxyable, and never falls back to "the first
+// instance" for anyone else.
+func TestMediaServerVisibilityIsGrantOnlyAndNeverProxyable(t *testing.T) {
+	s := newTestStore(t)
+	alice := createUser(t, s, "ms-alice")
+	bob := createUser(t, s, "ms-bob")
+	home := mkInstance(t, s, "jellyfin", "Home")
+	mkInstance(t, s, "jellyfin", "Other")
+	if err := s.SetUserGrants(alice, map[string][]string{"jellyfin": {home}}); err != nil {
+		t.Fatal(err)
+	}
+
+	visible, err := s.VisibleInstanceIDs(alice, "jellyfin")
+	if err != nil || !reflect.DeepEqual(visible, []string{home}) {
+		t.Fatalf("alice visible = %v, %v, want [%s]", visible, err, home)
+	}
+	if def, _ := s.EffectiveDefaultInstanceID(alice, "jellyfin"); def != home {
+		t.Fatalf("alice effective default = %q, want %s", def, home)
+	}
+	if visible, _ := s.VisibleInstanceIDs(bob, "jellyfin"); len(visible) != 0 {
+		t.Fatalf("ungranted bob sees %v, want nothing", visible)
+	}
+	if def, _ := s.EffectiveDefaultInstanceID(bob, "jellyfin"); def != "" {
+		t.Fatalf("ungranted bob effective default = %q, want none", def)
+	}
+	if ok, _ := s.UserCanAccessInstance(alice, home, "jellyfin"); ok {
+		t.Fatal("a media-server grant must never open the arr proxy")
+	}
+}
+
+func TestDeleteInstanceDropsMediaServerAccounts(t *testing.T) {
+	s := newTestStore(t)
+	alice := createUser(t, s, "acct-alice")
+	home := mkInstance(t, s, "jellyfin", "Home")
+	if _, err := s.db.Exec(
+		"INSERT INTO user_media_server_accounts (user_id, instance_id, remote_user_id, remote_username) VALUES (?, ?, 'r1', 'alice')",
+		alice, home,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(home); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM user_media_server_accounts").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("account rows after instance delete = %d, want 0", count)
 	}
 }

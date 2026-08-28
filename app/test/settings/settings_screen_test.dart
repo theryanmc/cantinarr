@@ -14,8 +14,15 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+const _homeJellyfin = ServiceInstance(
+  id: 'jf-a',
+  serviceType: 'jellyfin',
+  name: 'Home Jellyfin',
+);
 
 void main() {
   setUp(() {
@@ -269,6 +276,74 @@ void main() {
     expect(notifier.logoutCalls, 1);
   });
 
+  testWidgets('the media server guide row appears with a shared server',
+      (tester) async {
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      instances: const [_homeJellyfin],
+    );
+    await _dragSettingsUntilFound(tester, find.text('Media server access'));
+    expect(find.text('Media server access'), findsOneWidget);
+    expect(
+      find.text('Create your account and see where to sign in'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('the media server guide row is absent without a shared server',
+      (tester) async {
+    await _pumpSettings(tester, _settings(source: AiAccessSource.shared));
+
+    // Guides sits right above About; reaching GitHub means it was built.
+    await _dragSettingsUntilFound(tester, find.text('GitHub'));
+    expect(find.text('Watch on Plex'), findsOneWidget);
+    expect(find.text('Media server access'), findsNothing);
+  });
+
+  testWidgets("a requester's media server tile opens the guide",
+      (tester) async {
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const SettingsScreen()),
+        GoRoute(
+          path: '/media-servers',
+          builder: (_, __) => const Scaffold(body: Text('Guide body')),
+        ),
+      ],
+    );
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
+    dio.httpClientAdapter = _SettingsAdapter();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => _FakeAuthNotifier(
+                isAdmin: false,
+                instances: const [_homeJellyfin],
+              )),
+          aiSettingsProvider
+              .overrideWith((_) async => _settings(source: AiAccessSource.shared)),
+          backendClientProvider.overrideWithValue(dio),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _dragSettingsUntilFound(tester, find.text('Home Jellyfin'));
+    expect(find.text('Jellyfin'), findsOneWidget);
+    await tester.ensureVisible(find.text('Home Jellyfin'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Home Jellyfin'));
+    await tester.pumpAndSettle();
+
+    // An imperative push lands on the recorder route (the route information
+    // provider only reflects declarative navigation, so the page is the
+    // proof).
+    expect(find.text('Guide body'), findsOneWidget);
+  });
+
   group('Setup Checklist tile', _setupChecklistTileTests);
 }
 
@@ -358,12 +433,14 @@ Future<ProviderContainer> _pumpSettings(
   AiSettings settings, {
   bool isAdmin = false,
   Map<String, dynamic>? setupStatus,
+  List<ServiceInstance> instances = const [],
 }) async {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _SettingsAdapter(setupStatus: setupStatus);
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(isAdmin: isAdmin)),
+      authProvider.overrideWith(
+          () => _FakeAuthNotifier(isAdmin: isAdmin, instances: instances)),
       aiSettingsProvider.overrideWith((_) async => settings),
       backendClientProvider.overrideWithValue(dio),
     ],
@@ -391,16 +468,18 @@ Future<void> _dragSettingsUntilFound(
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.isAdmin});
+  _FakeAuthNotifier({required this.isAdmin, this.instances = const []});
 
   final bool isAdmin;
+  final List<ServiceInstance> instances;
 
   @override
   Future<AuthState> build() async => AuthState(
-        connection: const BackendConnection(
+        connection: BackendConnection(
           serverUrl: 'http://localhost',
           accessToken: 'access',
           refreshToken: 'refresh',
+          instances: instances,
         ),
         user: UserProfile(
           id: 1,

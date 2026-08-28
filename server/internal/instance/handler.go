@@ -31,15 +31,20 @@ var allowedServiceTypes = map[string]bool{
 	"nzbget":       true,
 	"transmission": true,
 	"tautulli":     true,
+	"jellyfin":     true,
 }
+
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and Tautulli are admin surfaces with no per-user routing,
-// so granting them would only invite confusion.
+// so granting them would only invite confusion. For media servers a grant is
+// the eligibility to create an account there.
 var grantableServiceTypes = map[string]bool{
 	"radarr":   true,
 	"sonarr":   true,
 	"chaptarr": true,
+	"jellyfin": true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are
@@ -54,6 +59,8 @@ type instanceResponse struct {
 	SortOrder         int                 `json:"sort_order"`
 	MediaDownloads    bool                `json:"media_downloads"`
 	MediaPathMappings []mediapath.Mapping `json:"media_path_mappings"`
+	// MediaServerConfig is present only for media-server instances.
+	MediaServerConfig *MediaServerConfig `json:"media_server_config,omitempty"`
 }
 
 type instanceRequest struct {
@@ -61,6 +68,8 @@ type instanceRequest struct {
 	// Pointer distinguishes an old client that omitted this new field from an
 	// admin explicitly sending [] to disable downloads on an existing instance.
 	MediaPathMappings *[]mediapath.Mapping `json:"media_path_mappings"`
+	// Same omitted-vs-cleared distinction for the media-server settings.
+	MediaServerConfig *MediaServerConfig `json:"media_server_config"`
 }
 
 func (h *Handler) toResponse(inst *Instance) instanceResponse {
@@ -68,7 +77,7 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 	if mappings == nil {
 		mappings = []mediapath.Mapping{}
 	}
-	return instanceResponse{
+	resp := instanceResponse{
 		ID:                inst.ID,
 		ServiceType:       inst.ServiceType,
 		Name:              inst.Name,
@@ -79,6 +88,11 @@ func (h *Handler) toResponse(inst *Instance) instanceResponse {
 		MediaDownloads:    inst.MediaDownloadsConfigured(h.mediaRoots),
 		MediaPathMappings: mappings,
 	}
+	if IsMediaServerType(inst.ServiceType) {
+		cfg := inst.MediaServerConfig.clone()
+		resp.MediaServerConfig = &cfg
+	}
+	return resp
 }
 
 // Handler provides REST endpoints for instance CRUD.
@@ -89,6 +103,10 @@ type Handler struct {
 	webhookLocks   map[string]*sync.Mutex
 	arrCallbackURL string
 	mediaRoots     []string
+	grantObserver  GrantObserver
+	// sharedLibrariesObserver is told when a media server's shared-library
+	// selection changes, so existing accounts follow the new set.
+	sharedLibrariesObserver SharedLibrariesObserver
 }
 
 // NewHandler creates a new instance handler.
@@ -193,7 +211,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	inst := request.Instance
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
+		http.Error(w, serviceTypeListError, http.StatusBadRequest)
 		return
 	}
 	if err := validateRequiredFields(&inst); err != nil {
@@ -201,6 +219,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.applyMediaPathMappings(&inst, request.MediaPathMappings, nil); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, nil); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -267,6 +289,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
+	if err := h.applyMediaServerConfig(&inst, request.MediaServerConfig, existing); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		return
+	}
 
 	inst.URL = strings.TrimRight(inst.URL, "/")
 
@@ -282,6 +308,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	h.registry.InvalidateClient(instanceID)
 
+	// The shared-library selection is access, not just a default for new
+	// accounts: when it changes, the accounts Cantinarr created here follow
+	// it. Only on a real change, so an unrelated save costs no policy writes.
+	if IsMediaServerType(inst.ServiceType) &&
+		!sameLibraryIDs(existing.MediaServerConfig.LibraryIDs, inst.MediaServerConfig.LibraryIDs) {
+		h.notifySharedLibrariesObserver(instanceID, inst.MediaServerConfig.LibraryIDs)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
@@ -293,21 +327,38 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 // in the body), blank credentials fall back to the stored ones, mirroring
 // Update's write-only semantics.
 func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
+	inst, ok := h.resolveTestInstance(w, r)
+	if !ok {
+		return
+	}
+	if err := validateConnection(inst); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// resolveTestInstance decodes a candidate configuration for the test-style
+// endpoints (TestConnection, MediaServerLibraries), applying the stored
+// credential fallback and the shared validation. It writes the error response
+// itself and returns ok=false when the request cannot proceed.
+func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*Instance, bool) {
 	var inst Instance
 	if err := json.NewDecoder(r.Body).Decode(&inst); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	if inst.ID != "" {
 		existing, err := h.store.Get(inst.ID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
-			return
+			return nil, false
 		}
 		if existing == nil {
 			http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
-			return
+			return nil, false
 		}
 		inst.ServiceType = existing.ServiceType
 		if inst.APIKey == "" {
@@ -322,8 +373,8 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !allowedServiceTypes[inst.ServiceType] {
-		http.Error(w, `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli'"}`, http.StatusBadRequest)
-		return
+		http.Error(w, serviceTypeListError, http.StatusBadRequest)
+		return nil, false
 	}
 	// The test doesn't need a name; default it so the shared validation only
 	// enforces the URL and credentials.
@@ -332,17 +383,11 @@ func (h *Handler) TestConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateRequiredFields(&inst); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	inst.URL = strings.TrimRight(inst.URL, "/")
-
-	if err := validateConnection(&inst); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"connection test failed: %s"}`, err), http.StatusBadRequest)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+	return &inst, true
 }
 
 // Delete removes a service instance.
@@ -403,6 +448,11 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	for serviceType := range body {
 		if !allowedServiceTypes[serviceType] {
 			http.Error(w, fmt.Sprintf(`{"error":"unknown service_type: %s"}`, serviceType), http.StatusBadRequest)
+			return
+		}
+		// A pin must never masquerade as media-server eligibility.
+		if IsMediaServerType(serviceType) {
+			http.Error(w, fmt.Sprintf(`{"error":"%s instances have no default; use access grants"}`, serviceType), http.StatusBadRequest)
 			return
 		}
 	}
@@ -479,6 +529,12 @@ func (h *Handler) UpdateUserInstanceGrants(w http.ResponseWriter, r *http.Reques
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
+	for serviceType := range body {
+		if IsMediaServerType(serviceType) {
+			h.notifyGrantObserver([]int64{userID})
+			break
+		}
+	}
 	grants, err := h.store.ListUserGrants(userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
@@ -545,6 +601,10 @@ func (h *Handler) UpdateInstanceUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	if serviceType == "" {
 		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
+		return
+	}
+	if IsMediaServerType(serviceType) {
+		http.Error(w, fmt.Sprintf(`{"error":"%s instances have no default; use access grants"}`, serviceType), http.StatusBadRequest)
 		return
 	}
 	var body struct {
@@ -637,11 +697,22 @@ func (h *Handler) UpdateInstanceGrantUsers(w http.ResponseWriter, r *http.Reques
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	// Users losing the grant are known only before the replace-set write.
+	var affected []int64
+	if IsMediaServerType(serviceType) {
+		previous, err := h.store.ListTypeUserGrants(serviceType)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusInternalServerError)
+			return
+		}
+		affected = append(usersGrantedInstance(previous, instanceID), body.UserIDs...)
+	}
 	if err := h.store.SetInstanceGrantUsers(instanceID, body.UserIDs); err != nil {
 		// Covers unknown user ids too (the user_id foreign key rejects them).
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
+	h.notifyGrantObserver(affected)
 	h.writeInstanceGrants(w, serviceType)
 }
 
@@ -700,6 +771,9 @@ func validateConnection(inst *Instance) error {
 		_, err := tautulli.NewClient(inst.URL, inst.APIKey).GetServerInfo()
 		return err
 	default:
+		if IsMediaServerType(inst.ServiceType) {
+			return validateMediaServerConnection(inst)
+		}
 		return fmt.Errorf("unknown service type: %s", inst.ServiceType)
 	}
 }

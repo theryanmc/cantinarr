@@ -26,6 +26,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/grokoauth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
+	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
@@ -136,6 +137,15 @@ func main() {
 	ctx := context.Background()
 	logger := slog.Default()
 
+	// Media-server accounts (Jellyfin): a granted user creates their own
+	// account from the app; grant changes and user deletion switch accounts
+	// off and on through the two hooks below.
+	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
+	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
+	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
+	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
+	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
+
 	// Push notifications via the self-hosted gateway. A single push.Manager owns
 	// the lazily-built gateway client: the key is resolved (explicit env key > a
 	// key auto-enrolled on a previous start > self-enroll) on first use, and a
@@ -213,6 +223,12 @@ func main() {
 	// store lives in remediation.
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
+
+	// A grant write never fails because a media server is down, so a
+	// switch-off decided during an outage can be owed to the server. This
+	// retries the owed ones until they land; it reads only Cantinarr's tables
+	// when nothing is owed.
+	mediaAccessService.StartAccountMaintenance(ctx)
 
 	// Watches the one database connection from outside and logs when nothing
 	// can get through. Deliberately not wired to the issue store above: a
@@ -321,7 +337,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, updateChecker, serverSettings)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, plexHandler, plexService, mediaAccessHandler, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)
