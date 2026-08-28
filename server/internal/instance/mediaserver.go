@@ -209,6 +209,37 @@ func (h *Handler) notifyGrantObserver(userIDs []int64) {
 	h.grantObserver(unique)
 }
 
+// SharedLibrariesObserver is told that an instance's shared-library set
+// changed, with the new set. Wired by main to the media-access service, which
+// re-applies the set to the accounts Cantinarr created on that instance.
+// Runs synchronously after the save and must never fail it.
+type SharedLibrariesObserver func(instanceID string, libraryIDs []string)
+
+// SetSharedLibrariesObserver installs the observer; nil disables it.
+func (h *Handler) SetSharedLibrariesObserver(observer SharedLibrariesObserver) {
+	h.sharedLibrariesObserver = observer
+}
+
+func (h *Handler) notifySharedLibrariesObserver(instanceID string, libraryIDs []string) {
+	if h.sharedLibrariesObserver == nil {
+		return
+	}
+	h.sharedLibrariesObserver(instanceID, append([]string(nil), libraryIDs...))
+}
+
+// sameLibraryIDs compares two normalized (tidyLibraryIDs) selections.
+func sameLibraryIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // usersGrantedInstance lists the users currently holding a grant on one
 // instance, read from the type-wide grant map.
 func usersGrantedInstance(grants map[int64][]string, instanceID string) []int64 {

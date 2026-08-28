@@ -104,6 +104,9 @@ type Handler struct {
 	arrCallbackURL string
 	mediaRoots     []string
 	grantObserver  GrantObserver
+	// sharedLibrariesObserver is told when a media server's shared-library
+	// selection changes, so existing accounts follow the new set.
+	sharedLibrariesObserver SharedLibrariesObserver
 }
 
 // NewHandler creates a new instance handler.
@@ -304,6 +307,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+
+	// The shared-library selection is access, not just a default for new
+	// accounts: when it changes, the accounts Cantinarr created here follow
+	// it. Only on a real change, so an unrelated save costs no policy writes.
+	if IsMediaServerType(inst.ServiceType) &&
+		!sameLibraryIDs(existing.MediaServerConfig.LibraryIDs, inst.MediaServerConfig.LibraryIDs) {
+		h.notifySharedLibrariesObserver(instanceID, inst.MediaServerConfig.LibraryIDs)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(h.toResponse(&inst))

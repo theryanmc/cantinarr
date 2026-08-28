@@ -48,6 +48,10 @@ const (
 	verifyTimeout    = 3 * time.Second
 	createTimeout    = 30 * time.Second
 	reconcileTimeout = 10 * time.Second
+	// driftSweepInterval paces the retry of switch-offs that could not reach
+	// the media server. A pass costs nothing when nothing is drifted: the
+	// candidate query is answered entirely from Cantinarr's own tables.
+	driftSweepInterval = 5 * time.Minute
 )
 
 // Service owns the user_media_server_accounts table and every remote action.
@@ -59,6 +63,9 @@ type Service struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// sweepMu serializes drift sweeps so a slow pass cannot overlap the next
+	// tick and reconcile the same user twice at once.
+	sweepMu sync.Mutex
 }
 
 // NewService wires the service. providers is called per request: media
@@ -457,6 +464,93 @@ func (s *Service) OnGrantsChanged(userIDs []int64) {
 		ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout)
 		s.reconcileUser(ctx, userID)
 		cancel()
+	}
+}
+
+// SweepAccountDrift retries the account switch-offs and switch-ons that never
+// reached the media server. A grant write reconciles synchronously and, by
+// design, does not fail when the server is down — which used to mean a grant
+// revoked during an outage was applied to Cantinarr and never to the server,
+// leaving the account signed-in-able forever with only a WARN line to say so.
+// Each pass re-derives the intent from the grants (the account rows whose
+// disabled stamp disagrees) and reconciles those users, so the switch-off
+// lands as soon as the server is reachable again.
+func (s *Service) SweepAccountDrift(ctx context.Context) {
+	s.sweepMu.Lock()
+	defer s.sweepMu.Unlock()
+
+	userIDs, err := s.listDriftedAccountUsers()
+	if err != nil {
+		s.logger.Error("mediaaccess: drift sweep: list candidates", "err", err)
+		return
+	}
+	if len(userIDs) == 0 {
+		return
+	}
+	s.logger.Info("mediaaccess: retrying media server account changes that did not land", "users", len(userIDs))
+	for _, userID := range userIDs {
+		if ctx.Err() != nil {
+			return
+		}
+		passCtx, cancel := context.WithTimeout(ctx, reconcileTimeout)
+		s.reconcileUser(passCtx, userID)
+		cancel()
+	}
+}
+
+// StartAccountMaintenance sweeps once now — a switch-off can be owed from
+// before this process started — and then on a fixed cadence until ctx ends.
+func (s *Service) StartAccountMaintenance(ctx context.Context) {
+	go func() {
+		s.SweepAccountDrift(ctx)
+		ticker := time.NewTicker(driftSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.SweepAccountDrift(ctx)
+			}
+		}
+	}()
+}
+
+// OnSharedLibrariesChanged is the instance handler's shared-libraries
+// observer: it re-applies the instance's library selection to the accounts
+// Cantinarr created there, so unticking a library actually takes it away from
+// the people who already have accounts instead of only from future ones.
+// Accounts an admin linked are left alone — Cantinarr never edits a policy it
+// did not write — and so is every other server. Failures are logged and the
+// next save retries them; the admin has just read this server's library list
+// to reach this screen, so a server that answers the list and then refuses
+// the write is the narrow case.
+func (s *Service) OnSharedLibrariesChanged(instanceID string, libraryIDs []string) {
+	inst, err := s.mediaServerInstance(instanceID)
+	if err != nil {
+		s.logger.Error("mediaaccess: shared libraries changed: load instance", "err", err, "instance_id", instanceID)
+		return
+	}
+	rows, err := s.listAccountsCreatedOn(instanceID)
+	if err != nil {
+		s.logger.Error("mediaaccess: shared libraries changed: list accounts", "err", err, "instance_id", instanceID)
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	provider, err := s.providers(inst)
+	if err != nil {
+		s.logger.Error("mediaaccess: shared libraries changed: build client", "err", err, "instance_id", instanceID)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout*time.Duration(len(rows)))
+	defer cancel()
+	for _, row := range rows {
+		if err := provider.SetLibraries(ctx, row.RemoteUserID, libraryIDs); err != nil {
+			s.logger.Error("mediaaccess: shared libraries changed: re-scope account",
+				"err", err, "user_id", row.UserID, "instance_id", instanceID)
+		}
 	}
 }
 

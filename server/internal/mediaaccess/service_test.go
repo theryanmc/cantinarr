@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -29,8 +30,16 @@ type fakeProvider struct {
 	onCreate       func() // runs inside CreateUser, after the remote account exists
 	creates        int
 	deletes        int
+	gets           int
+	libraryWrites  []libraryWrite
 	lastLibraryIDs []string
 	lastPassword   string
+}
+
+// libraryWrite records one SetLibraries call.
+type libraryWrite struct {
+	remoteID   string
+	libraryIDs []string
 }
 
 func newFakeProvider() *fakeProvider {
@@ -72,6 +81,9 @@ func (f *fakeProvider) Users(context.Context) ([]mediaserver.RemoteUser, error) 
 }
 
 func (f *fakeProvider) GetUser(ctx context.Context, id string) (mediaserver.RemoteUser, error) {
+	f.mu.Lock()
+	f.gets++
+	f.mu.Unlock()
 	if f.hang {
 		<-ctx.Done()
 		return mediaserver.RemoteUser{}, fmt.Errorf("fake: %s", ctx.Err())
@@ -116,7 +128,15 @@ func (f *fakeProvider) CreateUser(ctx context.Context, name, password string, li
 	return mediaserver.RemoteUser{ID: id, Name: name}, nil
 }
 
-func (f *fakeProvider) SetLibraries(context.Context, string, []string) error { return nil }
+func (f *fakeProvider) SetLibraries(_ context.Context, id string, libraryIDs []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.users[id] == nil {
+		return mediaserver.ErrUserNotFound
+	}
+	f.libraryWrites = append(f.libraryWrites, libraryWrite{remoteID: id, libraryIDs: append([]string(nil), libraryIDs...)})
+	return nil
+}
 
 func (f *fakeProvider) SetDisabled(_ context.Context, id string, disabled bool) error {
 	f.mu.Lock()
@@ -630,5 +650,148 @@ func TestRemoteUsersRequiresMediaServer(t *testing.T) {
 	users, err := e.svc.RemoteUsers(context.Background(), jf)
 	if err != nil || len(users) != 1 {
 		t.Fatalf("RemoteUsers = %+v, %v", users, err)
+	}
+}
+
+// A grant write never fails because the media server is down, so the
+// switch-off it decided on can be owed to the server long after the admin saw
+// a success. The sweep is what pays that debt: until it existed, a grant
+// revoked during an outage left the account signed-in-able forever.
+func TestSweepRetriesASwitchOffLostToAnOutage(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{})
+	e.grant(alice, jf)
+	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.row(alice, jf).RemoteUserID
+
+	// The admin revokes the grant while the server is unreachable.
+	e.provider.getErr = errors.New("dial tcp: no route to host")
+	e.grant(alice)
+	e.svc.OnGrantsChanged([]int64{alice})
+	if e.provider.user(remote).IsDisabled {
+		t.Fatal("the fake disabled the account despite being unreachable")
+	}
+	if e.row(alice, jf).DisabledAt.Valid {
+		t.Fatal("a switch-off that never reached the server was stamped as done")
+	}
+
+	// The server comes back; the next sweep applies what was owed.
+	e.provider.getErr = nil
+	e.svc.SweepAccountDrift(context.Background())
+	if !e.provider.user(remote).IsDisabled {
+		t.Fatal("the sweep did not disable the account whose grant was revoked")
+	}
+	if !e.row(alice, jf).DisabledAt.Valid {
+		t.Fatal("the sweep disabled the account without stamping the row")
+	}
+
+	// Nothing is owed now, so a second pass must not touch the server again.
+	before := e.provider.gets
+	e.svc.SweepAccountDrift(context.Background())
+	if e.provider.gets != before {
+		t.Fatalf("a settled sweep made %d extra calls", e.provider.gets-before)
+	}
+}
+
+// The same debt in the other direction: access handed back during an outage.
+func TestSweepRetriesASwitchOnLostToAnOutage(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{})
+	e.grant(alice, jf)
+	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+	remote := e.row(alice, jf).RemoteUserID
+	e.grant(alice)
+	e.svc.OnGrantsChanged([]int64{alice})
+
+	e.provider.getErr = errors.New("dial tcp: no route to host")
+	e.grant(alice, jf)
+	e.svc.OnGrantsChanged([]int64{alice})
+	if !e.provider.user(remote).IsDisabled {
+		t.Fatal("the fake re-enabled the account despite being unreachable")
+	}
+
+	e.provider.getErr = nil
+	e.svc.SweepAccountDrift(context.Background())
+	if e.provider.user(remote).IsDisabled || e.row(alice, jf).DisabledAt.Valid {
+		t.Fatal("the sweep did not re-enable the account whose grant returned")
+	}
+}
+
+// The sweep asks Cantinarr's own tables which accounts it still owes the
+// server, so a fleet that agrees with its grants costs no media-server calls
+// at all — and an account an admin disabled on the server side is left alone
+// rather than fought over every five minutes.
+func TestSweepIgnoresAccountsThatAgreeWithTheirGrants(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{})
+	e.grant(alice, jf)
+	e.grant(bob, jf)
+	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.CreateAccount(context.Background(), bob, jf, "bob-pass-123"); err != nil {
+		t.Fatal(err)
+	}
+	// An admin switches bob off in the media server's own UI.
+	bobRemote := e.row(bob, jf).RemoteUserID
+	if err := e.provider.SetDisabled(context.Background(), bobRemote, true); err != nil {
+		t.Fatal(err)
+	}
+
+	before := e.provider.gets
+	e.svc.SweepAccountDrift(context.Background())
+	if e.provider.gets != before {
+		t.Fatalf("sweep made %d media-server calls with nothing owed", e.provider.gets-before)
+	}
+	if !e.provider.user(bobRemote).IsDisabled {
+		t.Fatal("the sweep undid an admin's own change on the server")
+	}
+}
+
+// Unticking a shared library has to take it away from the people who already
+// have accounts, not only from future ones — but only for accounts Cantinarr
+// created. A linked account's policy stays the admin's business.
+func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies", "lib-shows"}})
+	other := e.jellyfin("Cabin", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies"}})
+	e.providers[other] = newFakeProvider()
+	e.grant(alice, jf)
+	e.grant(bob, jf)
+	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+	aliceRemote := e.row(alice, jf).RemoteUserID
+	// bob's account was made on the server by hand and linked afterwards.
+	bobRemote := e.provider.addUser("bob-on-jellyfin", false, false)
+	if _, err := e.svc.LinkAccount(context.Background(), bob, jf, bobRemote); err != nil {
+		t.Fatal(err)
+	}
+	e.provider.libraryWrites = nil
+
+	e.svc.OnSharedLibrariesChanged(jf, []string{"lib-movies"})
+
+	if len(e.provider.libraryWrites) != 1 {
+		t.Fatalf("library writes = %+v, want exactly one", e.provider.libraryWrites)
+	}
+	write := e.provider.libraryWrites[0]
+	if write.remoteID != aliceRemote {
+		t.Fatalf("re-scoped %s, want the account Cantinarr created (%s)", write.remoteID, aliceRemote)
+	}
+	if !reflect.DeepEqual(write.libraryIDs, []string{"lib-movies"}) {
+		t.Fatalf("re-scoped to %v, want the new selection", write.libraryIDs)
+	}
+	if writes := e.providers[other].libraryWrites; len(writes) != 0 {
+		t.Fatalf("another instance was re-scoped: %+v", writes)
 	}
 }

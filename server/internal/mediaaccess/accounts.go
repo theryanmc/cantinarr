@@ -167,3 +167,58 @@ func (s *Service) deleteAccount(userID int64, instanceID string) (bool, error) {
 	n, _ := res.RowsAffected()
 	return n == 1, nil
 }
+
+// listDriftedAccountUsers returns the users whose recorded account state
+// disagrees with their grants: Cantinarr decided to switch an account off (or
+// back on) and the write to the media server never landed, so the row still
+// carries the old stamp. It compares rows against grants only, never against
+// the live server, so an account an admin disabled on the server side is left
+// alone rather than fought over on a timer.
+func (s *Service) listDriftedAccountUsers() ([]int64, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT a.user_id
+		 FROM user_media_server_accounts a
+		 LEFT JOIN user_instance_grants g
+		   ON g.user_id = a.user_id AND g.instance_id = a.instance_id
+		 WHERE (g.instance_id IS NULL AND a.disabled_at IS NULL)
+		    OR (g.instance_id IS NOT NULL AND a.disabled_at IS NOT NULL)
+		 ORDER BY a.user_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list drifted media server accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("scan drifted media server account: %w", err)
+		}
+		out = append(out, userID)
+	}
+	return out, rows.Err()
+}
+
+// listAccountsCreatedOn returns the accounts Cantinarr itself created on one
+// instance. Linked accounts are excluded on purpose: Cantinarr never edits a
+// policy it did not write.
+func (s *Service) listAccountsCreatedOn(instanceID string) ([]accountRow, error) {
+	rows, err := s.db.Query(
+		"SELECT "+accountColumns+
+			" FROM user_media_server_accounts WHERE instance_id = ? AND created_by_cantinarr = 1 ORDER BY user_id",
+		instanceID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list media server accounts: %w", err)
+	}
+	defer rows.Close()
+	var out []accountRow
+	for rows.Next() {
+		row, err := scanAccount(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan media server account: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

@@ -106,8 +106,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   // Media-server (Jellyfin) section state: the libraries the server reports
   // right now (null until read; the admin adds and removes libraries on the
   // server itself, so the list is only ever a live read, never stored), the
-  // ids chosen for new accounts, and whether the section was touched. On
-  // edit, an untouched section sends nothing so the stored copy survives.
+  // ids shared with this server's accounts, and whether the section was
+  // touched. On edit, an untouched section sends nothing so the stored copy
+  // survives.
   List<MediaServerLibrary>? _mediaServerLibraries;
   bool _mediaServerLibrariesLoading = false;
   String? _mediaServerLibrariesError;
@@ -1346,9 +1347,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ),
           const SizedBox(height: 10),
           const Text(
-            'Optional. Choose which libraries new accounts can see. With '
-            'nothing chosen, every library is shared, including ones you add '
-            'later.',
+            'Optional. Choose which libraries these accounts can see. '
+            'Changing it updates the accounts Cantinarr created here; '
+            'accounts you linked keep what they have. With nothing chosen, '
+            'every library is shared, including ones you add later.',
             style: TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 12,

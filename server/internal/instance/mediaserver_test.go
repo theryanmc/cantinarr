@@ -311,3 +311,81 @@ func TestPinsRejectMediaServerTypes(t *testing.T) {
 func itoa(id int64) string {
 	return strconv.FormatInt(id, 10)
 }
+
+// A changed shared-library selection must reach the observer, because the
+// selection is access for accounts that already exist — not just a default
+// for new ones. A save that does not move the selection must stay silent so
+// an unrelated edit costs no policy writes on the media server.
+func TestUpdateFiresSharedLibrariesObserverOnlyOnChange(t *testing.T) {
+	const key = "jellyfin-secret"
+	jf := newFakeJellyfin(t, key)
+	store := newTestStore(t)
+	h := NewHandler(store, NewRegistry(store))
+	type call struct {
+		instanceID string
+		libraryIDs []string
+	}
+	var calls []call
+	h.SetSharedLibrariesObserver(func(instanceID string, libraryIDs []string) {
+		calls = append(calls, call{instanceID, libraryIDs})
+	})
+	router := chi.NewRouter()
+	router.Post("/instances", h.Create)
+	router.Put("/instances/{instanceID}", h.Update)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := do("POST", "/instances", `{"service_type":"jellyfin","name":"Home","url":"`+jf.URL+`","api_key":"`+key+`",
+		"media_server_config":{"library_ids":["lib-movies","lib-shows"]}}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	var created instanceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("create fired the observer: %+v", calls)
+	}
+
+	// Same set, different order and a rename: no change, no notification.
+	rec = do("PUT", "/instances/"+created.ID, `{"name":"Renamed","url":"`+jf.URL+`","api_key":"",
+		"media_server_config":{"library_ids":["lib-shows","lib-movies"]}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reordering update = %d %s", rec.Code, rec.Body.String())
+	}
+	// An omitted config keeps the stored one: also not a change.
+	rec = do("PUT", "/instances/"+created.ID, `{"name":"Renamed","url":"`+jf.URL+`","api_key":""}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("omitted update = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 0 {
+		t.Fatalf("an unchanged selection fired the observer: %+v", calls)
+	}
+
+	// Unticking a library is a change.
+	rec = do("PUT", "/instances/"+created.ID, `{"name":"Renamed","url":"`+jf.URL+`","api_key":"",
+		"media_server_config":{"library_ids":["lib-movies"]}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("narrowing update = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 || calls[0].instanceID != created.ID ||
+		!reflect.DeepEqual(calls[0].libraryIDs, []string{"lib-movies"}) {
+		t.Fatalf("narrowing update calls = %+v", calls)
+	}
+
+	// So is clearing it back to "every library".
+	rec = do("PUT", "/instances/"+created.ID, `{"name":"Renamed","url":"`+jf.URL+`","api_key":"",
+		"media_server_config":{"library_ids":[]}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clearing update = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 2 || len(calls[1].libraryIDs) != 0 {
+		t.Fatalf("clearing update calls = %+v", calls)
+	}
+}

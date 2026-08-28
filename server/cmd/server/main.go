@@ -143,6 +143,7 @@ func main() {
 	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
+	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
 	authHandler.SetUserDeleteHook(mediaAccessService.BeforeUserDelete)
 
 	// Push notifications via the self-hosted gateway. A single push.Manager owns
@@ -222,6 +223,12 @@ func main() {
 	// store lives in remediation.
 	requestService.SetBookImportStallSink(remediationService)
 	requestService.StartBookParkMaintenance(ctx)
+
+	// A grant write never fails because a media server is down, so a
+	// switch-off decided during an outage can be owed to the server. This
+	// retries the owed ones until they land; it reads only Cantinarr's tables
+	// when nothing is owed.
+	mediaAccessService.StartAccountMaintenance(ctx)
 
 	// Watches the one database connection from outside and logs when nothing
 	// can get through. Deliberately not wired to the issue store above: a
