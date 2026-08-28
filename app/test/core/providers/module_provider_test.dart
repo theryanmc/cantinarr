@@ -30,6 +30,9 @@ void main() {
     expect(_labels(modules), isNot(contains('Chaptarr')));
     expect(_labels(modules), isNot(contains('Downloads')));
     expect(_labels(modules), isNot(contains('Tautulli')));
+    // A granted media server is a guide, never a module.
+    expect(_labels(modules), isNot(contains('Jellyfin')));
+    expect(_labels(modules), isNot(contains('Home Jellyfin')));
   });
 
   test('admin module navigation is one row per app type', () async {
@@ -65,6 +68,10 @@ void main() {
       modules.where((module) => module.type == ModuleType.downloads),
       hasLength(1),
     );
+    // Media servers have no module for admins either: the arrs stay the
+    // source of library truth, and the guide is the media server's surface.
+    expect(_labels(modules), isNot(contains('Jellyfin')));
+    expect(_labels(modules), isNot(contains('Home Jellyfin')));
   });
 }
 
@@ -110,6 +117,11 @@ AuthState _authState({required bool isAdmin}) {
           id: 'tautulli-main',
           serviceType: 'tautulli',
           name: 'Tautulli',
+        ),
+        ServiceInstance(
+          id: 'jf-a',
+          serviceType: 'jellyfin',
+          name: 'Home Jellyfin',
         ),
       ],
     ),

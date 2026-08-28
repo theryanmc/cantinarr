@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/storage/preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_sheet.dart';
@@ -76,11 +77,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final externalAddress = ref.watch(externalAddressProvider);
     final aiSettings = ref.watch(aiSettingsProvider).valueOrNull;
     final appVersion = ref.watch(appVersionProvider).valueOrNull;
+    final mediaServersVisible =
+        connection?.mediaServerInstances.isNotEmpty ?? false;
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
+      mediaServersVisible: mediaServersVisible,
     );
     final searching = _query.trim().isNotEmpty;
 
@@ -215,6 +219,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     size: 12,
                     color: AppTheme.available,
                   ),
+                  // Admins edit the instance. The one instance a requester
+                  // can open is a media server, whose tile leads to the
+                  // access guide (their account and where to sign in).
                   onTap: user?.isAdmin == true
                       ? () => context.push(
                             '/settings/instance/${inst.id}',
@@ -224,7 +231,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               'is_default': inst.isDefault,
                             },
                           )
-                      : null,
+                      : mediaServerServiceTypes.contains(inst.serviceType)
+                          ? () => context.push('/media-servers')
+                          : null,
                 )),
             if (user?.isAdmin != true)
               _SettingsTile(
@@ -433,6 +442,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onTap: () => context.push('/plex-guide'),
               ),
             ),
+            // Only while a media server is shared with this account: the
+            // guide's content comes from the server, so without one there
+            // is nothing to open (no hide switch, unlike the static Plex
+            // guide above).
+            if (mediaServersVisible)
+              _SettingsTile(
+                icon: Icons.live_tv_outlined,
+                title: 'Media server access',
+                subtitle: 'Create your account and see where to sign in',
+                onTap: () => context.push('/media-servers'),
+              ),
 
             const SizedBox(height: 16),
 
@@ -918,6 +938,8 @@ IconData _serviceIcon(String serviceType) {
       return Icons.download_outlined;
     case 'tautulli':
       return Icons.monitor_heart_outlined;
+    case 'jellyfin':
+      return Icons.live_tv_outlined;
     default:
       return Icons.dns_outlined;
   }
@@ -941,6 +963,8 @@ String _serviceLabel(String serviceType) {
       return 'Transmission';
     case 'tautulli':
       return 'Tautulli';
+    case 'jellyfin':
+      return 'Jellyfin';
     default:
       return serviceType;
   }

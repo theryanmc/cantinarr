@@ -34,6 +34,8 @@ generated API key or local username/password:
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
 - SABnzbd, NZBGet, qBittorrent, Transmission — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
+- Jellyfin — local API key minted under Dashboard > API Keys; the whole
+  integration is server-local, no jellyfin.org account
 - Arr Connect webhooks — Cantinarr mints and installs its own per-instance
   tokens
 - Push gateway enrollment — account-free against any reachable gateway

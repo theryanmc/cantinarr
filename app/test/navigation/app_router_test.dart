@@ -13,6 +13,7 @@ import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
@@ -166,6 +167,17 @@ void main() {
 
     expect(router.routeInformationProvider.value.uri.path, '/settings/chatgpt');
     expect(find.byType(CodexConnectionScreen), findsOneWidget);
+  });
+
+  testWidgets('a requester can open the media server access guide',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/media-servers');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/media-servers');
+    expect(find.byType(MediaAccessGuide), findsOneWidget);
   });
 
   testWidgets('books route requires the Chaptarr grant', (tester) async {
@@ -333,6 +345,16 @@ void main() {
     expect(
       find.ancestor(
         of: find.byType(SetPasswordScreen),
+        matching: find.byType(AppAmbientBackground),
+      ),
+      findsNWidgets(2),
+    );
+
+    router.push('/media-servers');
+    await tester.pumpAndSettle();
+    expect(
+      find.ancestor(
+        of: find.byType(MediaAccessGuide),
         matching: find.byType(AppAmbientBackground),
       ),
       findsNWidgets(2),

@@ -39,6 +39,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'download_client':
       case 'tautulli':
       case 'books':
+      case 'media_servers':
         return '/settings/instance/new';
       case 'media_downloads':
         return '/settings';
@@ -79,6 +80,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.notifications_outlined;
       case 'plex_invites':
         return Icons.play_circle_outline;
+      case 'media_servers':
+        return Icons.live_tv_outlined;
       case 'books':
         return Icons.menu_book;
       case 'ai':
@@ -104,6 +107,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return {'service_type': 'tautulli'};
       case 'books':
         return {'service_type': 'chaptarr'};
+      case 'media_servers':
+        return {'service_type': 'jellyfin'};
       case 'download_client':
         return {'service_type_prompt': 'Select a download client'};
       default:

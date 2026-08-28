@@ -16,9 +16,17 @@ import (
 // auth stays free of both push and plex dependencies.
 type AccessRequestHook func(userID int64, username string)
 
+// UserDeleteHook is asked, before a user is deleted, to prepare whatever must
+// happen once they are gone (switching off their media-server accounts). It
+// returns the commit step, which the handler runs only after the delete
+// succeeded — the delete can still refuse (self-delete, last admin), and a
+// refused delete must leave the user untouched everywhere.
+type UserDeleteHook func(userID int64) (committed func())
+
 type Handler struct {
 	service           *Service
 	accessRequestHook AccessRequestHook
+	userDeleteHook    UserDeleteHook
 	externalURL       func() string
 }
 
@@ -31,6 +39,12 @@ func NewHandler(service *Service) *Handler {
 // handler (it needs the notifier composite, which needs the WebSocket hub).
 func (h *Handler) SetAccessRequestHook(hook AccessRequestHook) {
 	h.accessRequestHook = hook
+}
+
+// SetUserDeleteHook wires the media-server side effect of deleting a user
+// (see UserDeleteHook). Same late-binding shape as SetAccessRequestHook.
+func (h *Handler) SetUserDeleteHook(hook UserDeleteHook) {
+	h.userDeleteHook = hook
 }
 
 // SetExternalURLSource wires the admin-configured external address after
@@ -344,6 +358,13 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Snapshot what the delete must switch off while the rows still exist;
+	// nothing is touched until the delete has actually gone through.
+	var committed func()
+	if h.userDeleteHook != nil {
+		committed = h.userDeleteHook(userID)
+	}
+
 	if err := h.service.DeleteUser(claims.UserID, userID); err != nil {
 		switch {
 		case errors.Is(err, ErrUserNotFound):
@@ -356,6 +377,9 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user"})
 		}
 		return
+	}
+	if committed != nil {
+		committed()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

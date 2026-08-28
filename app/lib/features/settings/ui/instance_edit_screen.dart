@@ -56,6 +56,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   late final TextEditingController _apiKeyController;
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
+  late final TextEditingController _publicAddressController;
   String _serviceType = 'radarr';
   bool _isDefault = false;
   bool _isSaving = false;
@@ -102,6 +103,18 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   Set<int> _savedAssignedUserIds = <int>{};
   String? _userSelectError;
 
+  // Media-server (Jellyfin) section state: the libraries the server reports
+  // right now (null until read; the admin adds and removes libraries on the
+  // server itself, so the list is only ever a live read, never stored), the
+  // ids shared with this server's accounts, and whether the section was
+  // touched. On edit, an untouched section sends nothing so the stored copy
+  // survives.
+  List<MediaServerLibrary>? _mediaServerLibraries;
+  bool _mediaServerLibrariesLoading = false;
+  String? _mediaServerLibrariesError;
+  Set<String> _selectedLibraryIds = <String>{};
+  bool _mediaServerConfigDirty = false;
+
   static const _serviceTypes = <(String, String)>[
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
@@ -111,6 +124,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
     ('tautulli', 'Tautulli'),
+    ('jellyfin', 'Jellyfin'),
   ];
 
   /// Types that authenticate with username/password instead of an API key.
@@ -133,6 +147,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
 
+  /// Media servers (Jellyfin): users sign in there to watch, so the form
+  /// carries a sign-in address and a shared-library choice instead of media
+  /// downloads or instant updates.
+  bool get _isMediaServer => mediaServerServiceTypes.contains(_serviceType);
+
+  /// Types with no global default: their instances reach users only through
+  /// access grants, so the default toggle is hidden and never sent.
+  bool get _grantOnly => _isChaptarr || _isMediaServer;
+
   bool get _supportsMediaDownloads =>
       _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
 
@@ -143,16 +166,20 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       (!widget.isEditing || _mediaMappingsDirty);
 
   /// Source types feed requests and dashboard statuses, so they support
-  /// per-user assignment; download clients and Tautulli are global-only.
+  /// per-user assignment, and a media server's grant is what lets a user
+  /// create an account there; download clients and Tautulli are global-only.
   bool get _supportsUserAssignment =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+      _serviceType == 'radarr' ||
+      _serviceType == 'sonarr' ||
+      _isChaptarr ||
+      _isMediaServer;
 
-  /// Chaptarr has no global default — its instances are only ever assigned
-  /// directly to users — so it always shows the user-select. The other source
-  /// types show it when this instance is NOT the global default, as a
-  /// per-user override of that default.
+  /// Chaptarr and media servers have no global default — their instances are
+  /// only ever assigned directly to users — so they always show the
+  /// user-select. The other source types show it when this instance is NOT
+  /// the global default, as a per-user override of that default.
   bool get _showUserSelect =>
-      _supportsUserAssignment && (_isChaptarr || !_isDefault);
+      _supportsUserAssignment && (_grantOnly || !_isDefault);
 
   /// The type selector is still on its disabled placeholder (see
   /// [InstanceEditScreen.serviceTypePrompt]): the form asked for a choice
@@ -176,6 +203,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _usernameController =
         TextEditingController(text: widget.initialUsername ?? '');
     _passwordController = TextEditingController();
+    _publicAddressController = TextEditingController()
+      ..addListener(_markMediaServerConfigDirty);
     // A prompted new-instance form opens on the selector's disabled
     // placeholder ('') instead of a guessed type; every type-dependent
     // affordance stays hidden until a real one is picked (see
@@ -296,8 +325,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           InstanceApiService(backendDio: ref.read(backendClientProvider));
       final instancesFuture = service.listInstances();
       final usersFuture = ref.read(authProvider.notifier).listUsers();
-      final instances = await instancesFuture;
-      final users = await usersFuture;
+      // Attach listeners to both futures now: awaiting them sequentially
+      // would leave the second future's error unhandled when the first
+      // await throws, leaking it as an unhandled zone error. Future.wait
+      // (eagerError: false) waits for both, throws the first error, and
+      // drops the rest — the single catch below stays correct.
+      final results =
+          await Future.wait<Object>([instancesFuture, usersFuture]);
+      final instances = results[0] as List<ServiceInstance>;
+      final users = results[1] as List<UserSummary>;
       users.sort((a, b) =>
           a.username.toLowerCase().compareTo(b.username.toLowerCase()));
       if (!mounted) return;
@@ -319,7 +355,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// exist (the admin opts in explicitly, confirming the takeover on save).
   /// Mutates state; call from within setState.
   void _applyAutoDefault() {
-    if (widget.isEditing || !_instancesLoaded || _isChaptarr) return;
+    if (widget.isEditing || !_instancesLoaded || _grantOnly) return;
     _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
   }
 
@@ -352,7 +388,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     try {
       final service =
           InstanceApiService(backendDio: ref.read(backendClientProvider));
-      final pins = await service.getInstanceUsers(anchorId);
+      // Media servers have no per-user default pins (access is the grant
+      // alone), so only the grant rows are read for them.
+      final pins = _isMediaServer
+          ? const <int, String>{}
+          : await service.getInstanceUsers(anchorId);
       final grants = await service.getInstanceGrantUsers(anchorId);
       if (!mounted) return;
       setState(() {
@@ -401,6 +441,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        if (_isMediaServer) {
+          final raw = details['media_server_config'];
+          final config = raw is Map
+              ? MediaServerConfig.fromJson(Map<String, dynamic>.from(raw))
+              : const MediaServerConfig();
+          if (_publicAddressController.text.isEmpty) {
+            _publicAddressController.text = config.publicAddress;
+          }
+          _selectedLibraryIds = config.libraryIds.toSet();
+          // Hydration is not an edit: only a touch after this sends the
+          // config back, so an untouched section keeps the server's copy.
+          _mediaServerConfigDirty = false;
+        }
         if (details.containsKey('media_path_mappings')) {
           final rawMappings = details['media_path_mappings'] as List? ?? [];
           _replaceMediaPathMappings(rawMappings
@@ -420,6 +473,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       // Deep links may open the editor without a service type; retry the
       // reported-folders read once the record names the real one.
       if (_arrRootFoldersFetchedFor != _serviceType) _loadArrRootFolders();
+      // The stored key is the credential: with the id in the body a blank
+      // key falls back to it, so the libraries list without retyping it.
+      if (_isMediaServer) _loadMediaServerLibraries();
     } catch (_) {
       // Connection fields remain manually editable, but mapping data must not
       // be guessed: omitting it on Save preserves the server's current rules.
@@ -444,6 +500,47 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   void _markMediaMappingsDirty() {
     _mediaMappingsDirty = true;
+  }
+
+  void _markMediaServerConfigDirty() {
+    _mediaServerConfigDirty = true;
+  }
+
+  /// Reads the libraries the media server reports right now. When creating,
+  /// the read needs the typed URL and key, so it runs after a passing
+  /// connection test; when editing it runs on load through the stored key.
+  /// A failed read is a notice with Retry, never a blocker: saving without
+  /// it keeps the stored library choice (edit) or shares everything (create).
+  Future<void> _loadMediaServerLibraries() async {
+    if (!_isMediaServer) return;
+    final serviceType = _serviceType;
+    setState(() {
+      _mediaServerLibrariesLoading = true;
+      _mediaServerLibrariesError = null;
+    });
+    try {
+      final probe = await InstanceApiService(
+        backendDio: ref.read(backendClientProvider),
+      ).listMediaServerLibraries(
+        id: widget.instanceId,
+        serviceType: serviceType,
+        url: _urlController.text.trim(),
+        apiKey: _apiKeyController.text.trim(),
+      );
+      if (!mounted || serviceType != _serviceType) return;
+      setState(() {
+        _mediaServerLibraries = probe.libraries;
+        _mediaServerLibrariesLoading = false;
+      });
+    } catch (e) {
+      if (!mounted || serviceType != _serviceType) return;
+      setState(() {
+        _mediaServerLibrariesLoading = false;
+        _mediaServerLibrariesError =
+            "Couldn't load the libraries this server reports: "
+            '${_errorMessage(e)}';
+      });
+    }
   }
 
   void _addMediaPathMapping() {
@@ -496,6 +593,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _apiKeyController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
+    _publicAddressController.dispose();
     for (final mapping in _mediaPathMappings) {
       mapping.dispose();
     }
@@ -535,6 +633,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _testSucceeded = true;
         _testResult = 'Connection successful!';
       });
+      // A passing test proves the typed URL and key, which is exactly what
+      // the library read needs when creating.
+      if (_isMediaServer) _loadMediaServerLibraries();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -559,6 +660,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             mapping.cantinarrPath.text.trim().isEmpty) {
           return 'Both paths are required for every media mapping';
         }
+      }
+    }
+    if (_isMediaServer) {
+      // The address is handed to users verbatim as a link, so it must be one.
+      final address = _publicAddressController.text.trim();
+      if (address.isNotEmpty &&
+          !address.startsWith('http://') &&
+          !address.startsWith('https://')) {
+        return 'Sign-in address must start with http:// or https://';
       }
     }
     // When editing, blank credentials keep the existing ones.
@@ -630,7 +740,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// back out, before anything is saved.
   Future<bool> _confirmDefaultTakeover() async {
     final sibling = _currentDefaultSibling;
-    if (!_isDefault || _isChaptarr || sibling == null) return true;
+    if (!_isDefault || _grantOnly || sibling == null) return true;
     final label = _serviceLabel;
     final newName = _nameController.text.trim();
     final confirmed = await showDialog<bool>(
@@ -690,9 +800,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 'Books access through this instance (alongside any other '
                 'Chaptarr instance they hold). Unselecting a user removes '
                 'their access.'
-            : 'Selected users can use this library for requests alongside '
-                'their default $_serviceLabel library, choosing per request. '
-                'Unselecting a user removes their access to this library.',
+            : _isMediaServer
+                ? 'Selected users can create their own account on this '
+                    'server from the menu. Unselecting a user turns their '
+                    'account off without deleting it; selecting them again '
+                    'turns it back on.'
+                : 'Selected users can use this library for requests alongside '
+                    'their default $_serviceLabel library, choosing per '
+                    'request. Unselecting a user removes their access to this '
+                    'library.',
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: 8),
@@ -770,9 +886,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     if (!await _confirmDefaultTakeover()) return;
     if (!mounted) return;
 
-    // Chaptarr never carries the global default flag (the server enforces
-    // this too); its instances are only assigned per user below.
-    final isDefault = !_isChaptarr && _isDefault;
+    // Chaptarr and media servers never carry the global default flag (the
+    // server enforces this too); their instances are only assigned per user
+    // below.
+    final isDefault = !_grantOnly && _isDefault;
     // Apply assignments only when the section is visible and the selection
     // actually changed — a hidden section must never silently rewrite pins.
     final applyAssignments = _showUserSelect &&
@@ -783,6 +900,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     final mediaPathMappings = _shouldSubmitMediaPathMappings
         ? _currentMediaPathMappings()
         : null;
+    // Media-server settings travel whole: always on create, and on edit only
+    // when the section was touched, so an unrelated edit never rewrites the
+    // stored address or library choice (null = keep).
+    final mediaServerConfig =
+        _isMediaServer && (!widget.isEditing || _mediaServerConfigDirty)
+            ? MediaServerConfig(
+                publicAddress: _publicAddressController.text.trim(),
+                libraryIds: _selectedLibraryIds.toList(growable: false),
+              )
+            : null;
 
     setState(() => _isSaving = true);
 
@@ -800,6 +927,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           password: _passwordController.text,
           isDefault: isDefault,
           mediaPathMappings: mediaPathMappings,
+          mediaServerConfig: mediaServerConfig,
         );
         if (applyAssignments) {
           try {
@@ -837,6 +965,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         password: _passwordController.text,
         isDefault: isDefault,
         mediaPathMappings: mediaPathMappings,
+        mediaServerConfig: mediaServerConfig,
       );
       // The instance exists now, so a failed assignment must not re-run
       // create: surface it and let the admin retry from the edit screen.
@@ -1024,9 +1153,265 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://transmission:9091';
       case 'tautulli':
         return 'http://tautulli:8181';
+      case 'jellyfin':
+        return 'http://jellyfin:8096';
       default:
         return 'http://radarr:7878';
     }
+  }
+
+  String get _nameHint {
+    if (_isDownloadClient) return 'e.g. SABnzbd, qBittorrent';
+    switch (_serviceType) {
+      case 'tautulli':
+        return 'e.g. Tautulli';
+      case 'jellyfin':
+        return 'e.g. Home Jellyfin';
+      default:
+        return 'e.g. Movies, 4K Movies';
+    }
+  }
+
+  String get _apiKeyHint {
+    if (widget.isEditing) return 'Leave blank to keep existing';
+    switch (_serviceType) {
+      case 'sabnzbd':
+        return 'Your SABnzbd API key';
+      case 'tautulli':
+        return 'Your Tautulli API key';
+      case 'chaptarr':
+        return 'Your Chaptarr API key';
+      case 'jellyfin':
+        return 'Your Jellyfin API key (Dashboard > API Keys)';
+      default:
+        return 'Your Radarr/Sonarr API key';
+    }
+  }
+
+  String get _defaultSubtitle {
+    if (_isDownloadClient) return 'Use this as the default download client';
+    if (_serviceType == 'tautulli') {
+      return 'Use this as the default Tautulli instance';
+    }
+    return 'Use this as the default for media requests';
+  }
+
+  /// The server's own library kind, humanized. Jellyfin reports 'movies',
+  /// 'tvshows', 'music', 'books', 'homevideos', 'musicvideos', 'boxsets',
+  /// 'photos', 'playlists'; a mixed movies-and-shows library reports none.
+  static String _collectionTypeLabel(String collectionType) {
+    switch (collectionType.toLowerCase()) {
+      case '':
+        return 'Mixed content';
+      case 'movies':
+        return 'Movies';
+      case 'tvshows':
+        return 'Shows';
+      case 'music':
+        return 'Music';
+      case 'musicvideos':
+        return 'Music videos';
+      case 'homevideos':
+        return 'Home videos and photos';
+      case 'books':
+        return 'Books';
+      case 'boxsets':
+        return 'Collections';
+      case 'photos':
+        return 'Photos';
+      case 'playlists':
+        return 'Playlists';
+      case 'livetv':
+        return 'Live TV';
+      default:
+        return collectionType[0].toUpperCase() + collectionType.substring(1);
+    }
+  }
+
+  /// Which libraries a new account on this media server may see. Drawn only
+  /// from a live read, so before one succeeds the section says what would
+  /// load it instead of guessing; a stored id the server no longer reports
+  /// stays checked as "Unknown library" until the admin drops it.
+  Widget _buildSharedLibrariesSection() {
+    final libraries = _mediaServerLibraries;
+    final selectedCount = _selectedLibraryIds.length;
+    final unknownIds = libraries == null
+        ? const <String>[]
+        : _selectedLibraryIds
+            .where((id) => !libraries.any((library) => library.id == id))
+            .toList(growable: false);
+    final statusBadge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: (selectedCount == 0 ? AppTheme.textSecondary : AppTheme.accent)
+            .withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        selectedCount == 0 ? 'All' : '$selectedCount selected',
+        style: TextStyle(
+          color: selectedCount == 0
+              ? AppTheme.textSecondary
+              : AppTheme.accent,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+    Widget titleRow({required bool includeStatus}) => Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.video_library_outlined,
+                color: AppTheme.accent,
+                size: 21,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text(
+                'Shared libraries',
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (includeStatus) statusBadge,
+          ],
+        );
+    // Each tile gets its own transparent Material: the section's decorated
+    // container sits between the tiles and the page Material, and Flutter
+    // asserts (in debug builds) that a ListTile's ink would be hidden there.
+    Widget libraryTile({
+      required String id,
+      required String title,
+      required String subtitle,
+    }) =>
+        Material(
+          type: MaterialType.transparency,
+          child: CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            activeColor: AppTheme.accent,
+            title: Text(title,
+                style: const TextStyle(color: AppTheme.textPrimary)),
+            subtitle: Text(subtitle,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 12)),
+            value: _selectedLibraryIds.contains(id),
+            onChanged: (checked) => setState(() {
+              if (checked == true) {
+                _selectedLibraryIds.add(id);
+              } else {
+                _selectedLibraryIds.remove(id);
+              }
+              _mediaServerConfigDirty = true;
+            }),
+          ),
+        );
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final largeText =
+                  MediaQuery.textScalerOf(context).scale(1) > 1.3;
+              if (constraints.maxWidth < 300 || largeText) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleRow(includeStatus: false),
+                    const SizedBox(height: 8),
+                    statusBadge,
+                  ],
+                );
+              }
+              return titleRow(includeStatus: true);
+            },
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Optional. Choose which libraries these accounts can see. '
+            'Changing it updates the accounts Cantinarr created here; '
+            'accounts you linked keep what they have. With nothing chosen, '
+            'every library is shared, including ones you add later.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (_mediaServerLibrariesLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppTheme.accent,
+                  ),
+                ),
+              ),
+            )
+          else if (_mediaServerLibrariesError != null)
+            _MediaMappingNotice(
+              icon: Icons.sync_problem_outlined,
+              message: _mediaServerLibrariesError!,
+              action: TextButton(
+                onPressed: _loadMediaServerLibraries,
+                child: const Text('Retry'),
+              ),
+            )
+          else if (libraries == null)
+            const _MediaMappingNotice(
+              icon: Icons.wifi_tethering,
+              message:
+                  'Test the connection to load the libraries this server '
+                  'reports.',
+            )
+          else ...[
+            if (libraries.isEmpty)
+              const _MediaMappingNotice(
+                icon: Icons.video_library_outlined,
+                message: 'This server reports no libraries yet. Every library '
+                    'you add later will be shared.',
+              ),
+            for (final library in libraries)
+              libraryTile(
+                id: library.id,
+                title: library.name,
+                subtitle: _collectionTypeLabel(library.collectionType),
+              ),
+            for (final id in unknownIds)
+              libraryTile(
+                id: id,
+                title: 'Unknown library',
+                subtitle:
+                    'No longer reported by the server. Uncheck to drop it.',
+              ),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _buildMediaDownloadsSection() {
@@ -1486,6 +1871,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   _pins = const {};
                   _assignedUserIds = <int>{};
                   _savedAssignedUserIds = <int>{};
+                  // So does whatever a media server reported.
+                  _mediaServerLibraries = null;
+                  _mediaServerLibrariesError = null;
+                  _mediaServerLibrariesLoading = false;
+                  _selectedLibraryIds = <String>{};
                   _applyAutoDefault();
                 });
                 _loadPins();
@@ -1498,11 +1888,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             controller: _nameController,
             decoration: InputDecoration(
               labelText: 'Name',
-              hintText: _isDownloadClient
-                  ? 'e.g. SABnzbd, qBittorrent'
-                  : (_serviceType == 'tautulli'
-                      ? 'e.g. Tautulli'
-                      : 'e.g. Movies, 4K Movies'),
+              hintText: _nameHint,
             ),
           ),
           const SizedBox(height: 16),
@@ -1559,37 +1945,44 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               controller: _apiKeyController,
               decoration: InputDecoration(
                 labelText: 'API Key',
-                hintText: widget.isEditing
-                    ? 'Leave blank to keep existing'
-                    : (_serviceType == 'sabnzbd'
-                        ? 'Your SABnzbd API key'
-                        : (_serviceType == 'tautulli'
-                            ? 'Your Tautulli API key'
-                            : (_serviceType == 'chaptarr'
-                                ? 'Your Chaptarr API key'
-                                : 'Your Radarr/Sonarr API key'))),
+                hintText: _apiKeyHint,
               ),
               obscureText: true,
             ),
+          // Media servers: where users are told to sign in (handed to them
+          // verbatim, so only an address the admin typed is ever shown) and
+          // which libraries a new account may see.
+          if (_isMediaServer) ...[
+            const SizedBox(height: 16),
+            TextField(
+              controller: _publicAddressController,
+              decoration: const InputDecoration(
+                labelText: 'Sign-in address (optional)',
+                hintText: 'https://jellyfin.example.com',
+                helperText: 'What your users open to sign in. Shown to them '
+                    'in the app. Leave blank and they will need to ask you.',
+                helperMaxLines: 3,
+              ),
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+            ),
+            const SizedBox(height: 24),
+            _buildSharedLibrariesSection(),
+          ],
           if (_supportsMediaDownloads) ...[
             const SizedBox(height: 24),
             _buildMediaDownloadsSection(),
           ],
           const SizedBox(height: 16),
 
-          // Chaptarr has no global default: its instances are assigned
-          // directly to users below instead. The prompted form hides the
-          // toggle entirely until a type is chosen.
-          if (!_serviceTypeUnchosen && !_isChaptarr)
+          // Chaptarr and media servers have no global default: their
+          // instances are assigned directly to users below instead. The
+          // prompted form hides the toggle entirely until a type is chosen.
+          if (!_serviceTypeUnchosen && !_grantOnly)
             SwitchListTile(
               title: const Text('Default Instance',
                   style: TextStyle(color: AppTheme.textPrimary)),
-              subtitle: Text(
-                  _isDownloadClient
-                      ? 'Use this as the default download client'
-                      : (_serviceType == 'tautulli'
-                          ? 'Use this as the default Tautulli instance'
-                          : 'Use this as the default for media requests'),
+              subtitle: Text(_defaultSubtitle,
                   style: const TextStyle(
                       color: AppTheme.textSecondary, fontSize: 13)),
               value: _isDefault,

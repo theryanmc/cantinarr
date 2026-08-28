@@ -46,10 +46,16 @@ type Instance struct {
 	// path mappings (mapped). Downloads have no implicit configuration.
 	MediaDownloadMode string              `json:"-"`
 	MediaPathMappings []mediapath.Mapping `json:"-"`
-	CreatedAt         time.Time           `json:"created_at"`
+	// MediaServerConfig is the Jellyfin/Emby-only configuration (sign-in
+	// address shown to granted users, shared library ids). Zero for every
+	// other type. MediaServerConfigInvalid marks a stored document that could
+	// not be decoded: account creation refuses until an admin re-saves.
+	MediaServerConfig        MediaServerConfig `json:"-"`
+	MediaServerConfigInvalid bool              `json:"-"`
+	CreatedAt                time.Time         `json:"created_at"`
 }
 
-const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, created_at"
+const instanceColumns = "id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at"
 
 // EffectiveMediaPathMappings returns the instance's current routing rules:
 // exactly the mappings an admin saved, or nothing.
@@ -121,7 +127,7 @@ type rowScanner interface {
 
 func scanInstance(scanner rowScanner) (Instance, error) {
 	var inst Instance
-	var mappingsJSON string
+	var mappingsJSON, mediaServerJSON string
 	if err := scanner.Scan(
 		&inst.ID,
 		&inst.ServiceType,
@@ -134,6 +140,7 @@ func scanInstance(scanner rowScanner) (Instance, error) {
 		&inst.SortOrder,
 		&inst.MediaDownloadMode,
 		&mappingsJSON,
+		&mediaServerJSON,
 		&inst.CreatedAt,
 	); err != nil {
 		return Instance{}, err
@@ -158,6 +165,15 @@ func scanInstance(scanner rowScanner) (Instance, error) {
 	if inst.MediaDownloadMode != MediaDownloadModeMapped {
 		inst.MediaPathMappings = nil
 	}
+	if err := json.Unmarshal([]byte(mediaServerJSON), &inst.MediaServerConfig); err != nil {
+		// Fail closed the cheap way: "share everything" would be the open
+		// reading of a document nobody can decode. The instance stays visible
+		// in the editor and a re-save repairs the row.
+		log.Printf("instance: invalid media server config for %s; account creation refused until re-saved", inst.ID)
+		inst.MediaServerConfig = MediaServerConfig{}
+		inst.MediaServerConfigInvalid = true
+	}
+	normalizeMediaServerConfig(&inst)
 	return inst, nil
 }
 
@@ -234,10 +250,10 @@ func (s *Store) Get(id string) (*Instance, error) {
 }
 
 // normalizeDefault applies the service-type default rules before persisting:
-// Chaptarr has no global default — its instances are granted per user — so the
-// flag is forced off for it.
+// Chaptarr and the media servers have no global default — their instances are
+// granted per user — so the flag is forced off for them.
 func normalizeDefault(inst *Instance) {
-	if inst.ServiceType == "chaptarr" {
+	if inst.ServiceType == "chaptarr" || IsMediaServerType(inst.ServiceType) {
 		inst.IsDefault = false
 	}
 }
@@ -274,6 +290,10 @@ func (s *Store) Create(inst *Instance) error {
 	if err != nil {
 		return err
 	}
+	mediaServerJSON, err := encodeMediaServerConfig(inst)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("create instance: %w", err)
@@ -283,8 +303,8 @@ func (s *Store) Create(inst *Instance) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, inst.CreatedAt,
+		"INSERT INTO service_instances (id, service_type, name, url, api_key, username, password, is_default, sort_order, media_download_mode, media_path_mappings, media_server_config, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		inst.ID, inst.ServiceType, inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.CreatedAt,
 	); err != nil {
 		return fmt.Errorf("create instance: %w", err)
 	}
@@ -321,13 +341,17 @@ func (s *Store) Update(inst *Instance) error {
 	if err != nil {
 		return err
 	}
+	mediaServerJSON, err := encodeMediaServerConfig(inst)
+	if err != nil {
+		return err
+	}
 	normalizeDefault(inst)
 	if err := clearSiblingDefaults(tx, inst); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(
-		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ? WHERE id = ?",
-		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, inst.ID,
+		"UPDATE service_instances SET name = ?, url = ?, api_key = ?, username = ?, password = ?, is_default = ?, sort_order = ?, media_download_mode = ?, media_path_mappings = ?, media_server_config = ? WHERE id = ?",
+		inst.Name, inst.URL, apiKey, inst.Username, password, inst.IsDefault, inst.SortOrder, inst.MediaDownloadMode, mappingsJSON, mediaServerJSON, inst.ID,
 	); err != nil {
 		return fmt.Errorf("update instance: %w", err)
 	}
@@ -548,6 +572,9 @@ func (s *Store) Delete(id string) error {
 	}
 	if _, err := tx.Exec("DELETE FROM user_instance_grants WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance user grants: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM user_media_server_accounts WHERE instance_id = ?", id); err != nil {
+		return fmt.Errorf("delete instance media server accounts: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance queue witness: %w", err)
@@ -801,10 +828,10 @@ func (s *Store) GrantedInstanceIDs(userID int64, serviceType string) ([]string, 
 // EffectiveDefaultInstanceID resolves the one instance a user's implicit
 // (no instance selected) operations target: their pin when set, else the
 // global Radarr/Sonarr default chain — grants never move the default, they
-// only widen what may be selected. Chaptarr has no global chain: an unpinned
-// user's implicit target is their first granted instance, and no rows means
-// no access (the first-instance fallback the other types get would leak a
-// library).
+// only widen what may be selected. Chaptarr and the media servers have no
+// global chain: an unpinned user's implicit target is their first granted
+// instance, and no rows means no access (the first-instance fallback the
+// other types get would leak a library).
 func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error) {
 	pinnedID, pinned, err := s.GetUserDefault(userID, serviceType)
 	if err != nil {
@@ -813,7 +840,7 @@ func (s *Store) EffectiveDefaultInstanceID(userID int64, serviceType string) (st
 	if pinned {
 		return pinnedID, nil
 	}
-	if serviceType == "chaptarr" {
+	if serviceType == "chaptarr" || IsMediaServerType(serviceType) {
 		granted, err := s.GrantedInstanceIDs(userID, serviceType)
 		if err != nil {
 			return "", err

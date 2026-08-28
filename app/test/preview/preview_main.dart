@@ -58,8 +58,9 @@ class _PreviewApp extends ConsumerWidget {
 /// sidebar instance selector), Sonarr, Chaptarr, three download clients
 /// (exercises the aggregate "All" downloads view; torrent clients listed
 /// before usenet here to prove the menu reorders them usenet-first),
-/// Tautulli, plus AI + Chaptarr services for the assistant module and Books
-/// tab.
+/// Tautulli, a Jellyfin media server (exercises the "Watch on Jellyfin" menu
+/// entry, the access guide, and the editor's media-server sections), plus
+/// AI + Chaptarr services for the assistant module and Books tab.
 const _adminState = AuthState(
   connection: BackendConnection(
     serverUrl: 'http://localhost:8585',
@@ -117,6 +118,11 @@ const _adminState = AuthState(
         serviceType: 'tautulli',
         name: 'Tautulli',
         isDefault: true,
+      ),
+      ServiceInstance(
+        id: 'jellyfin-main',
+        serviceType: 'jellyfin',
+        name: 'Home Jellyfin',
       ),
     ],
   ),
@@ -426,6 +432,29 @@ class _StubAdapter implements HttpClientAdapter {
       };
     } else if (path.contains('/requests')) {
       body = {'requests': []};
+    } else if (path.endsWith('/api/media-servers')) {
+      // The access guide: one granted server with no account yet, so the
+      // create-account card and sheet are reachable.
+      body = [
+        {
+          'instance_id': 'jellyfin-main',
+          'service_type': 'jellyfin',
+          'name': 'Home Jellyfin',
+          'public_address': 'https://jellyfin.example.com',
+          'account': null,
+        },
+      ];
+    } else if (path.endsWith('/api/instances/media-server/libraries')) {
+      // The Jellyfin editor's library probe after a passing test.
+      body = {
+        'server_name': 'Home Jellyfin',
+        'version': '10.10.7',
+        'libraries': [
+          {'id': 'lib-movies', 'name': 'Movies', 'collection_type': 'movies'},
+          {'id': 'lib-shows', 'name': 'Shows', 'collection_type': 'tvshows'},
+          {'id': 'lib-music', 'name': 'Music', 'collection_type': 'music'},
+        ],
+      };
     } else if (path.endsWith('/api/admin/credentials')) {
       // Discover hosts the TMDB/Trakt credential sections; built-in TMDB is
       // the fresh-server truth.
