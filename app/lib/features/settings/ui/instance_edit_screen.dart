@@ -1286,30 +1286,36 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             if (includeStatus) statusBadge,
           ],
         );
-    CheckboxListTile libraryTile({
+    // Each tile gets its own transparent Material: the section's decorated
+    // container sits between the tiles and the page Material, and Flutter
+    // asserts (in debug builds) that a ListTile's ink would be hidden there.
+    Widget libraryTile({
       required String id,
       required String title,
       required String subtitle,
     }) =>
-        CheckboxListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          controlAffinity: ListTileControlAffinity.leading,
-          activeColor: AppTheme.accent,
-          title: Text(title,
-              style: const TextStyle(color: AppTheme.textPrimary)),
-          subtitle: Text(subtitle,
-              style:
-                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-          value: _selectedLibraryIds.contains(id),
-          onChanged: (checked) => setState(() {
-            if (checked == true) {
-              _selectedLibraryIds.add(id);
-            } else {
-              _selectedLibraryIds.remove(id);
-            }
-            _mediaServerConfigDirty = true;
-          }),
+        Material(
+          type: MaterialType.transparency,
+          child: CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            activeColor: AppTheme.accent,
+            title: Text(title,
+                style: const TextStyle(color: AppTheme.textPrimary)),
+            subtitle: Text(subtitle,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 12)),
+            value: _selectedLibraryIds.contains(id),
+            onChanged: (checked) => setState(() {
+              if (checked == true) {
+                _selectedLibraryIds.add(id);
+              } else {
+                _selectedLibraryIds.remove(id);
+              }
+              _mediaServerConfigDirty = true;
+            }),
+          ),
         );
     return Container(
       padding: const EdgeInsets.all(16),
