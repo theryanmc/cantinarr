@@ -724,7 +724,9 @@ void main() {
       'You do not have access to search this book library.';
   const requestFailedMessage =
       'Books could not be searched. Check the connection and try again.';
-  const noBooksMessage = 'No books found. Try a different search.';
+  // Now that the same search covers authors (SEARCH-01), the empty state can
+  // no longer say only "no books" — it names everything that was searched.
+  const noBooksMessage = 'No books or authors found. Try a different search.';
 
   Finder overlayText(String message) => find.descendant(
         of: find.byType(BookSearchResultsView),
@@ -1483,9 +1485,283 @@ void main() {
       reason: 'AI-01: the assistant still opens with the prompt in flight',
     );
   });
-}
 
-void _usePhoneSize(WidgetTester tester) {
+  // ---------------------------------------------------------------------
+  // SEARCH-01, author half: the same query returns authors as well as books.
+  // ---------------------------------------------------------------------
+
+  /// Types [term] into the shell toolbar on the Books tab and settles.
+  Future<_BooksSearchAdapter> searchBooksTab(
+    WidgetTester tester, {
+    String term = 'le guin',
+    bool authorMatches = false,
+    bool authorLookupFails = false,
+    bool unkeyedAuthor = false,
+    bool duplicateAuthorRecords = false,
+    bool emptyLookup = false,
+    bool authorLibraryFails = false,
+    bool emptyAuthorLibrary = false,
+  }) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, :adapter) = await _pumpRouter(
+      tester,
+      authorMatches: authorMatches,
+      authorLookupFails: authorLookupFails,
+      unkeyedAuthor: unkeyedAuthor,
+      duplicateAuthorRecords: duplicateAuthorRecords,
+      emptyLookup: emptyLookup,
+      authorLibraryFails: authorLibraryFails,
+      emptyAuthorLibrary: emptyAuthorLibrary,
+    );
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byType(TextField),
+      ),
+      term,
+    );
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    return adapter;
+  }
+
+  testWidgets(
+      'SEARCH-01: an author search returns author rows, and they render above '
+      'the book rows', (tester) async {
+    final adapter = await searchBooksTab(tester, authorMatches: true);
+
+    expect(
+      adapter.authorLookupPaths,
+      isNotEmpty,
+      reason: 'SEARCH-01: the query must actually reach author/lookup',
+    );
+    expect(find.text('Tracked Author'), findsOneWidget);
+    expect(find.text('Metadata Only Author'), findsOneWidget);
+
+    // Authors sit above books on screen. Compare against a book row known to
+    // be in this fixture's lookup response.
+    final firstAuthorY = tester.getTopLeft(find.text('Tracked Author')).dy;
+    final firstBookY = tester.getTopLeft(find.text('Meditations')).dy;
+    expect(
+      firstAuthorY,
+      lessThan(firstBookY),
+      reason: 'authors render above books',
+    );
+
+    // Both groups are labelled once both kinds are present.
+    expect(find.text('AUTHORS'), findsOneWidget);
+    expect(find.text('BOOKS'), findsOneWidget);
+  });
+
+  testWidgets(
+      'an author the library holds sorts above a metadata-only match, and '
+      'only the library one claims a count', (tester) async {
+    await searchBooksTab(tester, authorMatches: true);
+
+    final trackedY = tester.getTopLeft(find.text('Tracked Author')).dy;
+    final metaY = tester.getTopLeft(find.text('Metadata Only Author')).dy;
+    expect(
+      trackedY,
+      lessThan(metaY),
+      reason: 'the record the requester can already act on comes first, '
+          'even though the fixture returned it second',
+    );
+
+    // The count comes from the LIBRARY record, in requester vocabulary, and
+    // says what the number counted.
+    expect(find.text('Author · 2 of 4 books available'), findsOneWidget);
+    // The metadata-only author is named as such and claims no count — never
+    // "0 books", which would assert an empty shelf where nothing was counted.
+    expect(find.text('Author · not in your library'), findsOneWidget);
+    expect(find.textContaining('0 books'), findsNothing);
+  });
+
+  testWidgets(
+      'an author resolves to their library record even though the lookup and '
+      'the library report different provider ids', (tester) async {
+    await searchBooksTab(tester, authorMatches: true);
+
+    // The fixture's lookup returns `hc:author-tracked` while the library holds
+    // `gr:tracked-library-id` for the same person — the real Chaptarr
+    // behaviour (ForeignAuthorId is derived by provider priority) that made
+    // author links 404. Resolution is by name, so the row must still open, and
+    // must open with the LIBRARY id: that is the only one the server's
+    // exact-string search over its own records can find.
+    final tile = find.widgetWithText(ListTile, 'Tracked Author');
+    expect(
+      find.descendant(of: tile, matching: find.byIcon(Icons.chevron_right)),
+      findsOneWidget,
+      reason: 'a library author is openable',
+    );
+
+    await tester.tap(find.text('Tracked Author'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byType(BookSearchResultsView),
+      findsNothing,
+      reason: 'the author page opened, leaving the search overlay',
+    );
+  });
+
+  testWidgets(
+      'tapping a metadata-only author searches for their books instead of '
+      'opening a page that could not show them', (tester) async {
+    final adapter = await searchBooksTab(tester, authorMatches: true);
+    final lookupsBefore = adapter.bookLookupPaths.length;
+
+    // No chevron: there is no page for an author the library does not hold.
+    final tile = find.widgetWithText(ListTile, 'Metadata Only Author');
+    expect(
+      find.descendant(of: tile, matching: find.byIcon(Icons.chevron_right)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.byIcon(Icons.search)),
+      findsOneWidget,
+      reason: 'the row advertises a search, not a navigation',
+    );
+    expect(find.text('Tap to see their books'), findsOneWidget);
+
+    await tester.tap(find.text('Metadata Only Author'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    // Still in the overlay, now showing a fresh search for that author.
+    expect(find.byType(BookSearchResultsView), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.descendant(
+            of: find.byType(CantinarrSearchBar),
+            matching: find.byType(TextField),
+          ))
+          .controller!
+          .text,
+      'Metadata Only Author',
+      reason: 'the toolbar shows the search that is now running, so the bar '
+          'never disagrees with the results under it',
+    );
+    expect(
+      adapter.bookLookupPaths.length,
+      greaterThan(lookupsBefore),
+      reason: 'a book lookup actually fired for the author name',
+    );
+  });
+
+  testWidgets(
+      'two library authors sharing a name leave the row unopened rather than '
+      'guessing which record was meant', (tester) async {
+    await searchBooksTab(tester, duplicateAuthorRecords: true);
+
+    expect(
+      find.text('Ursula K. Le Guin'),
+      findsNWidgets(2),
+      reason: 'AGENTS.md: never silently dedupe or merge distinct records',
+    );
+    // Both library records normalize to the same name key, so neither can be
+    // claimed as "the" record for these rows.
+    expect(
+      find.text('Two authors in your library share this name — open the one '
+          'you want from the Authors row'),
+      findsNWidgets(2),
+    );
+    // Scoped to the author rows: the book rows below legitimately keep their
+    // own chevrons, so a bare byIcon check would assert nothing useful.
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Ursula K. Le Guin').first,
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsNothing,
+      reason: 'an ambiguous author is not openable',
+    );
+  });
+
+  testWidgets(
+      'when the library author list cannot be read, book results still render '
+      'and no author claims to be in the library', (tester) async {
+    await searchBooksTab(tester, authorMatches: true, authorLibraryFails: true);
+
+    expect(
+      find.text('Meditations'),
+      findsOneWidget,
+      reason: 'author linking failing must not break the book search',
+    );
+    // Unreadable library => nothing may claim library membership. Every author
+    // falls back to metadata-only, which is the safe direction.
+    expect(
+      find.text('Author · not in your library'),
+      findsNWidgets(2),
+      reason: 'both lookup authors fall back to metadata-only',
+    );
+    expect(find.text('Author · in your library'), findsNothing);
+    expect(find.textContaining('books available'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Tracked Author'),
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsNothing,
+      reason: 'nothing may be opened as a library author when the library '
+          'author list could not be read',
+    );
+  });
+
+  testWidgets(
+      'an author lookup failure keeps the book results and says authors '
+      'could not be searched', (tester) async {
+    await searchBooksTab(tester, authorLookupFails: true);
+
+    expect(
+      find.text('Meditations'),
+      findsOneWidget,
+      reason: 'a failed author lookup must not throw away usable book rows',
+    );
+    expect(
+      find.text('Authors could not be searched.'),
+      findsOneWidget,
+      reason: 'absence vs blindness: an author section that could not be '
+          'read must not render as one that matched nobody',
+    );
+    // The book lookup succeeded, so none of the book failure messages apply.
+    expect(overlayText(requestFailedMessage), findsNothing);
+    expect(overlayText(forbiddenMessage), findsNothing);
+  });
+
+  testWidgets(
+      'a search that matched no books and no authors says both were searched',
+      (tester) async {
+    await searchBooksTab(tester, emptyLookup: true);
+
+    expect(overlayText(noBooksMessage), findsOneWidget);
+  });
+
+  testWidgets(
+      'a library author whose record carries no id stays visible but is not '
+      'openable', (tester) async {
+    await searchBooksTab(tester, unkeyedAuthor: true);
+
+    expect(
+      find.text('Unkeyed Author'),
+      findsOneWidget,
+      reason: 'a real match is never dropped for lacking an id',
+    );
+    expect(
+      find.text('Ask an admin to check this author\u2019s library record'),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Unkeyed Author'),
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsNothing,
+      reason: 'no chevron on a row that cannot be opened',
+    );
+  });
+}void _usePhoneSize(WidgetTester tester) {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
@@ -1608,6 +1884,12 @@ Future<
   bool serverError = false,
   bool emptyLookup = false,
   bool perInstanceBooks = false,
+  bool authorMatches = false,
+  bool authorLookupFails = false,
+  bool unkeyedAuthor = false,
+  bool duplicateAuthorRecords = false,
+  bool authorLibraryFails = false,
+  bool emptyAuthorLibrary = false,
   Stream<WsEvent>? events,
   AuthState? authState,
   AiChatNotifier? aiChatNotifier,
@@ -1625,6 +1907,12 @@ Future<
     serverError: serverError,
     emptyLookup: emptyLookup,
     perInstanceBooks: perInstanceBooks,
+    authorMatches: authorMatches,
+    authorLookupFails: authorLookupFails,
+    unkeyedAuthor: unkeyedAuthor,
+    duplicateAuthorRecords: duplicateAuthorRecords,
+    authorLibraryFails: authorLibraryFails,
+    emptyAuthorLibrary: emptyAuthorLibrary,
   );
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
@@ -1706,6 +1994,12 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.serverError = false,
     this.emptyLookup = false,
     this.perInstanceBooks = false,
+    this.authorMatches = false,
+    this.authorLookupFails = false,
+    this.unkeyedAuthor = false,
+    this.duplicateAuthorRecords = false,
+    this.authorLibraryFails = false,
+    this.emptyAuthorLibrary = false,
   });
 
   /// BOOK-07 fixture: book/lookup answers with a title that depends on which
@@ -1717,6 +2011,36 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   /// Every `book/lookup` request path served, in order — lets a test assert
   /// exactly how many lookups fired and which instance each one targeted.
   final bookLookupPaths = <String>[];
+
+  /// SEARCH-01: `author/lookup` answers with two authors — one the library
+  /// also holds and one metadata-only match.
+  final bool authorMatches;
+
+  /// `author/lookup` answers 500 while `book/lookup` still succeeds — the
+  /// half-failure that must keep the book rows and say authors could not be
+  /// searched, rather than rendering an empty author section.
+  final bool authorLookupFails;
+
+  /// A library author record carrying no `foreignAuthorId`: visible, but with
+  /// nothing to open it by.
+  final bool unkeyedAuthor;
+
+  /// Two distinct library author records whose names normalize to the same key
+  /// — neither may be merged away, and neither may be claimed as "the" record.
+  final bool duplicateAuthorRecords;
+
+  /// Every `author/lookup` request path served, in order.
+  final authorLookupPaths = <String>[];
+
+  /// `GET /author` (the library's own author list) answers 500, so author
+  /// linking cannot be resolved. The book search must still work.
+  final bool authorLibraryFails;
+
+  /// The library holds no authors at all — every lookup match is metadata-only.
+  final bool emptyAuthorLibrary;
+
+  /// Every library-author-list request path served, in order.
+  final authorLibraryPaths = <String>[];
 
   final bool mismatchedIdentity;
   final bool unresolvedIdentity;
@@ -1867,6 +2191,93 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                       },
                     }
                   : {'status': 'unavailable'};
+    } else if (options.path.endsWith('/api/v1/author')) {
+      // The library's OWN author records. Their foreignAuthorId deliberately
+      // uses a different provider prefix than author/lookup returns for the
+      // same person (`gr:` here vs `hc:` there) — that is the real Chaptarr
+      // behaviour that broke author links: `AuthorResource.ForeignAuthorId` is
+      // derived by provider priority, so a library record and a fresh metadata
+      // search can report different strings for one author. Resolution has to
+      // work anyway, by name.
+      authorLibraryPaths.add(options.path);
+      if (authorLibraryFails) {
+        return ResponseBody.fromString('server error', 500);
+      }
+      body = [
+        if (!emptyAuthorLibrary && !unkeyedAuthor && !duplicateAuthorRecords)
+          {
+            'id': 7,
+            'authorName': 'Tracked Author',
+            'foreignAuthorId': 'gr:tracked-library-id',
+            'statistics': {'bookCount': 4, 'bookFileCount': 2},
+          },
+        if (duplicateAuthorRecords) ...[
+          {
+            'id': 41,
+            'authorName': 'Ursula K. Le Guin',
+            'foreignAuthorId': 'gr:lg-a',
+            'statistics': {'bookCount': 2, 'bookFileCount': 2},
+          },
+          {
+            'id': 42,
+            'authorName': 'Ursula K Le Guin',
+            'foreignAuthorId': 'gr:lg-b',
+            'statistics': {'bookCount': 1, 'bookFileCount': 0},
+          },
+        ],
+        if (unkeyedAuthor)
+          {
+            'id': 51,
+            'authorName': 'Unkeyed Author',
+            'foreignAuthorId': '',
+          },
+      ];
+    } else if (options.path.endsWith('/api/v1/author/lookup')) {
+      authorLookupPaths.add(options.path);
+      if (authorLookupFails) {
+        return ResponseBody.fromString('server error', 500);
+      }
+      if (unkeyedAuthor) {
+        body = [
+          {
+            'id': 0,
+            'authorName': 'Unkeyed Author',
+            'foreignAuthorId': 'hc:unkeyed-meta',
+          },
+        ];
+      } else if (duplicateAuthorRecords) {
+        body = [
+          {
+            'id': 0,
+            'authorName': 'Ursula K. Le Guin',
+            'foreignAuthorId': 'hc:lg-meta-a',
+          },
+          {
+            'id': 0,
+            'authorName': 'Ursula K. Le Guin',
+            'foreignAuthorId': 'hc:lg-meta-b',
+          },
+        ];
+      } else if (authorMatches) {
+        // Metadata-only FIRST, so a test asserting the library author renders
+        // above it proves the sort rather than echoing Chaptarr's order back.
+        // Note both carry id 0 and `hc:` ids: a lookup author is a metadata
+        // object, never the library's record.
+        body = [
+          {
+            'id': 0,
+            'authorName': 'Metadata Only Author',
+            'foreignAuthorId': 'hc:author-meta',
+          },
+          {
+            'id': 0,
+            'authorName': 'Tracked Author',
+            'foreignAuthorId': 'hc:author-tracked',
+          },
+        ];
+      } else {
+        body = <Object>[];
+      }
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
       bookLookupPaths.add(options.path);
       // FAIL-02/FAIL-03 widget cases: these short-circuit with their own

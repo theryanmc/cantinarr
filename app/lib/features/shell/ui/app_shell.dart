@@ -318,6 +318,26 @@ class _AppShellState extends ConsumerState<AppShell>
       'book library. Treat it as a question about books, authors and '
       'reading.\n\n';
 
+  /// Shows the books of an author the library does not hold, by running the
+  /// search the user could have typed themselves.
+  ///
+  /// A metadata-only author has no detail screen to open — Cantinarr's author
+  /// page renders *library* titles with ownership pills — so their books, in
+  /// this same overlay, are the useful destination: each row is already a
+  /// requestable book. Setting the field programmatically does not fire
+  /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
+  void _searchAuthorBooks(String authorName) {
+    final term = authorName.trim();
+    if (term.isEmpty) return;
+    _searchController.text = term;
+    _searchController.selection =
+        TextSelection.collapsed(offset: term.length);
+    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
+    // rather than firing off the tap that just happened.
+    _resetAskAiIdle();
+    ref.read(shellBookSearchProvider.notifier).updateSearch(term);
+  }
+
   /// Submit top-bar input through the full-screen assistant route.
   void _submitSearchBarToAi() {
     final text = _searchController.text.trim();
@@ -864,11 +884,15 @@ class _AppShellState extends ConsumerState<AppShell>
                             child: booksTab
                                 ? BookSearchResultsView(
                                     results: bookSearchState.results,
+                                    authors: bookSearchState.authors,
                                     query: bookSearchState.searchQuery,
                                     isLoading: bookSearchState.isLoadingSearch,
                                     searched: bookSearchState.searched,
                                     error: bookSearchState.error,
+                                    authorsUnavailable:
+                                        bookSearchState.authorsUnavailable,
                                     onResultTap: _dismissKeyboard,
+                                    onAuthorDrillDown: _searchAuthorBooks,
                                   )
                                 : SearchResultsView(
                                     results: searchState.searchResults,

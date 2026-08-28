@@ -29,6 +29,9 @@ enum BookSearchError {
 class ShellBookSearchState {
   final String searchQuery;
   final List<ChaptarrBook> results;
+
+  /// Author matches for [searchQuery], rendered above [results].
+  final List<ChaptarrAuthor> authors;
   final bool isLoadingSearch;
 
   /// True once a lookup has completed successfully for [searchQuery] — the
@@ -36,12 +39,23 @@ class ShellBookSearchState {
   final bool searched;
   final BookSearchError? error;
 
+  /// True when the book lookup succeeded but the author lookup did not.
+  ///
+  /// The two are separate Chaptarr calls, so an author failure must not throw
+  /// away book results the user can still use. But it must not render as an
+  /// empty author list either: per AGENTS.md an empty answer has to say whether
+  /// it is absence or blindness, and "no authors matched" and "authors could
+  /// not be searched" are different sentences.
+  final bool authorsUnavailable;
+
   const ShellBookSearchState({
     this.searchQuery = '',
     this.results = const [],
+    this.authors = const [],
     this.isLoadingSearch = false,
     this.searched = false,
     this.error,
+    this.authorsUnavailable = false,
   });
 
   /// [clearError] is explicit (not a plain nullable default) because a
@@ -50,17 +64,21 @@ class ShellBookSearchState {
   ShellBookSearchState copyWith({
     String? searchQuery,
     List<ChaptarrBook>? results,
+    List<ChaptarrAuthor>? authors,
     bool? isLoadingSearch,
     bool? searched,
     BookSearchError? error,
     bool clearError = false,
+    bool? authorsUnavailable,
   }) =>
       ShellBookSearchState(
         searchQuery: searchQuery ?? this.searchQuery,
         results: results ?? this.results,
+        authors: authors ?? this.authors,
         isLoadingSearch: isLoadingSearch ?? this.isLoadingSearch,
         searched: searched ?? this.searched,
         error: clearError ? null : (error ?? this.error),
+        authorsUnavailable: authorsUnavailable ?? this.authorsUnavailable,
       );
 
   bool get isSearching => searchQuery.trim().isNotEmpty;
@@ -90,9 +108,11 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
     state = state.copyWith(
       searchQuery: query,
       results: const [],
+      authors: const [],
       isLoadingSearch: true,
       searched: false,
       clearError: true,
+      authorsUnavailable: false,
     );
     _searchDebounce = Timer(
       AppConfig.searchDebounce,
@@ -117,8 +137,11 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
     if (instance == null) {
       if (superseded()) return;
       state = state.copyWith(
+        results: const [],
+        authors: const [],
         isLoadingSearch: false,
         searched: false,
+        authorsUnavailable: false,
         error: BookSearchError.noInstance,
       );
       return;
@@ -129,14 +152,40 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
       instanceId: instance.id,
     );
 
+    // Two independent Chaptarr calls, issued together rather than in sequence
+    // so adding authors costs no extra round-trip of latency. Their failures
+    // are NOT shared: the book lookup alone owns the FAIL-01/02/03 taxonomy
+    // below, and a failed author lookup only sets `authorsUnavailable` so the
+    // view can say "couldn't search authors" instead of showing an empty
+    // author list that reads as "this author doesn't exist".
+    final term = query.trim();
+    final authorsFuture = service.lookupAuthor(term);
+    // Claim the error now — an unawaited future that completes with an error
+    // while the book call is still in flight would otherwise reach the zone
+    // handler as an unhandled async error.
+    var authorsFailed = false;
+    final authorsGuarded = authorsFuture.catchError((Object error) {
+      if (kDebugMode) {
+        debugPrint(
+          'ShellBookSearchNotifier: author lookup failed with '
+          '${error.runtimeType}',
+        );
+      }
+      authorsFailed = true;
+      return <ChaptarrAuthor>[];
+    });
+
     try {
-      final books = await service.lookupBook(query.trim());
+      final books = await service.lookupBook(term);
+      final authors = await authorsGuarded;
       if (superseded()) return;
       state = state.copyWith(
         results: books,
+        authors: authors,
         isLoadingSearch: false,
         searched: true,
         clearError: true,
+        authorsUnavailable: authorsFailed,
       );
     } on DioException catch (e) {
       if (kDebugMode) {
@@ -148,8 +197,14 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
       if (superseded()) return;
       final code = e.response?.statusCode;
       state = state.copyWith(
+        // A failed search owns the whole overlay, so the previous query's
+        // authors must go with its books — leaving them rendered behind an
+        // error message would attribute them to a search that never ran.
+        results: const [],
+        authors: const [],
         isLoadingSearch: false,
         searched: false,
+        authorsUnavailable: false,
         error: code == 401 || code == 403
             ? BookSearchError.forbidden
             : BookSearchError.requestFailed,
@@ -163,8 +218,11 @@ class ShellBookSearchNotifier extends StateNotifier<ShellBookSearchState> {
       }
       if (superseded()) return;
       state = state.copyWith(
+        results: const [],
+        authors: const [],
         isLoadingSearch: false,
         searched: false,
+        authorsUnavailable: false,
         error: BookSearchError.requestFailed,
       );
     }
