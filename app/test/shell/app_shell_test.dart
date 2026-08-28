@@ -297,6 +297,12 @@ void main() {
     expect(find.byType(AiChatScreen), findsOneWidget);
     expect(find.byTooltip('Exit assistant'), findsOneWidget);
     expect(chatNotifier.sentMessage, 'What should I watch tonight?');
+    expect(
+      chatNotifier.sentWireContent,
+      isNull,
+      reason: 'Movies carries no wire override — its payload stays '
+          'byte-identical to before the Books-tab hand-off existed',
+    );
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
@@ -1395,12 +1401,14 @@ class _FakeAuthNotifier extends AuthNotifier {
 
 class _FakeAiChatNotifier extends AiChatNotifier {
   String? sentMessage;
+  String? sentWireContent;
 
   _FakeAiChatNotifier() : super(chatService: AiChatService(backendDio: Dio()));
 
   @override
-  Future<void> sendMessage(String text) async {
+  Future<void> sendMessage(String text, {String? wireContent}) async {
     sentMessage = text;
+    sentWireContent = wireContent;
   }
 }
 
