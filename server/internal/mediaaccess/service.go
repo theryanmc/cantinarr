@@ -52,6 +52,11 @@ const (
 	// the media server. A pass costs nothing when nothing is drifted: the
 	// candidate query is answered entirely from Cantinarr's own tables.
 	driftSweepInterval = 5 * time.Minute
+	// libraryPropagationBudget caps the whole re-scope pass. It runs inside
+	// the admin's save, so a media server that accepts the library list and
+	// then answers policy writes slowly must not hold the request open for
+	// one timeout per account.
+	libraryPropagationBudget = 30 * time.Second
 )
 
 // Service owns the user_media_server_accounts table and every remote action.
@@ -544,9 +549,14 @@ func (s *Service) OnSharedLibrariesChanged(instanceID string, libraryIDs []strin
 		s.logger.Error("mediaaccess: shared libraries changed: build client", "err", err, "instance_id", instanceID)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reconcileTimeout*time.Duration(len(rows)))
+	ctx, cancel := context.WithTimeout(context.Background(), libraryPropagationBudget)
 	defer cancel()
-	for _, row := range rows {
+	for i, row := range rows {
+		if ctx.Err() != nil {
+			s.logger.Error("mediaaccess: shared libraries changed: out of time",
+				"instance_id", instanceID, "not_rescoped", len(rows)-i, "of", len(rows))
+			return
+		}
 		if err := provider.SetLibraries(ctx, row.RemoteUserID, libraryIDs); err != nil {
 			s.logger.Error("mediaaccess: shared libraries changed: re-scope account",
 				"err", err, "user_id", row.UserID, "instance_id", instanceID)
