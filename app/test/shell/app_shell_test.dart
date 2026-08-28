@@ -8,6 +8,7 @@ import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/instance_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
+import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/features/ai_assistant/data/ai_chat_service.dart';
 import 'package:cantinarr/features/ai_assistant/data/codex_oauth_service.dart';
 import 'package:cantinarr/features/ai_assistant/logic/ai_chat_provider.dart';
@@ -997,6 +998,191 @@ void main() {
       adapter.searchRequests,
       greaterThan(0),
       reason: 'the Movies tab keystroke reaches the TMDB notifier as usual',
+    );
+  });
+
+  testWidgets(
+      'SEARCH-03: the prefix badge carries each dashboard tab\'s own icon, '
+      'and the generic glyph on a non-dashboard module and an unmatched '
+      'Books route', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Movies tab')),
+            ),
+            GoRoute(
+              path: '/dashboard/tv',
+              builder: (_, __) => const Scaffold(body: Text('TV tab')),
+            ),
+            GoRoute(
+              path: '/dashboard/releases',
+              builder: (_, __) => const Scaffold(body: Text('Releases tab')),
+            ),
+            GoRoute(
+              path: '/dashboard/books',
+              builder: (_, __) => const Scaffold(body: Text('Books tab')),
+            ),
+            GoRoute(
+              path: '/radarr',
+              builder: (_, __) => const Scaffold(body: Text('Radarr module')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_searchPinState),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Finder scopedIcon(IconData icon) => find.descendant(
+          of: find.byType(CantinarrSearchBar),
+          matching: find.byIcon(icon),
+        );
+    Finder toolbar() => find.descendant(
+          of: find.byType(CantinarrSearchBar),
+          matching: find.byType(TextField),
+        );
+
+    expect(scopedIcon(Icons.movie), findsOneWidget,
+        reason: '/dashboard/movies shows its own tab icon');
+    expect(
+      tester.widget<TextField>(toolbar()).decoration!.hintText,
+      'Search by title or person...',
+      reason: 'D-04: the Movies placeholder is unchanged with no AI '
+          'capability',
+    );
+
+    router.go('/dashboard/tv');
+    await tester.pumpAndSettle();
+    expect(scopedIcon(Icons.tv), findsOneWidget,
+        reason: '/dashboard/tv shows its own tab icon');
+
+    router.go('/dashboard/releases');
+    await tester.pumpAndSettle();
+    expect(scopedIcon(Icons.event), findsOneWidget,
+        reason: '/dashboard/releases shows its own tab icon');
+
+    router.go('/radarr');
+    await tester.pumpAndSettle();
+    expect(scopedIcon(Icons.search_rounded), findsOneWidget,
+        reason: 'SEARCH-06 fence: a non-dashboard module keeps the generic '
+            'search glyph');
+    expect(scopedIcon(Icons.movie), findsNothing,
+        reason: 'a non-dashboard module never borrows a dashboard tab icon');
+
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+    expect(scopedIcon(Icons.search_rounded), findsOneWidget,
+        reason: 'A-03: with no Chaptarr grant, modulePagesFor emits no '
+            'Books page, so the shell falls back to the generic glyph '
+            'rather than borrowing the Movies icon');
+    expect(scopedIcon(Icons.menu_book), findsNothing,
+        reason: 'A-03: the unmatched route must not borrow another tab\'s '
+            'icon');
+  });
+
+  testWidgets(
+      'SEARCH-03: an AI-capable server shows no sparkle outside AI mode, '
+      'and the sparkle once the bar actually enters AI mode', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final router = GoRouter(
+      initialLocation: '/dashboard/movies',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/movies',
+              builder: (_, __) => const Scaffold(body: Text('Movies tab')),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(
+            () => _FakeAuthNotifier(_authenticatedAiState),
+          ),
+          backendClientProvider.overrideWithValue(_fakeDio()),
+          realtimeEventsProvider
+              .overrideWithValue(const Stream<WsEvent>.empty()),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Finder scopedIcon(IconData icon) => find.descendant(
+          of: find.byType(CantinarrSearchBar),
+          matching: find.byIcon(icon),
+        );
+    Finder toolbar() => find.descendant(
+          of: find.byType(CantinarrSearchBar),
+          matching: find.byType(TextField),
+        );
+
+    expect(scopedIcon(Icons.auto_awesome_rounded), findsNothing,
+        reason: 'SEARCH-03 criterion 3: a plain, untouched field on an '
+            'AI-capable server does not advertise AI in the prefix badge');
+    expect(scopedIcon(Icons.movie), findsOneWidget,
+        reason: 'outside AI mode the badge still names the active tab');
+    expect(
+      tester.widget<TextField>(toolbar()).decoration!.hintText,
+      'Search or ask AI...',
+      reason: 'D-04: the Movies placeholder is unchanged for an AI-capable '
+          'server outside AI mode',
+    );
+
+    await tester.enterText(
+      find.byType(TextField).first,
+      'What should I watch tonight?',
+    );
+    await tester.pump();
+    // The shimmer border repeats while aiReady — bounded pump only, never
+    // pumpAndSettle.
+
+    expect(scopedIcon(Icons.auto_awesome_rounded), findsOneWidget,
+        reason: 'once the bar is actually in AI mode, the sparkle replaces '
+            'the tab icon');
+    expect(scopedIcon(Icons.movie), findsNothing);
+    expect(
+      tester.widget<TextField>(toolbar()).decoration!.hintText,
+      'Ask the AI anything...',
     );
   });
 }

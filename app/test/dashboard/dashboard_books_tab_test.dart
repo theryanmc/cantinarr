@@ -1367,6 +1367,64 @@ void main() {
           'overlay — an empty query is not a search',
     );
   });
+
+  testWidgets(
+      'SEARCH-02/SEARCH-03: the Books tab names itself in the toolbar '
+      'placeholder and prefix badge, on the real router', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    final toolbar = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    expect(
+      tester.widget<TextField>(toolbar).decoration!.hintText,
+      'Search books or authors...',
+      reason: 'SEARCH-02: an empty, unfocused Books-tab toolbar names '
+          'itself as a book search',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byIcon(Icons.menu_book),
+      ),
+      findsOneWidget,
+      reason: 'SEARCH-03: the prefix badge carries the Books tab\'s own '
+          'icon outside AI mode',
+    );
+  });
+
+  testWidgets(
+      'SEARCH-03: an AI-capable server does not show the sparkle on the '
+      'Books tab outside AI mode', (tester) async {
+    _usePhoneSize(tester);
+    final (:router, container: _, adapter: _) =
+        await _pumpRouter(tester, authState: _booksWithAiState);
+    router.go('/dashboard/books');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byIcon(Icons.auto_awesome_rounded),
+      ),
+      findsNothing,
+      reason: 'SEARCH-03 criterion 3: a plain title search on an '
+          'AI-capable server no longer advertises AI in the prefix badge',
+    );
+    expect(
+      find.descendant(
+        of: find.byType(CantinarrSearchBar),
+        matching: find.byIcon(Icons.menu_book),
+      ),
+      findsOneWidget,
+      reason: 'the Books icon still renders even when the server has AI',
+    );
+  });
 }
 
 void _usePhoneSize(WidgetTester tester) {

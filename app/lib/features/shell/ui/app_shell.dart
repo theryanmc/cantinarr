@@ -458,6 +458,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
+    final hasChaptarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -505,6 +508,29 @@ class _AppShellState extends ConsumerState<AppShell>
     // `_isBooksTab(widget.currentPath)` call sites) — every gate below reads
     // this local rather than re-deriving it.
     final booksTab = _isBooksTab(widget.currentPath);
+    // The prefix badge's glyph: the sparkle while the bar is actually in AI
+    // mode, otherwise the active discovery tab's own icon (read from the
+    // same `modulePagesFor` table the drawer already uses — no second icon
+    // map). Gated on `ModuleType.dashboard` specifically, not on
+    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Tautulli get no
+    // context of their own this phase (SEARCH-06, deferred) and keep the
+    // generic search glyph. A dashboard path matching no tab (a bare
+    // `/dashboard`, or `/dashboard/books` without the Chaptarr grant) also
+    // keeps the generic glyph rather than borrowing another tab's icon —
+    // the shell must not assert a context it has not determined.
+    IconData contextIcon = Icons.search_rounded;
+    if (isAiReady) {
+      contextIcon = Icons.auto_awesome_rounded;
+    } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
+      final dashboardPages = modulePagesFor(ModuleType.dashboard,
+          includeBooks: hasChaptarrService);
+      for (final page in dashboardPages) {
+        if (page.route == widget.currentPath) {
+          contextIcon = page.activeIcon;
+          break;
+        }
+      }
+    }
     // Books-aware "a search is active" predicate: on the Books tab this
     // reads the Chaptarr notifier, never the TMDB one, so the overlay and
     // scroll gates cannot be driven by a notifier that no longer receives
@@ -533,10 +559,13 @@ class _AppShellState extends ConsumerState<AppShell>
           focusNode: _searchFocusNode,
           hintText: isAiReady
               ? 'Ask the AI anything...'
-              : (hasAi
-                  ? 'Search or ask AI...'
-                  : 'Search by title or person...'),
+              : (booksTab
+                  ? 'Search books or authors...'
+                  : (hasAi
+                      ? 'Search or ask AI...'
+                      : 'Search by title or person...')),
           aiEnabled: hasAi,
+          contextIcon: contextIcon,
           onSubmitted: _submitSearchBar,
           onSend: isAiReady ? _submitSearchBarToAi : null,
           onChanged: (q) {
