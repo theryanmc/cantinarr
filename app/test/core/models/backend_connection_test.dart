@@ -102,6 +102,40 @@ void main() {
     );
   });
 
+  test('mediaServerInstances lists only media-server types', () {
+    const connection = BackendConnection(
+      serverUrl: 'https://cantinarr.example',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(id: 'radarr-main', serviceType: 'radarr', name: 'Movies'),
+        ServiceInstance(
+            id: 'jf-a', serviceType: 'jellyfin', name: 'Home Jellyfin'),
+        ServiceInstance(id: 'tautulli-a', serviceType: 'tautulli', name: 'T'),
+        ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
+      ],
+    );
+
+    expect(mediaServerServiceTypes, contains('jellyfin'));
+    expect(
+      connection.mediaServerInstances.map((i) => i.id).toList(),
+      ['jf-a', 'jf-b'],
+    );
+    // A media server is neither a library nor a download client.
+    expect(connection.radarrInstances.map((i) => i.id), ['radarr-main']);
+    expect(connection.downloadInstances, isEmpty);
+
+    const none = BackendConnection(
+      serverUrl: 'https://cantinarr.example',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      instances: [
+        ServiceInstance(id: 'radarr-main', serviceType: 'radarr', name: 'Movies'),
+      ],
+    );
+    expect(none.mediaServerInstances, isEmpty);
+  });
+
   test('legacy payload falls back to the global capability', () {
     const connection = BackendConnection(
       serverUrl: 'https://cantinarr.example',

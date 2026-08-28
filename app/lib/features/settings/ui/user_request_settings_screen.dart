@@ -424,6 +424,8 @@ class _UserRequestSettingsScreenState
         return 'Transmission';
       case 'tautulli':
         return 'Tautulli';
+      case 'jellyfin':
+        return 'Jellyfin';
       default:
         return serviceType;
     }
