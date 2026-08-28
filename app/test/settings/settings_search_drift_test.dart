@@ -48,6 +48,7 @@ const _adminGates = SettingsSearchGates(
   chaptarrEnabled: true,
   donateVisible: true,
   phoneAppsVisible: true,
+  mediaServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -97,10 +98,18 @@ Future<void> _assertTitles(
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({required this.user, this.chaptarr = false});
+  _FakeAuthNotifier({
+    required this.user,
+    this.chaptarr = false,
+    this.instances = const [],
+  });
 
   final UserProfile user;
   final bool chaptarr;
+
+  /// A jellyfin instance here renders the root's media server guide row
+  /// (gated on `mediaServersVisible`), keeping that entry drift-checked.
+  final List<ServiceInstance> instances;
 
   @override
   Future<AuthState> build() async => AuthState(
@@ -109,6 +118,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           accessToken: 'access',
           refreshToken: 'refresh',
           services: AvailableServices(chaptarr: chaptarr),
+          instances: instances,
         ),
         user: user,
       );
@@ -209,7 +219,16 @@ void main() {
         ProviderScope(
           overrides: [
             backendClientProvider.overrideWithValue(dio),
-            authProvider.overrideWith(() => _FakeAuthNotifier(user: user)),
+            authProvider.overrideWith(() => _FakeAuthNotifier(
+                  user: user,
+                  instances: const [
+                    ServiceInstance(
+                      id: 'jf-a',
+                      serviceType: 'jellyfin',
+                      name: 'Home Jellyfin',
+                    ),
+                  ],
+                )),
             aiSettingsProvider.overrideWith((_) async => _aiSettings()),
           ],
           child: const MaterialApp(home: SettingsScreen()),

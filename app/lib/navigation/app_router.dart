@@ -39,6 +39,7 @@ import '../features/issues/ui/ai_remediation_settings_screen.dart';
 import '../features/issues/ui/issue_thread_screen.dart';
 import '../features/issues/ui/issues_list_screen.dart';
 import '../features/issues/ui/pending_agent_actions_screen.dart';
+import '../features/media_access/ui/media_access_guide.dart';
 import '../features/media_detail/ui/media_detail_screen.dart';
 import '../features/notifications/ui/notification_preferences_screen.dart';
 import '../features/radarr/ui/radarr_calendar_screen.dart';
@@ -701,6 +702,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/plex-guide',
             builder: (_, __) =>
                 const AppAmbientBackground(child: PlexWatchGuide()),
+          ),
+          GoRoute(
+            path: '/media-servers',
+            builder: (_, __) =>
+                const AppAmbientBackground(child: MediaAccessGuide()),
           ),
         ],
       ),

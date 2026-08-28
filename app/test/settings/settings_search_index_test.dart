@@ -10,6 +10,7 @@ const _adminGates = SettingsSearchGates(
   chaptarrEnabled: true,
   donateVisible: true,
   phoneAppsVisible: true,
+  mediaServersVisible: true,
 );
 const _userGates = SettingsSearchGates(user: _user);
 
@@ -39,6 +40,7 @@ const _routableSettingsPaths = {
   '/setup',
   '/issues',
   '/plex-guide',
+  '/media-servers',
   '/approvals',
   '/agent-actions',
 };
@@ -121,6 +123,30 @@ void main() {
             .map((e) => e.id)
             .contains('notifications.new-book'),
         isFalse,
+      );
+    });
+
+    test('a shared media server gates the access guide entry', () {
+      expect(
+        searchSettingsIndex('jellyfin', _adminGates).map((e) => e.id),
+        contains('screen.media-servers'),
+      );
+      const none = SettingsSearchGates(user: _admin);
+      expect(
+        searchSettingsIndex('jellyfin', none)
+            .map((e) => e.id)
+            .contains('screen.media-servers'),
+        isFalse,
+      );
+      // The guide is for everyone with a grant, not just admins.
+      const requester = SettingsSearchGates(
+        user: _user,
+        mediaServersVisible: true,
+      );
+      expect(
+        searchSettingsIndex('media server access', requester)
+            .map((e) => e.id),
+        contains('screen.media-servers'),
       );
     });
 
