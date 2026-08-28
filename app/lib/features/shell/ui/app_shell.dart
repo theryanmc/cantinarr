@@ -308,16 +308,33 @@ class _AppShellState extends ConsumerState<AppShell>
     _searchFocusNode.requestFocus();
   }
 
+  /// Fixed framing prepended to a Books-tab AI hand-off's wire payload only
+  /// — never shown in the chat bubble. This is a compile-time literal with
+  /// nothing interpolated into it: the only user-controlled text in the
+  /// outgoing message stays the trimmed question appended after it
+  /// (threat T-04-01).
+  static const String _booksAiHandoffPrefix = 'Context: this question was '
+      'asked from the Books tab of Cantinarr, which searches the user\'s '
+      'book library. Treat it as a question about books, authors and '
+      'reading.\n\n';
+
   /// Submit top-bar input through the full-screen assistant route.
   void _submitSearchBarToAi() {
     final text = _searchController.text.trim();
     if (text.isEmpty) return;
 
+    // Captured before `_exitAiMode()`/the route push change `currentPath` —
+    // reading it from inside the post-frame callback below would ask "which
+    // tab am I on?" of the assistant route and always answer "not Books".
+    final wireContent = _isBooksTab(widget.currentPath)
+        ? '$_booksAiHandoffPrefix$text'
+        : null;
+
     _exitAiMode();
     context.push('/assistant');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(aiChatProvider).sendMessage(text);
+      ref.read(aiChatProvider).sendMessage(text, wireContent: wireContent);
     });
   }
 
