@@ -204,10 +204,14 @@ const testInstanceKey = "instance-key-SENTINEL"
 func itoa(id int64) string { return fmt.Sprintf("%d", id) }
 
 func (e *env) jellyfin(name string, cfg instance.MediaServerConfig) string {
+	return e.mediaServer("jellyfin", name, cfg)
+}
+
+func (e *env) mediaServer(serviceType, name string, cfg instance.MediaServerConfig) string {
 	e.t.Helper()
-	inst := &instance.Instance{ServiceType: "jellyfin", Name: name, URL: "http://jellyfin.internal:8096", APIKey: testInstanceKey, MediaServerConfig: cfg}
+	inst := &instance.Instance{ServiceType: serviceType, Name: name, URL: "http://" + serviceType + ".internal:8096", APIKey: testInstanceKey, MediaServerConfig: cfg}
 	if err := e.store.Create(inst); err != nil {
-		e.t.Fatalf("create jellyfin: %v", err)
+		e.t.Fatalf("create %s: %v", serviceType, err)
 	}
 	return inst.ID
 }
@@ -793,5 +797,54 @@ func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T)
 	}
 	if writes := e.providers[other].libraryWrites; len(writes) != 0 {
 		t.Fatalf("another instance was re-scoped: %+v", writes)
+	}
+}
+
+// The service never names a media server: everything it decides comes from
+// IsMediaServerType and the grant, so each registered type must get the whole
+// create / switch-off / switch-on cycle. A type missing from any list fails
+// here before it fails for an admin.
+func TestCreateAndReconcileForEveryMediaServerType(t *testing.T) {
+	for _, serviceType := range instance.MediaServerTypes() {
+		t.Run(serviceType, func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user("alice")
+			inst := e.mediaServer(serviceType, "Home", instance.MediaServerConfig{LibraryIDs: []string{"lib-1"}})
+			grant := func(ids ...string) {
+				t.Helper()
+				if err := e.store.SetUserGrants(alice, map[string][]string{serviceType: ids}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := e.svc.CreateAccount(context.Background(), alice, inst, "alice-pass-1"); !errors.Is(err, ErrNotAvailable) {
+				t.Fatalf("ungranted create err = %v, want ErrNotAvailable", err)
+			}
+			grant(inst)
+			created, err := e.svc.CreateAccount(context.Background(), alice, inst, "alice-pass-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.Username != "alice" || !reflect.DeepEqual(e.provider.lastLibraryIDs, []string{"lib-1"}) {
+				t.Fatalf("created = %+v, libraries = %v", created, e.provider.lastLibraryIDs)
+			}
+			remote := e.row(alice, inst).RemoteUserID
+
+			servers, err := e.svc.ListForUser(context.Background(), alice)
+			if err != nil || len(servers) != 1 || servers[0].ServiceType != serviceType || servers[0].Account == nil {
+				t.Fatalf("ListForUser = %+v, %v", servers, err)
+			}
+
+			grant()
+			e.svc.OnGrantsChanged([]int64{alice})
+			if !e.provider.user(remote).IsDisabled || !e.row(alice, inst).DisabledAt.Valid {
+				t.Fatal("revoked grant did not disable the account")
+			}
+			grant(inst)
+			e.svc.OnGrantsChanged([]int64{alice})
+			if e.provider.user(remote).IsDisabled || e.row(alice, inst).DisabledAt.Valid {
+				t.Fatal("returned grant did not re-enable the account")
+			}
+		})
 	}
 }

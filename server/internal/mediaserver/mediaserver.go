@@ -1,5 +1,5 @@
 // Package mediaserver defines the provider-neutral contract Cantinarr uses to
-// manage user accounts on a media server (Jellyfin today, Emby next). It is a
+// manage user accounts on a media server (Jellyfin and Emby). It is a
 // leaf package: value types, sentinel errors, and the Provider interface the
 // per-server clients implement. Nothing here dials anything.
 package mediaserver
@@ -71,7 +71,10 @@ type Provider interface {
 // character, no leading or trailing whitespace, and every rune a letter,
 // digit, combining mark, connector punctuation, or one of space - ' . _ @ +.
 // Cantinarr usernames are validated only for emptiness, so this is checked
-// before any account is created rather than discovered as a remote 400.
+// before any account is created rather than discovered as a remote 400. Emby's
+// own rule is closed-source; the last open-source one refused only < and >,
+// so this mirror is the stricter of the two and never admits a name Emby
+// would refuse on that rule.
 func ValidUsername(name string) bool {
 	if name == "" {
 		return false

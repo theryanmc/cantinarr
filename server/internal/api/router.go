@@ -210,7 +210,7 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex/settings", plexHandler.UpdateSettings)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/users/{userID}/plex-invite", plexHandler.InviteUser)
 
-			// Media-server accounts (Jellyfin): the linked-account rows the
+			// Media-server accounts (Jellyfin, Emby): the linked-account rows the
 			// Users screen tags, the server's own account list for the link
 			// picker, and link/unlink. Access itself is the instance grant.
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)

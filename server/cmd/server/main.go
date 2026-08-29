@@ -137,7 +137,7 @@ func main() {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	// Media-server accounts (Jellyfin): a granted user creates their own
+	// Media-server accounts (Jellyfin, Emby): a granted user creates their own
 	// account from the app; grant changes and user deletion switch accounts
 	// off and on through the two hooks below.
 	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
