@@ -49,6 +49,7 @@ type fakeServer struct {
 	passwordStatus     int
 	createStatus       int
 	createResponse     string
+	createGarbled      bool // answer 200 with an unreadable body after making the account
 	deleted            atomic.Int32
 	requests           atomic.Int32
 }
@@ -110,10 +111,17 @@ func (f *fakeServer) handler() http.Handler {
 			return
 		}
 		body := f.decodeBody(r)
+		name, _ := body["Name"].(string)
 		f.mu.Lock()
 		f.createBody = body
+		// The account exists from here on, whatever the answer looks like.
+		f.users = append(f.users, map[string]any{"Id": "new-user-id", "Name": name, "Policy": f.policy})
 		f.mu.Unlock()
-		name, _ := body["Name"].(string)
+		if f.createGarbled {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte{0x1f, 0x8b, 'n', 'o', 't', ' ', 'j', 's', 'o', 'n'})
+			return
+		}
 		writeJSON(f.t, w, map[string]any{"Id": "new-user-id", "Name": name, "HasPassword": false, "Policy": f.policy})
 	})
 	mux.HandleFunc("/Users/", func(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +322,27 @@ func TestCreateUserRollsBackWhenPasswordFails(t *testing.T) {
 	}
 	if f.postedPolicy != nil {
 		t.Fatal("policy was posted for an account that was being rolled back")
+	}
+}
+
+// A create whose answer cannot be read is not a refusal: the account may
+// exist. The pre-check proved the name was free a moment ago, so the account
+// that carries it now is the new one, and it is deleted rather than left
+// behind without a password.
+func TestCreateUserRollsBackWhenCreateAnswerIsUnreadable(t *testing.T) {
+	f := newFakeServer(t)
+	f.createGarbled = true
+	c := testClient(t, f.handler())
+
+	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", nil)
+	if err == nil {
+		t.Fatal("CreateUser succeeded on an unreadable answer")
+	}
+	if f.deleted.Load() != 1 {
+		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
+	}
+	if strings.Join(f.calls, ",") != "create,delete" {
+		t.Fatalf("calls = %v, want create then delete", f.calls)
 	}
 }
 

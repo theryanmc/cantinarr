@@ -335,6 +335,29 @@ func (c *Client) rollback(ctx context.Context, remoteID string, cause error) err
 	return cause
 }
 
+// rollbackByName deletes an account that carries name, for the case where
+// the create request may have reached the server but its answer never came
+// back readable (a cut connection, a timeout, an unreadable body). The
+// pre-check proved no account carried this name a moment ago, so one that
+// does now is the one just made. Runs on a fresh context.
+func (c *Client) rollbackByName(ctx context.Context, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	users, err := c.Users(cleanupCtx)
+	if err != nil {
+		return fmt.Errorf("look up new user for roll back: %w", err)
+	}
+	for _, u := range users {
+		if strings.EqualFold(u.Name, name) {
+			if err := c.DeleteUser(cleanupCtx, u.ID); err != nil {
+				return fmt.Errorf("roll back new user: %w", err)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // CreateUser implements mediaserver.Provider. Emby creates the account
 // without a password, so the password is a second call and the policy a
 // third; a failure at either step deletes the account, because an Emby
@@ -369,10 +392,21 @@ func (c *Client) CreateUser(ctx context.Context, name, password string, libraryI
 			// duplicate is the name, and the admin can link an account.
 			return mediaserver.RemoteUser{}, mediaserver.ErrInvalidName
 		}
+		if se == nil {
+			// Not a refusal: the server may have made the account and the
+			// answer got lost. Never leave a password-less account behind.
+			if rbErr := c.rollbackByName(ctx, name); rbErr != nil {
+				return mediaserver.RemoteUser{}, errors.Join(err, rbErr)
+			}
+		}
 		return mediaserver.RemoteUser{}, err
 	}
 	if created.ID == "" {
-		return mediaserver.RemoteUser{}, errors.New("emby create user: response carried no user id")
+		err := errors.New("emby create user: response carried no user id")
+		if rbErr := c.rollbackByName(ctx, name); rbErr != nil {
+			return mediaserver.RemoteUser{}, errors.Join(err, rbErr)
+		}
+		return mediaserver.RemoteUser{}, err
 	}
 
 	if err := c.setPassword(ctx, created.ID, password); err != nil {

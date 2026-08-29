@@ -33,15 +33,16 @@ func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 
 // fakeServer is a minimal Jellyfin that records the policy it was sent.
 type fakeServer struct {
-	t            *testing.T
-	users        []map[string]any
-	policy       map[string]any
-	postedPolicy map[string]any
-	policyStatus int
-	createStatus int
-	createBody   string
-	deleted      atomic.Int32
-	requests     atomic.Int32
+	t             *testing.T
+	users         []map[string]any
+	policy        map[string]any
+	postedPolicy  map[string]any
+	policyStatus  int
+	createStatus  int
+	createBody    string
+	createGarbled bool // answer 200 with an unreadable body after making the account
+	deleted       atomic.Int32
+	requests      atomic.Int32
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -84,6 +85,13 @@ func (f *fakeServer) handler() http.Handler {
 		}
 		if body.Password == "" {
 			f.t.Error("create user sent no password")
+		}
+		// The account exists from here on, whatever the answer looks like.
+		f.users = append(f.users, map[string]any{"Id": "new-user-id", "Name": body.Name, "Policy": f.policy})
+		if f.createGarbled {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte{0x1f, 0x8b, 'n', 'o', 't', ' ', 'j', 's', 'o', 'n'})
+			return
 		}
 		writeJSON(f.t, w, map[string]any{"Id": "new-user-id", "Name": body.Name, "Policy": f.policy})
 	})
@@ -227,6 +235,27 @@ func TestCreateUserRollsBackWhenPolicyFails(t *testing.T) {
 	}
 	if f.deleted.Load() != 1 {
 		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
+	}
+}
+
+// A create whose answer cannot be read is not a refusal: the account may
+// exist. The pre-check proved the name was free a moment ago, so the account
+// that carries it now is the new one, and it is deleted rather than left
+// where Cantinarr cannot see it.
+func TestCreateUserRollsBackWhenCreateAnswerIsUnreadable(t *testing.T) {
+	f := newFakeServer(t)
+	f.createGarbled = true
+	c := testClient(t, f.handler())
+
+	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", nil)
+	if err == nil {
+		t.Fatal("CreateUser succeeded on an unreadable answer")
+	}
+	if f.deleted.Load() != 1 {
+		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
+	}
+	if f.postedPolicy != nil {
+		t.Fatal("a policy was posted for an account that was being rolled back")
 	}
 }
 
