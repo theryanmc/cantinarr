@@ -1,5 +1,5 @@
 // Package mediaaccess provisions and tracks user accounts on media servers
-// (Jellyfin today, Emby next). Eligibility is the instance grant: a granted
+// (Jellyfin and Emby). Eligibility is the instance grant: a granted
 // user creates their own account, a revoked grant switches the account off,
 // and a returning grant switches it back on. Cantinarr never stores the
 // password it hands the server and never deletes an account it did not just

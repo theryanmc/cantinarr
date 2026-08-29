@@ -102,6 +102,19 @@ const _jellyfin = ServiceInstance(
   serviceType: 'jellyfin',
   name: 'Home Jellyfin',
 );
+const _emby = ServiceInstance(
+  id: 'em-a',
+  serviceType: 'emby',
+  name: 'Den Emby',
+);
+
+Map<String, dynamic> _embyServer({Map<String, dynamic>? account}) => {
+      'instance_id': 'em-a',
+      'service_type': 'emby',
+      'name': 'Den Emby',
+      'public_address': 'https://emby.example.com',
+      'account': account,
+    };
 
 Map<String, dynamic> _server({
   Map<String, dynamic>? account,
@@ -249,6 +262,84 @@ void main() {
     expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Create my account'),
         findsNothing);
+  });
+
+  testWidgets('an Emby server speaks Emby and never calls its app free',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_emby],
+      handlers: {
+        'GET /api/media-servers': (_, __) =>
+            _Reply(200, [_embyServer(account: _account())]),
+      },
+    );
+
+    expect(find.text('Watch on Emby'), findsOneWidget);
+    expect(
+      find.textContaining(
+          'Cantinarr is where you request. Emby is where you watch.'),
+      findsOneWidget,
+    );
+    expect(find.text('Install the Emby app'), findsOneWidget);
+    expect(
+      find.text('Download the Emby app from the App Store or Google Play'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('free'), findsNothing);
+    expect(
+      find.textContaining('one-time unlock or Emby Premiere'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('shows up in Emby once it is Available'),
+      findsOneWidget,
+    );
+    expect(find.text('Sign in at https://emby.example.com'), findsOneWidget);
+  });
+
+  testWidgets('a mixed set names both servers and keeps each card its own',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_jellyfin, _emby],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _server(account: _account()),
+              _embyServer(),
+            ]),
+      },
+    );
+
+    expect(find.text('Watch on Jellyfin or Emby'), findsOneWidget);
+    expect(
+      find.textContaining('Your media server is where you watch.'),
+      findsOneWidget,
+    );
+    expect(find.text('Install the Jellyfin or Emby app'), findsOneWidget);
+    expect(
+      find.text(
+          'Download the Jellyfin or Emby app from the App Store or Google Play'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Both are also on Apple TV'), findsOneWidget);
+    expect(
+      find.textContaining('one-time unlock or Emby Premiere'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('shows up in your media server once it is Available'),
+      findsOneWidget,
+    );
+
+    // Only the Emby card has no account, and its sheet speaks Emby.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Create my account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Create your Emby account'), findsOneWidget);
+    expect(
+      find.textContaining("You'll sign in to Den Emby as alice"),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a taken name says to ask the admin to link it', (tester) async {

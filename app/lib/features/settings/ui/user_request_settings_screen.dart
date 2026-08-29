@@ -426,6 +426,8 @@ class _UserRequestSettingsScreenState
         return 'Tautulli';
       case 'jellyfin':
         return 'Jellyfin';
+      case 'emby':
+        return 'Emby';
       default:
         return serviceType;
     }

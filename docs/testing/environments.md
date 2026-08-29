@@ -36,6 +36,8 @@ generated API key or local username/password:
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
 - Jellyfin — local API key minted under Dashboard > API Keys; the whole
   integration is server-local, no jellyfin.org account
+- Emby — local API key minted under Settings > Advanced > API Keys; no
+  emby.media account (Emby Connect stays off)
 - Arr Connect webhooks — Cantinarr mints and installs its own per-instance
   tokens
 - Push gateway enrollment — account-free against any reachable gateway

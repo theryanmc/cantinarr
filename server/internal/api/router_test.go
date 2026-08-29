@@ -107,6 +107,8 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	createConfigInstance(t, store, "tautulli", "Tautulli", false)
 	homeJellyfin := createConfigInstance(t, store, "jellyfin", "Home Jellyfin", false)
 	createConfigInstance(t, store, "jellyfin", "Other Jellyfin", false)
+	denEmby := createConfigInstance(t, store, "emby", "Den Emby", false)
+	createConfigInstance(t, store, "emby", "Other Emby", false)
 
 	if err := store.SetUserDefault(userID, "radarr", fourKRadarr.ID); err != nil {
 		t.Fatalf("pin radarr: %v", err)
@@ -116,8 +118,8 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	}
 	// Media servers are grant-only: the granted one is listed so the app can
 	// offer the account guide, the other never falls back into view.
-	if err := store.SetUserGrants(userID, map[string][]string{"jellyfin": {homeJellyfin.ID}}); err != nil {
-		t.Fatalf("grant jellyfin: %v", err)
+	if err := store.SetUserGrants(userID, map[string][]string{"jellyfin": {homeJellyfin.ID}, "emby": {denEmby.ID}}); err != nil {
+		t.Fatalf("grant media servers: %v", err)
 	}
 
 	resp := requestConfig(t, store, creds, remediationSvc, &auth.Claims{
@@ -131,6 +133,7 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 		mainSonarr.ID:   "sonarr",
 		books.ID:        "chaptarr",
 		homeJellyfin.ID: "jellyfin",
+		denEmby.ID:      "emby",
 	}
 	if len(resp.Instances) != len(want) {
 		t.Fatalf("instances = %#v, want %d visible instances", resp.Instances, len(want))

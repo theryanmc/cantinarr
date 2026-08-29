@@ -1,8 +1,8 @@
 /// Service types that are media servers: places users sign in to watch, as
-/// opposed to the arrs and download clients Cantinarr drives. Jellyfin today;
-/// Emby joins in a later wave. Access to one is grant-only, so an instance of
-/// these types is listed for a requester only when an admin granted it.
-const mediaServerServiceTypes = {'jellyfin'};
+/// opposed to the arrs and download clients Cantinarr drives. Access to one
+/// is grant-only, so an instance of these types is listed for a requester only
+/// when an admin granted it.
+const mediaServerServiceTypes = {'jellyfin', 'emby'};
 
 /// Represents a configured service instance (Radarr or Sonarr).
 class ServiceInstance {
@@ -132,7 +132,7 @@ class BackendConnection {
   List<ServiceInstance> get tautulliInstances =>
       instances.where((i) => i.serviceType == 'tautulli').toList();
 
-  /// Get all media-server (Jellyfin) instances. The backend lists one for a
+  /// Get all media-server (Jellyfin, Emby) instances. The backend lists one for a
   /// requester only when an admin granted them access, so its mere presence
   /// means the user may create an account there and the menu should offer
   /// the media server access guide.

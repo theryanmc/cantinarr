@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/emby"
 	"github.com/windoze95/cantinarr-server/internal/jellyfin"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
@@ -18,7 +19,7 @@ import (
 // mediaServerTypes are the service types that are media servers Cantinarr
 // provisions user accounts on. They follow the Chaptarr rule: never a global
 // default, granted per user, invisible to arr routing.
-var mediaServerTypes = []string{"jellyfin"}
+var mediaServerTypes = []string{"jellyfin", "emby"}
 
 // IsMediaServerType reports whether serviceType is a media server.
 func IsMediaServerType(serviceType string) bool {
@@ -33,6 +34,16 @@ func IsMediaServerType(serviceType string) bool {
 // MediaServerTypes returns the media-server service types in a stable order.
 func MediaServerTypes() []string {
 	return append([]string(nil), mediaServerTypes...)
+}
+
+// mediaServerTypeList renders the media-server types for error messages:
+// 'jellyfin', 'emby'.
+func mediaServerTypeList() string {
+	quoted := make([]string, 0, len(mediaServerTypes))
+	for _, t := range mediaServerTypes {
+		quoted = append(quoted, "'"+t+"'")
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // MediaServerConfig is the per-instance configuration of a media server.
@@ -54,12 +65,14 @@ func (c MediaServerConfig) clone() MediaServerConfig {
 }
 
 // NewMediaServerProvider builds the client for a media-server instance. It is
-// the one place a service type maps to a client package, so adding a server
-// (Emby) is a new case here plus an entry in mediaServerTypes.
+// the one place a service type maps to a client package: a new server is a
+// case here plus an entry in mediaServerTypes.
 func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 	switch inst.ServiceType {
 	case "jellyfin":
 		return jellyfin.NewClient(inst.URL, inst.APIKey), nil
+	case "emby":
+		return emby.NewClient(inst.URL, inst.APIKey), nil
 	default:
 		return nil, fmt.Errorf("not a media server instance: %s", inst.ServiceType)
 	}
@@ -148,7 +161,7 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerConfig, existing *Instance) error {
 	if !IsMediaServerType(inst.ServiceType) {
 		if provided != nil && (strings.TrimSpace(provided.PublicAddress) != "" || len(provided.LibraryIDs) > 0) {
-			return fmt.Errorf("media_server_config is supported only for Jellyfin")
+			return fmt.Errorf("media_server_config is supported only for media servers (%s)", mediaServerTypeList())
 		}
 		inst.MediaServerConfig = MediaServerConfig{}
 		return nil
@@ -278,7 +291,7 @@ func (h *Handler) MediaServerLibraries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !IsMediaServerType(inst.ServiceType) {
-		http.Error(w, `{"error":"service_type must be a media server type ('jellyfin')"}`, http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf(`{"error":"service_type must be a media server type (%s)"}`, mediaServerTypeList()), http.StatusBadRequest)
 		return
 	}
 	provider, err := NewMediaServerProvider(inst)

@@ -1,4 +1,4 @@
-package jellyfin
+package emby
 
 import (
 	"context"
@@ -8,13 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
 
-const testAPIKey = "JELLYFIN_KEY_SENTINEL"
+const testAPIKey = "EMBY_KEY_SENTINEL"
 
 func testClient(t *testing.T, handler http.Handler) *Client {
 	t.Helper()
@@ -31,18 +32,26 @@ func writeJSON(t *testing.T, w http.ResponseWriter, v any) {
 	}
 }
 
-// fakeServer is a minimal Jellyfin that records the policy it was sent.
+// fakeServer is a minimal Emby that records what it was sent and in which
+// order. Its user policy carries fields this client has never heard of and
+// numbers, so a round trip that drops or reshapes anything is visible.
 type fakeServer struct {
-	t             *testing.T
-	users         []map[string]any
-	policy        map[string]any
-	postedPolicy  map[string]any
-	policyStatus  int
-	createStatus  int
-	createBody    string
-	createGarbled bool // answer 200 with an unreadable body after making the account
-	deleted       atomic.Int32
-	requests      atomic.Int32
+	t                  *testing.T
+	mu                 sync.Mutex
+	users              []map[string]any
+	usersAsQueryResult bool
+	policy             map[string]any
+	postedPolicy       map[string]any
+	createBody         map[string]any
+	passwordBody       map[string]any
+	calls              []string
+	policyStatus       int
+	passwordStatus     int
+	createStatus       int
+	createResponse     string
+	createGarbled      bool // answer 200 with an unreadable body after making the account
+	deleted            atomic.Int32
+	requests           atomic.Int32
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -53,8 +62,9 @@ func newFakeServer(t *testing.T) *fakeServer {
 			"IsDisabled":               false,
 			"EnableAllFolders":         true,
 			"EnabledFolders":           []string{},
-			"AuthenticationProviderId": "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider",
-			"PasswordResetProviderId":  "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider",
+			"BlockedMediaFolders":      []string{},
+			"ExcludedSubFolders":       []string{},
+			"AuthenticationProviderId": "Emby.Server.Implementations.Library.DefaultAuthenticationProvider",
 			"MaxParentalRating":        12,
 			"RemoteClientBitrateLimit": 0,
 			"FutureField":              map[string]any{"nested": []any{1, "two"}},
@@ -62,10 +72,30 @@ func newFakeServer(t *testing.T) *fakeServer {
 	}
 }
 
+func (f *fakeServer) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
+
+func (f *fakeServer) decodeBody(r *http.Request) map[string]any {
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	body := map[string]any{}
+	if err := dec.Decode(&body); err != nil {
+		f.t.Errorf("decode %s body: %v", r.URL.Path, err)
+	}
+	return body
+}
+
 func (f *fakeServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/Users", func(w http.ResponseWriter, r *http.Request) {
 		f.requests.Add(1)
+		if f.usersAsQueryResult {
+			writeJSON(f.t, w, map[string]any{"Items": f.users, "TotalRecordCount": len(f.users)})
+			return
+		}
 		writeJSON(f.t, w, f.users)
 	})
 	mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
@@ -74,44 +104,54 @@ func (f *fakeServer) handler() http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		f.record("create")
 		if f.createStatus != 0 {
 			w.WriteHeader(f.createStatus)
-			_, _ = io.WriteString(w, f.createBody)
+			_, _ = io.WriteString(w, f.createResponse)
 			return
 		}
-		var body struct{ Name, Password string }
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			f.t.Errorf("decode create body: %v", err)
-		}
-		if body.Password == "" {
-			f.t.Error("create user sent no password")
-		}
+		body := f.decodeBody(r)
+		name, _ := body["Name"].(string)
+		f.mu.Lock()
+		f.createBody = body
 		// The account exists from here on, whatever the answer looks like.
-		f.users = append(f.users, map[string]any{"Id": "new-user-id", "Name": body.Name, "Policy": f.policy})
+		f.users = append(f.users, map[string]any{"Id": "new-user-id", "Name": name, "Policy": f.policy})
+		f.mu.Unlock()
 		if f.createGarbled {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte{0x1f, 0x8b, 'n', 'o', 't', ' ', 'j', 's', 'o', 'n'})
 			return
 		}
-		writeJSON(f.t, w, map[string]any{"Id": "new-user-id", "Name": body.Name, "Policy": f.policy})
+		writeJSON(f.t, w, map[string]any{"Id": "new-user-id", "Name": name, "HasPassword": false, "Policy": f.policy})
 	})
 	mux.HandleFunc("/Users/", func(w http.ResponseWriter, r *http.Request) {
 		f.requests.Add(1)
 		rest := strings.TrimPrefix(r.URL.Path, "/Users/")
 		switch {
+		case strings.HasSuffix(rest, "/Password") && r.Method == http.MethodPost:
+			f.record("password")
+			if f.passwordStatus != 0 {
+				w.WriteHeader(f.passwordStatus)
+				return
+			}
+			body := f.decodeBody(r)
+			f.mu.Lock()
+			f.passwordBody = body
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(rest, "/Policy") && r.Method == http.MethodPost:
+			f.record("policy")
 			if f.policyStatus != 0 {
 				w.WriteHeader(f.policyStatus)
 				return
 			}
-			dec := json.NewDecoder(r.Body)
-			dec.UseNumber()
-			f.postedPolicy = map[string]any{}
-			if err := dec.Decode(&f.postedPolicy); err != nil {
-				f.t.Errorf("decode posted policy: %v", err)
-			}
+			body := f.decodeBody(r)
+			f.mu.Lock()
+			f.postedPolicy = body
+			f.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete:
+			f.record("delete")
 			f.deleted.Add(1)
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet:
@@ -127,45 +167,48 @@ func (f *fakeServer) handler() http.Handler {
 	return mux
 }
 
-func TestHeadersCarryTokenInBothForms(t *testing.T) {
+func TestHeadersCarryEmbyToken(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/System/Info" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "MediaBrowser ") || !strings.Contains(auth, `Token="`+testAPIKey+`"`) {
-			t.Errorf("Authorization = %q", auth)
-		}
 		if got := r.Header.Get("X-Emby-Token"); got != testAPIKey {
 			t.Errorf("X-Emby-Token = %q", got)
 		}
-		writeJSON(t, w, map[string]any{"ServerName": "Home", "Version": "10.11.0", "Id": "srv-1"})
+		auth := r.Header.Get("X-Emby-Authorization")
+		if !strings.HasPrefix(auth, "MediaBrowser ") || !strings.Contains(auth, `Token="`+testAPIKey+`"`) || !strings.Contains(auth, `Client="Cantinarr"`) {
+			t.Errorf("X-Emby-Authorization = %q", auth)
+		}
+		writeJSON(t, w, map[string]any{"ServerName": "Den", "Version": "4.8.11.0", "Id": "srv-1"})
 	}))
 	info, err := c.SystemInfo(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.ServerName != "Home" || info.Version != "10.11.0" || info.ID != "srv-1" {
+	if info.ServerName != "Den" || info.Version != "4.8.11.0" || info.ID != "srv-1" {
 		t.Fatalf("SystemInfo = %+v", info)
 	}
 }
 
-func TestLibrariesDropLocations(t *testing.T) {
+// The policy wants the folder Guid, not the numeric Id Emby 4.7 introduced;
+// a folder without a Guid falls back to its Id, whatever JSON type it came
+// as; and the server's filesystem paths never leave the client.
+func TestLibrariesUseGuidAndNeverPaths(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/Library/VirtualFolders" {
+		if r.URL.Path != "/Library/MediaFolders" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		writeJSON(t, w, []map[string]any{
-			{"Name": "Movies", "CollectionType": "movies", "ItemId": "lib-movies", "Locations": []string{"/srv/media/movies"}},
-			{"Name": "Shows", "CollectionType": "tvshows", "ItemId": "lib-shows", "Locations": []string{"/srv/media/shows"}},
-			{"Name": "Broken", "CollectionType": "music", "ItemId": ""},
-		})
+		_, _ = io.WriteString(w, `{"Items":[
+			{"Name":"Movies","Id":"5","Guid":"guid-movies","CollectionType":"movies","Path":"/srv/media/movies"},
+			{"Name":"Shows","Id":7,"CollectionType":"tvshows","Path":"/srv/media/shows"},
+			{"Name":"Broken","CollectionType":"music"}
+		],"TotalRecordCount":3}`)
 	}))
 	libs, err := c.Libraries(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(libs) != 2 || libs[0].ID != "lib-movies" || libs[1].Name != "Shows" || libs[1].CollectionType != "tvshows" {
+	if len(libs) != 2 || libs[0].ID != "guid-movies" || libs[0].CollectionType != "movies" || libs[1].ID != "7" || libs[1].Name != "Shows" {
 		t.Fatalf("Libraries = %+v", libs)
 	}
 	encoded, _ := json.Marshal(libs)
@@ -174,16 +217,52 @@ func TestLibrariesDropLocations(t *testing.T) {
 	}
 }
 
-func TestCreateUserRoundTripsFetchedPolicy(t *testing.T) {
+func TestUsersDecodeBareListAndQueryResult(t *testing.T) {
+	for _, wrapped := range []bool{false, true} {
+		f := newFakeServer(t)
+		f.usersAsQueryResult = wrapped
+		f.users = []map[string]any{
+			{"Id": "u1", "Name": "admin", "Policy": map[string]any{"IsAdministrator": true}},
+			{"Id": "u2", "Name": "bob", "Policy": map[string]any{"IsDisabled": true}},
+		}
+		c := testClient(t, f.handler())
+		users, err := c.Users(context.Background())
+		if err != nil {
+			t.Fatalf("wrapped=%v: %v", wrapped, err)
+		}
+		if len(users) != 2 || !users[0].IsAdministrator || users[1].IsAdministrator || !users[1].IsDisabled || users[1].Name != "bob" {
+			t.Fatalf("wrapped=%v: Users = %+v", wrapped, users)
+		}
+	}
+}
+
+func TestCreateUserSetsPasswordThenRestricts(t *testing.T) {
 	f := newFakeServer(t)
 	c := testClient(t, f.handler())
 
-	user, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", []string{"lib-movies"})
+	user, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", []string{"guid-movies"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if user.ID != "new-user-id" || user.Name != "alice" || user.IsAdministrator {
 		t.Fatalf("CreateUser = %+v", user)
+	}
+	if strings.Join(f.calls, ",") != "create,password,policy" {
+		t.Fatalf("calls = %v, want create, password, policy", f.calls)
+	}
+	// Emby's create route has no password field; sending one would be
+	// silently dropped at best. The password goes in its own call.
+	if _, sent := f.createBody["Password"]; sent {
+		t.Error("create user sent a Password field")
+	}
+	if f.createBody["Name"] != "alice" {
+		t.Errorf("create body = %v", f.createBody)
+	}
+	if f.passwordBody["NewPw"] != "alice-pass-1" || f.passwordBody["ResetPassword"] != false || f.passwordBody["Id"] != "new-user-id" {
+		t.Errorf("password body = %v", f.passwordBody)
+	}
+	if current, ok := f.passwordBody["CurrentPw"]; !ok || current != "" {
+		t.Errorf("CurrentPw = %#v, want an empty string (a new account's current password)", current)
 	}
 	p := f.postedPolicy
 	if p == nil {
@@ -195,12 +274,12 @@ func TestCreateUserRoundTripsFetchedPolicy(t *testing.T) {
 	if p["EnableAllFolders"] != false {
 		t.Errorf("EnableAllFolders = %v, want false", p["EnableAllFolders"])
 	}
-	if folders, _ := p["EnabledFolders"].([]any); len(folders) != 1 || folders[0] != "lib-movies" {
+	if folders, _ := p["EnabledFolders"].([]any); len(folders) != 1 || folders[0] != "guid-movies" {
 		t.Errorf("EnabledFolders = %v", p["EnabledFolders"])
 	}
 	// Everything the server sent comes back untouched, including fields this
 	// client has never heard of and numbers in their original form.
-	for _, key := range []string{"AuthenticationProviderId", "PasswordResetProviderId", "FutureField", "RemoteClientBitrateLimit"} {
+	for _, key := range []string{"AuthenticationProviderId", "BlockedMediaFolders", "ExcludedSubFolders", "FutureField", "RemoteClientBitrateLimit"} {
 		if _, ok := p[key]; !ok {
 			t.Errorf("posted policy dropped %s", key)
 		}
@@ -224,24 +303,32 @@ func TestCreateUserShareAllWhenNoLibraries(t *testing.T) {
 	}
 }
 
-func TestCreateUserRollsBackWhenPolicyFails(t *testing.T) {
+// An Emby account without a password signs in with an empty one, so a
+// create whose password write fails must not leave the account behind.
+func TestCreateUserRollsBackWhenPasswordFails(t *testing.T) {
 	f := newFakeServer(t)
-	f.policyStatus = http.StatusInternalServerError
+	f.passwordStatus = http.StatusInternalServerError
 	c := testClient(t, f.handler())
 
-	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", []string{"lib-movies"})
+	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", []string{"guid-movies"})
 	if err == nil {
-		t.Fatal("CreateUser succeeded despite a failed policy update")
+		t.Fatal("CreateUser succeeded despite a failed password write")
+	}
+	if !strings.Contains(err.Error(), "set password") {
+		t.Fatalf("err = %v, want the password step named", err)
 	}
 	if f.deleted.Load() != 1 {
 		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
+	}
+	if f.postedPolicy != nil {
+		t.Fatal("policy was posted for an account that was being rolled back")
 	}
 }
 
 // A create whose answer cannot be read is not a refusal: the account may
 // exist. The pre-check proved the name was free a moment ago, so the account
 // that carries it now is the new one, and it is deleted rather than left
-// where Cantinarr cannot see it.
+// behind without a password.
 func TestCreateUserRollsBackWhenCreateAnswerIsUnreadable(t *testing.T) {
 	f := newFakeServer(t)
 	f.createGarbled = true
@@ -254,8 +341,22 @@ func TestCreateUserRollsBackWhenCreateAnswerIsUnreadable(t *testing.T) {
 	if f.deleted.Load() != 1 {
 		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
 	}
-	if f.postedPolicy != nil {
-		t.Fatal("a policy was posted for an account that was being rolled back")
+	if strings.Join(f.calls, ",") != "create,delete" {
+		t.Fatalf("calls = %v, want create then delete", f.calls)
+	}
+}
+
+func TestCreateUserRollsBackWhenPolicyFails(t *testing.T) {
+	f := newFakeServer(t)
+	f.policyStatus = http.StatusInternalServerError
+	c := testClient(t, f.handler())
+
+	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", []string{"guid-movies"})
+	if err == nil {
+		t.Fatal("CreateUser succeeded despite a failed policy update")
+	}
+	if f.deleted.Load() != 1 {
+		t.Fatalf("half-created user deleted %d times, want 1", f.deleted.Load())
 	}
 }
 
@@ -279,19 +380,36 @@ func TestCreateUserDetectsCaseInsensitiveCollision(t *testing.T) {
 	if !errors.Is(err, mediaserver.ErrUserExists) {
 		t.Fatalf("err = %v, want ErrUserExists", err)
 	}
-	if f.postedPolicy != nil || f.deleted.Load() != 0 {
-		t.Fatal("collision must not create or touch anything")
+	if len(f.calls) != 0 || f.deleted.Load() != 0 {
+		t.Fatalf("collision must not create or touch anything: calls = %v", f.calls)
 	}
 }
 
-func TestCreateUserMaps400AlreadyExists(t *testing.T) {
-	f := newFakeServer(t)
-	f.createStatus = http.StatusBadRequest
-	f.createBody = `"A user with the name 'alice' already exists."`
-	c := testClient(t, f.handler())
-	_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", nil)
-	if !errors.Is(err, mediaserver.ErrUserExists) {
-		t.Fatalf("err = %v, want ErrUserExists", err)
+// A 400 on create is either the duplicate Emby's own check missed or the
+// name rule, which is closed-source and so cannot be mirrored exactly. Both
+// map to a sentinel the handler already explains; neither creates anything
+// to roll back.
+func TestCreateUserMaps400s(t *testing.T) {
+	cases := []struct {
+		body string
+		want error
+	}{
+		{`"A user with the name 'alice' already exists."`, mediaserver.ErrUserExists},
+		{`"Usernames can contain letters (a-z), numbers (0-9), dashes (-), underscores (_), apostrophes ('), and periods (.)"`, mediaserver.ErrInvalidName},
+		{``, mediaserver.ErrInvalidName},
+	}
+	for _, tc := range cases {
+		f := newFakeServer(t)
+		f.createStatus = http.StatusBadRequest
+		f.createResponse = tc.body
+		c := testClient(t, f.handler())
+		_, err := c.CreateUser(context.Background(), "alice", "alice-pass-1", nil)
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("body %s: err = %v, want %v", tc.body, err, tc.want)
+		}
+		if f.deleted.Load() != 0 {
+			t.Fatalf("body %s: a refused create deleted something", tc.body)
+		}
 	}
 }
 
@@ -315,26 +433,6 @@ func TestSetDisabledRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUsersAndGetUserReadPolicyFlags(t *testing.T) {
-	f := newFakeServer(t)
-	f.users = []map[string]any{
-		{"Id": "u1", "Name": "admin", "Policy": map[string]any{"IsAdministrator": true}},
-		{"Id": "u2", "Name": "bob", "Policy": map[string]any{"IsDisabled": true}},
-	}
-	c := testClient(t, f.handler())
-	users, err := c.Users(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(users) != 2 || !users[0].IsAdministrator || !users[1].IsDisabled || users[1].IsAdministrator {
-		t.Fatalf("Users = %+v", users)
-	}
-	one, err := c.GetUser(context.Background(), "u1")
-	if err != nil || one.ID != "u1" || !one.IsAdministrator {
-		t.Fatalf("GetUser = %+v, %v", one, err)
-	}
-}
-
 func TestGetUser404IsErrUserNotFound(t *testing.T) {
 	f := newFakeServer(t)
 	c := testClient(t, f.handler())
@@ -343,6 +441,10 @@ func TestGetUser404IsErrUserNotFound(t *testing.T) {
 	}
 	if err := c.SetDisabled(context.Background(), "missing-user", true); !errors.Is(err, mediaserver.ErrUserNotFound) {
 		t.Fatalf("SetDisabled err = %v, want ErrUserNotFound", err)
+	}
+	one, err := c.GetUser(context.Background(), "u1")
+	if err != nil || one.ID != "u1" || !one.IsAdministrator {
+		t.Fatalf("GetUser = %+v, %v", one, err)
 	}
 }
 
@@ -359,8 +461,10 @@ func TestRedirectNeverDeliversKey(t *testing.T) {
 	var redirectedRequests atomic.Int32
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirectedRequests.Add(1)
-		if r.Header.Get("X-Emby-Token") != "" || r.Header.Get("Authorization") != "" {
-			t.Error("redirect destination received credentials")
+		for _, header := range []string{"X-Emby-Token", "X-Emby-Authorization", "Authorization"} {
+			if r.Header.Get(header) != "" {
+				t.Errorf("redirect destination received %s", header)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	}))

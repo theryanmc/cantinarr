@@ -113,13 +113,14 @@ void main() {
             id: 'jf-a', serviceType: 'jellyfin', name: 'Home Jellyfin'),
         ServiceInstance(id: 'tautulli-a', serviceType: 'tautulli', name: 'T'),
         ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
+        ServiceInstance(id: 'em-a', serviceType: 'emby', name: 'Den Emby'),
       ],
     );
 
-    expect(mediaServerServiceTypes, contains('jellyfin'));
+    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby']));
     expect(
       connection.mediaServerInstances.map((i) => i.id).toList(),
-      ['jf-a', 'jf-b'],
+      ['jf-a', 'jf-b', 'em-a'],
     );
     // A media server is neither a library nor a download client.
     expect(connection.radarrInstances.map((i) => i.id), ['radarr-main']);

@@ -32,9 +32,10 @@ var allowedServiceTypes = map[string]bool{
 	"transmission": true,
 	"tautulli":     true,
 	"jellyfin":     true,
+	"emby":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and Tautulli are admin surfaces with no per-user routing,
@@ -45,6 +46,7 @@ var grantableServiceTypes = map[string]bool{
 	"sonarr":   true,
 	"chaptarr": true,
 	"jellyfin": true,
+	"emby":     true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are

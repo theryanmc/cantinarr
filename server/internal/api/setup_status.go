@@ -122,7 +122,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "media_servers",
 			Title:       "Media server accounts",
-			Description: "Connect Jellyfin so users can create their own accounts from the app.",
+			Description: "Connect Jellyfin or Emby so users can create their own accounts from the app.",
 			Configured:  f.HasMediaServer,
 			Optional:    true,
 		},
