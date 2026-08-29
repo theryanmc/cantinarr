@@ -1,6 +1,6 @@
 # Media server accounts
 
-Real Jellyfin truth for account creation, library scope, switching access off and on, and linking. Request/response contracts, RBAC, rollback ordering, and log redaction are proven by the hermetic suites; every case here reads the resulting state on the media server itself (`GET /Users/{id}`, a sign-in as the created user, and `GET /Users/{id}/Views` for library scope).
+Real Jellyfin and Emby truth for account creation, library scope, switching access off and on, and linking. Request/response contracts, RBAC, rollback ordering, and log redaction are proven by the hermetic suites; every case here reads the resulting state on the media server itself (`GET /Users/{id}`, a sign-in as the created user, and `GET /Users/{id}/Views` for library scope, all three of which both servers answer). The cases that say Jellyfin run against Jellyfin and again against Emby; `MSRV-014` and `MSRV-015` are Emby-only, for the two places its account flow differs.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -12,6 +12,8 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `MSRV-009` · P1 · UI/LIVE — Create with two of three libraries chosen; verify `GET /Users/{id}/Views` as the new user lists only those two, and a fourth library added on Jellyfin afterwards stays hidden.
 - [ ] `MSRV-010` · P1 · UI/LIVE — Create with no libraries chosen, then add a library on Jellyfin; verify the user sees it with no Cantinarr action.
 - [ ] `MSRV-013` · P1 · UI/LIVE — With accounts already created, untick a shared library in the instance editor and save; verify `GET /Users/{id}/Views` for an existing Cantinarr-created account no longer lists it, that an account the admin linked keeps the libraries it had, and that re-ticking restores it.
+- [ ] `MSRV-014` · P0 · LIVE — Emby: create an account from the guide; verify `GET /Users/{id}` reads `HasPassword=true` and `IsAdministrator=false`, a sign-in with the chosen password succeeds and one with an empty password is refused. Then make the password step fail (revoke the API key between the create and the password call, or block `POST /Users/{id}/Password`) and verify no account survives on Emby.
+- [ ] `MSRV-015` · P0 · LIVE — Emby: create with two of three libraries chosen; verify the policy's `EnabledFolders` holds the folder `Guid`s that `GET /Library/MediaFolders` reports (never the numeric `Id`), `GET /Users/{id}/Views` lists only those two, and unticking one in the editor removes it from the existing account.
 
 ## Access off and on
 
