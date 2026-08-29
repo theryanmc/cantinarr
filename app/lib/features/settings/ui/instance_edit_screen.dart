@@ -103,7 +103,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   Set<int> _savedAssignedUserIds = <int>{};
   String? _userSelectError;
 
-  // Media-server (Jellyfin) section state: the libraries the server reports
+  // Media-server (Jellyfin, Emby) section state: the libraries the server reports
   // right now (null until read; the admin adds and removes libraries on the
   // server itself, so the list is only ever a live read, never stored), the
   // ids shared with this server's accounts, and whether the section was
@@ -125,6 +125,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('transmission', 'Transmission'),
     ('tautulli', 'Tautulli'),
     ('jellyfin', 'Jellyfin'),
+    ('emby', 'Emby'),
   ];
 
   /// Types that authenticate with username/password instead of an API key.
@@ -147,7 +148,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
 
-  /// Media servers (Jellyfin): users sign in there to watch, so the form
+  /// Media servers (Jellyfin, Emby): users sign in there to watch, so the form
   /// carries a sign-in address and a shared-library choice instead of media
   /// downloads or instant updates.
   bool get _isMediaServer => mediaServerServiceTypes.contains(_serviceType);
@@ -1155,6 +1156,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://tautulli:8181';
       case 'jellyfin':
         return 'http://jellyfin:8096';
+      case 'emby':
+        return 'http://emby:8096';
       default:
         return 'http://radarr:7878';
     }
@@ -1167,6 +1170,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'e.g. Tautulli';
       case 'jellyfin':
         return 'e.g. Home Jellyfin';
+      case 'emby':
+        return 'e.g. Home Emby';
       default:
         return 'e.g. Movies, 4K Movies';
     }
@@ -1183,6 +1188,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your Chaptarr API key';
       case 'jellyfin':
         return 'Your Jellyfin API key (Dashboard > API Keys)';
+      case 'emby':
+        return 'Your Emby API key (Settings > Advanced > API Keys)';
       default:
         return 'Your Radarr/Sonarr API key';
     }
@@ -1196,9 +1203,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return 'Use this as the default for media requests';
   }
 
-  /// The server's own library kind, humanized. Jellyfin reports 'movies',
-  /// 'tvshows', 'music', 'books', 'homevideos', 'musicvideos', 'boxsets',
-  /// 'photos', 'playlists'; a mixed movies-and-shows library reports none.
+  /// The server's own library kind, humanized. Jellyfin and Emby report
+  /// 'movies', 'tvshows', 'music', 'books', 'homevideos', 'musicvideos',
+  /// 'boxsets', 'photos', 'playlists'; a mixed movies-and-shows library
+  /// reports none.
   static String _collectionTypeLabel(String collectionType) {
     switch (collectionType.toLowerCase()) {
       case '':
@@ -1956,9 +1964,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             const SizedBox(height: 16),
             TextField(
               controller: _publicAddressController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Sign-in address (optional)',
-                hintText: 'https://jellyfin.example.com',
+                hintText: 'https://$_serviceType.example.com',
                 helperText: 'What your users open to sign in. Shown to them '
                     'in the app. Leave blank and they will need to ask you.',
                 helperMaxLines: 3,

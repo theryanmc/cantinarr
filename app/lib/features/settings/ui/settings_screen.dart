@@ -939,6 +939,7 @@ IconData _serviceIcon(String serviceType) {
     case 'tautulli':
       return Icons.monitor_heart_outlined;
     case 'jellyfin':
+    case 'emby':
       return Icons.live_tv_outlined;
     default:
       return Icons.dns_outlined;
@@ -965,6 +966,8 @@ String _serviceLabel(String serviceType) {
       return 'Tautulli';
     case 'jellyfin':
       return 'Jellyfin';
+    case 'emby':
+      return 'Emby';
     default:
       return serviceType;
   }

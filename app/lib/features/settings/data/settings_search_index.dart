@@ -37,7 +37,7 @@ class SettingsSearchGates {
   /// advertises, so they hide it).
   final bool phoneAppsVisible;
 
-  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin)
+  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin, Emby)
   /// is shared with this account, so the access guide has something to show.
   final bool mediaServersVisible;
 
@@ -213,6 +213,7 @@ const List<SettingsSearchEntry> _rootEntries = [
       'download client',
       'tautulli',
       'jellyfin',
+      'emby',
       'media server',
       'connect',
       'server',
@@ -467,6 +468,7 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Guides',
     keywords: [
       'jellyfin',
+      'emby',
       'media server',
       'account',
       'sign in',

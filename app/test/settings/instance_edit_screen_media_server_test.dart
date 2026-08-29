@@ -283,6 +283,36 @@ void main() {
     );
   });
 
+  testWidgets('Emby gets the media-server form with its own hints',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: [_user(1, 'alice')],
+      screen: const InstanceEditScreen(initialServiceType: 'emby'),
+    );
+
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    expect(find.text('User Access'), findsOneWidget);
+    expect(find.text('Shared libraries'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Sign-in address (optional)'),
+        findsOneWidget);
+    expect(find.text('http://emby:8096'), findsOneWidget);
+    expect(find.text('e.g. Home Emby'), findsOneWidget);
+    expect(find.text('Your Emby API key (Settings > Advanced > API Keys)'),
+        findsOneWidget);
+    expect(find.text('https://emby.example.com'), findsOneWidget);
+
+    // The probe carries the type, so the server reads it through the Emby
+    // client.
+    await _fillForm(tester);
+    await _testConnection(tester);
+    expect(_libraryProbes(adapter).single.body['service_type'], 'emby');
+    expect(find.widgetWithText(CheckboxListTile, 'Films'), findsOneWidget);
+  });
+
   testWidgets(
       'libraries load only after a passing test and save sends the chosen '
       'ids with is_default false', (tester) async {

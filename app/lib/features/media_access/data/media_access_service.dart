@@ -327,27 +327,40 @@ String mediaServerTypeLabel(String serviceType) {
   }
 }
 
+/// The product names of the granted media-server types, distinct and in a
+/// fixed order: Jellyfin, then Emby, then anything unknown as typed.
+List<String> mediaServerTypeLabels(Iterable<String> serviceTypes) {
+  const order = ['jellyfin', 'emby'];
+  final distinct = serviceTypes.toSet();
+  return [
+    for (final type in order)
+      if (distinct.remove(type)) mediaServerTypeLabel(type),
+    for (final type in distinct) mediaServerTypeLabel(type),
+  ];
+}
+
+/// The granted servers as one phrase: "Jellyfin", "Jellyfin or Emby",
+/// "Jellyfin, Emby, or Other". Empty when nothing is granted.
+String mediaServerNamesPhrase(Iterable<String> serviceTypes) {
+  final labels = mediaServerTypeLabels(serviceTypes);
+  switch (labels.length) {
+    case 0:
+      return '';
+    case 1:
+      return labels.single;
+    case 2:
+      return '${labels.first} or ${labels.last}';
+    default:
+      final head = labels.sublist(0, labels.length - 1).join(', ');
+      return '$head, or ${labels.last}';
+  }
+}
+
 /// The menu and app-bar title of the access guide, derived from the media
 /// server types the user was granted: "Watch on Jellyfin", "Watch on Jellyfin
 /// or Emby". Static surfaces (Settings row, breadcrumb, search index) say
 /// "Media server access" instead, because they cannot know the set.
 String mediaServerGuideTitle(Iterable<String> serviceTypes) {
-  const order = ['jellyfin', 'emby'];
-  final distinct = serviceTypes.toSet();
-  final labels = [
-    for (final type in order)
-      if (distinct.remove(type)) mediaServerTypeLabel(type),
-    for (final type in distinct) mediaServerTypeLabel(type),
-  ];
-  switch (labels.length) {
-    case 0:
-      return 'Watch on your media server';
-    case 1:
-      return 'Watch on ${labels.single}';
-    case 2:
-      return 'Watch on ${labels.first} or ${labels.last}';
-    default:
-      final head = labels.sublist(0, labels.length - 1).join(', ');
-      return 'Watch on $head, or ${labels.last}';
-  }
+  final names = mediaServerNamesPhrase(serviceTypes);
+  return names.isEmpty ? 'Watch on your media server' : 'Watch on $names';
 }

@@ -8,7 +8,7 @@ import '../../auth/logic/auth_provider.dart';
 import '../data/media_access_service.dart';
 import 'media_server_password_sheet.dart';
 
-/// Requester-focused guide for the media servers (Jellyfin) shared with this
+/// Requester-focused guide for the media servers (Jellyfin, Emby) shared with this
 /// account: create the account with a password only they know, see where to
 /// sign in, install the app, start watching. Everything here is re-read from
 /// the server on every open and on pull-to-refresh: the rows behind it are an
@@ -102,8 +102,6 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
             : (auth?.connection?.mediaServerInstances ?? const [])
                 .map((instance) => instance.serviceType))
         .toSet();
-    final product =
-        types.length == 1 ? mediaServerTypeLabel(types.single) : 'media server';
 
     return Scaffold(
       appBar: AppBar(title: Text(mediaServerGuideTitle(types))),
@@ -119,8 +117,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                       : _buildGuide(
                           servers,
                           username: user?.username ?? '',
-                          product: product,
-                          singleProduct: types.length == 1,
+                          types: types,
                         ),
                 ),
               ),
@@ -178,14 +175,19 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
   List<Widget> _buildGuide(
     List<MediaServerAccess> servers, {
     required String username,
-    required String product,
-    required bool singleProduct,
+    required Set<String> types,
   }) {
-    final where = singleProduct ? product : 'Your media server';
+    final labels = mediaServerTypeLabels(types);
+    final single = labels.length == 1;
+    // "Jellyfin", "Emby", or "Jellyfin or Emby": the granted set decides.
+    final names = mediaServerNamesPhrase(types);
+    final where = single ? labels.single : 'your media server';
+    final whereOpening = single ? labels.single : 'Your media server';
+    final includesEmby = types.contains('emby');
     return [
       Text(
-        'Cantinarr is where you request. $where is where you watch. Create '
-        'your account once, then sign in on any device.',
+        'Cantinarr is where you request. $whereOpening is where you watch. '
+        'Create your account once, then sign in on any device.',
         style: const TextStyle(
           color: AppTheme.textSecondary,
           fontSize: 14,
@@ -203,11 +205,24 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
       const SizedBox(height: 12),
       _GuideSection(
         number: 2,
-        title: 'Install the $product app',
+        title: 'Install the $names app',
         steps: [
-          'Download the free $product app from the App Store or Google Play',
-          '$product is also on Apple TV, Android TV, Roku, Fire TV, and most '
-              'smart TVs',
+          // Jellyfin's apps are free; Emby's are free to install but ask for
+          // an unlock or Premiere to play video on phones and tablets, so
+          // "free" is said only for a Jellyfin-only set.
+          if (single && !includesEmby)
+            'Download the free $names app from the App Store or Google Play'
+          else
+            'Download the $names app from the App Store or Google Play',
+          if (single)
+            '$names is also on Apple TV, Android TV, Roku, Fire TV, and most '
+                'smart TVs'
+          else
+            '${labels.length == 2 ? 'Both' : 'All of them'} are also on '
+                'Apple TV, Android TV, Roku, Fire TV, and most smart TVs',
+          if (includesEmby)
+            'On a phone or tablet, Emby may ask for a one-time unlock or Emby '
+                'Premiere before it plays video.',
           'On a computer there is nothing to install: open the sign-in '
               'address in your browser',
         ],
@@ -229,7 +244,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         number: 4,
         title: 'Start watching',
         steps: [
-          'Everything you request in Cantinarr shows up in $product once '
+          'Everything you request in Cantinarr shows up in $where once '
               'it is Available',
           'Missing something? Ask your admin',
         ],
