@@ -41,6 +41,7 @@ type fakeProvider struct {
 	authCalls int
 	authErr   error
 	onAuth    func()
+	usersErr  error // Users fails with this
 }
 
 // libraryWrite records one SetLibraries call.
@@ -116,6 +117,9 @@ func (f *fakeProvider) Libraries(context.Context) ([]mediaserver.Library, error)
 func (f *fakeProvider) Users(context.Context) ([]mediaserver.RemoteUser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
 	out := []mediaserver.RemoteUser{}
 	for _, u := range f.users {
 		out = append(out, *u)
@@ -516,6 +520,73 @@ func TestListForUserVerifiedAndBlindStates(t *testing.T) {
 	}
 	if d := byName["D Empty"].Account; d != nil {
 		t.Fatalf("never-created account = %+v, want nil", d)
+	}
+}
+
+// The guide leads with signing in when the server already holds an account
+// named like the user: the flag is a confirmed, unlinked, same-named account
+// on an account server the user has no account on, and nothing else.
+func TestListForUserFlagsExistingSameNamedAccount(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+	same := e.jellyfin("A Same", instance.MediaServerConfig{})
+	linked := e.jellyfin("B Linked", instance.MediaServerConfig{})
+	other := e.jellyfin("C Other", instance.MediaServerConfig{})
+	dead := e.jellyfin("D Dead", instance.MediaServerConfig{})
+	claimed := e.jellyfin("E Claimed", instance.MediaServerConfig{})
+	plex := e.mediaServer("plex", "F Plex", instance.MediaServerConfig{PublicAddress: instance.PlexPublicAddress})
+	e.grant(alice, same, linked, other, dead, claimed)
+	e.grantType(alice, "plex", plex)
+
+	sameP, linkedP, otherP, deadP, claimedP := newFakeProvider(), newFakeProvider(), newFakeProvider(), newFakeProvider(), newFakeProvider()
+	sameP.addUser("Alice", false, true) // a different case, and switched off: still hers to sign in with
+	linkedID := linkedP.addUser("alice", false, false)
+	otherP.addUser("bob", false, false)
+	deadP.addUser("alice", false, false)
+	deadP.usersErr = errors.New("jellyfin list users: status 503")
+	claimedID := claimedP.addUser("alice", false, false)
+	invite := newFakeInviteProvider()
+	invite.share("alice@example.com", false)
+	e.providers[same], e.providers[linked], e.providers[other], e.providers[dead], e.providers[claimed], e.providers[plex] = sameP, linkedP, otherP, deadP, claimedP, invite
+	for _, pair := range []struct {
+		user   int64
+		inst   string
+		remote string
+	}{{alice, linked, linkedID}, {bob, claimed, claimedID}} {
+		if _, err := e.svc.insertAccount(accountRow{UserID: pair.user, InstanceID: pair.inst, RemoteUserID: pair.remote, RemoteUsername: "alice", CreatedByCantinarr: false}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	views, err := e.svc.ListForUser(context.Background(), alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]ServerView{}
+	for _, v := range views {
+		byName[v.Name] = v
+	}
+	if v := byName["A Same"]; !v.ExistingAccount || v.Account != nil {
+		t.Fatalf("same-named account: view = %+v, want existing_account=true and no linked account", v)
+	}
+	if v := byName["B Linked"]; v.ExistingAccount || v.Account == nil {
+		t.Fatalf("linked account: view = %+v, want existing_account=false with the account", v)
+	}
+	if v := byName["C Other"]; v.ExistingAccount {
+		t.Fatalf("other names only: view = %+v, want existing_account=false", v)
+	}
+	if v := byName["D Dead"]; v.ExistingAccount {
+		t.Fatalf("unreachable server: view = %+v, want existing_account=false (blindness is not presence)", v)
+	}
+	if v := byName["E Claimed"]; v.ExistingAccount {
+		t.Fatalf("account linked to another user: view = %+v, want existing_account=false", v)
+	}
+	if v := byName["F Plex"]; v.ExistingAccount {
+		t.Fatalf("invite server: view = %+v, want existing_account=false", v)
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "could not check for an existing account") || strings.Contains(logs, "alice") {
+		t.Fatalf("logs = %q, want the unreachable server noted with ids only", logs)
 	}
 }
 
