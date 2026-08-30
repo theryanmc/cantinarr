@@ -94,6 +94,13 @@ class MediaServerAccess {
   final String publicAddress;
   final MediaServerAccountStatus? account;
 
+  /// The server confirmed an account named like this user that nobody is
+  /// linked to, while the user has none here: creating one would collide,
+  /// so the guide leads with signing in to link it. False only means no
+  /// match was confirmed (the server may have been unreachable), so the
+  /// card never claims there is no such account.
+  final bool existingAccount;
+
   const MediaServerAccess({
     required this.instanceId,
     required this.serviceType,
@@ -101,6 +108,7 @@ class MediaServerAccess {
     this.kind = MediaServerKind.account,
     this.publicAddress = '',
     this.account,
+    this.existingAccount = false,
   });
 
   bool get isInvite => kind == MediaServerKind.invite;
@@ -125,6 +133,7 @@ class MediaServerAccess {
               Map<String, dynamic>.from(rawAccount),
             )
           : null,
+      existingAccount: json['existing_account'] as bool? ?? false,
     );
   }
 }

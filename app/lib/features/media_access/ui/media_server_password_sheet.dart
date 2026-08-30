@@ -106,16 +106,18 @@ class _MediaServerPasswordSheetState
       "Couldn't create the account. Try again in a moment, or ask your admin.";
 
   /// Requester-voice copy per refusal. The server's fixed messages are
-  /// safe, but the user needs to know what to do next, which is the admin
-  /// in every case but a bad password.
+  /// safe, but the user needs to know what to do next: sign in with the
+  /// account when the name is taken (it may well be theirs), the admin in
+  /// every other case but a bad password.
   String _describe(MediaAccessException e) {
     final name = widget.server.name;
     if (e.isTransport) {
       return "Couldn't reach the server. Check your connection and try again.";
     }
     if (e.code == 'name_taken') {
-      return 'The name ${widget.username} is already taken on $name. Ask '
-          'your admin to link that account to you.';
+      return 'The name ${widget.username} is already taken on $name. If that '
+          "account is yours, go back and tap 'I already have an account' to "
+          'sign in with its password. Otherwise ask your admin.';
     }
     switch (e.status) {
       case 400:

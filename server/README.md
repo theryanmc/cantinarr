@@ -158,7 +158,10 @@ GET|PUT /api/admin/users/{userID}/instance-grants    # additional per-user insta
 ```
 GET    /api/media-servers                          # user: granted Jellyfin/Emby/Plex instances + own account state
                                                    # [{ instance_id, service_type, name, kind: account | invite, public_address,
-                                                   #    account: null | { username, disabled, pending, administrator, verified } }]
+                                                   #    account: null | { username, disabled, pending, administrator, verified },
+                                                   #    existing_account }]  (true only when the server confirmed an unlinked account named like the
+                                                   #    user while they have none there: the guide then leads with signing in to link it; false says
+                                                   #    nothing about absence, since an unreachable server reads the same)
 POST   /api/media-servers/{instanceID}/account     # user: create own account { password } (Jellyfin, Emby) or ask for the invite { email } (Plex)
                                                    # -> 201 { username, public_address, pending, administrator }
                                                    # 403 (one body for unknown and ungranted ids), 409 { code: account_exists | name_taken },

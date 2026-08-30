@@ -171,6 +171,7 @@ Map<String, dynamic> _embyServer({Map<String, dynamic>? account}) => {
 Map<String, dynamic> _server({
   Map<String, dynamic>? account,
   String publicAddress = 'https://jf.example.com',
+  bool existingAccount = false,
 }) =>
     {
       'instance_id': 'jf-a',
@@ -178,6 +179,7 @@ Map<String, dynamic> _server({
       'name': 'Home Jellyfin',
       'public_address': publicAddress,
       'account': account,
+      'existing_account': existingAccount,
     };
 
 Map<String, dynamic> _account({
@@ -399,7 +401,8 @@ void main() {
     );
   });
 
-  testWidgets('a taken name says to ask the admin to link it', (tester) async {
+  testWidgets('a taken name points at signing in with that account',
+      (tester) async {
     await _pumpGuide(
       tester,
       handlers: _createFlow(const _Reply(409, {
@@ -413,12 +416,70 @@ void main() {
     await _submitPassword(tester, password: 'correct-horse');
 
     expect(
-      find.text('The name alice is already taken on Home Jellyfin. Ask your '
-          'admin to link that account to you.'),
+      find.text('The name alice is already taken on Home Jellyfin. If that '
+          "account is yours, go back and tap 'I already have an account' to "
+          'sign in with its password. Otherwise ask your admin.'),
       findsOneWidget,
     );
     // The sheet stays open for another try.
     expect(find.text('Create your Jellyfin account'), findsOneWidget);
+  });
+
+  testWidgets(
+      'an account already named like the user leads with signing in and '
+      'offers nothing to create', (tester) async {
+    var linked = false;
+    final adapter = await _pumpGuide(
+      tester,
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _server(
+                account: linked ? _account() : null,
+                existingAccount: !linked,
+              ),
+            ]),
+        'POST /api/media-servers/jf-a/account/link': (_, __) {
+          linked = true;
+          return const _Reply(201, {
+            'username': 'alice',
+            'public_address': 'https://jf.example.com',
+          });
+        },
+      },
+    );
+
+    expect(
+      find.text("There's already an account named alice on Home Jellyfin. "
+          "If it's yours, sign in with its password to link it."),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(ElevatedButton, 'Sign in to link it'),
+        findsOneWidget);
+    expect(find.text('Not yours? Ask your admin.'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Create my account'),
+        findsNothing);
+    expect(find.widgetWithText(TextButton, 'I already have an account'),
+        findsNothing);
+    // The flag is a hint about the layout, never a claim of an account.
+    expect(find.text('Username'), findsNothing);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in to link it'));
+    await tester.pumpAndSettle();
+    expect(find.text('Link your Jellyfin account'), findsOneWidget);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Password'), 'correct-horse-battery');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
+    expect(post.body, {'username': 'alice', 'password': 'correct-horse-battery'});
+    expect(find.text('Account linked. Sign in with your usual password.'),
+        findsOneWidget);
+    // The card re-read the server: the linked account is shown and the
+    // hint is gone with it.
+    expect(find.text('Username'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Sign in to link it'),
+        findsNothing);
   });
 
   testWidgets('an existing account closes the sheet and refreshes',
