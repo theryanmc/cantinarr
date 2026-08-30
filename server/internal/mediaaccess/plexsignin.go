@@ -149,8 +149,12 @@ func (s *Service) PlexSignInCheck(ctx context.Context, userID int64, pinID int64
 		// The token has done its one job. A sign-out that fails leaves an
 		// idle "Cantinarr" device on the person's plex.tv account, which
 		// they can remove themselves; nothing here keeps the token.
-		if signOutErr := client.SignOut(acctCtx, entry.clientID, pin.AuthToken); signOutErr != nil {
+		removed, signOutErr := client.SignOut(acctCtx, entry.clientID, pin.AuthToken)
+		switch {
+		case signOutErr != nil:
 			s.logger.Warn("mediaaccess: plex sign-in: could not sign the token out", "err", signOutErr, "user_id", userID)
+		case !removed:
+			s.logger.Info("mediaaccess: plex sign-in: token revoked, but plex.tv never listed the device to remove; an idle Cantinarr entry stays on the account", "user_id", userID)
 		}
 	}
 	cancel()

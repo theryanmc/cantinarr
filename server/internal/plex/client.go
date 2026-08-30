@@ -135,7 +135,48 @@ func (c *Client) GetUser(ctx context.Context, clientID, token string) (*Account,
 // the entry listed, so that is only the fallback for a token plex.tv
 // registered no device for. A sign-in check calls this once it has read the
 // account: the token was only ever proof, never something to keep.
-func (c *Client) SignOut(ctx context.Context, clientID, token string) error {
+//
+// The device can take a moment to appear in the list after the approval, so
+// the lookup is retried for a few seconds before giving up on it. Returns
+// whether the device record was removed (false: only the token was revoked,
+// and an entry stays listed).
+func (c *Client) SignOut(ctx context.Context, clientID, token string) (removedDevice bool, err error) {
+	deadline := time.Now().Add(signOutDeviceWait)
+	for {
+		id, found, err := c.findDevice(ctx, clientID, token)
+		if err != nil {
+			return false, fmt.Errorf("sign out: list devices: %w", err)
+		}
+		if found {
+			if err := c.doXML(ctx, http.MethodDelete, fmt.Sprintf("/devices/%d.xml", id), clientID, token, nil); err != nil {
+				return false, fmt.Errorf("sign out: remove device: %w", err)
+			}
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false, fmt.Errorf("sign out: %w", ctx.Err())
+		case <-time.After(signOutDevicePoll):
+		}
+	}
+	if err := c.doJSON(ctx, http.MethodDelete, "/api/v2/users/signout", clientID, token, nil, nil); err != nil {
+		return false, fmt.Errorf("sign out: %w", err)
+	}
+	return false, nil
+}
+
+// signOutDeviceWait bounds how long SignOut waits for plex.tv to list the
+// device it registered for a fresh token; signOutDevicePoll paces the wait.
+var (
+	signOutDeviceWait = 6 * time.Second
+	signOutDevicePoll = 750 * time.Millisecond
+)
+
+// findDevice looks the client identifier up in the account's device list.
+func (c *Client) findDevice(ctx context.Context, clientID, token string) (id int64, found bool, err error) {
 	var container struct {
 		Devices []struct {
 			ID               int64  `xml:"id,attr"`
@@ -143,20 +184,14 @@ func (c *Client) SignOut(ctx context.Context, clientID, token string) error {
 		} `xml:"Device"`
 	}
 	if err := c.doXML(ctx, http.MethodGet, "/devices.xml", clientID, token, &container); err != nil {
-		return fmt.Errorf("sign out: list devices: %w", err)
+		return 0, false, err
 	}
 	for _, d := range container.Devices {
 		if d.ClientIdentifier == clientID {
-			if err := c.doXML(ctx, http.MethodDelete, fmt.Sprintf("/devices/%d.xml", d.ID), clientID, token, nil); err != nil {
-				return fmt.Errorf("sign out: remove device: %w", err)
-			}
-			return nil
+			return d.ID, true, nil
 		}
 	}
-	if err := c.doJSON(ctx, http.MethodDelete, "/api/v2/users/signout", clientID, token, nil, nil); err != nil {
-		return fmt.Errorf("sign out: %w", err)
-	}
-	return nil
+	return 0, false, nil
 }
 
 // ListServers returns the owned Plex Media Servers on the account.
