@@ -82,6 +82,20 @@ class LibraryAuthorIndex {
     return LibraryAuthorIndex(byName);
   }
 
+  /// Library records whose name passes [test], in library order.
+  ///
+  /// This is the search overlay's own-library fallback: when the metadata
+  /// lookup returns no author rows at all (Chaptarr's search routinely answers
+  /// a complete author name with nothing), the records the query names are
+  /// still surfaced directly. Each returned record is concrete — two records
+  /// sharing a name both return, and each row can open its own page, so this
+  /// path never needs the ambiguous state a lookup row falls into.
+  List<ChaptarrAuthor> recordsWhere(bool Function(String authorName) test) => [
+        for (final records in _byName.values)
+          for (final record in records)
+            if (test(record.authorName)) record,
+      ];
+
   /// Resolves [lookupAuthor] against the library.
   LibraryAuthorMatch match(ChaptarrAuthor lookupAuthor) {
     final key = normalizeAuthorName(lookupAuthor.authorName);

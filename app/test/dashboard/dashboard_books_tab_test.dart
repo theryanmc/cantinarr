@@ -1496,7 +1496,9 @@ void main() {
     String term = 'le guin',
     bool authorMatches = false,
     bool authorLookupFails = false,
+    bool authorLookupEmpty = false,
     bool unkeyedAuthor = false,
+    bool mixedOwnership = false,
     bool duplicateAuthorRecords = false,
     bool emptyLookup = false,
     bool authorLibraryFails = false,
@@ -1507,7 +1509,9 @@ void main() {
       tester,
       authorMatches: authorMatches,
       authorLookupFails: authorLookupFails,
+      authorLookupEmpty: authorLookupEmpty,
       unkeyedAuthor: unkeyedAuthor,
+      mixedOwnership: mixedOwnership,
       duplicateAuthorRecords: duplicateAuthorRecords,
       emptyLookup: emptyLookup,
       authorLibraryFails: authorLibraryFails,
@@ -1651,31 +1655,44 @@ void main() {
   });
 
   testWidgets(
-      'two library authors sharing a name leave the row unopened rather than '
-      'guessing which record was meant', (tester) async {
+      'two library authors sharing a name leave the lookup rows unopened, '
+      'while the concrete records they might be open individually',
+      (tester) async {
     await searchBooksTab(tester, duplicateAuthorRecords: true);
 
+    // Two ambiguous lookup rows plus the injected dotted-name library record;
+    // the undotted record renders under its own distinct name.
     expect(
       find.text('Ursula K. Le Guin'),
-      findsNWidgets(2),
+      findsNWidgets(3),
       reason: 'AGENTS.md: never silently dedupe or merge distinct records',
     );
-    // Both library records normalize to the same name key, so neither can be
-    // claimed as "the" record for these rows.
+    expect(find.text('Ursula K Le Guin'), findsOneWidget);
+    // Both lookup rows normalize to the same name key, so neither can be
+    // claimed as "the" record — and the records they might be are on screen
+    // to choose from, the same instruction the book rows give.
     expect(
       find.text('Two authors in your library share this name — open the one '
           'you want from the Authors row'),
       findsNWidgets(2),
     );
-    // Scoped to the author rows: the book rows below legitimately keep their
-    // own chevrons, so a bare byIcon check would assert nothing useful.
+    // Exactly one dotted-name tile carries a chevron: the injected library
+    // record. The two ambiguous lookup tiles stay unopenable.
     expect(
       find.descendant(
-        of: find.widgetWithText(ListTile, 'Ursula K. Le Guin').first,
+        of: find.widgetWithText(ListTile, 'Ursula K. Le Guin'),
         matching: find.byIcon(Icons.chevron_right),
       ),
-      findsNothing,
-      reason: 'an ambiguous author is not openable',
+      findsOneWidget,
+      reason: 'the concrete record opens; the ambiguous lookup rows do not',
+    );
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Ursula K Le Guin'),
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsOneWidget,
+      reason: 'the undotted record is its own openable row',
     );
   });
 
@@ -1753,6 +1770,94 @@ void main() {
       findsOneWidget,
       reason: 'only the genuinely metadata-only author still reads that way',
     );
+  });
+
+  // -----------------------------------------------------------------------
+  // The library answers for itself when the metadata search whiffs entirely.
+  // Verified live on a real Chaptarr: a complete author name ("madeline
+  // miller") returns zero rows from BOTH lookups while a prefix of it finds
+  // the author — so with no injection the overlay claimed nobody by that name
+  // exists while the Authors row behind it showed them.
+  // -----------------------------------------------------------------------
+
+  testWidgets(
+      'an author the library holds surfaces for their full name even when '
+      'both metadata lookups return nothing', (tester) async {
+    await searchBooksTab(
+      tester,
+      term: 'tracked author',
+      emptyLookup: true,
+    );
+
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(find.text('Tracked Author'), findsOneWidget);
+    expect(
+      find.text('Author · 2 of 4 books available'),
+      findsOneWidget,
+      reason: 'the injected row is the library record, counts and all',
+    );
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Tracked Author'),
+        matching: find.byIcon(Icons.chevron_right),
+      ),
+      findsOneWidget,
+      reason: 'an injected library author opens their page',
+    );
+  });
+
+  testWidgets(
+      'an owned book surfaces for its author\'s full name even when both '
+      'metadata lookups return nothing', (tester) async {
+    await searchBooksTab(
+      tester,
+      term: 'marcus aurelius',
+      emptyLookup: true,
+      mixedOwnership: true,
+    );
+
+    expect(overlayText(noBooksMessage), findsNothing);
+    expect(
+      find.text('Meditations'),
+      findsOneWidget,
+      reason: 'the owned title matches the query through its author name',
+    );
+  });
+
+  testWidgets(
+      'two same-named library authors both surface as their own openable '
+      'rows when the lookups return nothing', (tester) async {
+    await searchBooksTab(
+      tester,
+      term: 'ursula k le guin',
+      emptyLookup: true,
+      authorLookupEmpty: true,
+      duplicateAuthorRecords: true,
+    );
+
+    expect(overlayText(noBooksMessage), findsNothing);
+    // Injected rows are concrete records — unlike a lookup row resolving
+    // against two candidates, each of these IS one record, so neither is
+    // ambiguous and both open their own page. AGENTS.md: never silently
+    // dedupe distinct records.
+    expect(find.text('Ursula K. Le Guin'), findsOneWidget);
+    expect(find.text('Ursula K Le Guin'), findsOneWidget);
+    expect(
+      find.text('Two authors in your library share this name — open the one '
+          'you want from the Authors row'),
+      findsNothing,
+      reason: 'concrete records need no disambiguation copy',
+    );
+    for (final name in ['Ursula K. Le Guin', 'Ursula K Le Guin']) {
+      expect(
+        find.descendant(
+          of: find.widgetWithText(ListTile, name),
+          matching: find.byIcon(Icons.chevron_right),
+        ),
+        findsOneWidget,
+        reason: 'each same-named record opens its own page',
+      );
+    }
   });
 
   testWidgets(
@@ -1932,6 +2037,7 @@ Future<
   bool perInstanceBooks = false,
   bool authorMatches = false,
   bool authorLookupFails = false,
+  bool authorLookupEmpty = false,
   bool unkeyedAuthor = false,
   bool duplicateAuthorRecords = false,
   bool authorLibraryFails = false,
@@ -1955,6 +2061,7 @@ Future<
     perInstanceBooks: perInstanceBooks,
     authorMatches: authorMatches,
     authorLookupFails: authorLookupFails,
+    authorLookupEmpty: authorLookupEmpty,
     unkeyedAuthor: unkeyedAuthor,
     duplicateAuthorRecords: duplicateAuthorRecords,
     authorLibraryFails: authorLibraryFails,
@@ -2042,6 +2149,7 @@ class _BooksSearchAdapter implements HttpClientAdapter {
     this.perInstanceBooks = false,
     this.authorMatches = false,
     this.authorLookupFails = false,
+    this.authorLookupEmpty = false,
     this.unkeyedAuthor = false,
     this.duplicateAuthorRecords = false,
     this.authorLibraryFails = false,
@@ -2061,6 +2169,11 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   /// SEARCH-01: `author/lookup` answers with two authors — one the library
   /// also holds and one metadata-only match.
   final bool authorMatches;
+
+  /// `author/lookup` answers an empty list regardless of other flags — the
+  /// full-name whiff Chaptarr's metadata search produces live, staged beside
+  /// duplicate library records without also faking metadata rows.
+  bool authorLookupEmpty;
 
   /// `author/lookup` answers 500 while `book/lookup` still succeeds — the
   /// half-failure that must keep the book rows and say authors could not be
@@ -2284,7 +2397,9 @@ class _BooksSearchAdapter implements HttpClientAdapter {
       if (authorLookupFails) {
         return ResponseBody.fromString('server error', 500);
       }
-      if (unkeyedAuthor) {
+      if (authorLookupEmpty) {
+        body = <Object>[];
+      } else if (unkeyedAuthor) {
         body = [
           {
             'id': 0,
