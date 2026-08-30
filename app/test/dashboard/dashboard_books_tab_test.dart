@@ -1710,6 +1710,52 @@ void main() {
   });
 
   testWidgets(
+      'a library author list that failed is refetched by the next search, not '
+      'held blank for the session', (tester) async {
+    final adapter = await searchBooksTab(
+      tester,
+      authorMatches: true,
+      authorLibraryFails: true,
+    );
+    expect(adapter.authorLibraryPaths, hasLength(1));
+    expect(
+      find.text('Author · not in your library'),
+      findsNWidgets(2),
+      reason: 'an index that could not be read claims no membership',
+    );
+
+    // Chaptarr recovers. Dismissing the search releases the index — only a
+    // successful fetch is cached — so the next one asks again instead of
+    // rendering a blank the whole session inherits.
+    adapter.authorLibraryFails = false;
+    final field = find.descendant(
+      of: find.byType(CantinarrSearchBar),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(field, '');
+    await tester.pumpAndSettle();
+    await tester.enterText(field, 'le guin');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(
+      adapter.authorLibraryPaths,
+      hasLength(2),
+      reason: 'the failed index must be refetched, never reused',
+    );
+    expect(
+      find.text('Author · 2 of 4 books available'),
+      findsOneWidget,
+      reason: 'the recovered index resolves the author the library holds',
+    );
+    expect(
+      find.text('Author · not in your library'),
+      findsOneWidget,
+      reason: 'only the genuinely metadata-only author still reads that way',
+    );
+  });
+
+  testWidgets(
       'an author lookup failure keeps the book results and says authors '
       'could not be searched', (tester) async {
     await searchBooksTab(tester, authorLookupFails: true);
@@ -2033,8 +2079,9 @@ class _BooksSearchAdapter implements HttpClientAdapter {
   final authorLookupPaths = <String>[];
 
   /// `GET /author` (the library's own author list) answers 500, so author
-  /// linking cannot be resolved. The book search must still work.
-  final bool authorLibraryFails;
+  /// linking cannot be resolved. The book search must still work. Not final:
+  /// a test flips it to model a Chaptarr blip that recovers.
+  bool authorLibraryFails;
 
   /// The library holds no authors at all — every lookup match is metadata-only.
   final bool emptyAuthorLibrary;
