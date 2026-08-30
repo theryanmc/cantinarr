@@ -252,6 +252,7 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   bool accountsFail = false,
   List<ServiceInstance> instances = const [_homeJellyfin],
   List<String> grants = const ['jf-a'],
+  List<UserSummary>? users,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1000, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -266,8 +267,8 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider
-            .overrideWith(() => _FakeAuthNotifier(instances: instances)),
+        authProvider.overrideWith(
+            () => _FakeAuthNotifier(instances: instances, users: users)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen()),
@@ -347,6 +348,52 @@ void _mediaServerAccountTests() {
     );
 
     expect(find.text('Home Jellyfin: lr-tv'), findsOneWidget);
+  });
+
+  testWidgets('an adopted Plex share or the owner is not called an invite',
+      (tester) async {
+    const plex = ServiceInstance(
+      id: 'px-a',
+      serviceType: 'plex',
+      name: 'Cantina Plex',
+    );
+    await _pumpWithMediaServer(
+      tester,
+      instances: const [plex],
+      grants: const ['px-a'],
+      users: const [
+        UserSummary(
+          id: 7,
+          username: 'living-room',
+          role: 'admin',
+          permissions: [],
+          createdAt: '',
+          deviceCount: 1,
+          hasPassword: true,
+          passwordEnabled: true,
+          passkeyEnabled: false,
+          hasPendingInvite: false,
+          plexEmail: 'owner@example.com',
+          plexInvitedAt: '2026-08-30T02:00:00Z',
+        ),
+      ],
+      accounts: [
+        {
+          'user_id': 7,
+          'instance_id': 'px-a',
+          'instance_name': 'Cantina Plex',
+          'service_type': 'plex',
+          'remote_user_id': 'owner@example.com',
+          'username': 'windo186',
+          'created_by_cantinarr': false,
+          'disabled': false,
+          'created_at': '2026-08-30T02:00:00Z',
+        },
+      ],
+    );
+    expect(find.text('Cantina Plex: windo186'), findsOneWidget);
+    expect(find.text('Plex invite sent'), findsNothing);
+    expect(find.text('Asked for Plex access'), findsNothing);
   });
 
   testWidgets('the link picker marks administrators and PUTs the remote id',
@@ -528,7 +575,13 @@ class _MediaAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({this.currentUser = false, this.instances = const []});
+  _FakeAuthNotifier({
+    this.currentUser = false,
+    this.instances = const [],
+    List<UserSummary>? users,
+  }) {
+    if (users != null) _users = users;
+  }
 
   final bool currentUser;
 

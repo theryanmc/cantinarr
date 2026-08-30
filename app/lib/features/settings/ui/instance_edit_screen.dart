@@ -15,6 +15,7 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
 import '../logic/arr_path_match.dart';
+import '../logic/plex_invites_provider.dart';
 
 /// Form for creating or editing a service instance.
 class InstanceEditScreen extends ConsumerStatefulWidget {
@@ -1254,6 +1255,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   Future<void> _refreshConfigAfterSave() async {
     final activeBefore = ref.read(instanceProvider);
+    if (_isMediaServer) {
+      // A grant can settle a waiting Plex user (the share goes out off the
+      // request), so the drawer's waiting count is re-read here and again
+      // whenever the drawer opens.
+      ref.read(plexInvitesWaitingProvider.notifier).refresh();
+    }
     try {
       await ref.read(authProvider.notifier).refreshConfig();
       if (!mounted) return;

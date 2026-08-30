@@ -779,12 +779,15 @@ class _UserTile extends StatelessWidget {
               const _Tag(label: 'AI included', color: AppTheme.signal),
             if (user.plexEmail.isNotEmpty)
               _Tag(label: user.plexEmail, color: AppTheme.textSecondary),
-            // The invite state is derived from their live Plex share: sent
-            // when one exists, waiting when they shared an email and no
-            // grant has sent one yet (the grant toggle below is the tap).
-            if (user.plexInvitedAt != null)
+            // "Invite sent" only for a share Cantinarr itself sent; a share
+            // adopted from plex.tv, or the server's owner, is said by the
+            // account tag below and nothing was sent. "Asked" is an email
+            // with no Plex share yet (the grant toggle below is the tap).
+            if (mediaServers.any((server) =>
+                server.serviceType == 'plex' &&
+                (mediaAccounts[server.id]?.createdByCantinarr ?? false)))
               const _Tag(label: 'Plex invite sent', color: AppTheme.available)
-            else if (user.plexEmail.isNotEmpty)
+            else if (user.plexEmail.isNotEmpty && user.plexInvitedAt == null)
               const _Tag(
                   label: 'Asked for Plex access', color: AppTheme.requested),
             // One tag per linked media-server account: the server's name
