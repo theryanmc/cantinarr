@@ -58,6 +58,7 @@ func TestIsArrReadPath(t *testing.T) {
 
 		// Allowlisted Chaptarr v1 read resources.
 		{"chaptarr owned cover", "chaptarr", "api/v1/MediaCover/Books/9/cover.jpg", true},
+		{"chaptarr author portrait", "chaptarr", "api/v1/MediaCover/7/poster.jpg", true},
 		{"chaptarr author", "chaptarr", "api/v1/author", true},
 		{"chaptarr author detail", "chaptarr", "api/v1/author/7", true},
 		{"chaptarr book", "chaptarr", "api/v1/book/123", true},
@@ -107,6 +108,8 @@ func TestIsArrReadPath(t *testing.T) {
 		{"chaptarr root folders", "chaptarr", "api/v1/rootfolder", false},
 		{"chaptarr lookup cover proxy", "chaptarr", "api/v1/MediaCoverProxy/cover.jpg", false},
 		{"chaptarr bare media cover", "chaptarr", "api/v1/MediaCover", false},
+		{"chaptarr author portrait zero id", "chaptarr", "api/v1/MediaCover/0/poster.jpg", false},
+		{"chaptarr author portrait without file", "chaptarr", "api/v1/MediaCover/7", false},
 		{"chaptarr authors media cover", "chaptarr", "api/v1/MediaCover/Authors/9/fanart.jpg", false},
 		{"chaptarr config media cover", "chaptarr", "api/v1/MediaCover/Config/9/secret.txt", false},
 		{"chaptarr media cover without id", "chaptarr", "api/v1/MediaCover/Books/cover.jpg", false},

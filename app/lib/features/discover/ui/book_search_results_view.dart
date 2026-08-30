@@ -173,7 +173,35 @@ class BookSearchResultsView extends ConsumerWidget {
       (match.kind == LibraryAuthorMatchKind.absent ? elsewhere : inLibrary)
           .add(resolved);
     }
-    final orderedAuthors = <_ResolvedAuthor>[...inLibrary, ...elsewhere];
+    // The library answers for its own authors even when the metadata lookup
+    // does not: Chaptarr's search routinely returns nothing for a complete
+    // author name (verified live — "madeline miller" answers empty while
+    // "madeline mill" finds her), and without this the search overlay claims
+    // nobody by that name exists while the Authors row behind it shows them.
+    // Same query rule as the owned-title injection; records already on screen
+    // through a resolved lookup row are skipped — that is the same record, not
+    // a distinct one.
+    final presentRecordIds = <int>{
+      for (final resolved in inLibrary)
+        if (resolved.record != null) resolved.record!.id,
+    };
+    final injectedAuthors = <_ResolvedAuthor>[
+      for (final record in index
+          .recordsWhere((name) => titleMatchesQuery(query, name)))
+        if (!presentRecordIds.contains(record.id))
+          _ResolvedAuthor(
+            lookup: record,
+            match: LibraryAuthorMatch(
+              LibraryAuthorMatchKind.resolved,
+              record,
+            ),
+          ),
+    ];
+    final orderedAuthors = <_ResolvedAuthor>[
+      ...injectedAuthors,
+      ...inLibrary,
+      ...elsewhere,
+    ];
 
     if (ordered.isEmpty && orderedAuthors.isEmpty) {
       // A search that ran and matched nothing says so; a search that hasn't

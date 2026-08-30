@@ -73,10 +73,19 @@ func isArrReadResource(serviceType, forwardPath string) bool {
 	}
 
 	if serviceType == "chaptarr" && resource == "MediaCover" {
-		// The sole requester consumer is an owned-book cover returned as
-		// /MediaCover/Books/{numeric-id}/... . Lookup covers and every other
-		// MediaCover subtree remain admin-only.
-		return len(segments) >= 4 && segments[1] == "Books" && isPositiveDecimalID(segments[2])
+		// Two requester image forms, each one numeric id deep:
+		// /MediaCover/Books/{id}/... is an owned-book cover, and
+		// /MediaCover/{id}/... is a library author's portrait — Chaptarr keeps
+		// author art at the bare-id path (only books get a named subtree; see
+		// MediaCoverMapper in its source), which is exactly what book-authors
+		// emits, so without this arm every portrait in the requester's Authors
+		// row 403s into a placeholder. Neither form tells a requester anything
+		// the author and book records they already read do not. Lookup covers
+		// (/MediaCoverProxy) and every other subtree remain admin-only.
+		if len(segments) >= 4 && segments[1] == "Books" && isPositiveDecimalID(segments[2]) {
+			return true
+		}
+		return len(segments) >= 3 && isPositiveDecimalID(segments[1])
 	}
 
 	suffix := segments[1:]

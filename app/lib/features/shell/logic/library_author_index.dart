@@ -82,6 +82,20 @@ class LibraryAuthorIndex {
     return LibraryAuthorIndex(byName);
   }
 
+  /// Library records whose name passes [test], in library order.
+  ///
+  /// This is the search overlay's own-library fallback: when the metadata
+  /// lookup returns no author rows at all (Chaptarr's search routinely answers
+  /// a complete author name with nothing), the records the query names are
+  /// still surfaced directly. Each returned record is concrete — two records
+  /// sharing a name both return, and each row can open its own page, so this
+  /// path never needs the ambiguous state a lookup row falls into.
+  List<ChaptarrAuthor> recordsWhere(bool Function(String authorName) test) => [
+        for (final records in _byName.values)
+          for (final record in records)
+            if (test(record.authorName)) record,
+      ];
+
   /// Resolves [lookupAuthor] against the library.
   LibraryAuthorMatch match(ChaptarrAuthor lookupAuthor) {
     final key = normalizeAuthorName(lookupAuthor.authorName);
@@ -99,18 +113,28 @@ class LibraryAuthorIndex {
 /// This is the library's full author list (`GET /author`), not the browse row's
 /// (`/api/requests/book-authors`): that one is capped at 200 by design — "a
 /// shelf to scan, not the library" — and search is exactly the path that
-/// reaches past the cap. One unpaginated fetch per instance, cached for the
-/// session, issued only once a Books-tab search actually needs it.
+/// reaches past the cap. One unpaginated fetch per instance, issued only once a
+/// Books-tab search actually needs it and then held until the library itself
+/// changes: `DashboardBooksTab._refreshBookTruth()` drops this index alongside
+/// the browse rows' truth, so an author the library just gained resolves
+/// without a restart.
 ///
 /// On failure this yields [LibraryAuthorIndex.empty] rather than throwing: a
 /// book search must not fail because author *linking* could not be resolved.
 /// Every author then reads as metadata-only, which is the safe direction — no
-/// row claims to be in a library this could not read.
+/// row claims to be in a library this could not read. That blank is deliberately
+/// not held: only a fetch that succeeded keeps the cache alive, so a Chaptarr
+/// blip costs the search that saw it rather than every search until the app
+/// restarts — dismissing the overlay releases the failed index, and the next
+/// search asks again.
 final libraryAuthorIndexProvider =
     FutureProvider.autoDispose<LibraryAuthorIndex>((ref) async {
   final instance = ref.watch(instanceProvider).activeChaptarrInstance;
   if (instance == null) return LibraryAuthorIndex.empty;
-  ref.keepAlive();
+  // Taken before the fetch so a search dismissed and reopened mid-flight joins
+  // the request already running instead of starting a second one, and released
+  // again below if it fails.
+  final cache = ref.keepAlive();
   final service = ChaptarrApiService(
     backendDio: ref.read(backendClientProvider),
     instanceId: instance.id,
@@ -118,6 +142,7 @@ final libraryAuthorIndexProvider =
   try {
     return LibraryAuthorIndex.from(await service.getAuthors());
   } catch (_) {
+    cache.close();
     return LibraryAuthorIndex.empty;
   }
 });
