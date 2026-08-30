@@ -22,6 +22,7 @@ import '../../discover/data/tmdb_models.dart';
 import '../../discover/data/discover_api_service.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
+import '../../media_access/data/media_access_service.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../radarr/data/radarr_api_service.dart';
@@ -85,6 +86,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   String? _downloadInstanceId;
   int _arrResolveGeneration = 0;
 
+  /// Where this title can be watched on the user's media servers, as they
+  /// answered just now; empty until the title is there to watch (available
+  /// or partial) and a server has answered.
+  List<WatchLink> _watchLinks = const [];
+  int _watchGeneration = 0;
+  RequestStatus? _watchedStatus;
+
   /// The library this screen currently reads and requests against; null means
   /// the user's default. Only ever set when the connection exposes more than
   /// one library for this media type (multi-grant users, or admins).
@@ -107,10 +115,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
 
     // Resolve the arr deep link once the TMDB detail is in — Sonarr matching
-    // needs the show's TVDB id, which only lands after the detail loads.
+    // needs the show's TVDB id, which only lands after the detail loads. The
+    // watch links need the same detail (year, title, TVDB id) and the request
+    // status, so they resolve on whichever lands last.
     _detailNotifier.load().then((_) {
-      if (mounted) _resolveArrLink();
+      if (!mounted) return;
+      _resolveArrLink();
+      _resolveWatchLinks();
     });
+    _requestNotifier.addListener(_onRequestStateChanged);
     _requestNotifier.checkStatus();
     _loadMyOpenReport();
     if (widget.mediaType == MediaType.tv) {
@@ -118,6 +131,19 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         if (mounted && opts != null) setState(() => _requestOptions = opts);
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _requestNotifier.removeListener(_onRequestStateChanged);
+    super.dispose();
+  }
+
+  /// Re-asks the media servers when the request status moves, and only then:
+  /// the notifier also fires for option loads and request writes, which
+  /// change nothing about where the title can be watched.
+  void _onRequestStateChanged() {
+    if (_requestNotifier.state.status != _watchedStatus) _resolveWatchLinks();
   }
 
   /// Whether the user may pick specific seasons. Defaults to true (the
@@ -177,8 +203,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       }
     });
     // A request just added the title to the arr (main or per-season request
-    // both bump this tick) — re-check so the admin "Open in …" link appears.
-    ref.listen(libraryRefreshTickProvider, (_, __) => _resolveArrLink());
+    // both bump this tick) — re-check so the admin "Open in …" link appears,
+    // and ask the media servers again.
+    ref.listen(libraryRefreshTickProvider, (_, __) {
+      _resolveArrLink();
+      _resolveWatchLinks();
+    });
     // Resolve (or re-resolve) the admin link once auth settles — covers auth
     // landing after the initial detail load (e.g. an optimistic reconnect).
     ref.listen(authProvider, (_, __) => _resolveArrLink());
@@ -370,6 +400,32 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                               reportedPath:
                                                   _downloadMovieFile!.path,
                                             ),
+                                          for (final link in _watchLinks)
+                                            if (link.state ==
+                                                WatchLinkState.found)
+                                              TextButton.icon(
+                                                onPressed: () =>
+                                                    _openWatchLink(link),
+                                                icon: const Icon(
+                                                  Icons.play_circle_outline,
+                                                  size: 17,
+                                                ),
+                                                label: Text(
+                                                  'Watch on ${_watchLabel(link)}',
+                                                ),
+                                              )
+                                            else if (link.state ==
+                                                WatchLinkState.missing)
+                                              TextButton.icon(
+                                                onPressed: null,
+                                                icon: const Icon(
+                                                  Icons.hourglass_empty,
+                                                  size: 17,
+                                                ),
+                                                label: Text(
+                                                  'Not on ${_watchLabel(link)} yet',
+                                                ),
+                                              ),
                                           if (_arrLink != null)
                                             TextButton.icon(
                                               onPressed: _openInArr,
@@ -793,6 +849,73 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       ));
     }
     return result;
+  }
+
+  /// Asks the media servers the user can watch on where this title is, once
+  /// the request status says it is there to watch (available or partial) and
+  /// the TMDB detail is in (the year, the title, and a show's TVDB id narrow
+  /// the lookup; the match is by provider id). Best-effort like the arr
+  /// link: a failed read clears the links rather than showing stale ones.
+  /// Nothing is asked when the user has no Jellyfin or Emby server at all.
+  Future<void> _resolveWatchLinks() async {
+    final generation = ++_watchGeneration;
+    final status = _requestNotifier.state.status;
+    _watchedStatus = status;
+    final connection = ref.read(authProvider).valueOrNull?.connection;
+    final watchable = status == RequestStatus.available ||
+        status == RequestStatus.partial;
+    final askable = connection?.mediaServerInstances
+            .any((i) => i.serviceType != 'plex') ??
+        false;
+    final detail = _detailNotifier.state;
+    if (!watchable || !askable) {
+      if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);
+      return;
+    }
+    if (detail.movieDetail == null && detail.tvDetail == null) return;
+    try {
+      final links = await ref.read(mediaAccessServiceProvider).watchLinks(
+            mediaType: widget.mediaType,
+            tmdbId: widget.id,
+            tvdbId: detail.tvDetail?.externalIds?.tvdbId,
+            year: widget.mediaType == MediaType.movie
+                ? tmdbPremiereYear(detail.movieDetail?.releaseDate)
+                : tmdbPremiereYear(detail.tvDetail?.firstAirDate),
+            title: detail.title,
+          );
+      if (!mounted || generation != _watchGeneration) return;
+      setState(() => _watchLinks = links);
+    } catch (_) {
+      if (!mounted || generation != _watchGeneration) return;
+      setState(() => _watchLinks = const []);
+    }
+  }
+
+  /// "Jellyfin" when one server of that type answered, the instance's own
+  /// name when two of the same type did.
+  String _watchLabel(WatchLink link) {
+    final sameType = _watchLinks
+        .where((other) => other.serviceType == link.serviceType)
+        .length;
+    return sameType > 1 ? link.name : mediaServerTypeLabel(link.serviceType);
+  }
+
+  /// Opens the title's page on the media server, in the browser or the
+  /// server's app when it claims the address.
+  Future<void> _openWatchLink(WatchLink link) async {
+    final uri = Uri.tryParse(link.url);
+    var opened = false;
+    if (uri != null) {
+      try {
+        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {
+        opened = false;
+      }
+    }
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't open ${_watchLabel(link)}."),
+    ));
   }
 
   /// Pushes the matched arr detail screen (movie → Radarr, TV → Sonarr) over

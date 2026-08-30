@@ -7,6 +7,7 @@ package mediaserver
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -52,6 +53,59 @@ type Authenticator interface {
 	// such name), and ErrAccountRefused when the server refuses the account
 	// itself (switched off, or a network or schedule rule).
 	Authenticate(ctx context.Context, username, password string) (RemoteUser, error)
+}
+
+// ItemQuery names one title to look for on a media server: the media type
+// ("movie" or "tv"), its provider ids, and the year and title that narrow
+// the search where the server cannot filter by provider id itself.
+type ItemQuery struct {
+	MediaType string
+	TMDBID    int64
+	TVDBID    int64
+	Year      int
+	Title     string
+}
+
+// Item is a library item the media server holds. WebPath is the path and
+// fragment of its page under the server's root (for example
+// "/web/#/details?id=…&serverId=…"); the caller joins it to the admin-typed
+// public address, so the client never learns the address Cantinarr dials and
+// the caller never learns the server's URL scheme.
+type Item struct {
+	ID      string
+	WebPath string
+}
+
+// ErrItemNotFound reports that the server confirmed it has no such item the
+// account can see: absence, as opposed to a server that could not answer.
+var ErrItemNotFound = errors.New("media server has no such item")
+
+// ItemFinder is implemented by account servers that can look a title up by
+// its provider ids. The lookup runs as the linked account, so the server
+// applies that account's library access, and a match is by provider id,
+// never by name alone.
+type ItemFinder interface {
+	FindItem(ctx context.Context, remoteUserID string, q ItemQuery) (Item, error)
+}
+
+// ItemMatches reports whether a server item's provider ids (keyed the way
+// Jellyfin and Emby key them: "Tmdb", "Tvdb", in any case) name the queried
+// title: the TMDB id for a movie; the TVDB id or, failing that, the TMDB id
+// for a series.
+func ItemMatches(providerIDs map[string]string, q ItemQuery) bool {
+	var tmdb, tvdb string
+	for key, value := range providerIDs {
+		switch strings.ToLower(key) {
+		case "tmdb":
+			tmdb = strings.TrimSpace(value)
+		case "tvdb":
+			tvdb = strings.TrimSpace(value)
+		}
+	}
+	if q.TMDBID > 0 && tmdb == strconv.FormatInt(q.TMDBID, 10) {
+		return true
+	}
+	return q.MediaType == "tv" && q.TVDBID > 0 && tvdb == strconv.FormatInt(q.TVDBID, 10)
 }
 
 // SystemInfo identifies a media server; the connection test reads it.
