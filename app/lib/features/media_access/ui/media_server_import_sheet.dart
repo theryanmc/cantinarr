@@ -31,7 +31,7 @@ Future<int?> showMediaServerImportSheet(
 /// (a new user, an existing user of that name, or nothing because it is
 /// already linked), imports the picked ones, and shows each outcome with its
 /// connect link. The admin's pick is the mapping; nothing on the server
-/// changes.
+/// changes but a switched-off account, which is switched on with its access.
 class MediaServerImportSheet extends ConsumerStatefulWidget {
   final ServiceInstance server;
 
@@ -206,8 +206,9 @@ class _MediaServerImportSheetState
         const SizedBox(height: AppTheme.spaceSm),
         Text(
           'Each picked account gets a Cantinarr user with the same name, '
-          'access to $name, and the account linked. Nothing on $name is '
-          'changed.',
+          'access to $name, and the account linked. Nothing else on $name '
+          'changes: an account switched off there is switched back on, '
+          'since it gets access.',
           style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 14,

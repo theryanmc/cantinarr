@@ -353,7 +353,7 @@ void _mediaServerAccountTests() {
     await tester.tap(find.byTooltip('Import from a media server'));
     await tester.pumpAndSettle();
     expect(find.text('Import from Home Jellyfin'), findsOneWidget);
-    expect(find.textContaining('Nothing on Home Jellyfin is changed'),
+    expect(find.textContaining('Nothing else on Home Jellyfin changes'),
         findsOneWidget);
     // What each pick would do, said before it happens.
     expect(find.text('Administrator · New Cantinarr user jfadmin'),
