@@ -173,6 +173,14 @@ type ServerView struct {
 	Kind          string       `json:"kind"`
 	PublicAddress string       `json:"public_address"`
 	Account       *AccountView `json:"account"`
+	// ExistingAccount reports that the server confirmed an account named
+	// like this Cantinarr user (case-insensitively, the rule the server
+	// applies to a new name) that no Cantinarr user is linked to, while the
+	// caller has no account here: creating one would collide, so the guide
+	// leads with signing in to link it. False is "no match confirmed", which
+	// covers absence and an unreachable server alike; nothing ever claims
+	// absence from it. Account servers only.
+	ExistingAccount bool `json:"existing_account"`
 }
 
 // CreatedAccount is what a user gets back after creating their account,
@@ -255,7 +263,14 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 	if err != nil {
 		return nil, err
 	}
+	var username string
+	if err := s.db.QueryRow("SELECT username FROM users WHERE id = ?", userID).Scan(&username); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("load user: %w", err)
+	}
 	views := make([]ServerView, 0, len(ids))
+	// A pending check is either the linked account to confirm (row set) or,
+	// on an account server with no linked account, the look for one already
+	// named like the user.
 	type pending struct {
 		index int
 		inst  *instance.Instance
@@ -274,32 +289,79 @@ func (s *Service) ListForUser(ctx context.Context, userID int64) ([]ServerView, 
 		if err != nil {
 			return nil, err
 		}
+		kind := s.kindOf(inst)
 		views = append(views, ServerView{
 			InstanceID:    inst.ID,
 			ServiceType:   inst.ServiceType,
 			Name:          inst.Name,
-			Kind:          string(s.kindOf(inst)),
+			Kind:          string(kind),
 			PublicAddress: inst.MediaServerConfig.PublicAddress,
 		})
-		if row != nil {
+		switch {
+		case row != nil:
 			checks = append(checks, pending{index: len(views) - 1, inst: inst, row: row})
+		case kind == mediaserver.KindAccount:
+			checks = append(checks, pending{index: len(views) - 1, inst: inst})
 		}
 	}
 
 	var wg sync.WaitGroup
 	results := make([]*AccountView, len(views))
+	existing := make([]bool, len(views))
 	for _, check := range checks {
 		wg.Add(1)
 		go func(check pending) {
 			defer wg.Done()
-			results[check.index] = s.verifyAccount(ctx, check.inst, check.row)
+			if check.row != nil {
+				results[check.index] = s.verifyAccount(ctx, check.inst, check.row)
+				return
+			}
+			existing[check.index] = s.existingAccount(ctx, check.inst, userID, username)
 		}(check)
 	}
 	wg.Wait()
 	for i := range views {
 		views[i].Account = results[i]
+		views[i].ExistingAccount = existing[i]
 	}
 	return views, nil
+}
+
+// existingAccount reports whether the server holds an unlinked account named
+// like the Cantinarr user. It reads the live account list under
+// verifyTimeout; a server that cannot answer reads as no match, logged, and
+// the guide keeps its plain layout: the flag is only ever a confirmed
+// presence. An account another Cantinarr user is linked to is not offered,
+// since signing in with it could only end in "linked to someone else".
+func (s *Service) existingAccount(ctx context.Context, inst *instance.Instance, userID int64, username string) bool {
+	if strings.TrimSpace(username) == "" {
+		return false
+	}
+	provider, err := s.providers(inst)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+	users, err := provider.Users(ctx)
+	if err != nil {
+		s.logger.Info("mediaaccess: could not check for an existing account", "err", err, "user_id", userID, "instance_id", inst.ID)
+		return false
+	}
+	for _, u := range users {
+		if !strings.EqualFold(u.Name, username) {
+			continue
+		}
+		claimed, err := s.identityClaimed(inst.ID, u.ID, userID)
+		if err != nil {
+			s.logger.Warn("mediaaccess: could not check whether an account is linked", "err", err, "user_id", userID, "instance_id", inst.ID)
+			return false
+		}
+		if !claimed {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyAccount reads the live account. A confirmed 404 is definitive

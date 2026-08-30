@@ -114,6 +114,7 @@ void main() {
             'name': 'Cabin',
             'public_address': '',
             'account': null,
+            'existing_account': true,
           },
         ]),
       });
@@ -121,6 +122,9 @@ void main() {
       final servers = await _service(adapter).listMine();
 
       expect(servers, hasLength(2));
+      // A same-named account the server confirmed, only where it said so.
+      expect(servers[0].existingAccount, isFalse);
+      expect(servers[1].existingAccount, isTrue);
       expect(servers.first.publicAddress, 'https://jf.example.com');
       expect(servers.first.account?.username, 'alice');
       expect(servers.first.account?.disabled, isTrue);

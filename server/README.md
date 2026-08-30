@@ -158,7 +158,10 @@ GET|PUT /api/admin/users/{userID}/instance-grants    # additional per-user insta
 ```
 GET    /api/media-servers                          # user: granted Jellyfin/Emby/Plex instances + own account state
                                                    # [{ instance_id, service_type, name, kind: account | invite, public_address,
-                                                   #    account: null | { username, disabled, pending, administrator, verified } }]
+                                                   #    account: null | { username, disabled, pending, administrator, verified },
+                                                   #    existing_account }]  (true only when the server confirmed an unlinked account named like the
+                                                   #    user while they have none there: the guide then leads with signing in to link it; false says
+                                                   #    nothing about absence, since an unreachable server reads the same)
 GET    /api/media-servers/watch                    # user: where a title can be watched ?media_type=movie|tv&tmdb_id=&tvdb_id=&year=&title=
                                                    # -> [{ instance_id, service_type, name, state: found | missing | unreachable, url? }], one entry per
                                                    # Jellyfin/Emby server the caller holds a live linked account on that has a sign-in address (Plex is
