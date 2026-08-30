@@ -279,7 +279,7 @@ Connect links embed a server address. Set **Settings > External Address** to the
 ### For Admins
 1. Deploy the container and complete the setup wizard
 2. Add your shared API credentials and service instances from Settings; for included AI, either add an Anthropic/OpenAI/Gemini/xAI key or link a shared OpenAI (OAuth) or xAI Grok (OAuth) account; a Plex, Jellyfin, or Emby instance also chooses which users get access there
-3. Generate connect links for your household (set **Settings > External Address** first so links work away from home), grant included AI access where wanted, and pin per-user default instances if you run several
+3. Invite your household from **Settings > Users** (set **Settings > External Address** first so links work away from home), grant included AI access where wanted, and pin per-user default instances if you run several
 4. Optionally require approval for requests -- pending ones arrive as push notifications
 5. Instant updates come on by themselves: adding a Radarr/Sonarr/Chaptarr instance installs the server's authenticated webhook automatically (books need it most -- an ebook can finish downloading between two polls). Each instance's edit screen shows the live state and a **Configure instant updates** button to repair it -- e.g. after changing `CANTINARR_ARR_CALLBACK_URL`
 6. Manage everything from the app -- queues, stuck imports, issues, agent fixes. No config files.

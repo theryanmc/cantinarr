@@ -237,13 +237,25 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateEveryone,
   ),
   SettingsSearchEntry(
-    id: 'root.connect-link',
-    title: 'Generate Connect Link',
-    icon: Icons.link,
-    route: '/settings',
+    id: 'screen.users',
+    title: 'Users',
+    icon: Icons.people_outline,
+    route: '/settings/users',
     screenTitle: 'Settings',
     section: 'Admin',
-    keywords: ['invite', 'new user', 'share', 'token'],
+    // Inviting a new user lives on this screen, so the old Generate
+    // Connect Link vocabulary must land here.
+    keywords: [
+      'accounts',
+      'roles',
+      'invites',
+      'connect link',
+      'invite link',
+      'new user',
+      'add user',
+      'permissions',
+      'access',
+    ],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -260,16 +272,6 @@ const List<SettingsSearchEntry> _rootEntries = [
       'invite link',
       'reachable',
     ],
-    gate: gateAdmin,
-  ),
-  SettingsSearchEntry(
-    id: 'screen.users',
-    title: 'Users',
-    icon: Icons.people_outline,
-    route: '/settings/users',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['accounts', 'roles', 'invites', 'permissions', 'access'],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(

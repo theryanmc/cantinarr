@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -262,13 +261,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (user?.isAdmin == true) ...[
               const SizedBox(height: 16),
               const _SectionHeader(title: 'Admin'),
-              // People and access first: invite, manage, their devices,
-              // then the AI/config stack.
+              // People and access first: users (inviting lives there now),
+              // the address their invite links are built from, their
+              // devices, then the AI/config stack.
               _SettingsTile(
-                icon: Icons.link,
-                title: 'Generate Connect Link',
-                subtitle: 'Create a link to invite a new user',
-                onTap: () => _showGenerateConnectLinkDialog(context),
+                icon: Icons.people_outline,
+                title: 'Users',
+                subtitle: 'Manage accounts, roles, and invites',
+                onTap: () => context.push('/settings/users'),
               ),
               _SettingsTile(
                 icon: Icons.public,
@@ -278,12 +278,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     : 'Address invite links use outside your network',
                 onTap: () =>
                     _showExternalAddressDialog(context, externalAddress ?? ''),
-              ),
-              _SettingsTile(
-                icon: Icons.people_outline,
-                title: 'Users',
-                subtitle: 'Manage accounts, roles, and invites',
-                onTap: () => context.push('/settings/users'),
               ),
               _SettingsTile(
                 icon: Icons.devices,
@@ -555,9 +549,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       case 'root.sign-out':
         _confirmSignOut(context);
         return;
-      case 'root.connect-link':
-        _showGenerateConnectLinkDialog(context);
-        return;
       case 'root.external-address':
         _showExternalAddressDialog(
           context,
@@ -626,119 +617,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // No navigation here: clearing the session flips the router's
     // refreshListenable and the redirect lands on the connect screen.
     await ref.read(authProvider.notifier).logout();
-  }
-
-  void _showGenerateConnectLinkDialog(BuildContext context) {
-    final nameController = TextEditingController();
-    String? generatedLink;
-    String generatedOriginSource = '';
-    bool isGenerating = false;
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Generate Connect Link'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (generatedLink == null) ...[
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    hintText: 'e.g. Mom, Dad, Roommate',
-                    prefixIcon: Icon(Icons.person_outline),
-                  ),
-                  textCapitalization: TextCapitalization.words,
-                  textInputAction: TextInputAction.done,
-                ),
-              ] else ...[
-                const Text(
-                  'Share this link. It signs one device into the app, once, '
-                  'and expires in 7 days.',
-                  style: TextStyle(color: AppTheme.textSecondary),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accent.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: SelectableText(
-                    generatedLink!,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                if (generatedOriginSource == 'app') ...[
-                  const SizedBox(height: 12),
-                  const Text(
-                    'This link uses the address your app connects with. If '
-                    'they are not on your network, set External Address in '
-                    'Settings and generate a new link.',
-                    style:
-                        TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                  ),
-                ],
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(generatedLink != null ? 'Done' : 'Cancel'),
-            ),
-            if (generatedLink == null)
-              ElevatedButton(
-                onPressed: isGenerating
-                    ? null
-                    : () async {
-                        final name = nameController.text.trim();
-                        if (name.isEmpty) return;
-                        setDialogState(() => isGenerating = true);
-                        try {
-                          final resp = await ref
-                              .read(authProvider.notifier)
-                              .generateConnectToken(name);
-                          setDialogState(() {
-                            generatedLink = resp.link;
-                            generatedOriginSource = resp.originSource;
-                            isGenerating = false;
-                          });
-                        } catch (e) {
-                          setDialogState(() => isGenerating = false);
-                          if (dialogContext.mounted) {
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              SnackBar(
-                                  content: Text('Failed to generate link: $e')),
-                            );
-                          }
-                        }
-                      },
-                child: isGenerating
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Generate'),
-              ),
-            if (generatedLink != null)
-              ElevatedButton.icon(
-                onPressed: () {
-                  Clipboard.setData(ClipboardData(text: generatedLink!));
-                  ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    const SnackBar(content: Text('Link copied!')),
-                  );
-                },
-                icon: const Icon(Icons.copy, size: 18),
-                label: const Text('Copy'),
-              ),
-          ],
-        ),
-      ),
-    );
   }
 
   void _showExternalAddressDialog(BuildContext context, String current) {

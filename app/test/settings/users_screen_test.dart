@@ -611,6 +611,48 @@ void _mediaServerAccountTests() {
     expect(find.textContaining('access off'), findsNothing);
     expect(find.textContaining('Link '), findsNothing);
   });
+
+  testWidgets('inviting a new user from the app bar mints their connect link',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final auth = _FakeAuthNotifier();
+    final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
+      ..httpClientAdapter = _CredentialsAdapter(provider: 'codex');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => auth),
+          backendClientProvider.overrideWithValue(dio),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const UsersScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Invite a new user'));
+    await tester.pumpAndSettle();
+    expect(find.text('Invite a new user'), findsOneWidget);
+
+    // An empty name generates nothing and keeps the dialog open.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Create invite'));
+    await tester.pumpAndSettle();
+    expect(auth.connectTokenNames, isEmpty);
+    expect(find.text('Invite a new user'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'Mom');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Create invite'));
+    await tester.pumpAndSettle();
+
+    expect(auth.connectTokenNames, ['Mom']);
+    expect(find.text('Invite link for Mom'), findsOneWidget);
+    expect(find.textContaining('token=tok123'), findsOneWidget);
+  });
 }
 
 /// Serves the Users screen's media-server reads and records every request:
@@ -728,6 +770,7 @@ class _FakeAuthNotifier extends AuthNotifier {
   ];
 
   final aiAccessUpdates = <(int, bool)>[];
+  final connectTokenNames = <String>[];
   int configRefreshes = 0;
 
   @override
@@ -745,6 +788,16 @@ class _FakeAuthNotifier extends AuthNotifier {
 
   @override
   Future<List<UserSummary>> listUsers() async => _users;
+
+  @override
+  Future<ConnectTokenResponse> generateConnectToken(String name) async {
+    connectTokenNames.add(name);
+    return const ConnectTokenResponse(
+      link: 'https://cantinarr.example/connect?token=tok123',
+      expiresAt: '2026-09-06T00:00:00Z',
+      originSource: 'external_address',
+    );
+  }
 
   @override
   Future<UserSummary> updateUserAiAccess(
