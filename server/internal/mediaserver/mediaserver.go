@@ -41,6 +41,19 @@ func KindOf(p Provider) Kind {
 	return KindAccount
 }
 
+// Authenticator is implemented by account servers that can check a person's
+// own username and password, so a user can prove an existing account is
+// theirs. The check sends none of Cantinarr's stored credentials: the
+// password travels once, is never kept, never appears in an error, and the
+// session the check opens on the server is closed again before returning.
+type Authenticator interface {
+	// Authenticate answers the account the credentials belong to,
+	// ErrBadCredentials when the server refuses the password (or knows no
+	// such name), and ErrAccountRefused when the server refuses the account
+	// itself (switched off, or a network or schedule rule).
+	Authenticate(ctx context.Context, username, password string) (RemoteUser, error)
+}
+
 // SystemInfo identifies a media server; the connection test reads it.
 type SystemInfo struct {
 	ServerName string
@@ -78,6 +91,12 @@ var (
 	ErrUserNotFound = errors.New("media server user not found")
 	// ErrInvalidName reports a name the media server would refuse.
 	ErrInvalidName = errors.New("name is not valid on the media server")
+	// ErrBadCredentials reports a username and password the media server
+	// refused: a wrong password, or no such account.
+	ErrBadCredentials = errors.New("media server refused the username or password")
+	// ErrAccountRefused reports an account the media server will not sign in
+	// right now: switched off, or blocked by a network or schedule rule.
+	ErrAccountRefused = errors.New("media server refused the account")
 )
 
 // Provider is what a media-server client must offer. Implementations keep

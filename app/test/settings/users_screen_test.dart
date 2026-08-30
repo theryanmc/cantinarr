@@ -349,7 +349,7 @@ void _mediaServerAccountTests() {
     expect(find.text('Home Jellyfin: lr-tv'), findsOneWidget);
   });
 
-  testWidgets('the link picker hides administrators and PUTs the remote id',
+  testWidgets('the link picker marks administrators and PUTs the remote id',
       (tester) async {
     final adapter = await _pumpWithMediaServer(tester);
 
@@ -361,8 +361,13 @@ void _mediaServerAccountTests() {
     await tester.pumpAndSettle();
 
     expect(find.text('Link a Jellyfin account'), findsOneWidget);
-    expect(find.text("Administrator accounts aren't listed."), findsOneWidget);
-    expect(find.text('jfadmin'), findsNothing);
+    expect(
+      find.text('Administrator accounts can be linked; Cantinarr never '
+          'changes them.'),
+      findsOneWidget,
+    );
+    expect(find.text('jfadmin'), findsOneWidget);
+    expect(find.text('Administrator'), findsOneWidget);
     expect(find.text('lr-tv'), findsOneWidget);
     expect(find.text('old-tablet'), findsOneWidget);
     expect(find.text('Turned off on the server'), findsOneWidget);

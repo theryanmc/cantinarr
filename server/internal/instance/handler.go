@@ -227,7 +227,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, serviceTypeListError, http.StatusBadRequest)
 		return
 	}
-	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, nil)
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
@@ -244,7 +244,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
-	if err := applyPlexConfig(&inst, plexClientID); err != nil {
+	if err := applyPlexConfig(&inst, plexCred); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -302,7 +302,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if inst.Password == "" {
 		inst.Password = existing.Password
 	}
-	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
@@ -320,7 +320,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
-	if err := applyPlexConfig(&inst, plexClientID); err != nil {
+	if err := applyPlexConfig(&inst, plexCred); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
@@ -417,13 +417,13 @@ func (h *Handler) resolveTestInstance(w http.ResponseWriter, r *http.Request) (*
 	if request.MediaServerConfig != nil {
 		inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(request.MediaServerConfig.MachineIdentifier)
 	}
-	plexClientID, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
+	plexCred, err := h.applyPlexLink(&inst, request.PlexLinkPin, existing)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return nil, false
 	}
 	if inst.ServiceType == "plex" {
-		inst.MediaServerConfig.ClientID = plexClientID
+		inst.MediaServerConfig.ClientID = plexCred.clientID
 	}
 	// The test doesn't need a name; default it so the shared validation only
 	// enforces the URL and credentials.

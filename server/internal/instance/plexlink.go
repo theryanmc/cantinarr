@@ -19,12 +19,24 @@ import (
 const plexLinkTTL = 15 * time.Minute
 
 // plexLink is one PIN link: the client identifier the PIN was created under
-// and, once the admin approves it in their browser, the token and account.
+// and, once the admin approves it in their browser, the token and the
+// account it belongs to (the server's owner, recorded on the instance).
 type plexLink struct {
 	clientID string
 	token    string
-	account  string
+	owner    plex.Account
 	expires  time.Time
+}
+
+// plexCredential is what applyPlexLink resolved for a Plex instance: the
+// client identifier the token belongs with and, for a token that was just
+// linked or pasted, the owner it belongs to (zero for a pasted token, whose
+// owner is backfilled from the token later). fresh says the token is new,
+// so the stored owner no longer applies.
+type plexCredential struct {
+	clientID string
+	owner    plex.Account
+	fresh    bool
 }
 
 // plexLinks holds links by PIN id. Tokens never leave the process: the app
@@ -108,7 +120,7 @@ func (h *Handler) PlexLinkCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	if link.token != "" {
-		json.NewEncoder(w).Encode(map[string]any{"linked": true, "account": link.account})
+		json.NewEncoder(w).Encode(map[string]any{"linked": true, "account": link.owner.Username})
 		return
 	}
 	client := plex.NewClientAt(h.plexBaseURL)
@@ -128,7 +140,7 @@ func (h *Handler) PlexLinkCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"plex.tv did not accept the approved link; try again"}`, http.StatusBadGateway)
 		return
 	}
-	link.token, link.account = pin.AuthToken, account.Username
+	link.token, link.owner = pin.AuthToken, *account
 	json.NewEncoder(w).Encode(map[string]any{"linked": true, "account": account.Username})
 }
 
@@ -170,11 +182,11 @@ func (h *Handler) PlexServers(w http.ResponseWriter, r *http.Request) {
 // applyPlexLink resolves a Plex instance's credential before the shared
 // validation runs: the url defaults to plex.tv, and the token comes from the
 // named PIN link, else the stored instance, else an api_key pasted by hand
-// (which gets a fresh client identifier). Returns the client identifier the
-// token belongs with. Non-Plex instances pass through untouched.
-func (h *Handler) applyPlexLink(inst *Instance, pin int64, existing *Instance) (string, error) {
+// (which gets a fresh client identifier). Returns the credential the token
+// belongs with. Non-Plex instances pass through untouched.
+func (h *Handler) applyPlexLink(inst *Instance, pin int64, existing *Instance) (plexCredential, error) {
 	if inst.ServiceType != "plex" {
-		return "", nil
+		return plexCredential{}, nil
 	}
 	if inst.URL == "" {
 		inst.URL = plex.BaseURL
@@ -182,32 +194,36 @@ func (h *Handler) applyPlexLink(inst *Instance, pin int64, existing *Instance) (
 	if pin != 0 {
 		link := h.plexLinks.get(pin)
 		if link == nil {
-			return "", fmt.Errorf("the Plex link has expired; link the account again")
+			return plexCredential{}, fmt.Errorf("the Plex link has expired; link the account again")
 		}
 		if link.token == "" {
-			return "", fmt.Errorf("the Plex link is not approved yet")
+			return plexCredential{}, fmt.Errorf("the Plex link is not approved yet")
 		}
 		inst.APIKey = link.token
-		return link.clientID, nil
+		return plexCredential{clientID: link.clientID, owner: link.owner, fresh: true}, nil
 	}
 	if existing != nil && existing.ServiceType == "plex" && inst.APIKey == existing.APIKey {
-		return existing.MediaServerConfig.ClientID, nil
+		return plexCredential{clientID: existing.MediaServerConfig.ClientID}, nil
 	}
 	if inst.APIKey != "" {
-		return uuid.NewString(), nil
+		return plexCredential{clientID: uuid.NewString(), fresh: true}, nil
 	}
-	return "", fmt.Errorf("link a Plex account first")
+	return plexCredential{}, fmt.Errorf("link a Plex account first")
 }
 
 // applyPlexConfig finishes a Plex instance's config after the shared config
-// step: the client identifier the token belongs with, and the server the
-// instance shares — an instance with no server selected can invite nobody.
-func applyPlexConfig(inst *Instance, clientID string) error {
+// step: the client identifier the token belongs with, the owner a fresh
+// token belongs to, and the server the instance shares — an instance with
+// no server selected can invite nobody.
+func applyPlexConfig(inst *Instance, cred plexCredential) error {
 	if inst.ServiceType != "plex" {
 		return nil
 	}
-	if clientID != "" {
-		inst.MediaServerConfig.ClientID = clientID
+	if cred.clientID != "" {
+		inst.MediaServerConfig.ClientID = cred.clientID
+	}
+	if cred.fresh {
+		inst.MediaServerConfig.setPlexOwner(cred.owner)
 	}
 	if inst.MediaServerConfig.MachineIdentifier == "" {
 		return fmt.Errorf("pick the Plex server to share (media_server_config.machine_identifier)")

@@ -8,17 +8,20 @@ import '../../../core/network/backend_client.dart';
 /// answered just now. [verified] is false when the backend could not reach
 /// the media server and fell back to what it last recorded: blindness, not
 /// absence, and the guide says so. [pending] is an invite (Plex) the person
-/// has not accepted yet.
+/// has not accepted yet. [administrator] is an account Cantinarr records and
+/// never changes: a server administrator, or on Plex the server's owner.
 class MediaServerAccountStatus {
   final String username;
   final bool disabled;
   final bool pending;
+  final bool administrator;
   final bool verified;
 
   const MediaServerAccountStatus({
     required this.username,
     this.disabled = false,
     this.pending = false,
+    this.administrator = false,
     this.verified = true,
   });
 
@@ -27,6 +30,7 @@ class MediaServerAccountStatus {
         username: json['username'] as String? ?? '',
         disabled: json['disabled'] as bool? ?? false,
         pending: json['pending'] as bool? ?? false,
+        administrator: json['administrator'] as bool? ?? false,
         verified: json['verified'] as bool? ?? true,
       );
 }
@@ -82,17 +86,20 @@ class MediaServerAccess {
   }
 }
 
-/// What the server answers once an account has been created or an invite
-/// sent ([pending] true: the person still has to accept it).
+/// What the server answers once an account has been created, an invite
+/// sent ([pending] true: the person still has to accept it), or an existing
+/// account linked ([administrator] when it is one the server administers).
 class MediaServerAccountCreated {
   final String username;
   final String publicAddress;
   final bool pending;
+  final bool administrator;
 
   const MediaServerAccountCreated({
     required this.username,
     this.publicAddress = '',
     this.pending = false,
+    this.administrator = false,
   });
 
   factory MediaServerAccountCreated.fromJson(Map<String, dynamic> json) =>
@@ -100,6 +107,56 @@ class MediaServerAccountCreated {
         username: json['username'] as String? ?? '',
         publicAddress: json['public_address'] as String? ?? '',
         pending: json['pending'] as bool? ?? false,
+        administrator: json['administrator'] as bool? ?? false,
+      );
+}
+
+/// A Plex sign-in that has begun: the PIN the app polls and the plex.tv page
+/// the person opens to approve it with their own account.
+class PlexSignInStart {
+  final int pinId;
+  final String code;
+  final String url;
+
+  const PlexSignInStart({
+    required this.pinId,
+    required this.code,
+    required this.url,
+  });
+
+  factory PlexSignInStart.fromJson(Map<String, dynamic> json) =>
+      PlexSignInStart(
+        pinId: (json['pin_id'] as num?)?.toInt() ?? 0,
+        code: json['code'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+      );
+}
+
+/// One poll of a Plex sign-in. [linked] stays false until the person has
+/// approved the PIN; then [email] is the verified address and [inviteState]
+/// says what it led to: `sent` (an invite to accept), `adopted` (access was
+/// already there), `failed` (an invite that could not go out yet; the server
+/// retries it), or empty (nobody has granted this user Plex yet, and the
+/// admins were told).
+class PlexSignInState {
+  final bool linked;
+  final String username;
+  final String email;
+  final String inviteState;
+
+  const PlexSignInState({
+    required this.linked,
+    this.username = '',
+    this.email = '',
+    this.inviteState = '',
+  });
+
+  factory PlexSignInState.fromJson(Map<String, dynamic> json) =>
+      PlexSignInState(
+        linked: json['linked'] as bool? ?? false,
+        username: json['username'] as String? ?? '',
+        email: json['email'] as String? ?? '',
+        inviteState: json['invite_state'] as String? ?? '',
       );
 }
 
@@ -146,9 +203,10 @@ class MediaServerAccountRow {
 }
 
 /// One account as the media server itself lists it, for the admin link
-/// picker. Administrators are listed by the server but never linkable. On
-/// Plex the rows are shares, keyed by email, and [pending] marks an invite
-/// nobody has accepted yet.
+/// picker. Administrators are listed as such and link like any other
+/// account, except that Cantinarr never changes them. On Plex the rows are
+/// shares, keyed by email, and [pending] marks an invite nobody has accepted
+/// yet.
 class RemoteMediaServerUser {
   final String id;
   final String name;
@@ -231,10 +289,11 @@ class MediaAccessException implements Exception {
   return (code: '', message: '');
 }
 
-/// The media-server account endpoints: a user's own servers and account
-/// creation, plus the admin link/unlink routes. Turning access off and on is
-/// not here on purpose: access is the instance grant, edited through the
-/// existing per-user grants endpoints.
+/// The media-server account endpoints: a user's own servers, account
+/// creation, linking an account that is already theirs (a password check or
+/// a Plex sign-in), plus the admin link/unlink routes. Turning access off and
+/// on is not here on purpose: access is the instance grant, edited through
+/// the existing per-user grants endpoints.
 class MediaAccessService {
   final Dio _dio;
 
@@ -284,6 +343,55 @@ class MediaAccessService {
         data: {'email': email},
       );
       return MediaServerAccountCreated.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
+  /// Links the user's existing account on [instanceId] by proving it is
+  /// theirs: the server checks [username] and [password] with the media
+  /// server once and keeps neither. Throws [MediaAccessException] with the
+  /// server's `code` (`bad_credentials`, `account_refused`, `account_exists`,
+  /// `remote_already_linked`, `wrong_kind`) on refusal; a wrong password is
+  /// a 400, never a 401.
+  Future<MediaServerAccountCreated> linkOwnAccount(
+    String instanceId, {
+    required String username,
+    required String password,
+  }) async {
+    try {
+      final resp = await _dio.post(
+        '/api/media-servers/$instanceId/account/link',
+        data: {'username': username, 'password': password},
+      );
+      return MediaServerAccountCreated.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
+  /// Begins a Plex sign-in: the server mints a plex.tv PIN for the person to
+  /// approve with their own account.
+  Future<PlexSignInStart> beginPlexSignIn() async {
+    try {
+      final resp = await _dio.post('/api/media-servers/plex/sign-in/begin');
+      return PlexSignInStart.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
+  /// Polls a Plex sign-in. Once approved, the server has already remembered
+  /// the verified email and run the share pass; the same answer comes back
+  /// on every later poll. Throws [MediaAccessException] with `pin_expired`
+  /// when the sign-in is gone.
+  Future<PlexSignInState> checkPlexSignIn(int pinId) async {
+    try {
+      final resp = await _dio.post(
+        '/api/media-servers/plex/sign-in/check',
+        data: {'pin_id': pinId},
+      );
+      return PlexSignInState.fromJson(_map(resp.data));
     } on DioException catch (e) {
       throw MediaAccessException.fromDio(e);
     }

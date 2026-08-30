@@ -17,6 +17,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 )
 
 // ProviderFactory builds the client for a media-server instance. In
@@ -45,20 +46,27 @@ var (
 	// ErrNotAvailable is the one answer for every "not for you" case —
 	// unknown instance, not a media server, no grant — so the endpoint is
 	// never an existence oracle.
-	ErrNotAvailable         = errors.New("media server is not available to this user")
-	ErrAccountExists        = errors.New("user already has an account on this media server")
-	ErrNameTaken            = errors.New("account name is already taken on the media server")
-	ErrInvalidName          = errors.New("username is not a valid media server account name")
-	ErrInvalidEmail         = errors.New("email is not a valid invite address")
-	ErrWrongKind            = errors.New("that is not how this media server grants access")
-	ErrConfigInvalid        = errors.New("media server configuration is unreadable; re-save the instance")
-	ErrInstanceNotFound     = errors.New("instance not found")
-	ErrNotMediaServer       = errors.New("not a media server instance")
-	ErrUserNotFound         = errors.New("user not found")
-	ErrRemoteUserNotFound   = errors.New("remote user not found")
-	ErrAdministratorAccount = errors.New("administrator accounts can't be linked")
-	ErrRemoteAlreadyLinked  = errors.New("remote account is already linked to another user")
-	ErrNoAccount            = errors.New("no linked account")
+	ErrNotAvailable        = errors.New("media server is not available to this user")
+	ErrAccountExists       = errors.New("user already has an account on this media server")
+	ErrNameTaken           = errors.New("account name is already taken on the media server")
+	ErrInvalidName         = errors.New("username is not a valid media server account name")
+	ErrInvalidEmail        = errors.New("email is not a valid invite address")
+	ErrWrongKind           = errors.New("that is not how this media server grants access")
+	ErrConfigInvalid       = errors.New("media server configuration is unreadable; re-save the instance")
+	ErrInstanceNotFound    = errors.New("instance not found")
+	ErrNotMediaServer      = errors.New("not a media server instance")
+	ErrUserNotFound        = errors.New("user not found")
+	ErrRemoteUserNotFound  = errors.New("remote user not found")
+	ErrRemoteAlreadyLinked = errors.New("remote account is already linked to another user")
+	ErrNoAccount           = errors.New("no linked account")
+	// ErrBadCredentials and ErrAccountRefused are the media server's answers
+	// to a person's own username and password: wrong (or no such name), and
+	// an account it will not sign in right now.
+	ErrBadCredentials = errors.New("media server refused the username or password")
+	ErrAccountRefused = errors.New("media server refused the account")
+	// ErrPinNotFound is a Plex sign-in nobody began, one that expired, or
+	// one that belongs to another user; all three read the same.
+	ErrPinNotFound = errors.New("plex sign-in not found or expired")
 	// ErrUpstream wraps a media-server failure. The wrapped text is host-free
 	// by the Provider contract; handlers still answer with fixed bodies.
 	ErrUpstream = errors.New("media server request failed")
@@ -82,6 +90,13 @@ const (
 	// never wait on, so the pass runs off the request; the drift sweep
 	// retries whatever the budget cut off.
 	inviteBudget = 30 * time.Second
+	// plexSignInShareBudget caps the share pass a Plex sign-in runs before
+	// answering. Unlike a shared email, the person is waiting on the answer
+	// (the app's read timeout is 15 seconds), so the pass is short and the
+	// drift sweep sends whatever it cut off.
+	plexSignInShareBudget = 8 * time.Second
+	// plexTVTimeout bounds one plex.tv call.
+	plexTVTimeout = 15 * time.Second
 )
 
 // Service owns the user_media_server_accounts table and every remote action.
@@ -100,6 +115,10 @@ type Service struct {
 	// background runs the invite passes that must not hold a request open.
 	// Tests replace it with a synchronous runner.
 	background func(func())
+	// signIns holds the Plex sign-ins in flight; plexBaseURL is where their
+	// PIN calls go (plex.tv, or a test server).
+	signIns     *plexSignIns
+	plexBaseURL string
 }
 
 // NewService wires the service. providers is called per request: media
@@ -110,8 +129,10 @@ func NewService(db *sql.DB, store *instance.Store, providers ProviderFactory, lo
 	}
 	return &Service{
 		db: db, store: store, providers: providers, logger: logger,
-		locks:      map[string]*sync.Mutex{},
-		background: func(fn func()) { go fn() },
+		locks:       map[string]*sync.Mutex{},
+		background:  func(fn func()) { go fn() },
+		signIns:     newPlexSignIns(),
+		plexBaseURL: plex.BaseURL,
 	}
 }
 
@@ -127,6 +148,9 @@ type AccountView struct {
 	Disabled bool   `json:"disabled"`
 	// Pending is an invite the person has not accepted yet (invite servers).
 	Pending bool `json:"pending"`
+	// Administrator marks an account Cantinarr records and never changes: a
+	// server administrator, or on Plex the server's owner.
+	Administrator bool `json:"administrator"`
 	// Verified is true when the server confirmed the account just now; false
 	// means the answer came from Cantinarr's record because the server could
 	// not be reached (blindness, said as such — never mistaken for absence).
@@ -147,12 +171,13 @@ type ServerView struct {
 	Account       *AccountView `json:"account"`
 }
 
-// CreatedAccount is what a user gets back after creating their account or
-// asking for their invite.
+// CreatedAccount is what a user gets back after creating their account,
+// asking for their invite, or linking an account that is already theirs.
 type CreatedAccount struct {
 	Username      string `json:"username"`
 	PublicAddress string `json:"public_address"`
 	Pending       bool   `json:"pending"`
+	Administrator bool   `json:"administrator"`
 }
 
 // Account is an admin-facing row: which Cantinarr user is which remote
@@ -293,7 +318,7 @@ func (s *Service) verifyAccount(ctx context.Context, inst *instance.Instance, ro
 		s.logger.Warn("mediaaccess: could not confirm account", "err", err, "user_id", row.UserID, "instance_id", inst.ID)
 		return stored
 	}
-	return &AccountView{Username: live.Name, Disabled: live.IsDisabled, Pending: live.Pending, Verified: true}
+	return &AccountView{Username: live.Name, Disabled: live.IsDisabled, Pending: live.Pending, Administrator: live.IsAdministrator, Verified: true}
 }
 
 // eligibleProvider is the prologue of every self-service write: the instance
@@ -516,6 +541,90 @@ func (s *Service) RequestInvite(ctx context.Context, userID int64, instanceID, e
 	return CreatedAccount{Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Pending: remote.Pending}, nil
 }
 
+// LinkOwnAccount links an existing account on a granted account server to
+// the caller, on proof that it is theirs: the server checks the username
+// and password, which travel once and are never kept. An administrator
+// account is accepted as it is (recorded, never changed). The row check runs
+// before the credentials are sent, so a request that will be refused moves
+// no lockout counter on the server.
+func (s *Service) LinkOwnAccount(ctx context.Context, userID int64, instanceID, username, password string) (CreatedAccount, error) {
+	unlock := s.lock(userID, instanceID)
+	defer unlock()
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
+
+	inst, provider, err := s.eligibleProvider(userID, instanceID)
+	if err != nil {
+		return CreatedAccount{}, err
+	}
+	authenticator, ok := provider.(mediaserver.Authenticator)
+	if !ok || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+		return CreatedAccount{}, ErrWrongKind
+	}
+
+	if row, err := s.getAccount(userID, instanceID); err != nil {
+		return CreatedAccount{}, err
+	} else if row != nil {
+		// A row is a claim, not proof: confirm it before refusing. A server
+		// that no longer has that account lets the user link another.
+		_, liveErr := provider.GetUser(ctx, row.RemoteUserID)
+		switch {
+		case liveErr == nil:
+			return CreatedAccount{}, ErrAccountExists
+		case errors.Is(liveErr, mediaserver.ErrUserNotFound):
+			if _, err := s.deleteAccount(userID, instanceID); err != nil {
+				return CreatedAccount{}, err
+			}
+		default:
+			return CreatedAccount{}, fmt.Errorf("%w: %v", ErrUpstream, liveErr)
+		}
+	}
+
+	remote, err := authenticator.Authenticate(ctx, username, password)
+	switch {
+	case errors.Is(err, mediaserver.ErrBadCredentials):
+		s.logger.Info("mediaaccess: link own account: the server refused the password", "user_id", userID, "instance_id", instanceID)
+		return CreatedAccount{}, ErrBadCredentials
+	case errors.Is(err, mediaserver.ErrAccountRefused):
+		s.logger.Info("mediaaccess: link own account: the server refused the account", "user_id", userID, "instance_id", instanceID)
+		return CreatedAccount{}, ErrAccountRefused
+	case err != nil:
+		return CreatedAccount{}, fmt.Errorf("%w: %v", ErrUpstream, err)
+	case remote.ID == "":
+		return CreatedAccount{}, fmt.Errorf("%w: the sign-in check answered no account id", ErrUpstream)
+	}
+	claimed, err := s.identityClaimed(instanceID, remote.ID, userID)
+	if err != nil {
+		return CreatedAccount{}, err
+	}
+	if claimed {
+		return CreatedAccount{}, ErrRemoteAlreadyLinked
+	}
+	name := remote.Name
+	if name == "" {
+		name = username
+	}
+
+	inserted, err := s.insertAccount(accountRow{
+		UserID: userID, InstanceID: instanceID,
+		RemoteUserID: remote.ID, RemoteUsername: name, CreatedByCantinarr: false,
+	}, true)
+	switch {
+	case errors.Is(err, errAccountConflict):
+		return CreatedAccount{}, ErrAccountExists
+	case errors.Is(err, errRemoteConflict):
+		return CreatedAccount{}, ErrRemoteAlreadyLinked
+	case errors.Is(err, errRowReference):
+		return CreatedAccount{}, ErrNotAvailable
+	case err != nil:
+		return CreatedAccount{}, err
+	case !inserted:
+		// The grant went away while the server was checking the password.
+		return CreatedAccount{}, ErrNotAvailable
+	}
+	return CreatedAccount{Username: name, PublicAddress: inst.MediaServerConfig.PublicAddress, Administrator: remote.IsAdministrator}, nil
+}
+
 func (s *Service) rollbackCreate(ctx context.Context, provider mediaserver.Provider, remoteID string, userID int64, instanceID string) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reconcileTimeout)
 	defer cancel()
@@ -600,14 +709,14 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 	if mediaserver.KindOf(provider) == mediaserver.KindInvite {
 		remoteUserID = mediaserver.CanonicalEmail(remoteUserID)
 	}
+	// An administrator account links like any other: recorded, and from
+	// then on left alone by every path that changes accounts.
 	remote, err := provider.GetUser(ctx, remoteUserID)
 	switch {
 	case errors.Is(err, mediaserver.ErrUserNotFound):
 		return Account{}, ErrRemoteUserNotFound
 	case err != nil:
 		return Account{}, fmt.Errorf("%w: %v", ErrUpstream, err)
-	case remote.IsAdministrator:
-		return Account{}, ErrAdministratorAccount
 	}
 	remoteID := remote.ID
 	if remoteID == "" {
@@ -708,15 +817,60 @@ func (s *Service) OnPlexEmailShared(userID int64, username string) {
 	})
 }
 
+// emailSharedOutcome is what one shared email led to.
+type emailSharedOutcome struct {
+	granted int // invite servers the user holds a grant on
+	invites inviteOutcome
+}
+
+// adminState is the push's invite_state: whether anything is left for an
+// admin to do. Empty means nobody has granted this user an invite server;
+// "claimed" means the address belongs to another user's row, which only an
+// admin can untangle (the push reads it as waiting on them).
+func (o emailSharedOutcome) adminState() string {
+	switch {
+	case o.invites.failed > 0:
+		return "failed"
+	case o.invites.sent > 0 || o.invites.adopted > 0:
+		return "sent"
+	case o.invites.claimed > 0:
+		return "claimed"
+	case o.granted > 0:
+		return "sent"
+	}
+	return ""
+}
+
+// userState is what the person who signed in is told: an invite to accept
+// ("sent"), access already there ("adopted"), an invite that could not go
+// out yet ("failed"), an address that belongs to another user's row
+// ("claimed"), or nothing until an admin grants them ("").
+func (o emailSharedOutcome) userState() string {
+	switch {
+	case o.invites.failed > 0:
+		return "failed"
+	case o.invites.sent > 0:
+		return "sent"
+	case o.invites.adopted > 0:
+		return "adopted"
+	case o.invites.claimed > 0:
+		return "claimed"
+	case o.granted > 0:
+		return "adopted"
+	}
+	return ""
+}
+
 // handleEmailShared is OnPlexEmailShared's synchronous body.
-func (s *Service) handleEmailShared(ctx context.Context, userID int64, username string) {
+func (s *Service) handleEmailShared(ctx context.Context, userID int64, username string) emailSharedOutcome {
+	var out emailSharedOutcome
 	email, err := s.plexEmail(userID)
 	if err != nil {
 		s.logger.Error("mediaaccess: email shared: load user", "err", err, "user_id", userID)
-		return
+		return out
 	}
 	if email == "" {
-		return
+		return out
 	}
 	s.dropSharesToOtherAddresses(ctx, userID, email)
 	if err := s.autoApprove(userID); err != nil {
@@ -725,23 +879,18 @@ func (s *Service) handleEmailShared(ctx context.Context, userID int64, username 
 	granted, err := s.grantedInviteServers(userID)
 	if err != nil {
 		s.logger.Error("mediaaccess: email shared: list grants", "err", err, "user_id", userID)
-		return
+		return out
 	}
-	outcome := s.inviteGranted(ctx, userID)
-	state := "" // needs an admin: nobody has granted this user an invite server
-	switch {
-	case outcome.failed > 0:
-		state = "failed"
-	case len(granted) > 0:
-		state = "sent"
-	}
+	out.granted = len(granted)
+	out.invites = s.inviteGranted(ctx, userID)
 	if s.notifier != nil {
 		s.notifier.NotifyAdmins(eventAccessRequest, map[string]interface{}{
 			"user_id":      userID,
 			"username":     username,
-			"invite_state": state,
+			"invite_state": out.adminState(),
 		})
 	}
+	return out
 }
 
 // dropSharesToOtherAddresses removes the shares Cantinarr sent to an address
@@ -834,9 +983,11 @@ func (s *Service) grantedInviteServers(userID int64) ([]*instance.Instance, erro
 	return out, nil
 }
 
-// inviteOutcome counts one pass of inviteGranted.
+// inviteOutcome counts one pass of inviteGranted. claimed counts the servers
+// where the user's address belongs to another user's row: nothing can be
+// sent, and the person needs an admin.
 type inviteOutcome struct {
-	sent, adopted, failed int
+	sent, adopted, failed, claimed int
 }
 
 // inviteGranted sends the invites a user is owed: one per granted invite
@@ -873,9 +1024,14 @@ func (s *Service) inviteGranted(ctx context.Context, userID int64) inviteOutcome
 			out.sent++
 		case err == nil:
 			out.adopted++
-		case errors.Is(err, ErrAccountExists), errors.Is(err, ErrNameTaken), errors.Is(err, ErrNotAvailable):
-			// Nothing owed here: the share exists, or the address belongs to
-			// someone else's row, or the grant went away meanwhile.
+		case errors.Is(err, ErrNameTaken):
+			// The address belongs to someone else's row: nothing to send,
+			// and only an admin can sort out whose it is.
+			out.claimed++
+			s.logger.Info("mediaaccess: invite: nothing to send", "reason", err, "user_id", userID, "instance_id", inst.ID)
+		case errors.Is(err, ErrAccountExists), errors.Is(err, ErrNotAvailable):
+			// Nothing owed here: the share exists, or the grant went away
+			// meanwhile.
 			s.logger.Info("mediaaccess: invite: nothing to send", "reason", err, "user_id", userID, "instance_id", inst.ID)
 		default:
 			out.failed++
@@ -1031,7 +1187,14 @@ func (s *Service) reconcileUser(ctx context.Context, userID int64) {
 			continue
 		}
 		if live.IsAdministrator {
-			s.logger.Warn("mediaaccess: reconcile: linked account is an administrator; leaving it alone", "user_id", userID, "instance_id", row.InstanceID)
+			// Never touched on the server. The stamp still follows the
+			// grant, so the drift sweep does not re-read this row forever.
+			if row.DisabledAt.Valid != wantDisabled {
+				if err := s.setDisabledAt(userID, row.InstanceID, wantDisabled); err != nil {
+					s.logger.Error("mediaaccess: reconcile: stamp", "err", err, "user_id", userID, "instance_id", row.InstanceID)
+				}
+			}
+			s.logger.Info("mediaaccess: reconcile: linked account is an administrator; leaving it alone", "user_id", userID, "instance_id", row.InstanceID)
 			continue
 		}
 		if live.IsDisabled != wantDisabled {

@@ -307,14 +307,20 @@ func NewRouter(
 		})
 
 		// Media-server accounts (authenticated, self-scoped): a granted user
-		// sees their media servers and creates their own account there. The
-		// create is rate-limited like the other self-service credential
-		// writes; eligibility is checked inside, with one answer for every
-		// "not for you" case.
+		// sees their media servers, creates their own account there, or links
+		// one that is already theirs (a password check against the server,
+		// or a plex.tv sign-in). The credential writes are rate-limited like
+		// the other self-service ones; the sign-in poll is not, since the
+		// app polls it every few seconds and a pin can only be polled by the
+		// user who began it. Eligibility is checked inside, with one answer
+		// for every "not for you" case.
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/media-servers", mediaAccessHandler.List)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
+			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account/link", mediaAccessHandler.LinkOwnAccount)
+			r.With(authLimiter.Middleware).Post("/media-servers/plex/sign-in/begin", mediaAccessHandler.PlexSignInBegin)
+			r.Post("/media-servers/plex/sign-in/check", mediaAccessHandler.PlexSignInCheck)
 		})
 
 		// Completed-media ticket issuance (authenticated requester/admin). The

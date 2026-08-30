@@ -16,18 +16,26 @@ import (
 // canonical spelling, a pending invite is a share nobody has accepted, and a
 // share that is gone is absence. Everything goes through plex.tv with the
 // owner's token; the server itself is never dialed.
+//
+// The owner is the one account plex.tv never lists as a share, and the one
+// most likely to sign in from the guide (the admin's own). When the instance
+// knows who owns the server, the provider answers for that identity with an
+// administrator account: found, never pending, and never invited, re-scoped,
+// or removed, since plex.tv refuses to share a server with its owner.
 type Provider struct {
 	client    *Client
 	clientID  string
 	token     string
 	machineID string
+	owner     Account
 }
 
 // NewProvider builds the provider for one server. clientID is the app-wide
 // X-Plex-Client-Identifier the token was minted under; machineID is the
-// server's plex.tv machine identifier.
-func NewProvider(client *Client, clientID, token, machineID string) *Provider {
-	return &Provider{client: client, clientID: clientID, token: token, machineID: machineID}
+// server's plex.tv machine identifier; owner is the account the token
+// belongs to, or the zero Account when the instance has not recorded it.
+func NewProvider(client *Client, clientID, token, machineID string, owner Account) *Provider {
+	return &Provider{client: client, clientID: clientID, token: token, machineID: machineID, owner: owner}
 }
 
 // Kind marks the provider as an invite server.
@@ -60,11 +68,27 @@ func (p *Provider) Libraries(ctx context.Context) ([]mediaserver.Library, error)
 	return out, nil
 }
 
-// entry is one share or pending invite, looked up by identity.
+// entry is one share or pending invite, looked up by identity, or the
+// server's owner.
 type entry struct {
 	user     mediaserver.RemoteUser
 	shareID  int64  // set for a share
 	inviteID string // set for a pending invite that is not yet a share
+	owner    bool   // the account that owns the server: an administrator, never a share
+}
+
+// ownerEntry is the owner as an administrator account, when the instance
+// recorded who that is.
+func (p *Provider) ownerEntry() (entry, bool) {
+	id := mediaserver.CanonicalEmail(p.owner.Email)
+	if id == "" {
+		return entry{}, false
+	}
+	name := p.owner.Username
+	if name == "" {
+		name = id
+	}
+	return entry{owner: true, user: mediaserver.RemoteUser{ID: id, Name: name, IsAdministrator: true}}, true
 }
 
 func (e entry) matches(identity string) bool {
@@ -78,7 +102,10 @@ func (p *Provider) entries(ctx context.Context) ([]entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]entry, 0, len(shares))
+	out := make([]entry, 0, len(shares)+1)
+	if owner, ok := p.ownerEntry(); ok {
+		out = append(out, owner)
+	}
 	for _, s := range shares {
 		out = append(out, entry{shareID: s.ID, user: remoteUser(s.Email, s.Username, !s.Accepted)})
 	}
@@ -183,6 +210,10 @@ func (p *Provider) CreateUser(ctx context.Context, identity, password string, li
 	if !mediaserver.ValidEmail(identity) {
 		return mediaserver.RemoteUser{}, mediaserver.ErrInvalidName
 	}
+	if owner, ok := p.ownerEntry(); ok && owner.matches(identity) {
+		// The owner already has everything; plex.tv would refuse the share.
+		return owner.user, nil
+	}
 	sectionIDs, err := sectionIDs(libraryIDs)
 	if err != nil {
 		return mediaserver.RemoteUser{}, err
@@ -215,7 +246,7 @@ func (p *Provider) SetLibraries(ctx context.Context, identity string, libraryIDs
 	if err != nil {
 		return err
 	}
-	if e.shareID == 0 {
+	if e.owner || e.shareID == 0 {
 		return nil
 	}
 	sectionIDs, err := sectionIDs(libraryIDs)
@@ -234,6 +265,10 @@ func (p *Provider) SetDisabled(ctx context.Context, identity string, disabled bo
 	e, err := p.find(ctx, identity)
 	if err != nil {
 		return err
+	}
+	if e.owner {
+		// Nothing to remove: the owner's access is not a share.
+		return nil
 	}
 	if e.shareID != 0 {
 		return p.client.RemoveShare(ctx, p.clientID, p.token, p.machineID, e.shareID)

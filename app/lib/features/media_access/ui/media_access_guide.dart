@@ -8,16 +8,20 @@ import '../../auth/logic/auth_provider.dart';
 import '../data/media_access_service.dart';
 import 'media_server_email_sheet.dart';
 import 'media_server_password_sheet.dart';
+import 'media_server_sign_in_sheet.dart';
+import 'plex_sign_in_sheet.dart';
 
 /// Requester-focused guide for the media servers (Plex, Jellyfin, Emby)
 /// shared with this account: create the account with a password only they
-/// know, or share the Plex email their invite goes to; see where to sign in,
-/// install the app, start watching. Everything here is re-read from the
-/// server on every open and on pull-to-refresh: the rows behind it are an
-/// action log and the media server is the truth, which is also why an
-/// unconfirmed account is said to be unconfirmed rather than shown as fact.
-/// A user with no Plex grant on a server that has Plex sees one card to ask
-/// for it: sharing their email tells the admin where to send the invite.
+/// know, or link one they already have by signing in with it; on Plex, sign
+/// in with their own Plex account or share the email their invite goes to;
+/// see where to sign in, install the app, start watching. Everything here is
+/// re-read from the server on every open and on pull-to-refresh: the rows
+/// behind it are an action log and the media server is the truth, which is
+/// also why an unconfirmed account is said to be unconfirmed rather than
+/// shown as fact. A user with no Plex grant on a server that has Plex sees
+/// one card to ask for it: signing in with Plex or sharing their email tells
+/// the admin where to send the invite.
 class MediaAccessGuide extends ConsumerStatefulWidget {
   const MediaAccessGuide({super.key});
 
@@ -77,6 +81,50 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           'You already have an account here.',
       }),
     ));
+    await _load();
+  }
+
+  Future<void> _linkOwnAccount(MediaServerAccess server, String username) async {
+    final outcome = await showMediaServerSignInSheet(
+      context,
+      server: server,
+      username: username,
+    );
+    if (!mounted || outcome == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(switch (outcome) {
+        MediaServerSignInSheetOutcome.linked =>
+          'Account linked. Sign in with your usual password.',
+        MediaServerSignInSheetOutcome.accountExists =>
+          'You already have an account here.',
+      }),
+    ));
+    await _load();
+  }
+
+  /// Signs in with the person's own Plex account. The server remembers the
+  /// verified email and runs the same share pass a shared email does, so
+  /// the snackbar says what that led to.
+  Future<void> _signInWithPlex() async {
+    final state = await showPlexSignInSheet(context);
+    if (!mounted || state == null) return;
+    final who = state.username.isNotEmpty ? state.username : state.email;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(switch (state.inviteState) {
+        'sent' => 'Signed in as $who. Invite sent. Check your email.',
+        'adopted' => 'Signed in as $who. Your access is set up.',
+        'failed' => "Signed in as $who, but the invite couldn't be sent yet. "
+            'It will be retried.',
+        'claimed' => 'Signed in as $who, but that Plex account is already '
+            'linked to another Cantinarr user here. Ask your admin.',
+        _ => 'Signed in as $who. Your admin has been notified.',
+      }),
+    ));
+    // The profile's email changed; the ask card reads it from there, and a
+    // grant that auto-approve added shows up in the config.
+    final auth = ref.read(authProvider.notifier);
+    auth.refreshUser();
+    auth.refreshConfig();
     await _load();
   }
 
@@ -434,8 +482,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You have access to ${server.name}. Share the email of your Plex '
-            'account and your invite is on its way.',
+            'You have access to ${server.name}. Sign in with Plex to link '
+            'your account, or share the email of your Plex account.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -444,6 +492,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
+            onPressed: _signInWithPlex,
+            icon: const Icon(Icons.login, size: 18),
+            label: const Text('Sign in with Plex'),
+          ),
+          TextButton.icon(
             onPressed: () => _requestInvite(server, plexEmail),
             icon: const Icon(Icons.mail_outline, size: 18),
             label: const Text('Share my Plex email'),
@@ -490,6 +543,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       );
     } else {
+      // The owner of the server is an accepted share of a kind: nothing to
+      // accept, nothing Cantinarr will ever change.
+      final owner = account.administrator;
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -500,7 +556,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '${server.name} is shared with ${account.username}',
+                  owner
+                      ? 'You own ${server.name}.'
+                      : '${server.name} is shared with ${account.username}',
                   style: const TextStyle(
                     color: AppTheme.textPrimary,
                     fontWeight: FontWeight.w500,
@@ -509,6 +567,17 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
               ),
             ],
           ),
+          if (owner) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Signed in as ${account.username}',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           if (server.publicAddress.isNotEmpty) ...[
             Text(
@@ -543,17 +612,18 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     return _card(body);
   }
 
-  /// A Plex server exists but this user holds no grant on it: sharing the
-  /// email tells the admin where to send the invite (and, with auto-approve
-  /// on, sends it at once).
+  /// A Plex server exists but this user holds no grant on it: signing in
+  /// with Plex or sharing the email tells the admin where to send the invite
+  /// (and, with auto-approve on, sends it at once).
   Widget _buildAskForPlexCard(String plexEmail) {
     final Widget body = plexEmail.isEmpty
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'This server has Plex. Share the email of your Plex account '
-                'to ask for access; your admin gets a notification with it.',
+                'This server has Plex. Sign in with Plex to ask for access, '
+                'or share the email of your Plex account; your admin gets a '
+                'notification either way.',
                 style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 14,
@@ -562,9 +632,14 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
               ),
               const SizedBox(height: 12),
               ElevatedButton.icon(
+                onPressed: _signInWithPlex,
+                icon: const Icon(Icons.login, size: 18),
+                label: const Text('Sign in with Plex'),
+              ),
+              TextButton.icon(
                 onPressed: () => _askForPlexAccess(plexEmail),
                 icon: const Icon(Icons.mail_outline, size: 18),
-                label: const Text('Ask for Plex access'),
+                label: const Text('Share my Plex email'),
               ),
             ],
           )
@@ -597,14 +672,28 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                   height: 1.4,
                 ),
               ),
-              TextButton(
-                onPressed: () => _askForPlexAccess(plexEmail),
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.zero,
-                  minimumSize: const Size(0, 32),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                child: const Text('Change email'),
+              Wrap(
+                spacing: 16,
+                children: [
+                  TextButton(
+                    onPressed: _signInWithPlex,
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Sign in with Plex'),
+                  ),
+                  TextButton(
+                    onPressed: () => _askForPlexAccess(plexEmail),
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 32),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Change email'),
+                  ),
+                ],
               ),
             ],
           );
@@ -651,9 +740,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     );
   }
 
-  /// One server's account state: nothing yet (create it), turned off (ask
-  /// the admin), or active (username, where to sign in, and whether the
-  /// server confirmed the account just now).
+  /// One server's account state: nothing yet (create it, or link one the
+  /// person already has), turned off (ask the admin), or active (username,
+  /// where to sign in, whether the server confirmed the account just now,
+  /// and whether it is an administrator account Cantinarr never changes).
   Widget _buildAccountCard(MediaServerAccess server, String username) {
     final account = server.account;
     final Widget body;
@@ -675,6 +765,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
             onPressed: () => _createAccount(server, username),
             icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
             label: const Text('Create my account'),
+          ),
+          TextButton.icon(
+            onPressed: () => _linkOwnAccount(server, username),
+            icon: const Icon(Icons.login, size: 18),
+            label: const Text('I already have an account'),
           ),
         ],
       );
@@ -749,6 +844,29 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
               ),
             ],
           ),
+          if (account.administrator) ...[
+            const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(top: 1),
+                  child: Icon(Icons.admin_panel_settings_outlined,
+                      color: AppTheme.textSecondary, size: 16),
+                ),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Administrator account. Cantinarr never changes it.',
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 8),
           if (server.publicAddress.isNotEmpty) ...[
             Text(

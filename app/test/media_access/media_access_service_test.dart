@@ -299,4 +299,103 @@ void main() {
       );
     });
   });
+
+  group('linking an existing account', () {
+    test('link POSTs the credentials once and decodes the answer', () async {
+      final adapter = _FakeAdapter({
+        'POST /api/media-servers/jf-a/account/link': const _Reply(201, {
+          'username': 'Alice',
+          'public_address': 'https://jf.example.com',
+          'administrator': true,
+        }),
+      });
+      final linked = await _service(adapter).linkOwnAccount(
+        'jf-a',
+        username: 'alice',
+        password: 'correct-horse',
+      );
+      expect(linked.username, 'Alice');
+      expect(linked.publicAddress, 'https://jf.example.com');
+      expect(linked.administrator, isTrue);
+      expect(adapter.requests.single.method, 'POST');
+      expect(adapter.requests.single.body,
+          {'username': 'alice', 'password': 'correct-horse'});
+    });
+
+    test('a refused password carries the code on a 400', () async {
+      final adapter = _FakeAdapter({
+        'POST /api/media-servers/jf-a/account/link': const _Reply(400, {
+          'error': 'wrong username or password for this server',
+          'code': 'bad_credentials',
+        }),
+      });
+      await expectLater(
+        _service(adapter)
+            .linkOwnAccount('jf-a', username: 'alice', password: 'nope'),
+        throwsA(isA<MediaAccessException>()
+            .having((e) => e.status, 'status', 400)
+            .having((e) => e.code, 'code', 'bad_credentials')),
+      );
+    });
+
+    test('the Plex sign-in begins and polls until linked', () async {
+      final waiting = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/begin': const _Reply(200, {
+          'pin_id': 42,
+          'code': 'ABCD',
+          'url': 'https://app.plex.tv/auth#?code=ABCD',
+        }),
+        'POST /api/media-servers/plex/sign-in/check':
+            const _Reply(200, {'linked': false}),
+      });
+      final service = _service(waiting);
+      final start = await service.beginPlexSignIn();
+      expect(start.pinId, 42);
+      expect(start.code, 'ABCD');
+      expect(start.url, startsWith('https://app.plex.tv/auth#?'));
+      final pending = await service.checkPlexSignIn(42);
+      expect(pending.linked, isFalse);
+      expect(waiting.requests.last.body, {'pin_id': 42});
+
+      final done = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/check': const _Reply(200, {
+          'linked': true,
+          'username': 'alice',
+          'email': 'alice@example.com',
+          'invite_state': 'adopted',
+        }),
+      });
+      final state = await _service(done).checkPlexSignIn(42);
+      expect(state.linked, isTrue);
+      expect(state.username, 'alice');
+      expect(state.email, 'alice@example.com');
+      expect(state.inviteState, 'adopted');
+
+      final expired = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/check': const _Reply(404, {
+          'error': 'the Plex sign-in has expired; start again',
+          'code': 'pin_expired',
+        }),
+      });
+      await expectLater(
+        _service(expired).checkPlexSignIn(42),
+        throwsA(isA<MediaAccessException>()
+            .having((e) => e.code, 'code', 'pin_expired')),
+      );
+    });
+
+    test('an account status reads administrator, off by default', () {
+      expect(
+        MediaServerAccountStatus.fromJson(
+                const {'username': 'julian', 'administrator': true})
+            .administrator,
+        isTrue,
+      );
+      expect(
+        MediaServerAccountStatus.fromJson(const {'username': 'alice'})
+            .administrator,
+        isFalse,
+      );
+    });
+  });
 }

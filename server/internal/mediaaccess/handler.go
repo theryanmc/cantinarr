@@ -16,6 +16,7 @@ import (
 const (
 	minPasswordLength = 8
 	maxPasswordLength = 1024
+	maxUsernameLength = 256
 	maxBodyBytes      = 1 << 20
 )
 
@@ -128,6 +129,111 @@ func (h *Handler) requestInvite(w http.ResponseWriter, r *http.Request, userID i
 	}
 }
 
+// LinkOwnAccount answers POST /api/media-servers/{instanceID}/account/link:
+// the caller links an existing account by proving it is theirs with its
+// username and password. A refused password is a 400 with a code, never a
+// 401: to the app, a 401 from this server means its own session is gone.
+func (h *Handler) LinkOwnAccount(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	instanceID := chi.URLParam(r, "instanceID")
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	body.Username = strings.TrimSpace(body.Username)
+	switch {
+	case body.Username == "" || body.Password == "":
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username and password required"})
+		return
+	case len(body.Username) > maxUsernameLength:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username is too long"})
+		return
+	case len(body.Password) > maxPasswordLength:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is too long"})
+		return
+	}
+
+	linked, err := h.svc.LinkOwnAccount(r.Context(), claims.UserID, instanceID, body.Username, body.Password)
+	switch {
+	case err == nil:
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusCreated, linked)
+	case errors.Is(err, ErrBadCredentials):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wrong username or password for this server", "code": "bad_credentials"})
+	case errors.Is(err, ErrAccountRefused):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "that account can't sign in right now; it may be turned off. Ask your admin", "code": "account_refused"})
+	case errors.Is(err, ErrRemoteAlreadyLinked):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "that account is already linked to another user; ask your admin", "code": "remote_already_linked"})
+	case errors.Is(err, ErrWrongKind):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this server invites by email; sign in with Plex or share your email", "code": "wrong_kind"})
+	case errors.Is(err, ErrUpstream):
+		h.logger.Warn("mediaaccess: link own account failed upstream", "err", err, "user_id", claims.UserID, "instance_id", instanceID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "couldn't reach the server to check the account; try again later"})
+	default:
+		h.writeCreateError(w, err, claims.UserID, instanceID)
+	}
+}
+
+// PlexSignInBegin answers POST /api/media-servers/plex/sign-in/begin ->
+// {pin_id, code, url}: the caller opens url, approves with their own Plex
+// account, and the app polls PlexSignInCheck.
+func (h *Handler) PlexSignInBegin(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	start, err := h.svc.PlexSignInBegin(r.Context(), claims.UserID)
+	if err != nil {
+		h.logger.Warn("mediaaccess: plex sign-in begin", "err", err, "user_id", claims.UserID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach plex.tv"})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, start)
+}
+
+// PlexSignInCheck answers POST /api/media-servers/plex/sign-in/check
+// {pin_id} -> {linked} until approved, then {linked, username, email,
+// invite_state}.
+func (h *Handler) PlexSignInCheck(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body struct {
+		PinID int64 `json:"pin_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil || body.PinID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pin_id required"})
+		return
+	}
+	result, err := h.svc.PlexSignInCheck(r.Context(), claims.UserID, body.PinID, claims.Username)
+	switch {
+	case err == nil:
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, result)
+	case errors.Is(err, ErrPinNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the Plex sign-in has expired; start again", "code": "pin_expired"})
+	case errors.Is(err, ErrInvalidEmail):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plex.tv reported no email for that account", "code": "invalid_email"})
+	case errors.Is(err, ErrUpstream):
+		h.logger.Warn("mediaaccess: plex sign-in check", "err", err, "user_id", claims.UserID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach plex.tv"})
+	default:
+		h.writeCreateError(w, err, claims.UserID, "")
+	}
+}
+
 // writeCreateError maps the outcomes CreateAccount and RequestInvite share.
 func (h *Handler) writeCreateError(w http.ResponseWriter, err error, userID int64, instanceID string) {
 	switch {
@@ -235,8 +341,6 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a media server instance"})
 	case errors.Is(err, ErrRemoteUserNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "remote user not found"})
-	case errors.Is(err, ErrAdministratorAccount):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "administrator accounts can't be linked"})
 	case errors.Is(err, ErrAccountExists):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "user already has an account on this server", "code": "account_exists"})
 	case errors.Is(err, ErrRemoteAlreadyLinked):
