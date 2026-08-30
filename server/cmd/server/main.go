@@ -146,6 +146,9 @@ func main() {
 		log.Fatalf("Failed to migrate the Plex integration: %v", err)
 	}
 	mediaAccessService := mediaaccess.NewService(database, instanceStore, instance.NewMediaServerProvider, logger)
+	// An import creates the Cantinarr users it names through the auth
+	// service, the same find-or-create the connect-link route uses.
+	mediaAccessService.SetUserCreator(authService)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
 	instanceHandler.SetGrantObserver(mediaAccessService.OnGrantsChanged)
 	instanceHandler.SetSharedLibrariesObserver(mediaAccessService.OnSharedLibrariesChanged)
@@ -317,6 +320,7 @@ func main() {
 	// Read per call so a settings change reaches the next link without a
 	// restart. Wired late for the same reason as the access-request hook.
 	authHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
+	mediaAccessHandler.SetExternalURLSource(func() string { return serverSettings.Get().ExternalURL })
 
 	// Discover handler (always created — checks credentials at request time)
 	apiCache := cache.New()

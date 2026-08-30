@@ -22,6 +22,9 @@ Use the [run template](../run-template.md) to record executions of these cases.
 
 - [ ] `MSRV-019` · P1 · UI/LIVE — As a user with a linked Jellyfin account restricted to some libraries, open an available title that is in a shared library and one that is only in a library not shared; verify the first shows **Watch on Jellyfin** whose link opens that exact item's page on the server (signed in as that user), the second shows the disabled "Not on Jellyfin yet", a title Radarr has that Jellyfin has not scanned yet reads the same way, and the server's request log shows the lookup made as the user's own account id.
 - [ ] `MSRV-020` · P1 · UI/LIVE — Emby: the same with a linked Emby account; verify the button opens the item page (`web/index.html#!/item?id=…&serverId=…`) and that stopping the Emby container while the page is open leaves neither a button nor a "not yet" line for it (no answer is never shown as absence).
+## Importing
+
+- [ ] `MSRV-021` · P1 · UI/LIVE — From Users, import two accounts that exist only on the server (one of them switched off there) plus the server's administrator (ticked by hand, since Select all skips it); verify a Cantinarr user of each exact name appears granted and linked (`created_by_cantinarr=0`), each new user's connect link redeems, the accounts' policies on the server are untouched except that the switched-off one is switched back on (it now has access), an account already linked to someone cannot be picked, an account whose name matches an existing Cantinarr user is attached to that user without a new link, and importing the same accounts again answers "already linked" for each and creates nothing. Repeat on Emby.
 
 ## Access off and on
 

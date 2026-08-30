@@ -197,9 +197,12 @@ func NewRouter(
 
 			// Media-server accounts (Jellyfin, Emby, Plex): the linked-account
 			// rows the Users screen tags, the server's own account list for the
-			// link picker, and link/unlink. Access itself is the instance grant.
+			// link picker, link/unlink, and the import that turns picked
+			// accounts into granted, linked Cantinarr users. Access itself is
+			// the instance grant.
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/accounts", mediaAccessHandler.ListAccounts)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/media-servers/{instanceID}/users", mediaAccessHandler.RemoteUsers)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
 
