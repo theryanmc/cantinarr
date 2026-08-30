@@ -219,6 +219,75 @@ func userPath(remoteID string) string {
 	return "/Users/" + url.PathEscape(remoteID)
 }
 
+// itemDTO is the slice of a library item Cantinarr reads: its id and the
+// provider ids that identify the title. No paths, no media info.
+type itemDTO struct {
+	ID          string            `json:"Id"`
+	ProviderIDs map[string]string `json:"ProviderIds"`
+}
+
+type itemsResponse struct {
+	Items []itemDTO `json:"Items"`
+}
+
+var itemTypes = map[string]string{"movie": "Movie", "tv": "Series"}
+
+// FindItem implements mediaserver.ItemFinder. The query runs as the linked
+// account (userId), so Jellyfin applies that account's library access, and
+// the answer is matched on provider ids, never on a name alone. Jellyfin has
+// no provider-id filter of its own (10.11 silently ignores
+// anyProviderIdEquals), so the candidates are narrowed by production year, a
+// three-year window around the title's year since both sides took the date
+// from the same metadata, or by the title when no year is known. The item's
+// page is the web client's details route, keyed by item and server id.
+func (c *Client) FindItem(ctx context.Context, remoteUserID string, q mediaserver.ItemQuery) (mediaserver.Item, error) {
+	itemType, ok := itemTypes[q.MediaType]
+	if !ok {
+		return mediaserver.Item{}, errors.New("jellyfin find item: unsupported media type")
+	}
+	if q.TMDBID <= 0 && q.TVDBID <= 0 {
+		return mediaserver.Item{}, errors.New("jellyfin find item: no provider id to match")
+	}
+	params := url.Values{}
+	params.Set("userId", remoteUserID)
+	params.Set("recursive", "true")
+	params.Set("includeItemTypes", itemType)
+	params.Set("fields", "ProviderIds")
+	params.Set("enableImages", "false")
+	params.Set("enableUserData", "false")
+	params.Set("enableTotalRecordCount", "false")
+	switch {
+	case q.Year > 0:
+		params.Set("years", fmt.Sprintf("%d,%d,%d", q.Year-1, q.Year, q.Year+1))
+	case strings.TrimSpace(q.Title) != "":
+		params.Set("searchTerm", strings.TrimSpace(q.Title))
+	default:
+		return mediaserver.Item{}, errors.New("jellyfin find item: no year or title to narrow by")
+	}
+	var resp itemsResponse
+	if err := c.do(ctx, http.MethodGet, "/Items?"+params.Encode(), "find item", nil, &resp); err != nil {
+		return mediaserver.Item{}, err
+	}
+	for _, item := range resp.Items {
+		if item.ID == "" || !mediaserver.ItemMatches(item.ProviderIDs, q) {
+			continue
+		}
+		info, err := c.SystemInfo(ctx)
+		if err != nil {
+			return mediaserver.Item{}, err
+		}
+		return mediaserver.Item{ID: item.ID, WebPath: itemWebPath(item.ID, info.ID)}, nil
+	}
+	return mediaserver.Item{}, mediaserver.ErrItemNotFound
+}
+
+// itemWebPath is the Jellyfin web client's page for an item, under the
+// server root: the "details" route of jellyfin-web, which also serves the
+// older "#!/" form through a redirect.
+func itemWebPath(itemID, serverID string) string {
+	return "/web/#/details?id=" + url.QueryEscape(itemID) + "&serverId=" + url.QueryEscape(serverID)
+}
+
 func (c *Client) getUser(ctx context.Context, remoteID string) (userDTO, error) {
 	var dto userDTO
 	err := c.do(ctx, http.MethodGet, userPath(remoteID), "get user", nil, &dto)

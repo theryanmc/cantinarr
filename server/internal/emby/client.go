@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -278,6 +279,70 @@ func (c *Client) Users(ctx context.Context) ([]mediaserver.RemoteUser, error) {
 
 func userPath(remoteID string) string {
 	return "/Users/" + url.PathEscape(remoteID)
+}
+
+// itemDTO is the slice of a library item Cantinarr reads: its id and the
+// provider ids that identify the title. No paths, no media info.
+type itemDTO struct {
+	ID          flexString        `json:"Id"`
+	ProviderIDs map[string]string `json:"ProviderIds"`
+}
+
+type itemsResponse struct {
+	Items []itemDTO `json:"Items"`
+}
+
+var itemTypes = map[string]string{"movie": "Movie", "tv": "Series"}
+
+// FindItem implements mediaserver.ItemFinder. The query runs as the linked
+// account (/Users/{id}/Items), so Emby applies that account's library
+// access. Emby filters by provider id itself (AnyProviderIdEquals, a list of
+// name.value pairs, verified on 4.9.5), and the answer is still confirmed
+// against the item's provider ids before it is trusted. The item's page is
+// the web client's item route, keyed by item and server id.
+func (c *Client) FindItem(ctx context.Context, remoteUserID string, q mediaserver.ItemQuery) (mediaserver.Item, error) {
+	itemType, ok := itemTypes[q.MediaType]
+	if !ok {
+		return mediaserver.Item{}, errors.New("emby find item: unsupported media type")
+	}
+	var ids []string
+	if q.MediaType == "tv" && q.TVDBID > 0 {
+		ids = append(ids, "tvdb."+strconv.FormatInt(q.TVDBID, 10))
+	}
+	if q.TMDBID > 0 {
+		ids = append(ids, "tmdb."+strconv.FormatInt(q.TMDBID, 10))
+	}
+	if len(ids) == 0 {
+		return mediaserver.Item{}, errors.New("emby find item: no provider id to match")
+	}
+	params := url.Values{}
+	params.Set("Recursive", "true")
+	params.Set("IncludeItemTypes", itemType)
+	params.Set("Fields", "ProviderIds")
+	params.Set("AnyProviderIdEquals", strings.Join(ids, ","))
+	params.Set("EnableImages", "false")
+	params.Set("EnableUserData", "false")
+	var resp itemsResponse
+	if err := c.do(ctx, http.MethodGet, userPath(remoteUserID)+"/Items?"+params.Encode(), "find item", nil, &resp); err != nil {
+		return mediaserver.Item{}, err
+	}
+	for _, item := range resp.Items {
+		if item.ID == "" || !mediaserver.ItemMatches(item.ProviderIDs, q) {
+			continue
+		}
+		info, err := c.SystemInfo(ctx)
+		if err != nil {
+			return mediaserver.Item{}, err
+		}
+		return mediaserver.Item{ID: string(item.ID), WebPath: itemWebPath(string(item.ID), info.ID)}, nil
+	}
+	return mediaserver.Item{}, mediaserver.ErrItemNotFound
+}
+
+// itemWebPath is the Emby web client's page for an item, under the server
+// root.
+func itemWebPath(itemID, serverID string) string {
+	return "/web/index.html#!/item?id=" + url.QueryEscape(itemID) + "&serverId=" + url.QueryEscape(serverID)
 }
 
 func (c *Client) getUser(ctx context.Context, remoteID string) (userDTO, error) {

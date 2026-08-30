@@ -18,6 +18,11 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `MSRV-017` · P0 · UI/LIVE — Link with a wrong password, then with the right one; verify the app says the password was wrong and stays signed in to Cantinarr (a refused password is never a revoked session), the server's own failed-attempt counter moved exactly as its login page would move it, and nothing was linked until the right password.
 - [ ] `MSRV-018` · P0 · UI/LIVE — Link the server's administrator account, from the guide with its password and again from the admin picker (where it is listed and marked); verify the guide shows the "Cantinarr never changes it" line, removing the grant and deleting the Cantinarr user both leave the account enabled on the server, the maintenance sweep stays quiet afterwards (no retry logged every five minutes), and a shared-library change in the editor leaves its policy alone.
 
+## Watching
+
+- [ ] `MSRV-019` · P1 · UI/LIVE — As a user with a linked Jellyfin account restricted to some libraries, open an available title that is in a shared library and one that is only in a library not shared; verify the first shows **Watch on Jellyfin** whose link opens that exact item's page on the server (signed in as that user), the second shows the disabled "Not on Jellyfin yet", a title Radarr has that Jellyfin has not scanned yet reads the same way, and the server's request log shows the lookup made as the user's own account id.
+- [ ] `MSRV-020` · P1 · UI/LIVE — Emby: the same with a linked Emby account; verify the button opens the item page (`web/index.html#!/item?id=…&serverId=…`) and that stopping the Emby container while the page is open leaves neither a button nor a "not yet" line for it (no answer is never shown as absence).
+
 ## Access off and on
 
 - [ ] `MSRV-004` · P0 · UI/LIVE — Remove the user's grant in the instance editor; verify the Jellyfin user reads `IsDisabled=true`, the server leaves that user's guide entirely (the admin's Users list is where `: off` shows), and granting again flips it back with watch history and library scope intact. Then disable the account in Jellyfin's own UI while the grant stays: the guide keeps listing the server and shows the access-is-turned-off line.

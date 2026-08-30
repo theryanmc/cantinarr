@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,7 @@ class _FakeAdapter implements HttpClientAdapter {
 
   final Map<String, _Reply> replies;
   final List<({String method, String path, dynamic body})> requests = [];
+  final List<Uri> uris = [];
 
   @override
   Future<ResponseBody> fetch(
@@ -31,6 +33,7 @@ class _FakeAdapter implements HttpClientAdapter {
       if (bytes.isNotEmpty) body = jsonDecode(utf8.decode(bytes));
     }
     final path = options.uri.path;
+    uris.add(options.uri);
     requests.add((method: options.method, path: path, body: body));
     final reply = replies['${options.method} $path'] ??
         const _Reply(404, {'error': 'not found'});
@@ -123,6 +126,80 @@ void main() {
       expect(servers.first.account?.disabled, isTrue);
       expect(servers.first.account?.verified, isFalse);
       expect(servers.last.account, isNull);
+    });
+  });
+
+  group('watchLinks', () {
+    test('asks with the ids that narrow the lookup and parses every state',
+        () async {
+      final adapter = _FakeAdapter({
+        'GET /api/media-servers/watch': const _Reply(200, [
+          {
+            'instance_id': 'jf-a',
+            'service_type': 'jellyfin',
+            'name': 'Home Jellyfin',
+            'state': 'found',
+            'url': 'https://jf.example.com/web/#/details?id=i-1&serverId=s',
+          },
+          {
+            'instance_id': 'em-a',
+            'service_type': 'emby',
+            'name': 'Den Emby',
+            'state': 'missing',
+          },
+          {
+            'instance_id': 'jf-b',
+            'service_type': 'jellyfin',
+            'name': 'Cabin',
+            'state': 'unreachable',
+          },
+        ]),
+      });
+
+      final links = await _service(adapter).watchLinks(
+        mediaType: MediaType.tv,
+        tmdbId: 1396,
+        tvdbId: 81189,
+        year: 2008,
+        title: ' Breaking Bad ',
+      );
+
+      final query = adapter.uris.single.queryParameters;
+      expect(query, {
+        'media_type': 'tv',
+        'tmdb_id': '1396',
+        'tvdb_id': '81189',
+        'year': '2008',
+        'title': 'Breaking Bad',
+      });
+      expect(links.map((l) => l.state), [
+        WatchLinkState.found,
+        WatchLinkState.missing,
+        WatchLinkState.unreachable,
+      ]);
+      expect(links.first.url,
+          'https://jf.example.com/web/#/details?id=i-1&serverId=s');
+      expect(links.first.name, 'Home Jellyfin');
+      expect(links[1].url, isEmpty);
+    });
+
+    test('unknown ids and an empty title are left out of the query',
+        () async {
+      final adapter = _FakeAdapter({
+        'GET /api/media-servers/watch': const _Reply(200, []),
+      });
+
+      final links = await _service(adapter).watchLinks(
+        mediaType: MediaType.movie,
+        tmdbId: 10378,
+        tvdbId: 0,
+        year: null,
+        title: '',
+      );
+
+      expect(links, isEmpty);
+      expect(adapter.uris.single.queryParameters,
+          {'media_type': 'movie', 'tmdb_id': '10378'});
     });
   });
 

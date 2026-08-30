@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,7 +74,10 @@ var (
 )
 
 const (
-	verifyTimeout    = 3 * time.Second
+	verifyTimeout = 3 * time.Second
+	// watchTimeout bounds one title lookup on one media server; the detail
+	// page waits for the slowest of them.
+	watchTimeout     = 5 * time.Second
 	createTimeout    = 30 * time.Second
 	reconcileTimeout = 10 * time.Second
 	// driftSweepInterval paces the retry of switch-offs that could not reach
@@ -319,6 +323,107 @@ func (s *Service) verifyAccount(ctx context.Context, inst *instance.Instance, ro
 		return stored
 	}
 	return &AccountView{Username: live.Name, Disabled: live.IsDisabled, Pending: live.Pending, Administrator: live.IsAdministrator, Verified: true}
+}
+
+// Watch-link states: what the media server answered about one title.
+const (
+	// WatchFound: the server holds the title and the account can see it.
+	WatchFound = "found"
+	// WatchMissing: the server confirmed it has no such title the account
+	// can see (absence: not imported yet, or in a library not shared).
+	WatchMissing = "missing"
+	// WatchUnreachable: no answer (blindness); never read as absence.
+	WatchUnreachable = "unreachable"
+)
+
+// WatchLink is where one title can be watched on one of the user's media
+// servers, as the server answered just now. URL is the item's page at the
+// admin-typed public address, set only when found.
+type WatchLink struct {
+	InstanceID  string `json:"instance_id"`
+	Name        string `json:"name"`
+	ServiceType string `json:"service_type"`
+	State       string `json:"state"`
+	URL         string `json:"url,omitempty"`
+}
+
+// WatchLinks looks a title up on every media server the user can watch on:
+// a granted account server with a sign-in address whose client can find
+// items, where the user holds a live linked account. Each lookup runs as
+// that account, so the server applies its library access, concurrently and
+// bounded. Servers without a public address are omitted (nothing there is
+// client-reachable), invite servers are not looked up (Plex is reached only
+// through plex.tv), and every remaining server answers with a state, so an
+// absent link is never mistaken for a server that could not answer.
+func (s *Service) WatchLinks(ctx context.Context, userID int64, q mediaserver.ItemQuery) ([]WatchLink, error) {
+	ids, err := s.grantedMediaServers(userID)
+	if err != nil {
+		return nil, err
+	}
+	type target struct {
+		inst   *instance.Instance
+		row    *accountRow
+		finder mediaserver.ItemFinder
+	}
+	var targets []target
+	for _, id := range ids {
+		inst, err := s.store.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		if inst == nil || !instance.IsMediaServerType(inst.ServiceType) || inst.MediaServerConfig.PublicAddress == "" {
+			continue
+		}
+		provider, err := s.providers(inst)
+		if err != nil || mediaserver.KindOf(provider) != mediaserver.KindAccount {
+			continue
+		}
+		finder, ok := provider.(mediaserver.ItemFinder)
+		if !ok {
+			continue
+		}
+		row, err := s.getAccount(userID, id)
+		if err != nil {
+			return nil, err
+		}
+		if row == nil || row.DisabledAt.Valid {
+			continue
+		}
+		targets = append(targets, target{inst: inst, row: row, finder: finder})
+	}
+
+	links := make([]WatchLink, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t target) {
+			defer wg.Done()
+			links[i] = s.watchLink(ctx, t.inst, t.row, t.finder, q)
+		}(i, t)
+	}
+	wg.Wait()
+	return links, nil
+}
+
+// watchLink is one server's answer for one title. A confirmed absence and an
+// unanswered lookup are different states; only the latter is logged, with
+// ids.
+func (s *Service) watchLink(ctx context.Context, inst *instance.Instance, row *accountRow, finder mediaserver.ItemFinder, q mediaserver.ItemQuery) WatchLink {
+	link := WatchLink{InstanceID: inst.ID, Name: inst.Name, ServiceType: inst.ServiceType}
+	ctx, cancel := context.WithTimeout(ctx, watchTimeout)
+	defer cancel()
+	item, err := finder.FindItem(ctx, row.RemoteUserID, q)
+	switch {
+	case errors.Is(err, mediaserver.ErrItemNotFound):
+		link.State = WatchMissing
+	case err != nil:
+		s.logger.Info("mediaaccess: could not look a title up on the media server", "err", err, "user_id", row.UserID, "instance_id", inst.ID)
+		link.State = WatchUnreachable
+	default:
+		link.State = WatchFound
+		link.URL = strings.TrimRight(inst.MediaServerConfig.PublicAddress, "/") + item.WebPath
+	}
+	return link
 }
 
 // eligibleProvider is the prologue of every self-service write: the instance
