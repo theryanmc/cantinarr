@@ -41,6 +41,7 @@ type fakeProvider struct {
 	authCalls int
 	authErr   error
 	onAuth    func()
+	usersErr  error // Users fails with this
 }
 
 // libraryWrite records one SetLibraries call.
@@ -116,6 +117,9 @@ func (f *fakeProvider) Libraries(context.Context) ([]mediaserver.Library, error)
 func (f *fakeProvider) Users(context.Context) ([]mediaserver.RemoteUser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
 	out := []mediaserver.RemoteUser{}
 	for _, u := range f.users {
 		out = append(out, *u)

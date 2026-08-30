@@ -35,6 +35,49 @@ class MediaServerAccountStatus {
       );
 }
 
+/// One requested account's outcome from an import: [created] says a
+/// Cantinarr user was made for it (an existing user of the same name is
+/// reused and gets no new link), [linked] says the account is now that
+/// user's, [link] is the connect link to hand out, and [error] is the
+/// server's code when a step was refused (`not_found`, `already_linked`,
+/// `user_failed`, `user_has_account`, `link_failed`).
+class MediaServerImportResult {
+  final String remoteUserId;
+  final String remoteUsername;
+  final int? userId;
+  final String username;
+  final bool created;
+  final bool linked;
+  final String link;
+  final String originSource;
+  final String error;
+
+  const MediaServerImportResult({
+    required this.remoteUserId,
+    required this.remoteUsername,
+    this.userId,
+    this.username = '',
+    this.created = false,
+    this.linked = false,
+    this.link = '',
+    this.originSource = '',
+    this.error = '',
+  });
+
+  factory MediaServerImportResult.fromJson(Map<String, dynamic> json) =>
+      MediaServerImportResult(
+        remoteUserId: json['remote_user_id']?.toString() ?? '',
+        remoteUsername: json['remote_username'] as String? ?? '',
+        userId: (json['user_id'] as num?)?.toInt(),
+        username: json['username'] as String? ?? '',
+        created: json['created'] as bool? ?? false,
+        linked: json['linked'] as bool? ?? false,
+        link: json['link'] as String? ?? '',
+        originSource: json['origin_source'] as String? ?? '',
+        error: json['error'] as String? ?? '',
+      );
+}
+
 /// How a media server grants access: an account Cantinarr creates with a
 /// password the user picks (Jellyfin, Emby), or an invite sent to the email
 /// the user shares (Plex).
@@ -415,6 +458,27 @@ class MediaAccessService {
     if (data is Map && data['users'] is List) data = data['users'];
     return _list(data)
         .map((raw) => RemoteMediaServerUser.fromJson(raw))
+        .toList(growable: false);
+  }
+
+  /// Turns accounts the server lists into Cantinarr users (admin): each
+  /// picked account gets a user named after it (found or created, a new one
+  /// with a connect link), the instance grant, and the account linked. One
+  /// result per picked account, each with its own outcome. [serverUrl] is
+  /// the address the links are built on when no External Address is set.
+  Future<List<MediaServerImportResult>> importAccounts({
+    required String instanceId,
+    required List<String> remoteUserIds,
+    required String serverUrl,
+  }) async {
+    final resp = await _dio.post(
+      '/api/admin/media-servers/$instanceId/import',
+      data: {'remote_user_ids': remoteUserIds, 'server_url': serverUrl},
+    );
+    dynamic data = resp.data;
+    if (data is Map && data['results'] is List) data = data['results'];
+    return _list(data)
+        .map((raw) => MediaServerImportResult.fromJson(raw))
         .toList(growable: false);
   }
 

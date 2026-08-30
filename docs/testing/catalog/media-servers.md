@@ -18,6 +18,10 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `MSRV-017` · P0 · UI/LIVE — Link with a wrong password, then with the right one; verify the app says the password was wrong and stays signed in to Cantinarr (a refused password is never a revoked session), the server's own failed-attempt counter moved exactly as its login page would move it, and nothing was linked until the right password.
 - [ ] `MSRV-018` · P0 · UI/LIVE — Link the server's administrator account, from the guide with its password and again from the admin picker (where it is listed and marked); verify the guide shows the "Cantinarr never changes it" line, removing the grant and deleting the Cantinarr user both leave the account enabled on the server, the maintenance sweep stays quiet afterwards (no retry logged every five minutes), and a shared-library change in the editor leaves its policy alone.
 
+## Importing
+
+- [ ] `MSRV-021` · P1 · UI/LIVE — From Users, import two accounts that exist only on the server (one of them switched off there) plus the server's administrator (ticked by hand, since Select all skips it); verify a Cantinarr user of each exact name appears granted and linked (`created_by_cantinarr=0`), each new user's connect link redeems, the accounts' policies on the server are untouched, an account already linked to someone cannot be picked, an account whose name matches an existing Cantinarr user is attached to that user without a new link, and importing the same accounts again answers "already linked" for each and creates nothing. Repeat on Emby.
+
 ## Access off and on
 
 - [ ] `MSRV-004` · P0 · UI/LIVE — Remove the user's grant in the instance editor; verify the Jellyfin user reads `IsDisabled=true`, the server leaves that user's guide entirely (the admin's Users list is where `: off` shows), and granting again flips it back with watch history and library scope intact. Then disable the account in Jellyfin's own UI while the grant stays: the guide keeps listing the server and shows the access-is-turned-off line.

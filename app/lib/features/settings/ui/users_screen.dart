@@ -6,10 +6,12 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/app_sheet.dart';
 import '../../ai_assistant/data/ai_settings_service.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/ui/media_server_import_sheet.dart';
 import '../../media_access/ui/media_server_link_sheet.dart';
 import '../../notifications/push_service.dart';
 import '../data/credentials_service.dart';
@@ -573,10 +575,90 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     return match != null ? match.group(1)! : fallback;
   }
 
+  /// Opens the import for one media server (a chooser first when there are
+  /// several): picked accounts become granted, linked Cantinarr users.
+  Future<void> _importFromMediaServer() async {
+    final servers = _mediaServers;
+    if (servers.isEmpty) return;
+    ServiceInstance? server = servers.length == 1 ? servers.single : null;
+    server ??= await showAppSheet<ServiceInstance>(
+      context,
+      builder: (sheetContext) => AppSheet(
+        padding: const EdgeInsets.fromLTRB(
+          AppTheme.spaceXl,
+          0,
+          AppTheme.spaceXl,
+          AppTheme.spaceXl,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Import from which server?',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: AppTheme.spaceMd),
+            for (final candidate in servers)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.live_tv_outlined,
+                    color: AppTheme.textSecondary),
+                title: Text(candidate.name,
+                    style: const TextStyle(color: AppTheme.textPrimary)),
+                onTap: () => Navigator.of(sheetContext).pop(candidate),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (server == null || !mounted) return;
+    final users = _users ?? const <UserSummary>[];
+    final imported = await showMediaServerImportSheet(
+      context,
+      server: server,
+      existingUsers: {for (final u in users) u.username: u.id},
+      linkedTo: {
+        for (final row in _mediaAccounts)
+          if (row.instanceId == server.id)
+            row.remoteUserId: users
+                    .where((u) => u.id == row.userId)
+                    .map((u) => u.username)
+                    .firstOrNull ??
+                'another user',
+      },
+    );
+    if (imported == null || !mounted) return;
+    await _loadUsers();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(imported == 1
+          ? 'Imported 1 user from ${server.name}'
+          : 'Imported $imported users from ${server.name}'),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final mediaServers = ref.watch(authProvider).valueOrNull?.connection
+            ?.mediaServerInstances ??
+        const <ServiceInstance>[];
     return Scaffold(
-      appBar: AppBar(title: const Text('Users')),
+      appBar: AppBar(
+        title: const Text('Users'),
+        actions: [
+          if (mediaServers.isNotEmpty)
+            IconButton(
+              tooltip: 'Import from a media server',
+              icon: const Icon(Icons.group_add_outlined),
+              onPressed: _isLoading ? null : _importFromMediaServer,
+            ),
+        ],
+      ),
       body: CenteredContent(child: _buildBody()),
     );
   }

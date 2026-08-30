@@ -119,6 +119,9 @@ type Service struct {
 	// PIN calls go (plex.tv, or a test server).
 	signIns     *plexSignIns
 	plexBaseURL string
+	// userCreator makes the Cantinarr users an import names; nil until main
+	// wires the auth service.
+	userCreator UserCreator
 }
 
 // NewService wires the service. providers is called per request: media

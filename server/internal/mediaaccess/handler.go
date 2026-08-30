@@ -25,6 +25,16 @@ const (
 type Handler struct {
 	svc    *Service
 	logger *slog.Logger
+	// externalURL is the admin-configured external address, read per call;
+	// an import's connect links prefer it over the address the admin's own
+	// app sent, exactly as the connect-token route does.
+	externalURL func() string
+}
+
+// SetExternalURLSource wires the external address an import's connect links
+// are built on. Wired late by main, like the auth handler's.
+func (h *Handler) SetExternalURLSource(fn func() string) {
+	h.externalURL = fn
 }
 
 // NewHandler creates the handler.
@@ -351,6 +361,66 @@ func (h *Handler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.logger.Error("mediaaccess: link account", "err", err, "user_id", userID, "instance_id", instanceID)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to link account"})
+	}
+}
+
+// Import answers POST /api/admin/media-servers/{instanceID}/import
+// { remote_user_ids, server_url }: a Cantinarr user per picked account,
+// granted and linked, with a connect link for each user that was created.
+// One result per requested account, each with its own outcome.
+func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	instanceID := chi.URLParam(r, "instanceID")
+	var body struct {
+		RemoteUserIDs []string `json:"remote_user_ids"`
+		ServerURL     string   `json:"server_url"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(body.RemoteUserIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "remote_user_ids required"})
+		return
+	}
+	if len(body.RemoteUserIDs) > maxImportAccounts {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many accounts at once"})
+		return
+	}
+	serverURL := strings.TrimSpace(body.ServerURL)
+	if h.externalURL != nil {
+		if ext := h.externalURL(); ext != "" {
+			serverURL = ext
+		}
+	}
+	if serverURL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_url required"})
+		return
+	}
+	results, err := h.svc.ImportAccounts(r.Context(), claims.UserID, instanceID, serverURL, body.RemoteUserIDs)
+	switch {
+	case err == nil:
+		if results == nil {
+			results = []ImportResult{}
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	case errors.Is(err, ErrInstanceNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "instance not found"})
+	case errors.Is(err, ErrNotMediaServer):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a media server instance"})
+	case errors.Is(err, ErrImportUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "import is not available"})
+	case errors.Is(err, ErrUpstream):
+		h.logger.Warn("mediaaccess: import", "err", err, "instance_id", instanceID)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach the media server"})
+	default:
+		h.logger.Error("mediaaccess: import", "err", err, "instance_id", instanceID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to import accounts"})
 	}
 }
 
