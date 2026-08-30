@@ -25,6 +25,9 @@ func newHandlerEnv(t *testing.T) (*env, http.Handler) {
 	r := chi.NewRouter()
 	r.Get("/api/media-servers", h.List)
 	r.Post("/api/media-servers/{instanceID}/account", h.CreateAccount)
+	r.Post("/api/media-servers/{instanceID}/account/link", h.LinkOwnAccount)
+	r.Post("/api/media-servers/plex/sign-in/begin", h.PlexSignInBegin)
+	r.Post("/api/media-servers/plex/sign-in/check", h.PlexSignInCheck)
 	r.Get("/api/admin/media-servers/accounts", h.ListAccounts)
 	r.Get("/api/admin/media-servers/{instanceID}/users", h.RemoteUsers)
 	r.Put("/api/admin/users/{userID}/media-servers/{instanceID}/account", h.LinkAccount)
@@ -115,9 +118,15 @@ func TestNoResponseOrLogContainsPasswordOrKey(t *testing.T) {
 	jf := e.jellyfin("Home", instance.MediaServerConfig{})
 	e.grant(alice, jf)
 	const password = "alice-pass-SENTINEL"
+	bob := e.user("bob")
+	e.grant(bob, jf)
+	bobID := e.provider.addUser("bob", false, false)
+	e.provider.passwords[bobID] = "bob-pass-SENTINEL"
 	bodies := []string{
 		serve(router, "POST", "/api/media-servers/"+jf+"/account", alice, `{"password":"`+password+`"}`).Body.String(),
 		serve(router, "POST", "/api/media-servers/"+jf+"/account", alice, `{"password":"`+password+`"}`).Body.String(),
+		serve(router, "POST", "/api/media-servers/"+jf+"/account/link", bob, `{"username":"bob","password":"wrong-pass-SENTINEL"}`).Body.String(),
+		serve(router, "POST", "/api/media-servers/"+jf+"/account/link", bob, `{"username":"bob","password":"bob-pass-SENTINEL"}`).Body.String(),
 		serve(router, "GET", "/api/media-servers", alice, "").Body.String(),
 		serve(router, "GET", "/api/admin/media-servers/accounts", alice, "").Body.String(),
 	}
@@ -213,8 +222,11 @@ func TestAdminRoutesStatusMapping(t *testing.T) {
 	if rec := link(alice, jf, "remote-nope"); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown remote = %d", rec.Code)
 	}
-	if rec := link(alice, jf, adminID); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "administrator") {
+	if rec := link(bob, jf, adminID); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"username":"root"`) {
 		t.Fatalf("admin remote = %d %s", rec.Code, rec.Body.String())
+	}
+	if err := e.svc.UnlinkAccount(bob, jf); err != nil {
+		t.Fatal(err)
 	}
 	rec = link(alice, jf, aliceID)
 	if rec.Code != http.StatusOK {
@@ -301,5 +313,86 @@ func TestRequestInviteStatusMapping(t *testing.T) {
 	users := serve(router, "GET", "/api/admin/media-servers/"+plex+"/users", alice, "")
 	if users.Code != http.StatusOK || !strings.Contains(users.Body.String(), `"pending":true`) {
 		t.Fatalf("remote users = %d %s", users.Code, users.Body.String())
+	}
+}
+
+func TestLinkOwnAccountStatusMapping(t *testing.T) {
+	e, router := newHandlerEnv(t)
+	alice, bob := e.user("alice"), e.user("bob")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{PublicAddress: "https://jf.example.com"})
+	plex, _ := e.inviteServer("Den Plex", instance.MediaServerConfig{})
+	e.grant(alice, jf, plex)
+	e.grant(bob, jf)
+	aliceID := e.provider.addUser("alice", false, false)
+	e.provider.addUser("dave", false, true)
+	path := "/api/media-servers/" + jf + "/account/link"
+	const good = `{"username":"alice","password":"alice-pass-1"}`
+
+	if rec := serve(router, "POST", path, 0, good); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous = %d", rec.Code)
+	}
+	for name, body := range map[string]string{
+		"garbage":       `{`,
+		"no password":   `{"username":"alice"}`,
+		"no username":   `{"password":"alice-pass-1"}`,
+		"long username": `{"username":"` + strings.Repeat("a", 257) + `","password":"x"}`,
+	} {
+		if rec := serve(router, "POST", path, alice, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", name, rec.Code)
+		}
+	}
+	if e.provider.authCalls != 0 {
+		t.Fatalf("malformed bodies sent %d passwords", e.provider.authCalls)
+	}
+
+	// Every refusal of the credentials is a 400 with a code: never a 401,
+	// which the app reads as its own session being revoked.
+	rec := serve(router, "POST", path, alice, `{"username":"alice","password":"nope"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"bad_credentials"`) {
+		t.Fatalf("wrong password = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = serve(router, "POST", path, alice, `{"username":"dave","password":"dave-pass-1"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"account_refused"`) {
+		t.Fatalf("refused account = %d %s", rec.Code, rec.Body.String())
+	}
+	// Unknown and ungranted instances answer the same 403 as a create.
+	unknown := serve(router, "POST", "/api/media-servers/jellyfin-nope/account/link", alice, good)
+	ungranted := serve(router, "POST", path, e.user("carol"), good)
+	if unknown.Code != http.StatusForbidden || ungranted.Code != http.StatusForbidden || unknown.Body.String() != ungranted.Body.String() {
+		t.Fatalf("unknown = %d %s, ungranted = %d %s", unknown.Code, unknown.Body.String(), ungranted.Code, ungranted.Body.String())
+	}
+	rec = serve(router, "POST", "/api/media-servers/"+plex+"/account/link", alice, good)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"code":"wrong_kind"`) {
+		t.Fatalf("invite server = %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = serve(router, "POST", path, alice, good)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("link = %d %s", rec.Code, rec.Body.String())
+	}
+	var linked CreatedAccount
+	if err := json.Unmarshal(rec.Body.Bytes(), &linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked.Username != "alice" || linked.PublicAddress != "https://jf.example.com" || linked.Administrator {
+		t.Fatalf("linked = %+v", linked)
+	}
+	if rec := serve(router, "POST", path, alice, good); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"account_exists"`) {
+		t.Fatalf("second link = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(router, "POST", path, bob, good); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"remote_already_linked"`) {
+		t.Fatalf("claimed remote = %d %s", rec.Code, rec.Body.String())
+	}
+	_ = aliceID
+	rec = serve(router, "GET", "/api/media-servers", alice, "")
+	if !strings.Contains(rec.Body.String(), `"administrator":false`) || !strings.Contains(rec.Body.String(), `"username":"alice"`) {
+		t.Fatalf("guide after link = %s", rec.Body.String())
+	}
+
+	// Upstream failure: fixed body, nothing the server said is echoed.
+	e.provider.authErr = errors.New("jellyfin sign-in check: token=UPSTREAM_SECRET host=jellyfin.internal")
+	rec = serve(router, "POST", path, bob, `{"username":"bob","password":"bob-pass-1"}`)
+	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "UPSTREAM_SECRET") || strings.Contains(rec.Body.String(), "jellyfin.internal") {
+		t.Fatalf("upstream failure = %d %s", rec.Code, rec.Body.String())
 	}
 }
