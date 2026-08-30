@@ -448,8 +448,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   }
 
   /// Records that this user is an existing account on [server]. The picker
-  /// lists what the server reports (administrators excluded); linking only
-  /// records the connection and changes nothing on the server.
+  /// lists what the server reports, administrators marked as such; linking
+  /// only records the connection and changes nothing on the server.
   Future<void> _linkMediaAccount(
       UserSummary user, ServiceInstance server) async {
     final remote = await showMediaServerLinkSheet(

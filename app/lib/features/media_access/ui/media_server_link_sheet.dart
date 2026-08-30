@@ -25,7 +25,8 @@ Future<RemoteMediaServerUser?> showMediaServerLinkSheet(
 
 /// Lists the accounts the media server reports so an admin can say which one
 /// belongs to a Cantinarr user (a name collision, or a Jellyseerr migrant).
-/// Administrators are never offered, and picking one only records the link.
+/// Administrators are listed as such; picking any account only records the
+/// link, and an administrator account is never changed afterwards either.
 class MediaServerLinkSheet extends ConsumerStatefulWidget {
   final String instanceId;
   final String instanceName;
@@ -77,7 +78,7 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
     final name = widget.instanceName;
     final product = mediaServerTypeLabel(widget.serviceType);
     final users = _users;
-    final linkable = users?.where((user) => !user.isAdministrator).toList();
+    final linkable = users;
     return AppSheet(
       padding: const EdgeInsets.fromLTRB(
         AppTheme.spaceXl,
@@ -148,16 +149,21 @@ class _MediaServerLinkSheetState extends ConsumerState<MediaServerLinkSheet> {
                     color: AppTheme.textSecondary),
                 title: Text(user.name,
                     style: const TextStyle(color: AppTheme.textPrimary)),
-                subtitle: user.isDisabled
-                    ? const Text('Turned off on the server',
+                subtitle: user.isAdministrator
+                    ? const Text('Administrator',
                         style: TextStyle(
-                            color: AppTheme.unavailable, fontSize: 12))
-                    : null,
+                            color: AppTheme.textSecondary, fontSize: 12))
+                    : user.isDisabled
+                        ? const Text('Turned off on the server',
+                            style: TextStyle(
+                                color: AppTheme.unavailable, fontSize: 12))
+                        : null,
                 onTap: () => Navigator.of(context).pop(user),
               ),
           const SizedBox(height: AppTheme.spaceMd),
           const Text(
-            "Administrator accounts aren't listed.",
+            'Administrator accounts can be linked; Cantinarr never changes '
+            'them.',
             style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
           ),
         ],

@@ -667,10 +667,12 @@ void main() {
     expect(find.text('Watch on Plex'), findsOneWidget);
     expect(find.text('Your invite'), findsOneWidget);
     expect(
-      find.textContaining('Share the email of your Plex account and your '
-          'invite is on its way.'),
+      find.textContaining('Sign in with Plex to link your account, or share '
+          'the email of your Plex account.'),
       findsOneWidget,
     );
+    expect(find.widgetWithText(ElevatedButton, 'Sign in with Plex'),
+        findsOneWidget);
     expect(find.text('Install the Plex app'), findsOneWidget);
     expect(
       find.text('Download the free Plex app from the App Store or Google Play'),
@@ -683,7 +685,7 @@ void main() {
     // Nothing about passwords or a sign-in address to type on a Plex-only set.
     expect(find.textContaining('password you chose'), findsNothing);
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Share my Plex email'));
+    await tester.tap(find.widgetWithText(TextButton, 'Share my Plex email'));
     await tester.pumpAndSettle();
     expect(find.text('Your Plex email'), findsOneWidget);
 
@@ -703,7 +705,7 @@ void main() {
         findsOneWidget);
     expect(find.textContaining('Invite sent to alice@example.com'),
         findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Share my Plex email'),
+    expect(find.widgetWithText(TextButton, 'Share my Plex email'),
         findsNothing);
     expect(find.widgetWithText(TextButton, 'Wrong email?'), findsOneWidget);
   });
@@ -740,12 +742,14 @@ void main() {
     expect(find.textContaining('No media server is shared with you'),
         findsNothing);
     expect(
-      find.textContaining('Share the email of your Plex account to ask for '
-          'access'),
+      find.textContaining('Sign in with Plex to ask for access, or share the '
+          'email of your Plex account'),
       findsOneWidget,
     );
+    expect(find.widgetWithText(ElevatedButton, 'Sign in with Plex'),
+        findsOneWidget);
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Ask for Plex access'));
+    await tester.tap(find.widgetWithText(TextButton, 'Share my Plex email'));
     await tester.pumpAndSettle();
     await tester.enterText(
         find.widgetWithText(TextField, 'Email'), 'alice@example.com');
@@ -758,6 +762,7 @@ void main() {
     expect(find.textContaining('Your admin has been notified. Once they grant'),
         findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Change email'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Sign in with Plex'), findsOneWidget);
     // The delayed re-read fires and finds nothing new; no pending timers.
     await tester.pump(const Duration(seconds: 4));
     await tester.pumpAndSettle();
@@ -778,11 +783,229 @@ void main() {
     expect(find.text('Watch on Plex or Jellyfin'), findsOneWidget);
     expect(find.text('Your account'), findsOneWidget);
     expect(find.text('Install the Plex or Jellyfin app'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Share my Plex email'),
+    expect(find.widgetWithText(TextButton, 'Share my Plex email'),
         findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'I already have an account'),
+        findsNothing);
     expect(find.text('Sign in'), findsOneWidget);
     expect(find.textContaining('open it and accept'), findsOneWidget);
     expect(find.textContaining('password you chose'), findsOneWidget);
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
+  });
+
+  testWidgets('an existing account links from the guide with its password',
+      (tester) async {
+    var linked = false;
+    final logs = <String>[];
+    final adapter = await _pumpGuide(
+      tester,
+      logs: logs,
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _server(account: linked ? _account(username: 'Alice') : null),
+            ]),
+        'POST /api/media-servers/jf-a/account/link': (body, __) {
+          if (body['password'] == 'not-it') {
+            return const _Reply(400, {
+              'error': 'wrong username or password for this server',
+              'code': 'bad_credentials',
+            });
+          }
+          linked = true;
+          return const _Reply(201, {
+            'username': 'Alice',
+            'public_address': 'https://jf.example.com',
+            'administrator': false,
+          });
+        },
+      },
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, 'I already have an account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Link your Jellyfin account'), findsOneWidget);
+    expect(
+      find.textContaining('Cantinarr checks them with Home Jellyfin once'),
+      findsOneWidget,
+    );
+    // The username is prefilled with the Cantinarr one.
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'Username'))
+          .controller!
+          .text,
+      'alice',
+    );
+
+    // Nothing is sent without a password.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter your password.'), findsOneWidget);
+    expect(adapter.calls('POST', '/api/media-servers/jf-a/account/link'), 0);
+
+    // A refused password says so and keeps the sheet (and the session).
+    await tester.enterText(find.widgetWithText(TextField, 'Password'), 'not-it');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Wrong username or password for Home Jellyfin.'),
+        findsOneWidget);
+    expect(find.text('Link your Jellyfin account'), findsOneWidget);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Username'), ' Alice ');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Password'), 'correct-horse-battery');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+    final posts = adapter.requests.where((r) => r.method == 'POST').toList();
+    expect(posts.length, 2);
+    expect(posts.last.body,
+        {'username': 'Alice', 'password': 'correct-horse-battery'});
+    expect(find.text('Link your Jellyfin account'), findsNothing);
+    expect(find.text('Account linked. Sign in with your usual password.'),
+        findsOneWidget);
+
+    // The card re-read the server: the linked account is shown.
+    expect(find.text('Alice'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'I already have an account'),
+        findsNothing);
+    expect(find.text('Administrator account. Cantinarr never changes it.'),
+        findsNothing);
+
+    final output = logs.join('\n');
+    expect(output, contains('POST /api/media-servers/…'));
+    expect(output, isNot(contains('correct-horse-battery')));
+    expect(output, isNot(contains('not-it')));
+  });
+
+  testWidgets('a claimed account and a refused one say what to do next',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [_server()]),
+        'POST /api/media-servers/jf-a/account/link': (_, callsSoFar) =>
+            callsSoFar == 0
+                ? const _Reply(409, {
+                    'error': 'that account is already linked to another user',
+                    'code': 'remote_already_linked',
+                  })
+                : const _Reply(400, {
+                    'error': "that account can't sign in right now",
+                    'code': 'account_refused',
+                  }),
+      },
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'I already have an account'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Password'), 'pw');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('That account is already linked to another Cantinarr user. '
+          'Ask your admin.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text("Home Jellyfin won't let that account sign in right now. It "
+          'may be turned off. Ask your admin.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('an administrator account says Cantinarr never changes it',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _server(account: {
+                ..._account(username: 'julian'),
+                'administrator': true,
+              }),
+            ]),
+      },
+    );
+    expect(find.text('julian'), findsOneWidget);
+    expect(find.text('Administrator account. Cantinarr never changes it.'),
+        findsOneWidget);
+    expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
+  });
+
+  testWidgets('signing in with Plex polls the pin and says what it led to',
+      (tester) async {
+    var linked = false;
+    final adapter = await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _plexServer(account: linked ? _share() : null),
+            ]),
+        'POST /api/media-servers/plex/sign-in/begin': (_, __) =>
+            const _Reply(200, {
+              'pin_id': 42,
+              'code': 'ABCD',
+              'url': 'https://app.plex.tv/auth#?code=ABCD',
+            }),
+        'POST /api/media-servers/plex/sign-in/check': (_, callsSoFar) {
+          if (callsSoFar == 0) return const _Reply(200, {'linked': false});
+          linked = true;
+          return const _Reply(200, {
+            'linked': true,
+            'username': 'alice',
+            'email': 'alice@example.com',
+            'invite_state': 'sent',
+          });
+        },
+      },
+    );
+
+    // The sheet shows a spinner, so settle by hand: pumpAndSettle would run
+    // the clock until the poll itself finished the flow.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Waiting for approval.'), findsOneWidget);
+    expect(adapter.calls('POST', '/api/media-servers/plex/sign-in/begin'), 1);
+    expect(adapter.calls('POST', '/api/media-servers/plex/sign-in/check'), 0);
+
+    // The first poll finds the pin unapproved; the sheet stays.
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump();
+    expect(adapter.calls('POST', '/api/media-servers/plex/sign-in/check'), 1);
+    expect(adapter.requests.last.body, {'pin_id': 42});
+    expect(find.text('Waiting for approval.'), findsOneWidget);
+
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, "I've approved, check now"));
+    await tester.pumpAndSettle();
+    expect(find.text('Waiting for approval.'), findsNothing);
+    expect(find.text('Signed in as alice. Invite sent. Check your email.'),
+        findsOneWidget);
+    expect(find.textContaining('Invite sent to alice@example.com'),
+        findsOneWidget);
+    expect(adapter.calls('POST', '/api/media-servers/plex/sign-in/check'), 2);
+  });
+
+  testWidgets('the Plex owner reads as the owner', (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [
+              _plexServer(account: {
+                ..._share(username: 'cantina-owner', pending: false),
+                'administrator': true,
+              }),
+            ]),
+      },
+    );
+    expect(find.text('You own Cantina Plex.'), findsOneWidget);
+    expect(find.text('Signed in as cantina-owner'), findsOneWidget);
+    expect(find.text('Sign in at https://app.plex.tv'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Wrong email?'), findsNothing);
   });
 }
