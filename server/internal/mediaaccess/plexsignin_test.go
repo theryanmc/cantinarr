@@ -75,11 +75,32 @@ func newFakePlexTV(t *testing.T) (*fakePlexTV, *httptest.Server) {
 		}
 		json.NewEncoder(w).Encode(acct)
 	})
-	mux.HandleFunc("/api/v2/users/signout", func(w http.ResponseWriter, r *http.Request) {
+	// plex.tv registers a device per client identifier when a PIN is
+	// approved; the sign-out removes that record, which is what drops the
+	// entry from Authorized Devices and kills the token.
+	mux.HandleFunc("/devices.xml", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
+		if accounts[r.Header.Get("X-Plex-Token")] == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><MediaContainer size="2"><Device id="555" name="Chrome" clientIdentifier="browser-cid"/><Device id="777001" name="Cantinarr" clientIdentifier="` + r.Header.Get("X-Plex-Client-Identifier") + `"/></MediaContainer>`))
+	})
+	mux.HandleFunc("/devices/777001.xml", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.Method != http.MethodDelete || accounts[r.Header.Get("X-Plex-Token")] == nil {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		f.mu.Lock()
 		f.signedOut = append(f.signedOut, r.Header.Get("X-Plex-Token"))
 		f.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/api/v2/users/signout", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		f.t.Errorf("the plain sign-out was used although plex.tv listed a device for the client")
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/api/v2/shared_servers", func(w http.ResponseWriter, r *http.Request) {

@@ -192,8 +192,10 @@ func TestInviteEmailMapsDuplicateShare(t *testing.T) {
 	}
 }
 
-func TestGetUserDecodesTheAccountAndSignOutDropsTheToken(t *testing.T) {
-	var signedOut atomic.Int32
+func TestGetUserDecodesTheAccountAndSignOutRemovesTheDevice(t *testing.T) {
+	var signedOut, deleted atomic.Int32
+	var deletedPath string
+	listDevice := true
 	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Plex-Token") != "user-token" || r.Header.Get("X-Plex-Client-Identifier") != "client-id" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -202,6 +204,17 @@ func TestGetUserDecodesTheAccountAndSignOutDropsTheToken(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v2/user":
 			w.Write([]byte(`{"id":12345,"uuid":"u-1","username":"rey","email":"Rey@Example.com","title":"Rey","thumb":"https://plex.tv/users/x/avatar","authToken":"user-token"}`))
+		case "GET /devices.xml":
+			w.Header().Set("Content-Type", "application/xml")
+			mine := ""
+			if listDevice {
+				mine = `<Device id="1778846848" name="Cantinarr" clientIdentifier="client-id" product="Cantinarr"/>`
+			}
+			w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><MediaContainer size="2"><Device id="555" name="Chrome" clientIdentifier="browser-cid" product="Plex Web"/>` + mine + `</MediaContainer>`))
+		case "DELETE /devices/1778846848.xml":
+			deleted.Add(1)
+			deletedPath = r.URL.Path
+			w.WriteHeader(http.StatusOK)
 		case "DELETE /api/v2/users/signout":
 			signedOut.Add(1)
 			w.WriteHeader(http.StatusNoContent)
@@ -216,11 +229,21 @@ func TestGetUserDecodesTheAccountAndSignOutDropsTheToken(t *testing.T) {
 	if acct.ID != 12345 || acct.UUID != "u-1" || acct.Username != "rey" || acct.Email != "Rey@Example.com" || acct.Title != "Rey" {
 		t.Fatalf("account = %+v", acct)
 	}
+	// The device plex.tv registered for this client goes; the browser's
+	// device and the plain sign-out are left alone.
 	if err := client.SignOut(context.Background(), "client-id", "user-token"); err != nil {
 		t.Fatal(err)
 	}
-	if signedOut.Load() != 1 {
-		t.Fatalf("sign-outs = %d, want 1", signedOut.Load())
+	if deleted.Load() != 1 || deletedPath != "/devices/1778846848.xml" || signedOut.Load() != 0 {
+		t.Fatalf("deleted=%d path=%q signouts=%d", deleted.Load(), deletedPath, signedOut.Load())
+	}
+	// No device registered: the token is signed out directly.
+	listDevice = false
+	if err := client.SignOut(context.Background(), "client-id", "user-token"); err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Load() != 1 || signedOut.Load() != 1 {
+		t.Fatalf("fallback: deleted=%d signouts=%d", deleted.Load(), signedOut.Load())
 	}
 	if err := client.SignOut(context.Background(), "client-id", "wrong-token"); err == nil {
 		t.Fatal("a refused sign-out was reported as done")

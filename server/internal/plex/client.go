@@ -128,11 +128,31 @@ func (c *Client) GetUser(ctx context.Context, clientID, token string) (*Account,
 	return &acct, nil
 }
 
-// SignOut invalidates a token plex.tv minted for the client identifier, which
-// also drops the "Cantinarr" entry from the account's authorized devices. A
-// sign-in check calls it once it has read the account: the token was only
-// ever proof, never something to keep.
+// SignOut removes the device plex.tv registered for clientID when the token
+// was minted. Live-verified: deleting the device record both drops the
+// "Cantinarr" entry from the account's Authorized Devices and invalidates
+// the token, whereas /api/v2/users/signout invalidates the token but leaves
+// the entry listed, so that is only the fallback for a token plex.tv
+// registered no device for. A sign-in check calls this once it has read the
+// account: the token was only ever proof, never something to keep.
 func (c *Client) SignOut(ctx context.Context, clientID, token string) error {
+	var container struct {
+		Devices []struct {
+			ID               int64  `xml:"id,attr"`
+			ClientIdentifier string `xml:"clientIdentifier,attr"`
+		} `xml:"Device"`
+	}
+	if err := c.doXML(ctx, http.MethodGet, "/devices.xml", clientID, token, &container); err != nil {
+		return fmt.Errorf("sign out: list devices: %w", err)
+	}
+	for _, d := range container.Devices {
+		if d.ClientIdentifier == clientID {
+			if err := c.doXML(ctx, http.MethodDelete, fmt.Sprintf("/devices/%d.xml", d.ID), clientID, token, nil); err != nil {
+				return fmt.Errorf("sign out: remove device: %w", err)
+			}
+			return nil
+		}
+	}
 	if err := c.doJSON(ctx, http.MethodDelete, "/api/v2/users/signout", clientID, token, nil, nil); err != nil {
 		return fmt.Errorf("sign out: %w", err)
 	}
