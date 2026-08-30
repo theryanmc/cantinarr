@@ -62,10 +62,15 @@ type Pin struct {
 	AuthToken string `json:"authToken"`
 }
 
-// Account identifies the linked plex.tv account (display only).
+// Account identifies a plex.tv account: the one an instance links (the
+// server's owner) or the one a person signs in with to prove a share is
+// theirs. Email is the identity shares are keyed by; ID is plex.tv's own.
 type Account struct {
+	ID       int64  `json:"id"`
+	UUID     string `json:"uuid"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
+	Title    string `json:"title"`
 }
 
 // Server is an owned Plex Media Server visible to the linked account.
@@ -121,6 +126,17 @@ func (c *Client) GetUser(ctx context.Context, clientID, token string) (*Account,
 		return nil, fmt.Errorf("get user: %w", err)
 	}
 	return &acct, nil
+}
+
+// SignOut invalidates a token plex.tv minted for the client identifier, which
+// also drops the "Cantinarr" entry from the account's authorized devices. A
+// sign-in check calls it once it has read the account: the token was only
+// ever proof, never something to keep.
+func (c *Client) SignOut(ctx context.Context, clientID, token string) error {
+	if err := c.doJSON(ctx, http.MethodDelete, "/api/v2/users/signout", clientID, token, nil, nil); err != nil {
+		return fmt.Errorf("sign out: %w", err)
+	}
+	return nil
 }
 
 // ListServers returns the owned Plex Media Servers on the account.

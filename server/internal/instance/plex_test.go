@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -68,7 +69,7 @@ func newFakePlexTV(t *testing.T) (*fakePlexTV, *httptest.Server) {
 		if !authed(w, r) {
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"username": "cantina-owner", "email": "owner@example.com"})
+		json.NewEncoder(w).Encode(map[string]any{"id": 12345, "uuid": "u-owner", "username": "cantina-owner", "email": "Owner@Example.com", "title": "Cantina Owner"})
 	})
 	mux.HandleFunc("/api/v2/resources", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
@@ -221,7 +222,7 @@ func TestPlexInstanceLinksByPinAndNeverShowsTheToken(t *testing.T) {
 	if cfg.MachineIdentifier != "m1" || !cfg.AutoApprove || cfg.PublicAddress != PlexPublicAddress || len(cfg.LibraryIDs) != 2 || cfg.LibraryIDs[0] != "101" {
 		t.Fatalf("created config = %+v", cfg)
 	}
-	if strings.Contains(rec.Body.String(), f.token) || strings.Contains(rec.Body.String(), "client_id") {
+	if strings.Contains(rec.Body.String(), f.token) || strings.Contains(rec.Body.String(), "client_id") || strings.Contains(rec.Body.String(), "plex_owner") {
 		t.Fatalf("create response leaked a server-managed value: %s", rec.Body.String())
 	}
 	stored, err := store.Get(created.ID)
@@ -230,6 +231,10 @@ func TestPlexInstanceLinksByPinAndNeverShowsTheToken(t *testing.T) {
 	}
 	if stored.APIKey != f.token || stored.MediaServerConfig.ClientID == "" || stored.URL != plexTV.URL {
 		t.Fatalf("stored = key %q client %q url %q", stored.APIKey, stored.MediaServerConfig.ClientID, stored.URL)
+	}
+	// The link recorded who owns the server, exactly as plex.tv spelled it.
+	if cfg := stored.MediaServerConfig; cfg.PlexOwnerID != 12345 || cfg.PlexOwnerUsername != "cantina-owner" || cfg.PlexOwnerEmail != "Owner@Example.com" {
+		t.Fatalf("stored owner = %+v", cfg)
 	}
 	clientID := stored.MediaServerConfig.ClientID
 
@@ -245,13 +250,16 @@ func TestPlexInstanceLinksByPinAndNeverShowsTheToken(t *testing.T) {
 	if stored.APIKey != f.token || stored.MediaServerConfig.ClientID != clientID || stored.MediaServerConfig.MachineIdentifier != "m1" || len(stored.MediaServerConfig.LibraryIDs) != 1 {
 		t.Fatalf("update changed what it should not: %+v key=%q", stored.MediaServerConfig, stored.APIKey)
 	}
+	if stored.MediaServerConfig.PlexOwnerID != 12345 || stored.MediaServerConfig.PlexOwnerEmail != "Owner@Example.com" {
+		t.Fatalf("update dropped the owner: %+v", stored.MediaServerConfig)
+	}
 	// An old client omitting the config keeps it whole.
 	rec = do("PUT", "/instances/"+created.ID, `{"name":"Cantina Plex","url":"`+plexTV.URL+`","api_key":""}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("omitted update = %d %s", rec.Code, rec.Body.String())
 	}
 	stored, _ = store.Get(created.ID)
-	if stored.MediaServerConfig.MachineIdentifier != "m1" || stored.MediaServerConfig.ClientID != clientID {
+	if stored.MediaServerConfig.MachineIdentifier != "m1" || stored.MediaServerConfig.ClientID != clientID || stored.MediaServerConfig.PlexOwnerUsername != "cantina-owner" {
 		t.Fatalf("omitted update dropped plex fields: %+v", stored.MediaServerConfig)
 	}
 
@@ -288,6 +296,40 @@ func TestPlexInstanceLinksByPinAndNeverShowsTheToken(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &pasted)
 	if stored, _ := store.Get(pasted.ID); stored.MediaServerConfig.ClientID == "" || stored.MediaServerConfig.ClientID == clientID {
 		t.Fatalf("pasted token client id = %q", stored.MediaServerConfig.ClientID)
+	} else if stored.MediaServerConfig.PlexOwnerID != 0 || stored.MediaServerConfig.PlexOwnerEmail != "" {
+		// Nobody read the pasted token's account; the owner is backfilled
+		// from the token later, not guessed.
+		t.Fatalf("pasted token recorded an owner: %+v", stored.MediaServerConfig)
+	}
+}
+
+func TestSetPlexOwnerPatchesOnlyTheConfig(t *testing.T) {
+	s := newTestStore(t)
+	inst := &Instance{ServiceType: "plex", Name: "Cantina", URL: plex.BaseURL, APIKey: "tok",
+		MediaServerConfig: MediaServerConfig{PublicAddress: PlexPublicAddress, LibraryIDs: []string{"101", "102"}, MachineIdentifier: "m1", AutoApprove: true, ClientID: "cid"}}
+	if err := s.Create(inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPlexOwner(inst.ID, plex.Account{ID: 7, Username: "owner", Email: "Owner@Example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := got.MediaServerConfig
+	if cfg.PlexOwnerID != 7 || cfg.PlexOwnerUsername != "owner" || cfg.PlexOwnerEmail != "Owner@Example.com" {
+		t.Fatalf("owner = %+v", cfg)
+	}
+	if cfg.ClientID != "cid" || cfg.MachineIdentifier != "m1" || !cfg.AutoApprove || len(cfg.LibraryIDs) != 2 || cfg.PublicAddress != PlexPublicAddress || got.APIKey != "tok" {
+		t.Fatalf("patch touched more than the owner: %+v key=%q", cfg, got.APIKey)
+	}
+	if err := s.SetPlexOwner("plex-nope", plex.Account{ID: 1}); err == nil {
+		t.Fatal("unknown instance accepted")
+	}
+	jf := mkInstance(t, s, "jellyfin", "Main")
+	if err := s.SetPlexOwner(jf, plex.Account{ID: 1}); err == nil {
+		t.Fatal("a Jellyfin instance took a Plex owner")
 	}
 }
 

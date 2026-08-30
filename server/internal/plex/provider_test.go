@@ -148,7 +148,71 @@ func newTestProvider(t *testing.T) (*fakePlexTV, *Provider) {
 	f, c := newFakePlexTV(t)
 	f.shares = acceptedShare + pendingShare
 	f.invites = sentInvite + otherInvite + friendRequest
-	return f, NewProvider(c, "cid-1", "tok-SECRET", "m1")
+	return f, NewProvider(c, "cid-1", "tok-SECRET", "m1", Account{})
+}
+
+func TestProviderTreatsTheOwnerAsAnAdministratorAccount(t *testing.T) {
+	f, c := newFakePlexTV(t)
+	f.shares = acceptedShare
+	f.invites = sentInvite
+	p := NewProvider(c, "cid-1", "tok-SECRET", "m1", Account{ID: 1, Username: "cantina-owner", Email: "Owner@Example.com"})
+
+	users, err := p.Users(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner *mediaserver.RemoteUser
+	for i := range users {
+		if users[i].IsAdministrator {
+			owner = &users[i]
+		}
+	}
+	if owner == nil || owner.ID != "owner@example.com" || owner.Name != "cantina-owner" || owner.Pending || owner.IsDisabled {
+		t.Fatalf("owner listed as %+v in %+v", owner, users)
+	}
+	if len(users) != 3 {
+		t.Fatalf("users = %+v, want the owner plus two", users)
+	}
+	for _, identity := range []string{"OWNER@example.com", " owner@Example.COM ", "cantina-owner"} {
+		u, err := p.GetUser(context.Background(), identity)
+		if err != nil || !u.IsAdministrator || u.ID != "owner@example.com" {
+			t.Errorf("GetUser(%q) = %+v, %v", identity, u, err)
+		}
+	}
+
+	// Writes against the owner change nothing at plex.tv: no invite, no
+	// re-scope, no removal.
+	before := f.count()
+	u, err := p.CreateUser(context.Background(), "owner@example.com", "", []string{"101"})
+	if err != nil || !u.IsAdministrator || u.Pending {
+		t.Fatalf("CreateUser(owner) = %+v, %v", u, err)
+	}
+	if f.saw("POST /api/v2/shared_servers") {
+		t.Fatal("the owner was invited to their own server")
+	}
+	if err := p.SetLibraries(context.Background(), "owner@example.com", []string{"101"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetDisabled(context.Background(), "owner@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.DeleteUser(context.Background(), "owner@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range f.requests[before:] {
+		if strings.HasPrefix(r, "PUT ") || strings.HasPrefix(r, "DELETE ") || strings.HasPrefix(r, "POST ") {
+			t.Fatalf("owner write reached plex.tv: %s", r)
+		}
+	}
+	// Bob is still an ordinary share next to the owner.
+	if u, err := p.GetUser(context.Background(), "bob@example.com"); err != nil || u.IsAdministrator {
+		t.Fatalf("bob = %+v, %v", u, err)
+	}
+	// Without a recorded owner, nothing is listed for that identity.
+	anon := NewProvider(c, "cid-1", "tok-SECRET", "m1", Account{})
+	if _, err := anon.GetUser(context.Background(), "owner@example.com"); !errors.Is(err, mediaserver.ErrUserNotFound) {
+		t.Fatalf("unknown owner err = %v, want ErrUserNotFound", err)
+	}
 }
 
 func TestProviderIsAnInviteServerThatListsSharesAndPendingInvites(t *testing.T) {
@@ -215,7 +279,7 @@ func TestProviderSystemInfoAndLibrariesReadTheServer(t *testing.T) {
 		t.Fatal("reading the server listed its shares")
 	}
 	// An unselected server is refused before anything is dialed.
-	empty := NewProvider(p.client, "cid-1", "tok-SECRET", "")
+	empty := NewProvider(p.client, "cid-1", "tok-SECRET", "", Account{})
 	if _, err := empty.SystemInfo(context.Background()); err == nil {
 		t.Fatal("no machine id accepted")
 	}
@@ -325,7 +389,7 @@ func TestProviderSetLibrariesUpdatesOnlyAnExistingShare(t *testing.T) {
 
 func TestProviderErrorsNeverCarryTheToken(t *testing.T) {
 	f, c := newFakePlexTV(t)
-	p := NewProvider(c, "cid-1", "wrong-token", "m1")
+	p := NewProvider(c, "cid-1", "wrong-token", "m1", Account{})
 	_, err := p.Users(context.Background())
 	if err == nil {
 		t.Fatal("wrong token accepted")

@@ -73,6 +73,15 @@ type MediaServerConfig struct {
 	// Server-managed: set by the PIN link, never taken from a request, and
 	// never served.
 	ClientID string `json:"client_id,omitempty"`
+	// PlexOwner* (Plex) identify the plex.tv account the token belongs to,
+	// which is the one account plex.tv never lists among the server's
+	// shares. The provider answers for it as an administrator account, so
+	// the owner signing in from the guide is recognised rather than invited
+	// to their own server. Server-managed like ClientID: recorded by the PIN
+	// link, backfilled from the stored token when missing, never served.
+	PlexOwnerID       int64  `json:"plex_owner_id,omitempty"`
+	PlexOwnerUsername string `json:"plex_owner_username,omitempty"`
+	PlexOwnerEmail    string `json:"plex_owner_email,omitempty"`
 }
 
 func (c MediaServerConfig) clone() MediaServerConfig {
@@ -82,15 +91,29 @@ func (c MediaServerConfig) clone() MediaServerConfig {
 		MachineIdentifier: c.MachineIdentifier,
 		AutoApprove:       c.AutoApprove,
 		ClientID:          c.ClientID,
+		PlexOwnerID:       c.PlexOwnerID,
+		PlexOwnerUsername: c.PlexOwnerUsername,
+		PlexOwnerEmail:    c.PlexOwnerEmail,
 	}
 }
 
 // public is the config as served to clients: everything but the
-// server-managed client id.
+// server-managed client id and owner.
 func (c MediaServerConfig) public() MediaServerConfig {
 	out := c.clone()
 	out.ClientID = ""
+	out.PlexOwnerID, out.PlexOwnerUsername, out.PlexOwnerEmail = 0, "", ""
 	return out
+}
+
+// plexOwner is the recorded owner as the provider wants it.
+func (c MediaServerConfig) plexOwner() plex.Account {
+	return plex.Account{ID: c.PlexOwnerID, Username: c.PlexOwnerUsername, Email: c.PlexOwnerEmail}
+}
+
+// setPlexOwner records (or clears) the owner.
+func (c *MediaServerConfig) setPlexOwner(owner plex.Account) {
+	c.PlexOwnerID, c.PlexOwnerUsername, c.PlexOwnerEmail = owner.ID, owner.Username, owner.Email
 }
 
 // NewMediaServerProvider builds the client for a media-server instance. It is
@@ -104,7 +127,7 @@ func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 		return emby.NewClient(inst.URL, inst.APIKey), nil
 	case "plex":
 		cfg := inst.MediaServerConfig
-		return plex.NewProvider(plex.NewClientAt(inst.URL), cfg.ClientID, inst.APIKey, cfg.MachineIdentifier), nil
+		return plex.NewProvider(plex.NewClientAt(inst.URL), cfg.ClientID, inst.APIKey, cfg.MachineIdentifier, cfg.plexOwner()), nil
 	default:
 		return nil, fmt.Errorf("not a media server instance: %s", inst.ServiceType)
 	}
@@ -226,8 +249,9 @@ func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerCo
 		return fmt.Errorf("invalid media_server_config: %w", err)
 	}
 	if existing != nil {
-		// Server-managed; a request can neither set nor clear it.
+		// Server-managed; a request can neither set nor clear them.
 		normalized.ClientID = existing.MediaServerConfig.ClientID
+		normalized.setPlexOwner(existing.MediaServerConfig.plexOwner())
 	}
 	inst.MediaServerConfig = normalized
 	inst.MediaServerConfigInvalid = false

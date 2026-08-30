@@ -191,3 +191,38 @@ func TestInviteEmailMapsDuplicateShare(t *testing.T) {
 		t.Fatalf("expected ErrAlreadyShared, got %v", err)
 	}
 }
+
+func TestGetUserDecodesTheAccountAndSignOutDropsTheToken(t *testing.T) {
+	var signedOut atomic.Int32
+	client := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Plex-Token") != "user-token" || r.Header.Get("X-Plex-Client-Identifier") != "client-id" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v2/user":
+			w.Write([]byte(`{"id":12345,"uuid":"u-1","username":"rey","email":"Rey@Example.com","title":"Rey","thumb":"https://plex.tv/users/x/avatar","authToken":"user-token"}`))
+		case "DELETE /api/v2/users/signout":
+			signedOut.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	acct, err := client.GetUser(context.Background(), "client-id", "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct.ID != 12345 || acct.UUID != "u-1" || acct.Username != "rey" || acct.Email != "Rey@Example.com" || acct.Title != "Rey" {
+		t.Fatalf("account = %+v", acct)
+	}
+	if err := client.SignOut(context.Background(), "client-id", "user-token"); err != nil {
+		t.Fatal(err)
+	}
+	if signedOut.Load() != 1 {
+		t.Fatalf("sign-outs = %d, want 1", signedOut.Load())
+	}
+	if err := client.SignOut(context.Background(), "client-id", "wrong-token"); err == nil {
+		t.Fatal("a refused sign-out was reported as done")
+	}
+}
