@@ -605,7 +605,7 @@ void main() {
     expect(
         find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
     expect(find.text('User Access'), findsOneWidget);
-    expect(find.textContaining('get a Plex invite to the shared libraries'),
+    expect(find.textContaining('recognised as the owner, never invited'),
         findsOneWidget);
     // The sign-in address is prefilled with where everyone signs in to Plex.
     expect(find.text('https://app.plex.tv'), findsOneWidget);
