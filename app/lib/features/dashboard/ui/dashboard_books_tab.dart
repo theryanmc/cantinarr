@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
+import '../../shell/logic/library_author_index.dart';
 import '../data/book_library_service.dart';
 import '../data/book_authors_service.dart';
 import '../data/book_series_service.dart';
@@ -56,6 +57,13 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
     ref.invalidate(recentBooksProvider);
     ref.invalidate(bookAuthorsProvider);
     ref.invalidate(bookSeriesProvider);
+    // The search overlay's "in your library" verdicts come from this index,
+    // which is kept alive for the session. Without invalidating it here, a book
+    // requested from an author the library did not previously hold shows up in
+    // the Authors row above while the overlay keeps calling that author
+    // metadata-only until a restart — and an index whose first fetch failed
+    // stays empty for the rest of the session with no way to retry.
+    ref.invalidate(libraryAuthorIndexProvider);
     ref.read(libraryRefreshTickProvider.notifier).state++;
   }
 

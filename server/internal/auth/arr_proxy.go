@@ -85,9 +85,14 @@ func isArrReadResource(serviceType, forwardPath string) bool {
 		if len(suffix) == 0 {
 			return true
 		}
-		if serviceType == "chaptarr" && resource == "book" && len(suffix) == 1 && suffix[0] == "lookup" {
-			// Dashboard book discovery has no Cantinarr metadata-provider
-			// equivalent and intentionally uses this exact read-only lookup.
+		if serviceType == "chaptarr" && (resource == "book" || resource == "author") &&
+			len(suffix) == 1 && suffix[0] == "lookup" {
+			// Book discovery has no Cantinarr metadata-provider equivalent and
+			// intentionally uses these exact read-only lookups. A Books search
+			// returns authors beside titles, so a requester needs author/lookup
+			// for the same reason it needs book/lookup — without it the author
+			// section 403s for everyone but admins, who skip this allowlist.
+			// The radarr/sonarr equivalents stay closed: TMDB covers those.
 			return true
 		}
 		return len(suffix) == 1 && isPositiveDecimalID(suffix[0])
