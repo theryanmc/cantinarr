@@ -448,7 +448,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
             'Open the app and enter the sign-in address from your account '
                 'card above',
             'Sign in with your username and the password you chose when you '
-                'created the account',
+                'created the account, or your usual password if you linked '
+                'one you already had',
             'Forgot the password? Your admin can reset it on the server',
           ],
         ],
@@ -741,13 +742,41 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
   }
 
   /// One server's account state: nothing yet (create it, or link one the
-  /// person already has), turned off (ask the admin), or active (username,
-  /// where to sign in, whether the server confirmed the account just now,
-  /// and whether it is an administrator account Cantinarr never changes).
+  /// person already has; when the server already holds an account with
+  /// their name, signing in with it comes first, since creating would only
+  /// collide), turned off (ask the admin), or active (username, where to
+  /// sign in, whether the server confirmed the account just now, and
+  /// whether it is an administrator account Cantinarr never changes).
   Widget _buildAccountCard(MediaServerAccess server, String username) {
     final account = server.account;
     final Widget body;
-    if (account == null) {
+    if (account == null && server.existingAccount) {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "There's already an account named $username on ${server.name}. "
+            "If it's yours, sign in with its password to link it.",
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () => _linkOwnAccount(server, username),
+            icon: const Icon(Icons.login, size: 18),
+            label: const Text('Sign in to link it'),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Not yours? Ask your admin.',
+            style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+          ),
+        ],
+      );
+    } else if (account == null) {
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
