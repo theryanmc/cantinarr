@@ -24,7 +24,7 @@ The management side goes as deep as you want:
 • One download queue across SABnzbd, qBittorrent, NZBGet, and Transmission
 • Import Doctor: stuck downloads explain themselves in plain English, with one-click fixes
 • See what's playing through Tautulli — active streams, history, top stats
-• Plex invites, a guided setup checklist, per-user defaults, and device management
+• Plex invites, Jellyfin and Emby accounts, a guided setup checklist, per-user defaults, and device management
 • Push notifications with a single line of server config — no Apple developer account, certificates, or Firebase project on your side
 • Your server is an MCP server too: connect Claude or any MCP client and manage your library with the same tools that power the built-in assistant
 

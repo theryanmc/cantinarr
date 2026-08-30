@@ -16,7 +16,7 @@ live service, it belongs in the live-lab or manual layers described in
 
 Cantinarr's integration credentials are not environment variables. Radarr,
 Sonarr, Chaptarr, download clients, Tautulli, TMDB, Trakt, AI provider
-keys, and the Plex account link are all entered through the admin UI at
+keys, and the Plex account link (a Plex instance) are all entered through the admin UI at
 runtime and stored AES-256-GCM encrypted in the SQLite database
 (`service_instances` rows and the settings KV). Environment variables only
 tune boot and deployment (port, public URL, push gateway, passkey
@@ -36,6 +36,8 @@ generated API key or local username/password:
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
 - Jellyfin — local API key minted under Dashboard > API Keys; the whole
   integration is server-local, no jellyfin.org account
+- Emby — local API key minted under Settings > Advanced > API Keys; no
+  emby.media account (Emby Connect stays off)
 - Arr Connect webhooks — Cantinarr mints and installs its own per-instance
   tokens
 - Push gateway enrollment — account-free against any reachable gateway

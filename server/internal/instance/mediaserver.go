@@ -11,14 +11,21 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/emby"
 	"github.com/windoze95/cantinarr-server/internal/jellyfin"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 )
 
 // mediaServerTypes are the service types that are media servers Cantinarr
-// provisions user accounts on. They follow the Chaptarr rule: never a global
-// default, granted per user, invisible to arr routing.
-var mediaServerTypes = []string{"jellyfin"}
+// manages user access on. They follow the Chaptarr rule: never a global
+// default, granted per user, invisible to arr routing. Jellyfin and Emby
+// hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
+var mediaServerTypes = []string{"jellyfin", "emby", "plex"}
+
+// PlexPublicAddress is where anyone signs in to any Plex server, so it is the
+// sign-in address a Plex instance shows unless the admin typed another.
+const PlexPublicAddress = "https://app.plex.tv"
 
 // IsMediaServerType reports whether serviceType is a media server.
 func IsMediaServerType(serviceType string) bool {
@@ -35,6 +42,16 @@ func MediaServerTypes() []string {
 	return append([]string(nil), mediaServerTypes...)
 }
 
+// mediaServerTypeList renders the media-server types for error messages:
+// 'jellyfin', 'emby'.
+func mediaServerTypeList() string {
+	quoted := make([]string, 0, len(mediaServerTypes))
+	for _, t := range mediaServerTypes {
+		quoted = append(quoted, "'"+t+"'")
+	}
+	return strings.Join(quoted, ", ")
+}
+
 // MediaServerConfig is the per-instance configuration of a media server.
 // PublicAddress is the client-reachable address shown to granted users so
 // they know where to sign in — the only instance field a requester ever
@@ -44,22 +61,73 @@ func MediaServerTypes() []string {
 type MediaServerConfig struct {
 	PublicAddress string   `json:"public_address"`
 	LibraryIDs    []string `json:"library_ids"`
+	// MachineIdentifier names the Plex Media Server whose shares the instance
+	// manages (plex.tv's machineIdentifier). Empty for every other type.
+	MachineIdentifier string `json:"machine_identifier,omitempty"`
+	// AutoApprove (Plex) grants this server to anyone who shares a Plex email
+	// and sends their invite at once, instead of waiting for an admin to
+	// grant them. Off unless an admin switches it on.
+	AutoApprove bool `json:"auto_approve,omitempty"`
+	// ClientID (Plex) is the X-Plex-Client-Identifier the instance's token
+	// was minted under; plex.tv ties a token to the device that linked it.
+	// Server-managed: set by the PIN link, never taken from a request, and
+	// never served.
+	ClientID string `json:"client_id,omitempty"`
+	// PlexOwner* (Plex) identify the plex.tv account the token belongs to,
+	// which is the one account plex.tv never lists among the server's
+	// shares. The provider answers for it as an administrator account, so
+	// the owner signing in from the guide is recognised rather than invited
+	// to their own server. Server-managed like ClientID: recorded by the PIN
+	// link, backfilled from the stored token when missing, never served.
+	PlexOwnerID       int64  `json:"plex_owner_id,omitempty"`
+	PlexOwnerUsername string `json:"plex_owner_username,omitempty"`
+	PlexOwnerEmail    string `json:"plex_owner_email,omitempty"`
 }
 
 func (c MediaServerConfig) clone() MediaServerConfig {
 	return MediaServerConfig{
-		PublicAddress: c.PublicAddress,
-		LibraryIDs:    append([]string{}, c.LibraryIDs...),
+		PublicAddress:     c.PublicAddress,
+		LibraryIDs:        append([]string{}, c.LibraryIDs...),
+		MachineIdentifier: c.MachineIdentifier,
+		AutoApprove:       c.AutoApprove,
+		ClientID:          c.ClientID,
+		PlexOwnerID:       c.PlexOwnerID,
+		PlexOwnerUsername: c.PlexOwnerUsername,
+		PlexOwnerEmail:    c.PlexOwnerEmail,
 	}
 }
 
+// public is the config as served to clients: everything but the
+// server-managed client id and owner.
+func (c MediaServerConfig) public() MediaServerConfig {
+	out := c.clone()
+	out.ClientID = ""
+	out.PlexOwnerID, out.PlexOwnerUsername, out.PlexOwnerEmail = 0, "", ""
+	return out
+}
+
+// plexOwner is the recorded owner as the provider wants it.
+func (c MediaServerConfig) plexOwner() plex.Account {
+	return plex.Account{ID: c.PlexOwnerID, Username: c.PlexOwnerUsername, Email: c.PlexOwnerEmail}
+}
+
+// setPlexOwner records (or clears) the owner.
+func (c *MediaServerConfig) setPlexOwner(owner plex.Account) {
+	c.PlexOwnerID, c.PlexOwnerUsername, c.PlexOwnerEmail = owner.ID, owner.Username, owner.Email
+}
+
 // NewMediaServerProvider builds the client for a media-server instance. It is
-// the one place a service type maps to a client package, so adding a server
-// (Emby) is a new case here plus an entry in mediaServerTypes.
+// the one place a service type maps to a client package: a new server is a
+// case here plus an entry in mediaServerTypes.
 func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 	switch inst.ServiceType {
 	case "jellyfin":
 		return jellyfin.NewClient(inst.URL, inst.APIKey), nil
+	case "emby":
+		return emby.NewClient(inst.URL, inst.APIKey), nil
+	case "plex":
+		cfg := inst.MediaServerConfig
+		return plex.NewProvider(plex.NewClientAt(inst.URL), cfg.ClientID, inst.APIKey, cfg.MachineIdentifier, cfg.plexOwner()), nil
 	default:
 		return nil, fmt.Errorf("not a media server instance: %s", inst.ServiceType)
 	}
@@ -76,6 +144,10 @@ func normalizeMediaServerConfig(inst *Instance) {
 	}
 	inst.MediaServerConfig.PublicAddress = strings.TrimRight(strings.TrimSpace(inst.MediaServerConfig.PublicAddress), "/")
 	inst.MediaServerConfig.LibraryIDs = tidyLibraryIDs(inst.MediaServerConfig.LibraryIDs)
+	inst.MediaServerConfig.MachineIdentifier = strings.TrimSpace(inst.MediaServerConfig.MachineIdentifier)
+	if inst.ServiceType == "plex" && inst.MediaServerConfig.PublicAddress == "" {
+		inst.MediaServerConfig.PublicAddress = PlexPublicAddress
+	}
 }
 
 // tidyLibraryIDs trims, drops empties, de-duplicates, and sorts, so equal
@@ -137,6 +209,17 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 		}
 	}
 	out.LibraryIDs = tidyLibraryIDs(cfg.LibraryIDs)
+	machine := strings.TrimSpace(cfg.MachineIdentifier)
+	if len(machine) > 128 {
+		return out, fmt.Errorf("machine identifier is too long")
+	}
+	for _, r := range machine {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return out, fmt.Errorf("machine identifier contains invalid characters")
+		}
+	}
+	out.MachineIdentifier = machine
+	out.AutoApprove = cfg.AutoApprove
 	return out, nil
 }
 
@@ -148,7 +231,7 @@ func validateMediaServerConfig(cfg MediaServerConfig) (MediaServerConfig, error)
 func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerConfig, existing *Instance) error {
 	if !IsMediaServerType(inst.ServiceType) {
 		if provided != nil && (strings.TrimSpace(provided.PublicAddress) != "" || len(provided.LibraryIDs) > 0) {
-			return fmt.Errorf("media_server_config is supported only for Jellyfin")
+			return fmt.Errorf("media_server_config is supported only for media servers (%s)", mediaServerTypeList())
 		}
 		inst.MediaServerConfig = MediaServerConfig{}
 		return nil
@@ -164,6 +247,11 @@ func (h *Handler) applyMediaServerConfig(inst *Instance, provided *MediaServerCo
 	normalized, err := validateMediaServerConfig(*provided)
 	if err != nil {
 		return fmt.Errorf("invalid media_server_config: %w", err)
+	}
+	if existing != nil {
+		// Server-managed; a request can neither set nor clear them.
+		normalized.ClientID = existing.MediaServerConfig.ClientID
+		normalized.setPlexOwner(existing.MediaServerConfig.plexOwner())
 	}
 	inst.MediaServerConfig = normalized
 	inst.MediaServerConfigInvalid = false
@@ -278,7 +366,7 @@ func (h *Handler) MediaServerLibraries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !IsMediaServerType(inst.ServiceType) {
-		http.Error(w, `{"error":"service_type must be a media server type ('jellyfin')"}`, http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf(`{"error":"service_type must be a media server type (%s)"}`, mediaServerTypeList()), http.StatusBadRequest)
 		return
 	}
 	provider, err := NewMediaServerProvider(inst)

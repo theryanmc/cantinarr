@@ -33,7 +33,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
-	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -109,6 +108,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			{http.MethodGet, "/api/ai/available", "", http.StatusOK},
 			{http.MethodGet, "/api/ai/settings", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers", "", http.StatusOK},
+			{http.MethodGet, "/api/media-servers/watch?media_type=movie&tmdb_id=1", "", http.StatusOK},
 			{http.MethodPost, "/api/ai/chat", `{"messages":[{"role":"user","content":"hello"}]}`, http.StatusServiceUnavailable},
 		} {
 			recorder := serveRBACRequestWithBody(harness.router, route.method, route.path, token, route.body)
@@ -468,8 +468,6 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	pushHandler := push.NewHandler(database, nil, logger)
 	hub := ws.NewHub(authService, instanceRegistry, store, nil, nil, nil)
-	plexService := plex.NewService(database, cipher, plex.NewClient(), nil, logger)
-	plexHandler := plex.NewHandler(plexService, logger)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaaccess.NewService(database, store, instance.NewMediaServerProvider, logger), logger)
 	webhookHandler := webhooks.NewHandler(store, instanceRegistry, hub, requestService, nil)
 	discoverCache := cache.New()
@@ -504,8 +502,6 @@ func newRBACRouterHarness(t *testing.T, withCodex bool) *rbacRouterHarness {
 		toolServer,
 		pushHandler,
 		webhookHandler,
-		plexHandler,
-		plexService,
 		mediaAccessHandler,
 		update.NewChecker("dev", true),
 		serversettings.NewService(database, func() bool { return registry.Trakt() != nil }),

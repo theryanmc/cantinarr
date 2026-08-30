@@ -171,6 +171,7 @@ class ConfigChange {
         'transmission' => 'Transmission',
         'tautulli' => 'Tautulli',
         'jellyfin' => 'Jellyfin',
+        'emby' => 'Emby',
         _ => serviceType.trim().isEmpty ? 'Connected app' : serviceType,
       };
 

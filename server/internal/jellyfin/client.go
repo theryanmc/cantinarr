@@ -27,7 +27,20 @@ type Client struct {
 	httpClient *http.Client
 }
 
-var _ mediaserver.Provider = (*Client)(nil)
+var (
+	_ mediaserver.Provider      = (*Client)(nil)
+	_ mediaserver.Authenticator = (*Client)(nil)
+)
+
+// The API key acts under one device identity; a person's sign-in check runs
+// under a second, fixed one, so the check never attaches to the key's device
+// record and repeated checks never pile up devices on the server's dashboard.
+const (
+	apiDevice      = "Cantinarr"
+	apiDeviceID    = "cantinarr"
+	signInDevice   = "Cantinarr sign-in check"
+	signInDeviceID = "cantinarr-signin"
+)
 
 // NewClient creates a client for the server at baseURL. Redirects are never
 // followed: a redirect would otherwise hand the API key to whatever host the
@@ -59,9 +72,17 @@ func (e *statusError) Error() string {
 	}
 }
 
-// do performs one request. op names the operation in errors instead of the
-// URL, so nothing about the host ever appears in an error string.
+// do performs one request as the API key. op names the operation in errors
+// instead of the URL, so nothing about the host ever appears in an error
+// string.
 func (c *Client) do(ctx context.Context, method, path, op string, body, out any) error {
+	return c.doAs(ctx, method, path, op, c.apiKey, apiDevice, apiDeviceID, body, out)
+}
+
+// doAs is do under an explicit token and device identity. An empty token
+// sends the device header alone, which is how a sign-in check introduces
+// itself without any credential of Cantinarr's.
+func (c *Client) doAs(ctx context.Context, method, path, op, token, device, deviceID string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -74,8 +95,12 @@ func (c *Client) do(ctx context.Context, method, path, op string, body, out any)
 	if err != nil {
 		return fmt.Errorf("jellyfin %s: invalid url", op)
 	}
-	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`", Client="Cantinarr", Device="Cantinarr", DeviceId="cantinarr", Version="1"`)
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	if token != "" {
+		req.Header.Set("Authorization", `MediaBrowser Token="`+token+`", Client="Cantinarr", Device="`+device+`", DeviceId="`+deviceID+`", Version="1"`)
+		req.Header.Set("X-Emby-Token", token)
+	} else {
+		req.Header.Set("Authorization", `MediaBrowser Client="Cantinarr", Device="`+device+`", DeviceId="`+deviceID+`", Version="1"`)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -194,6 +219,75 @@ func userPath(remoteID string) string {
 	return "/Users/" + url.PathEscape(remoteID)
 }
 
+// itemDTO is the slice of a library item Cantinarr reads: its id and the
+// provider ids that identify the title. No paths, no media info.
+type itemDTO struct {
+	ID          string            `json:"Id"`
+	ProviderIDs map[string]string `json:"ProviderIds"`
+}
+
+type itemsResponse struct {
+	Items []itemDTO `json:"Items"`
+}
+
+var itemTypes = map[string]string{"movie": "Movie", "tv": "Series"}
+
+// FindItem implements mediaserver.ItemFinder. The query runs as the linked
+// account (userId), so Jellyfin applies that account's library access, and
+// the answer is matched on provider ids, never on a name alone. Jellyfin has
+// no provider-id filter of its own (10.11 silently ignores
+// anyProviderIdEquals), so the candidates are narrowed by production year, a
+// three-year window around the title's year since both sides took the date
+// from the same metadata, or by the title when no year is known. The item's
+// page is the web client's details route, keyed by item and server id.
+func (c *Client) FindItem(ctx context.Context, remoteUserID string, q mediaserver.ItemQuery) (mediaserver.Item, error) {
+	itemType, ok := itemTypes[q.MediaType]
+	if !ok {
+		return mediaserver.Item{}, errors.New("jellyfin find item: unsupported media type")
+	}
+	if q.TMDBID <= 0 && q.TVDBID <= 0 {
+		return mediaserver.Item{}, errors.New("jellyfin find item: no provider id to match")
+	}
+	params := url.Values{}
+	params.Set("userId", remoteUserID)
+	params.Set("recursive", "true")
+	params.Set("includeItemTypes", itemType)
+	params.Set("fields", "ProviderIds")
+	params.Set("enableImages", "false")
+	params.Set("enableUserData", "false")
+	params.Set("enableTotalRecordCount", "false")
+	switch {
+	case q.Year > 0:
+		params.Set("years", fmt.Sprintf("%d,%d,%d", q.Year-1, q.Year, q.Year+1))
+	case strings.TrimSpace(q.Title) != "":
+		params.Set("searchTerm", strings.TrimSpace(q.Title))
+	default:
+		return mediaserver.Item{}, errors.New("jellyfin find item: no year or title to narrow by")
+	}
+	var resp itemsResponse
+	if err := c.do(ctx, http.MethodGet, "/Items?"+params.Encode(), "find item", nil, &resp); err != nil {
+		return mediaserver.Item{}, err
+	}
+	for _, item := range resp.Items {
+		if item.ID == "" || !mediaserver.ItemMatches(item.ProviderIDs, q) {
+			continue
+		}
+		info, err := c.SystemInfo(ctx)
+		if err != nil {
+			return mediaserver.Item{}, err
+		}
+		return mediaserver.Item{ID: item.ID, WebPath: itemWebPath(item.ID, info.ID)}, nil
+	}
+	return mediaserver.Item{}, mediaserver.ErrItemNotFound
+}
+
+// itemWebPath is the Jellyfin web client's page for an item, under the
+// server root: the "details" route of jellyfin-web, which also serves the
+// older "#!/" form through a redirect.
+func itemWebPath(itemID, serverID string) string {
+	return "/web/#/details?id=" + url.QueryEscape(itemID) + "&serverId=" + url.QueryEscape(serverID)
+}
+
 func (c *Client) getUser(ctx context.Context, remoteID string) (userDTO, error) {
 	var dto userDTO
 	err := c.do(ctx, http.MethodGet, userPath(remoteID), "get user", nil, &dto)
@@ -213,6 +307,49 @@ func (c *Client) GetUser(ctx context.Context, remoteID string) (mediaserver.Remo
 		return mediaserver.RemoteUser{}, err
 	}
 	return dto.remoteUser(), nil
+}
+
+// authResult is what /Users/AuthenticateByName answers: the account and a
+// session token for the device that asked.
+type authResult struct {
+	User        userDTO `json:"User"`
+	AccessToken string  `json:"AccessToken"`
+}
+
+// Authenticate implements mediaserver.Authenticator: the person's own
+// username and password are checked with the server under the sign-in
+// check's device identity and without the API key, and the session the
+// check opened is closed again. Jellyfin answers 401 for a wrong password
+// or an unknown name and 403 for an account it refuses (disabled, or a
+// network or schedule rule), before or after looking at the password.
+func (c *Client) Authenticate(ctx context.Context, username, password string) (mediaserver.RemoteUser, error) {
+	body := struct {
+		Username string `json:"Username"`
+		Pw       string `json:"Pw"`
+	}{Username: username, Pw: password}
+	var result authResult
+	err := c.doAs(ctx, http.MethodPost, "/Users/AuthenticateByName", "sign-in check", "", signInDevice, signInDeviceID, body, &result)
+	switch statusOf(err) {
+	case http.StatusUnauthorized:
+		return mediaserver.RemoteUser{}, mediaserver.ErrBadCredentials
+	case http.StatusForbidden:
+		return mediaserver.RemoteUser{}, mediaserver.ErrAccountRefused
+	}
+	if err != nil {
+		return mediaserver.RemoteUser{}, err
+	}
+	if result.AccessToken != "" {
+		// Best effort, on a fresh context: the session is the check's to
+		// close, not to keep. A logout that fails leaves one idle session
+		// under the check's own device name for the server to expire.
+		logoutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = c.doAs(logoutCtx, http.MethodPost, "/Sessions/Logout", "sign-in check logout", result.AccessToken, signInDevice, signInDeviceID, nil, nil)
+	}
+	if result.User.ID == "" {
+		return mediaserver.RemoteUser{}, errors.New("jellyfin sign-in check: response carried no user")
+	}
+	return result.User.remoteUser(), nil
 }
 
 // updatePolicy is the single path for every policy change. Jellyfin's
@@ -249,6 +386,29 @@ func setLibraries(policy map[string]any, libraryIDs []string) {
 	policy["EnabledFolders"] = append([]string(nil), libraryIDs...)
 }
 
+// rollbackByName deletes an account that carries name, for the case where
+// the create request may have reached the server but its answer never came
+// back readable (a cut connection, a timeout, an unreadable body). The
+// pre-check proved no account carried this name a moment ago, so one that
+// does now is the one just made. Runs on a fresh context.
+func (c *Client) rollbackByName(ctx context.Context, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	users, err := c.Users(cleanupCtx)
+	if err != nil {
+		return fmt.Errorf("look up new user for roll back: %w", err)
+	}
+	for _, u := range users {
+		if strings.EqualFold(u.Name, name) {
+			if err := c.DeleteUser(cleanupCtx, u.ID); err != nil {
+				return fmt.Errorf("roll back new user: %w", err)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // CreateUser implements mediaserver.Provider.
 func (c *Client) CreateUser(ctx context.Context, name, password string, libraryIDs []string) (mediaserver.RemoteUser, error) {
 	if !mediaserver.ValidUsername(name) {
@@ -276,10 +436,21 @@ func (c *Client) CreateUser(ctx context.Context, name, password string, libraryI
 		if errors.As(err, &se) && se.status == http.StatusBadRequest && bytes.Contains(bytes.ToLower(se.body), []byte("exist")) {
 			return mediaserver.RemoteUser{}, mediaserver.ErrUserExists
 		}
+		if se == nil {
+			// Not a refusal: the server may have made the account and the
+			// answer got lost. Never leave an account Cantinarr cannot see.
+			if rbErr := c.rollbackByName(ctx, name); rbErr != nil {
+				return mediaserver.RemoteUser{}, errors.Join(err, rbErr)
+			}
+		}
 		return mediaserver.RemoteUser{}, err
 	}
 	if created.ID == "" {
-		return mediaserver.RemoteUser{}, errors.New("jellyfin create user: response carried no user id")
+		err := errors.New("jellyfin create user: response carried no user id")
+		if rbErr := c.rollbackByName(ctx, name); rbErr != nil {
+			return mediaserver.RemoteUser{}, errors.Join(err, rbErr)
+		}
+		return mediaserver.RemoteUser{}, err
 	}
 
 	if err := c.updatePolicy(ctx, created.ID, func(policy map[string]any) {

@@ -34,6 +34,14 @@ type fakeProvider struct {
 	libraryWrites  []libraryWrite
 	lastLibraryIDs []string
 	lastPassword   string
+	// passwords is what Authenticate checks against, by remote id; addUser
+	// gives every account "<name>-pass-1". authErr fails the check outright;
+	// onAuth runs inside a successful check, before the answer.
+	passwords map[string]string
+	authCalls int
+	authErr   error
+	onAuth    func()
+	usersErr  error // Users fails with this
 }
 
 // libraryWrite records one SetLibraries call.
@@ -43,7 +51,7 @@ type libraryWrite struct {
 }
 
 func newFakeProvider() *fakeProvider {
-	return &fakeProvider{users: map[string]*mediaserver.RemoteUser{}}
+	return &fakeProvider{users: map[string]*mediaserver.RemoteUser{}, passwords: map[string]string{}}
 }
 
 func (f *fakeProvider) addUser(name string, admin, disabled bool) string {
@@ -52,7 +60,43 @@ func (f *fakeProvider) addUser(name string, admin, disabled bool) string {
 	f.nextID++
 	id := fmt.Sprintf("remote-%d", f.nextID)
 	f.users[id] = &mediaserver.RemoteUser{ID: id, Name: name, IsAdministrator: admin, IsDisabled: disabled}
+	f.passwords[id] = name + "-pass-1"
 	return id
+}
+
+// Authenticate implements mediaserver.Authenticator the way Jellyfin does:
+// 401 (ErrBadCredentials) for a wrong password or an unknown name, 403
+// (ErrAccountRefused) for a disabled account.
+func (f *fakeProvider) Authenticate(_ context.Context, username, password string) (mediaserver.RemoteUser, error) {
+	f.mu.Lock()
+	f.authCalls++
+	if f.authErr != nil {
+		f.mu.Unlock()
+		return mediaserver.RemoteUser{}, f.authErr
+	}
+	var found *mediaserver.RemoteUser
+	var id string
+	for candidate, u := range f.users {
+		if strings.EqualFold(u.Name, username) {
+			found, id = u, candidate
+			break
+		}
+	}
+	if found == nil || password == "" || f.passwords[id] != password {
+		f.mu.Unlock()
+		return mediaserver.RemoteUser{}, mediaserver.ErrBadCredentials
+	}
+	if found.IsDisabled {
+		f.mu.Unlock()
+		return mediaserver.RemoteUser{}, mediaserver.ErrAccountRefused
+	}
+	out := *found
+	hook := f.onAuth
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return out, nil
 }
 
 func (f *fakeProvider) user(id string) mediaserver.RemoteUser {
@@ -73,6 +117,9 @@ func (f *fakeProvider) Libraries(context.Context) ([]mediaserver.Library, error)
 func (f *fakeProvider) Users(context.Context) ([]mediaserver.RemoteUser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
 	out := []mediaserver.RemoteUser{}
 	for _, u := range f.users {
 		out = append(out, *u)
@@ -163,7 +210,8 @@ type env struct {
 	store     *instance.Store
 	svc       *Service
 	provider  *fakeProvider
-	providers map[string]*fakeProvider // per instance id; falls back to provider
+	providers map[string]mediaserver.Provider // per instance id; falls back to provider
+	real      map[string]bool                 // instance ids served by the production provider factory
 	logs      *bytes.Buffer
 }
 
@@ -178,14 +226,20 @@ func newEnv(t *testing.T) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, db: database, store: instance.NewStore(database, cipher), provider: newFakeProvider(), providers: map[string]*fakeProvider{}, logs: &bytes.Buffer{}}
+	e := &env{t: t, db: database, store: instance.NewStore(database, cipher), provider: newFakeProvider(), providers: map[string]mediaserver.Provider{}, real: map[string]bool{}, logs: &bytes.Buffer{}}
 	logger := slog.New(slog.NewTextHandler(e.logs, nil))
 	e.svc = NewService(database, e.store, func(inst *instance.Instance) (mediaserver.Provider, error) {
+		if e.real[inst.ID] {
+			return instance.NewMediaServerProvider(inst)
+		}
 		if p, ok := e.providers[inst.ID]; ok {
 			return p, nil
 		}
 		return e.provider, nil
 	}, logger)
+	// Invite passes run off the request in production; here they run inline
+	// so a test can assert right after the call that triggered them.
+	e.svc.background = func(fn func()) { fn() }
 	return e
 }
 
@@ -204,17 +258,27 @@ const testInstanceKey = "instance-key-SENTINEL"
 func itoa(id int64) string { return fmt.Sprintf("%d", id) }
 
 func (e *env) jellyfin(name string, cfg instance.MediaServerConfig) string {
+	return e.mediaServer("jellyfin", name, cfg)
+}
+
+func (e *env) mediaServer(serviceType, name string, cfg instance.MediaServerConfig) string {
 	e.t.Helper()
-	inst := &instance.Instance{ServiceType: "jellyfin", Name: name, URL: "http://jellyfin.internal:8096", APIKey: testInstanceKey, MediaServerConfig: cfg}
+	inst := &instance.Instance{ServiceType: serviceType, Name: name, URL: "http://" + serviceType + ".internal:8096", APIKey: testInstanceKey, MediaServerConfig: cfg}
 	if err := e.store.Create(inst); err != nil {
-		e.t.Fatalf("create jellyfin: %v", err)
+		e.t.Fatalf("create %s: %v", serviceType, err)
 	}
 	return inst.ID
 }
 
 func (e *env) grant(userID int64, instanceIDs ...string) {
 	e.t.Helper()
-	if err := e.store.SetUserGrants(userID, map[string][]string{"jellyfin": instanceIDs}); err != nil {
+	e.grantType(userID, "jellyfin", instanceIDs...)
+}
+
+// grantType is grant for instances of another media-server type.
+func (e *env) grantType(userID int64, serviceType string, instanceIDs ...string) {
+	e.t.Helper()
+	if err := e.store.SetUserGrants(userID, map[string][]string{serviceType: instanceIDs}); err != nil {
 		e.t.Fatalf("grant: %v", err)
 	}
 }
@@ -459,6 +523,73 @@ func TestListForUserVerifiedAndBlindStates(t *testing.T) {
 	}
 }
 
+// The guide leads with signing in when the server already holds an account
+// named like the user: the flag is a confirmed, unlinked, same-named account
+// on an account server the user has no account on, and nothing else.
+func TestListForUserFlagsExistingSameNamedAccount(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user("alice")
+	bob := e.user("bob")
+	same := e.jellyfin("A Same", instance.MediaServerConfig{})
+	linked := e.jellyfin("B Linked", instance.MediaServerConfig{})
+	other := e.jellyfin("C Other", instance.MediaServerConfig{})
+	dead := e.jellyfin("D Dead", instance.MediaServerConfig{})
+	claimed := e.jellyfin("E Claimed", instance.MediaServerConfig{})
+	plex := e.mediaServer("plex", "F Plex", instance.MediaServerConfig{PublicAddress: instance.PlexPublicAddress})
+	e.grant(alice, same, linked, other, dead, claimed)
+	e.grantType(alice, "plex", plex)
+
+	sameP, linkedP, otherP, deadP, claimedP := newFakeProvider(), newFakeProvider(), newFakeProvider(), newFakeProvider(), newFakeProvider()
+	sameP.addUser("Alice", false, true) // a different case, and switched off: still hers to sign in with
+	linkedID := linkedP.addUser("alice", false, false)
+	otherP.addUser("bob", false, false)
+	deadP.addUser("alice", false, false)
+	deadP.usersErr = errors.New("jellyfin list users: status 503")
+	claimedID := claimedP.addUser("alice", false, false)
+	invite := newFakeInviteProvider()
+	invite.share("alice@example.com", false)
+	e.providers[same], e.providers[linked], e.providers[other], e.providers[dead], e.providers[claimed], e.providers[plex] = sameP, linkedP, otherP, deadP, claimedP, invite
+	for _, pair := range []struct {
+		user   int64
+		inst   string
+		remote string
+	}{{alice, linked, linkedID}, {bob, claimed, claimedID}} {
+		if _, err := e.svc.insertAccount(accountRow{UserID: pair.user, InstanceID: pair.inst, RemoteUserID: pair.remote, RemoteUsername: "alice", CreatedByCantinarr: false}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	views, err := e.svc.ListForUser(context.Background(), alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]ServerView{}
+	for _, v := range views {
+		byName[v.Name] = v
+	}
+	if v := byName["A Same"]; !v.ExistingAccount || v.Account != nil {
+		t.Fatalf("same-named account: view = %+v, want existing_account=true and no linked account", v)
+	}
+	if v := byName["B Linked"]; v.ExistingAccount || v.Account == nil {
+		t.Fatalf("linked account: view = %+v, want existing_account=false with the account", v)
+	}
+	if v := byName["C Other"]; v.ExistingAccount {
+		t.Fatalf("other names only: view = %+v, want existing_account=false", v)
+	}
+	if v := byName["D Dead"]; v.ExistingAccount {
+		t.Fatalf("unreachable server: view = %+v, want existing_account=false (blindness is not presence)", v)
+	}
+	if v := byName["E Claimed"]; v.ExistingAccount {
+		t.Fatalf("account linked to another user: view = %+v, want existing_account=false", v)
+	}
+	if v := byName["F Plex"]; v.ExistingAccount {
+		t.Fatalf("invite server: view = %+v, want existing_account=false", v)
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "could not check for an existing account") || strings.Contains(logs, "alice") {
+		t.Fatalf("logs = %q, want the unreachable server noted with ids only", logs)
+	}
+}
+
 func TestReconcileDisablesOnRevokeAndEnablesOnRegrant(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user("alice")
@@ -481,7 +612,8 @@ func TestReconcileDisablesOnRevokeAndEnablesOnRegrant(t *testing.T) {
 		t.Fatal("returned grant did not re-enable the account")
 	}
 
-	// A linked administrator is never touched.
+	// A linked administrator is never touched on the server; its row still
+	// follows the grant, so the drift sweep has nothing to retry.
 	bob := e.user("bob")
 	adminID := e.provider.addUser("bob", true, false)
 	if _, err := e.svc.insertAccount(accountRow{UserID: bob, InstanceID: jf, RemoteUserID: adminID, RemoteUsername: "bob"}, false); err != nil {
@@ -491,8 +623,19 @@ func TestReconcileDisablesOnRevokeAndEnablesOnRegrant(t *testing.T) {
 	if e.provider.user(adminID).IsDisabled {
 		t.Fatal("reconcile disabled an administrator account")
 	}
+	if !e.row(bob, jf).DisabledAt.Valid {
+		t.Fatal("an ungranted administrator row was not stamped")
+	}
 	if !strings.Contains(e.logs.String(), "administrator") {
 		t.Fatal("skipping an administrator was not logged")
+	}
+	if drifted, err := e.svc.listDriftedAccountUsers(); err != nil || len(drifted) != 0 {
+		t.Fatalf("drift candidates after the admin skip = %v, %v; want none", drifted, err)
+	}
+	e.grant(bob, jf)
+	e.svc.OnGrantsChanged([]int64{bob})
+	if e.row(bob, jf).DisabledAt.Valid || e.provider.user(adminID).IsDisabled {
+		t.Fatal("re-granting the administrator did not clear the stamp, or touched the account")
 	}
 }
 
@@ -523,16 +666,26 @@ func TestReconcileOnlyTouchesAffectedUsers(t *testing.T) {
 	}
 }
 
-func TestLinkAccountRejectsAdministratorAndDuplicateRemote(t *testing.T) {
+func TestLinkAccountAcceptsAdministratorsAndRefusesDuplicateRemote(t *testing.T) {
 	e := newEnv(t)
-	alice, bob := e.user("alice"), e.user("bob")
+	alice, bob, root := e.user("alice"), e.user("bob"), e.user("root")
 	jf := e.jellyfin("Home", instance.MediaServerConfig{})
 	adminID := e.provider.addUser("root", true, false)
 	aliceID := e.provider.addUser("alice", false, false)
 	ctx := context.Background()
 
-	if _, err := e.svc.LinkAccount(ctx, alice, jf, adminID); !errors.Is(err, ErrAdministratorAccount) {
-		t.Fatalf("link admin = %v, want ErrAdministratorAccount", err)
+	// An administrator links like anyone else and is then left alone: the
+	// grant the link adds reconciles without a write to the server.
+	linked, err := e.svc.LinkAccount(ctx, root, jf, adminID)
+	if err != nil || linked.CreatedByCantinarr || linked.Username != "root" || linked.Disabled {
+		t.Fatalf("link admin = %+v, %v", linked, err)
+	}
+	if e.provider.user(adminID).IsDisabled {
+		t.Fatal("linking an administrator touched the account")
+	}
+	views, err := e.svc.ListForUser(ctx, root)
+	if err != nil || len(views) != 1 || views[0].Account == nil || !views[0].Account.Administrator || !views[0].Account.Verified {
+		t.Fatalf("root's guide = %+v, %v; want an administrator account", views, err)
 	}
 	if _, err := e.svc.LinkAccount(ctx, alice, jf, "remote-nope"); !errors.Is(err, ErrRemoteUserNotFound) {
 		t.Fatalf("link unknown = %v, want ErrRemoteUserNotFound", err)
@@ -765,7 +918,8 @@ func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T)
 	bob := e.user("bob")
 	jf := e.jellyfin("Home", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies", "lib-shows"}})
 	other := e.jellyfin("Cabin", instance.MediaServerConfig{LibraryIDs: []string{"lib-movies"}})
-	e.providers[other] = newFakeProvider()
+	otherFake := newFakeProvider()
+	e.providers[other] = otherFake
 	e.grant(alice, jf)
 	e.grant(bob, jf)
 	if _, err := e.svc.CreateAccount(context.Background(), alice, jf, "alice-pass-1"); err != nil {
@@ -791,7 +945,201 @@ func TestSharedLibrariesChangeRescopesOnlyAccountsCantinarrCreated(t *testing.T)
 	if !reflect.DeepEqual(write.libraryIDs, []string{"lib-movies"}) {
 		t.Fatalf("re-scoped to %v, want the new selection", write.libraryIDs)
 	}
-	if writes := e.providers[other].libraryWrites; len(writes) != 0 {
+	if writes := otherFake.libraryWrites; len(writes) != 0 {
 		t.Fatalf("another instance was re-scoped: %+v", writes)
+	}
+}
+
+// The service never names a media server: everything it decides comes from
+// IsMediaServerType and the grant, so each registered type must get the whole
+// create / switch-off / switch-on cycle. A type missing from any list fails
+// here before it fails for an admin.
+func TestCreateAndReconcileForEveryMediaServerType(t *testing.T) {
+	for _, serviceType := range instance.MediaServerTypes() {
+		t.Run(serviceType, func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user("alice")
+			inst := e.mediaServer(serviceType, "Home", instance.MediaServerConfig{LibraryIDs: []string{"lib-1"}})
+			grant := func(ids ...string) {
+				t.Helper()
+				if err := e.store.SetUserGrants(alice, map[string][]string{serviceType: ids}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := e.svc.CreateAccount(context.Background(), alice, inst, "alice-pass-1"); !errors.Is(err, ErrNotAvailable) {
+				t.Fatalf("ungranted create err = %v, want ErrNotAvailable", err)
+			}
+			grant(inst)
+			created, err := e.svc.CreateAccount(context.Background(), alice, inst, "alice-pass-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.Username != "alice" || !reflect.DeepEqual(e.provider.lastLibraryIDs, []string{"lib-1"}) {
+				t.Fatalf("created = %+v, libraries = %v", created, e.provider.lastLibraryIDs)
+			}
+			remote := e.row(alice, inst).RemoteUserID
+
+			servers, err := e.svc.ListForUser(context.Background(), alice)
+			if err != nil || len(servers) != 1 || servers[0].ServiceType != serviceType || servers[0].Account == nil {
+				t.Fatalf("ListForUser = %+v, %v", servers, err)
+			}
+
+			grant()
+			e.svc.OnGrantsChanged([]int64{alice})
+			if !e.provider.user(remote).IsDisabled || !e.row(alice, inst).DisabledAt.Valid {
+				t.Fatal("revoked grant did not disable the account")
+			}
+			grant(inst)
+			e.svc.OnGrantsChanged([]int64{alice})
+			if e.provider.user(remote).IsDisabled || e.row(alice, inst).DisabledAt.Valid {
+				t.Fatal("returned grant did not re-enable the account")
+			}
+		})
+	}
+}
+
+func TestLinkOwnAccountLinksAVerifiedAccount(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.user("alice"), e.user("bob")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{PublicAddress: "https://jf.example.com"})
+	e.grant(alice, jf)
+	e.grant(bob, jf)
+	aliceID := e.provider.addUser("Alice", false, false)
+	adminID := e.provider.addUser("bob", true, false)
+	ctx := context.Background()
+
+	linked, err := e.svc.LinkOwnAccount(ctx, alice, jf, "alice", "Alice-pass-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked.Username != "Alice" || linked.PublicAddress != "https://jf.example.com" || linked.Administrator || linked.Pending {
+		t.Fatalf("linked = %+v", linked)
+	}
+	row := e.row(alice, jf)
+	if row == nil || row.RemoteUserID != aliceID || row.CreatedByCantinarr || row.DisabledAt.Valid {
+		t.Fatalf("row = %+v", row)
+	}
+	if e.provider.authCalls != 1 || e.provider.creates != 0 {
+		t.Fatalf("auth calls = %d, creates = %d", e.provider.authCalls, e.provider.creates)
+	}
+
+	// An administrator's own account links too, and reads as one.
+	linked, err = e.svc.LinkOwnAccount(ctx, bob, jf, "bob", "bob-pass-1")
+	if err != nil || !linked.Administrator {
+		t.Fatalf("admin link = %+v, %v", linked, err)
+	}
+	views, err := e.svc.ListForUser(ctx, bob)
+	if err != nil || len(views) != 1 || views[0].Account == nil || !views[0].Account.Administrator {
+		t.Fatalf("bob's guide = %+v, %v", views, err)
+	}
+	// The grant coming and going never touches the administrator account.
+	e.grant(bob)
+	e.svc.OnGrantsChanged([]int64{bob})
+	if e.provider.user(adminID).IsDisabled {
+		t.Fatal("revoking the grant disabled the administrator")
+	}
+	if drifted, _ := e.svc.listDriftedAccountUsers(); len(drifted) != 0 {
+		t.Fatalf("the sweep still has work after an administrator revoke: %v", drifted)
+	}
+	// The remote id is what the row holds; the password never is.
+	var stored int
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM user_media_server_accounts WHERE remote_user_id LIKE '%pass%' OR remote_username LIKE '%pass%'").Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("a password reached the database (%d, %v)", stored, err)
+	}
+	if strings.Contains(e.logs.String(), "pass-1") {
+		t.Fatal("a password reached the logs")
+	}
+}
+
+func TestLinkOwnAccountRefusals(t *testing.T) {
+	e := newEnv(t)
+	alice, bob, carol := e.user("alice"), e.user("bob"), e.user("carol")
+	jf := e.jellyfin("Home", instance.MediaServerConfig{})
+	plex, _ := e.inviteServer("Den Plex", instance.MediaServerConfig{})
+	e.grant(alice, jf, plex)
+	e.grant(bob, jf)
+	e.grant(carol, jf)
+	aliceID := e.provider.addUser("alice", false, false)
+	e.provider.addUser("dave", false, true)
+	ctx := context.Background()
+
+	// Not granted: refused before any password travels.
+	if _, err := e.svc.LinkOwnAccount(ctx, e.user("nobody"), jf, "alice", "alice-pass-1"); !errors.Is(err, ErrNotAvailable) {
+		t.Fatalf("ungranted = %v, want ErrNotAvailable", err)
+	}
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, "jellyfin-nope", "alice", "alice-pass-1"); !errors.Is(err, ErrNotAvailable) {
+		t.Fatalf("unknown instance = %v, want ErrNotAvailable", err)
+	}
+	if e.provider.authCalls != 0 {
+		t.Fatalf("refusals sent %d passwords", e.provider.authCalls)
+	}
+	// An invite server takes no password.
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, plex, "alice", "alice-pass-1"); !errors.Is(err, ErrWrongKind) {
+		t.Fatalf("invite server = %v, want ErrWrongKind", err)
+	}
+	// Wrong password, unknown name, disabled account: no row, said apart.
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "alice", "not-it"); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("wrong password = %v, want ErrBadCredentials", err)
+	}
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "zed", "zed-pass-1"); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("unknown name = %v, want ErrBadCredentials", err)
+	}
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "dave", "dave-pass-1"); !errors.Is(err, ErrAccountRefused) {
+		t.Fatalf("disabled account = %v, want ErrAccountRefused", err)
+	}
+	if e.row(alice, jf) != nil {
+		t.Fatal("a refused link left a row")
+	}
+	// The server down: upstream, without its words.
+	e.provider.authErr = errors.New("jellyfin sign-in check: host=jellyfin.internal")
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "alice", "alice-pass-1"); !errors.Is(err, ErrUpstream) {
+		t.Fatalf("server down = %v, want ErrUpstream", err)
+	}
+	e.provider.authErr = nil
+
+	// Claimed by another user's row: refused after the check, no row.
+	if _, err := e.svc.LinkAccount(ctx, bob, jf, aliceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "alice", "alice-pass-1"); !errors.Is(err, ErrRemoteAlreadyLinked) {
+		t.Fatalf("claimed remote = %v, want ErrRemoteAlreadyLinked", err)
+	}
+	if err := e.svc.UnlinkAccount(bob, jf); err != nil {
+		t.Fatal(err)
+	}
+
+	// A live row already: refused without sending the password. A stale
+	// row (the account is gone from the server) is replaced.
+	if _, err := e.svc.CreateAccount(ctx, carol, jf, "carol-pass-1"); err != nil {
+		t.Fatal(err)
+	}
+	before := e.provider.authCalls
+	if _, err := e.svc.LinkOwnAccount(ctx, carol, jf, "alice", "alice-pass-1"); !errors.Is(err, ErrAccountExists) {
+		t.Fatalf("live row = %v, want ErrAccountExists", err)
+	}
+	if e.provider.authCalls != before {
+		t.Fatal("a refused link for a live row still sent the password")
+	}
+	if err := e.provider.DeleteUser(ctx, e.row(carol, jf).RemoteUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.LinkOwnAccount(ctx, carol, jf, "alice", "alice-pass-1"); err != nil {
+		t.Fatalf("stale row = %v, want replaced", err)
+	}
+	if row := e.row(carol, jf); row == nil || row.RemoteUserID != aliceID || row.CreatedByCantinarr {
+		t.Fatalf("row after stale replace = %+v", row)
+	}
+	if err := e.svc.UnlinkAccount(carol, jf); err != nil {
+		t.Fatal(err)
+	}
+
+	// The grant vanishing while the server checks the password: no row.
+	e.provider.onAuth = func() { e.grant(alice) }
+	if _, err := e.svc.LinkOwnAccount(ctx, alice, jf, "alice", "alice-pass-1"); !errors.Is(err, ErrNotAvailable) {
+		t.Fatalf("grant vanished = %v, want ErrNotAvailable", err)
+	}
+	if e.row(alice, jf) != nil {
+		t.Fatal("a link whose grant vanished left a row")
 	}
 }

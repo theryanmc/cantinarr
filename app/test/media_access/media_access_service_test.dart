@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cantinarr/features/discover/data/tmdb_models.dart';
 import 'package:cantinarr/features/media_access/data/media_access_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,7 @@ class _FakeAdapter implements HttpClientAdapter {
 
   final Map<String, _Reply> replies;
   final List<({String method, String path, dynamic body})> requests = [];
+  final List<Uri> uris = [];
 
   @override
   Future<ResponseBody> fetch(
@@ -31,6 +33,7 @@ class _FakeAdapter implements HttpClientAdapter {
       if (bytes.isNotEmpty) body = jsonDecode(utf8.decode(bytes));
     }
     final path = options.uri.path;
+    uris.add(options.uri);
     requests.add((method: options.method, path: path, body: body));
     final reply = replies['${options.method} $path'] ??
         const _Reply(404, {'error': 'not found'});
@@ -80,7 +83,7 @@ void main() {
       expect(mediaServerGuideTitle(const ['emby', 'jellyfin']),
           'Watch on Jellyfin or Emby');
       expect(mediaServerGuideTitle(const ['plex', 'emby', 'jellyfin']),
-          'Watch on Jellyfin, Emby, or Plex');
+          'Watch on Plex, Jellyfin, or Emby');
     });
 
     test('type labels are product names', () {
@@ -111,6 +114,7 @@ void main() {
             'name': 'Cabin',
             'public_address': '',
             'account': null,
+            'existing_account': true,
           },
         ]),
       });
@@ -118,11 +122,88 @@ void main() {
       final servers = await _service(adapter).listMine();
 
       expect(servers, hasLength(2));
+      // A same-named account the server confirmed, only where it said so.
+      expect(servers[0].existingAccount, isFalse);
+      expect(servers[1].existingAccount, isTrue);
       expect(servers.first.publicAddress, 'https://jf.example.com');
       expect(servers.first.account?.username, 'alice');
       expect(servers.first.account?.disabled, isTrue);
       expect(servers.first.account?.verified, isFalse);
       expect(servers.last.account, isNull);
+    });
+  });
+
+  group('watchLinks', () {
+    test('asks with the ids that narrow the lookup and parses every state',
+        () async {
+      final adapter = _FakeAdapter({
+        'GET /api/media-servers/watch': const _Reply(200, [
+          {
+            'instance_id': 'jf-a',
+            'service_type': 'jellyfin',
+            'name': 'Home Jellyfin',
+            'state': 'found',
+            'url': 'https://jf.example.com/web/#/details?id=i-1&serverId=s',
+          },
+          {
+            'instance_id': 'em-a',
+            'service_type': 'emby',
+            'name': 'Den Emby',
+            'state': 'missing',
+          },
+          {
+            'instance_id': 'jf-b',
+            'service_type': 'jellyfin',
+            'name': 'Cabin',
+            'state': 'unreachable',
+          },
+        ]),
+      });
+
+      final links = await _service(adapter).watchLinks(
+        mediaType: MediaType.tv,
+        tmdbId: 1396,
+        tvdbId: 81189,
+        year: 2008,
+        title: ' Breaking Bad ',
+      );
+
+      final query = adapter.uris.single.queryParameters;
+      expect(query, {
+        'media_type': 'tv',
+        'tmdb_id': '1396',
+        'tvdb_id': '81189',
+        'year': '2008',
+        'title': 'Breaking Bad',
+      });
+      expect(links.map((l) => l.state), [
+        WatchLinkState.found,
+        WatchLinkState.missing,
+        WatchLinkState.unreachable,
+      ]);
+      expect(links.first.url,
+          'https://jf.example.com/web/#/details?id=i-1&serverId=s');
+      expect(links.first.name, 'Home Jellyfin');
+      expect(links[1].url, isEmpty);
+    });
+
+    test('unknown ids and an empty title are left out of the query',
+        () async {
+      final adapter = _FakeAdapter({
+        'GET /api/media-servers/watch': const _Reply(200, []),
+      });
+
+      final links = await _service(adapter).watchLinks(
+        mediaType: MediaType.movie,
+        tmdbId: 10378,
+        tvdbId: 0,
+        year: null,
+        title: '',
+      );
+
+      expect(links, isEmpty);
+      expect(adapter.uris.single.queryParameters,
+          {'media_type': 'movie', 'tmdb_id': '10378'});
     });
   });
 
@@ -296,6 +377,105 @@ void main() {
             .link(userId: 7, instanceId: 'jf-a', remoteUserId: 'u2'),
         throwsA(isA<MediaAccessException>()
             .having((e) => e.code, 'code', 'remote_already_linked')),
+      );
+    });
+  });
+
+  group('linking an existing account', () {
+    test('link POSTs the credentials once and decodes the answer', () async {
+      final adapter = _FakeAdapter({
+        'POST /api/media-servers/jf-a/account/link': const _Reply(201, {
+          'username': 'Alice',
+          'public_address': 'https://jf.example.com',
+          'administrator': true,
+        }),
+      });
+      final linked = await _service(adapter).linkOwnAccount(
+        'jf-a',
+        username: 'alice',
+        password: 'correct-horse',
+      );
+      expect(linked.username, 'Alice');
+      expect(linked.publicAddress, 'https://jf.example.com');
+      expect(linked.administrator, isTrue);
+      expect(adapter.requests.single.method, 'POST');
+      expect(adapter.requests.single.body,
+          {'username': 'alice', 'password': 'correct-horse'});
+    });
+
+    test('a refused password carries the code on a 400', () async {
+      final adapter = _FakeAdapter({
+        'POST /api/media-servers/jf-a/account/link': const _Reply(400, {
+          'error': 'wrong username or password for this server',
+          'code': 'bad_credentials',
+        }),
+      });
+      await expectLater(
+        _service(adapter)
+            .linkOwnAccount('jf-a', username: 'alice', password: 'nope'),
+        throwsA(isA<MediaAccessException>()
+            .having((e) => e.status, 'status', 400)
+            .having((e) => e.code, 'code', 'bad_credentials')),
+      );
+    });
+
+    test('the Plex sign-in begins and polls until linked', () async {
+      final waiting = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/begin': const _Reply(200, {
+          'pin_id': 42,
+          'code': 'ABCD',
+          'url': 'https://app.plex.tv/auth#?code=ABCD',
+        }),
+        'POST /api/media-servers/plex/sign-in/check':
+            const _Reply(200, {'linked': false}),
+      });
+      final service = _service(waiting);
+      final start = await service.beginPlexSignIn();
+      expect(start.pinId, 42);
+      expect(start.code, 'ABCD');
+      expect(start.url, startsWith('https://app.plex.tv/auth#?'));
+      final pending = await service.checkPlexSignIn(42);
+      expect(pending.linked, isFalse);
+      expect(waiting.requests.last.body, {'pin_id': 42});
+
+      final done = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/check': const _Reply(200, {
+          'linked': true,
+          'username': 'alice',
+          'email': 'alice@example.com',
+          'invite_state': 'adopted',
+        }),
+      });
+      final state = await _service(done).checkPlexSignIn(42);
+      expect(state.linked, isTrue);
+      expect(state.username, 'alice');
+      expect(state.email, 'alice@example.com');
+      expect(state.inviteState, 'adopted');
+
+      final expired = _FakeAdapter({
+        'POST /api/media-servers/plex/sign-in/check': const _Reply(404, {
+          'error': 'the Plex sign-in has expired; start again',
+          'code': 'pin_expired',
+        }),
+      });
+      await expectLater(
+        _service(expired).checkPlexSignIn(42),
+        throwsA(isA<MediaAccessException>()
+            .having((e) => e.code, 'code', 'pin_expired')),
+      );
+    });
+
+    test('an account status reads administrator, off by default', () {
+      expect(
+        MediaServerAccountStatus.fromJson(
+                const {'username': 'julian', 'administrator': true})
+            .administrator,
+        isTrue,
+      );
+      expect(
+        MediaServerAccountStatus.fromJson(const {'username': 'alice'})
+            .administrator,
+        isFalse,
       );
     });
   });

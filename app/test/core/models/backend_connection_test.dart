@@ -113,13 +113,14 @@ void main() {
             id: 'jf-a', serviceType: 'jellyfin', name: 'Home Jellyfin'),
         ServiceInstance(id: 'tautulli-a', serviceType: 'tautulli', name: 'T'),
         ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
+        ServiceInstance(id: 'em-a', serviceType: 'emby', name: 'Den Emby'),
       ],
     );
 
-    expect(mediaServerServiceTypes, contains('jellyfin'));
+    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby', 'plex']));
     expect(
       connection.mediaServerInstances.map((i) => i.id).toList(),
-      ['jf-a', 'jf-b'],
+      ['jf-a', 'jf-b', 'em-a'],
     );
     // A media server is neither a library nor a download client.
     expect(connection.radarrInstances.map((i) => i.id), ['radarr-main']);
@@ -154,5 +155,38 @@ void main() {
     expect(connection.mediaDownloadsEnabledFor('radarr-main'), isTrue);
     expect(connection.mediaDownloadsEnabledFor('missing'), isTrue);
     expect(connection.mediaDownloadsEnabledFor(null), isTrue);
+  });
+
+  test('the access guide shows for a granted server or an askable Plex', () {
+    const none = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+    );
+    expect(none.mediaAccessGuideVisible, isFalse);
+    expect(none.mediaAccessGuideTypes, isEmpty);
+
+    const askable = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+      plexAccessRequestable: true,
+    );
+    expect(askable.mediaAccessGuideVisible, isTrue);
+    expect(askable.mediaAccessGuideTypes, {'plex'});
+
+    const granted = BackendConnection(
+      serverUrl: 'http://localhost',
+      accessToken: 'a',
+      refreshToken: 'r',
+      instances: [
+        ServiceInstance(id: 'jf-a', serviceType: 'jellyfin', name: 'Home'),
+        ServiceInstance(id: 'px-a', serviceType: 'plex', name: 'Cantina'),
+      ],
+    );
+    expect(granted.mediaAccessGuideVisible, isTrue);
+    expect(granted.mediaAccessGuideTypes, {'jellyfin', 'plex'});
+    expect(granted.copyWith(plexAccessRequestable: true).mediaAccessGuideTypes,
+        {'jellyfin', 'plex'});
   });
 }

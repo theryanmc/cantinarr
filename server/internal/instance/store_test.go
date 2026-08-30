@@ -211,6 +211,8 @@ func TestLookupServiceTypeUsesServiceMetadata(t *testing.T) {
 		"transmission",
 		"tautulli",
 		"jellyfin",
+		"emby",
+		"plex",
 	}
 
 	for _, serviceType := range serviceTypes {

@@ -7,7 +7,6 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
-import 'package:cantinarr/features/settings/data/plex_admin_service.dart';
 import 'package:cantinarr/features/settings/ui/users_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -30,7 +29,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -74,7 +72,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -119,7 +116,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -166,7 +162,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -206,7 +201,6 @@ void main() {
         overrides: [
           authProvider.overrideWith(() => auth),
           backendClientProvider.overrideWithValue(dio),
-          plexInviteConfiguredProvider.overrideWith((_) async => false),
         ],
         child: MaterialApp(
           theme: AppTheme.dark,
@@ -258,6 +252,8 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   bool accountsFail = false,
   List<ServiceInstance> instances = const [_homeJellyfin],
   List<String> grants = const ['jf-a'],
+  List<UserSummary>? users,
+  List<Map<String, dynamic>> importResults = const [],
 }) async {
   await tester.binding.setSurfaceSize(const Size(1000, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -266,16 +262,16 @@ Future<_MediaAdapter> _pumpWithMediaServer(
     accounts: accounts,
     accountsFail: accountsFail,
     grants: grants,
+    importResults: importResults,
   );
   final dio = Dio(BaseOptions(baseUrl: 'https://cantinarr.example'))
     ..httpClientAdapter = adapter;
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider
-            .overrideWith(() => _FakeAuthNotifier(instances: instances)),
+        authProvider.overrideWith(
+            () => _FakeAuthNotifier(instances: instances, users: users)),
         backendClientProvider.overrideWithValue(dio),
-        plexInviteConfiguredProvider.overrideWith((_) async => false),
       ],
       child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen()),
     ),
@@ -290,6 +286,124 @@ Future<void> _openMenu(WidgetTester tester) async {
 }
 
 void _mediaServerAccountTests() {
+  testWidgets('the import action shows only with a media server',
+      (tester) async {
+    await _pumpWithMediaServer(tester, instances: const []);
+    expect(find.byTooltip('Import from a media server'), findsNothing);
+  });
+
+  testWidgets(
+      'importing picks accounts, says what each becomes, and hands back '
+      'the links', (tester) async {
+    final adapter = await _pumpWithMediaServer(
+      tester,
+      // living-room (user 7) is linked to the server's r1; the picker's u2
+      // is free. A Cantinarr user named old-tablet already exists.
+      accounts: [
+        {..._accountRow(remoteUsername: 'lr-tv'), 'remote_user_id': 'u2'},
+      ],
+      users: [
+        const UserSummary(
+          id: 7,
+          username: 'living-room',
+          role: 'admin',
+          permissions: [],
+          createdAt: '',
+          deviceCount: 1,
+          hasPassword: true,
+          passwordEnabled: true,
+          passkeyEnabled: false,
+          hasPendingInvite: false,
+        ),
+        const UserSummary(
+          id: 8,
+          username: 'old-tablet',
+          role: 'user',
+          permissions: [],
+          createdAt: '',
+          deviceCount: 0,
+          hasPassword: false,
+          passwordEnabled: false,
+          passkeyEnabled: false,
+          hasPendingInvite: true,
+        ),
+      ],
+      importResults: [
+        {
+          'remote_user_id': 'a1',
+          'remote_username': 'jfadmin',
+          'user_id': 9,
+          'username': 'jfadmin',
+          'created': true,
+          'linked': true,
+          'link': 'https://cantinarr.example/connect?token=one',
+          'origin_source': 'app',
+        },
+        {
+          'remote_user_id': 'u3',
+          'remote_username': 'old-tablet',
+          'user_id': 8,
+          'username': 'old-tablet',
+          'created': false,
+          'linked': true,
+        },
+      ],
+    );
+
+    await tester.tap(find.byTooltip('Import from a media server'));
+    await tester.pumpAndSettle();
+    expect(find.text('Import from Home Jellyfin'), findsOneWidget);
+    expect(find.textContaining('Nothing else on Home Jellyfin changes'),
+        findsOneWidget);
+    // What each pick would do, said before it happens.
+    expect(find.text('Administrator · New Cantinarr user jfadmin'),
+        findsOneWidget);
+    expect(find.text('Already linked to living-room'), findsOneWidget);
+    expect(
+      find.text('Turned off on the server · Existing Cantinarr user '
+          'old-tablet'),
+      findsOneWidget,
+    );
+    // The linked row cannot be picked; the button waits for a pick.
+    final linkedTile = tester.widget<CheckboxListTile>(
+        find.widgetWithText(CheckboxListTile, 'lr-tv'));
+    expect(linkedTile.onChanged, isNull);
+    expect(find.widgetWithText(ElevatedButton, 'Import 0 accounts'),
+        findsNothing);
+
+    // Select all skips the administrator; it is ticked by hand.
+    await tester.tap(find.text('Select all'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(ElevatedButton, 'Import 1 account'),
+        findsOneWidget);
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'jfadmin'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Import 2 accounts'));
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests
+        .singleWhere((r) => r.path == '/api/admin/media-servers/jf-a/import');
+    expect(post.method, 'POST');
+    expect(post.body, {
+      'remote_user_ids': ['u3', 'a1'],
+      'server_url': 'https://cantinarr.example',
+    });
+
+    // The outcome per row, the link only for a user that was created.
+    expect(find.text('Imported 2 accounts from Home Jellyfin'), findsOneWidget);
+    expect(find.text('New user jfadmin, linked'), findsOneWidget);
+    expect(find.text('Existing user old-tablet, linked'), findsOneWidget);
+    expect(find.byTooltip('Copy link for jfadmin'), findsOneWidget);
+    expect(find.byTooltip('Copy link for old-tablet'), findsNothing);
+    expect(find.textContaining('address your app connects with'),
+        findsOneWidget);
+    expect(find.text('Copy all links'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Imported 2 users from Home Jellyfin'), findsOneWidget);
+  });
+
   testWidgets('a linked account is tagged and its menu flips access',
       (tester) async {
     final adapter =
@@ -356,7 +470,53 @@ void _mediaServerAccountTests() {
     expect(find.text('Home Jellyfin: lr-tv'), findsOneWidget);
   });
 
-  testWidgets('the link picker hides administrators and PUTs the remote id',
+  testWidgets('an adopted Plex share or the owner is not called an invite',
+      (tester) async {
+    const plex = ServiceInstance(
+      id: 'px-a',
+      serviceType: 'plex',
+      name: 'Cantina Plex',
+    );
+    await _pumpWithMediaServer(
+      tester,
+      instances: const [plex],
+      grants: const ['px-a'],
+      users: const [
+        UserSummary(
+          id: 7,
+          username: 'living-room',
+          role: 'admin',
+          permissions: [],
+          createdAt: '',
+          deviceCount: 1,
+          hasPassword: true,
+          passwordEnabled: true,
+          passkeyEnabled: false,
+          hasPendingInvite: false,
+          plexEmail: 'owner@example.com',
+          plexInvitedAt: '2026-08-30T02:00:00Z',
+        ),
+      ],
+      accounts: [
+        {
+          'user_id': 7,
+          'instance_id': 'px-a',
+          'instance_name': 'Cantina Plex',
+          'service_type': 'plex',
+          'remote_user_id': 'owner@example.com',
+          'username': 'windo186',
+          'created_by_cantinarr': false,
+          'disabled': false,
+          'created_at': '2026-08-30T02:00:00Z',
+        },
+      ],
+    );
+    expect(find.text('Cantina Plex: windo186'), findsOneWidget);
+    expect(find.text('Plex invite sent'), findsNothing);
+    expect(find.text('Asked for Plex access'), findsNothing);
+  });
+
+  testWidgets('the link picker marks administrators and PUTs the remote id',
       (tester) async {
     final adapter = await _pumpWithMediaServer(tester);
 
@@ -368,8 +528,13 @@ void _mediaServerAccountTests() {
     await tester.pumpAndSettle();
 
     expect(find.text('Link a Jellyfin account'), findsOneWidget);
-    expect(find.text("Administrator accounts aren't listed."), findsOneWidget);
-    expect(find.text('jfadmin'), findsNothing);
+    expect(
+      find.text('Administrator accounts can be linked; Cantinarr never '
+          'changes them.'),
+      findsOneWidget,
+    );
+    expect(find.text('jfadmin'), findsOneWidget);
+    expect(find.text('Administrator'), findsOneWidget);
     expect(find.text('lr-tv'), findsOneWidget);
     expect(find.text('old-tablet'), findsOneWidget);
     expect(find.text('Turned off on the server'), findsOneWidget);
@@ -456,11 +621,13 @@ class _MediaAdapter implements HttpClientAdapter {
     required this.accounts,
     required this.accountsFail,
     required this.grants,
+    this.importResults = const [],
   });
 
   final List<Map<String, dynamic>> accounts;
   final bool accountsFail;
   final List<String> grants;
+  final List<Map<String, dynamic>> importResults;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -502,6 +669,8 @@ class _MediaAdapter implements HttpClientAdapter {
           {'id': 'u3', 'name': 'old-tablet', 'is_disabled': true},
         ],
       };
+    } else if (path == '/api/admin/media-servers/jf-a/import') {
+      response = {'results': importResults};
     } else if (path == '/api/admin/users/7/instance-grants') {
       response = {'jellyfin': grants};
     } else if (path == '/api/admin/users/7/media-servers/jf-a/account') {
@@ -530,7 +699,13 @@ class _MediaAdapter implements HttpClientAdapter {
 }
 
 class _FakeAuthNotifier extends AuthNotifier {
-  _FakeAuthNotifier({this.currentUser = false, this.instances = const []});
+  _FakeAuthNotifier({
+    this.currentUser = false,
+    this.instances = const [],
+    List<UserSummary>? users,
+  }) {
+    if (users != null) _users = users;
+  }
 
   final bool currentUser;
 

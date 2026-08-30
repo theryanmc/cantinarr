@@ -45,6 +45,39 @@ func newFakeJellyfin(t *testing.T, apiKey string) *httptest.Server {
 	return srv
 }
 
+// newFakeEmby is the Emby counterpart: libraries come as a query result whose
+// ids are the folder Guid (the numeric Id is what Emby 4.7 made of the old
+// one) and whose Path is the server's own filesystem.
+func newFakeEmby(t *testing.T, apiKey string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	authed := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("X-Emby-Token") != apiKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("/System/Info", func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ServerName": "Den", "Version": "4.8.11.0", "Id": "srv-2"})
+	})
+	mux.HandleFunc("/Library/MediaFolders", func(w http.ResponseWriter, r *http.Request) {
+		if !authed(w, r) {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{
+			{"Name": "Movies", "CollectionType": "movies", "Id": "5", "Guid": "guid-movies", "Path": "/srv/media/movies"},
+			{"Name": "Shows", "CollectionType": "tvshows", "Id": 7, "Guid": "guid-shows", "Path": "/srv/media/shows"},
+		}, "TotalRecordCount": 2})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func TestMediaServerConfigPreserveClearAndValidate(t *testing.T) {
 	h := NewHandler(newTestStore(t), nil)
 
@@ -173,6 +206,26 @@ func TestMediaServerLibrariesEndpoint(t *testing.T) {
 	if rec := do(`{"id":"jellyfin-missing","url":"` + jf.URL + `"}`); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown id = %d, want 404", rec.Code)
 	}
+
+	// The factory dispatches on the type: an Emby candidate is read through
+	// the Emby client, whose library ids are the folder Guids.
+	const embyKey = "emby-secret"
+	em := newFakeEmby(t, embyKey)
+	rec = do(`{"service_type":"emby","url":"` + em.URL + `","api_key":"` + embyKey + `"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("emby candidate = %d %s", rec.Code, rec.Body.String())
+	}
+	resp = mediaServerLibrariesResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ServerName != "Den" || len(resp.Libraries) != 2 ||
+		resp.Libraries[0].ID != "guid-movies" || resp.Libraries[1].ID != "guid-shows" || resp.Libraries[1].CollectionType != "tvshows" {
+		t.Fatalf("emby response = %+v", resp)
+	}
+	if strings.Contains(rec.Body.String(), "/srv/media") {
+		t.Fatalf("emby server paths leaked: %s", rec.Body.String())
+	}
 }
 
 func TestJellyfinInstanceHTTPWritesCarryMediaServerConfig(t *testing.T) {
@@ -254,6 +307,7 @@ func TestGrantEndpointsFireObserverForMediaServerTypes(t *testing.T) {
 	alice := createUser(t, s, "alice")
 	bob := createUser(t, s, "bob")
 	jf := mkInstance(t, s, "jellyfin", "Home")
+	em := mkInstance(t, s, "emby", "Den")
 	radarr := mkInstance(t, s, "radarr", "Movies")
 	do := func(method, path, body string) {
 		t.Helper()
@@ -273,38 +327,44 @@ func TestGrantEndpointsFireObserverForMediaServerTypes(t *testing.T) {
 	do("PUT", "/instances/"+radarr+"/grant-users", `{"user_ids":[`+itoa(alice)+`]}`)
 	do("PUT", "/users/"+itoa(alice)+"/instance-grants", `{"jellyfin":["`+jf+`"]}`)
 	do("PUT", "/users/"+itoa(alice)+"/instance-grants", `{"radarr":["`+radarr+`"]}`)
+	// Every media-server type is observed, not just the first one added.
+	do("PUT", "/users/"+itoa(bob)+"/instance-grants", `{"emby":["`+em+`"]}`)
 
-	want := [][]int64{ids(alice), ids(alice, bob), ids(alice)}
+	want := [][]int64{ids(alice), ids(alice, bob), ids(alice), ids(bob)}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("observer calls = %v, want %v", calls, want)
 	}
 }
 
 func TestPinsRejectMediaServerTypes(t *testing.T) {
-	s := newTestStore(t)
-	h := NewHandler(s, nil)
-	router := newUsersRouter(h)
-	alice := createUser(t, s, "alice")
-	jf := mkInstance(t, s, "jellyfin", "Home")
-	do := func(method, path, body string) *httptest.ResponseRecorder {
-		t.Helper()
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, req)
-		return rec
-	}
-	if rec := do("PUT", "/users/"+itoa(alice)+"/default-instances", `{"jellyfin":"`+jf+`"}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("pin via user defaults = %d, want 400", rec.Code)
-	}
-	if rec := do("PUT", "/instances/"+jf+"/users", `{"user_ids":[`+itoa(alice)+`]}`); rec.Code != http.StatusBadRequest {
-		t.Fatalf("pin via instance users = %d, want 400", rec.Code)
-	}
-	rec := do("GET", "/instances/"+jf+"/users", "")
-	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
-		t.Fatalf("GET pins = %d %q, want 200 []", rec.Code, rec.Body.String())
-	}
-	if pins, _ := s.ListUserDefaults(alice); len(pins) != 0 {
-		t.Fatalf("a pin was stored: %v", pins)
+	for _, serviceType := range MediaServerTypes() {
+		t.Run(serviceType, func(t *testing.T) {
+			s := newTestStore(t)
+			h := NewHandler(s, nil)
+			router := newUsersRouter(h)
+			alice := createUser(t, s, "alice")
+			inst := mkInstance(t, s, serviceType, "Home")
+			do := func(method, path, body string) *httptest.ResponseRecorder {
+				t.Helper()
+				req := httptest.NewRequest(method, path, strings.NewReader(body))
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, req)
+				return rec
+			}
+			if rec := do("PUT", "/users/"+itoa(alice)+"/default-instances", `{"`+serviceType+`":"`+inst+`"}`); rec.Code != http.StatusBadRequest {
+				t.Fatalf("pin via user defaults = %d, want 400", rec.Code)
+			}
+			if rec := do("PUT", "/instances/"+inst+"/users", `{"user_ids":[`+itoa(alice)+`]}`); rec.Code != http.StatusBadRequest {
+				t.Fatalf("pin via instance users = %d, want 400", rec.Code)
+			}
+			rec := do("GET", "/instances/"+inst+"/users", "")
+			if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "[]" {
+				t.Fatalf("GET pins = %d %q, want 200 []", rec.Code, rec.Body.String())
+			}
+			if pins, _ := s.ListUserDefaults(alice); len(pins) != 0 {
+				t.Fatalf("a pin was stored: %v", pins)
+			}
+		})
 	}
 }
 
@@ -387,5 +447,37 @@ func TestUpdateFiresSharedLibrariesObserverOnlyOnChange(t *testing.T) {
 	}
 	if len(calls) != 2 || len(calls[1].libraryIDs) != 0 {
 		t.Fatalf("clearing update calls = %+v", calls)
+	}
+}
+
+// The Plex fields ride along with the two original ones through every path
+// that rebuilds the config: an update that omits the config keeps them, one
+// that sends them stores them trimmed, and the response carries them.
+func TestMediaServerConfigCarriesPlexFields(t *testing.T) {
+	h := NewHandler(newTestStore(t), nil)
+
+	created := &Instance{ServiceType: "jellyfin"}
+	if err := h.applyMediaServerConfig(created, &MediaServerConfig{MachineIdentifier: " machine-1 ", AutoApprove: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if created.MediaServerConfig.MachineIdentifier != "machine-1" || !created.MediaServerConfig.AutoApprove {
+		t.Fatalf("stored config = %+v", created.MediaServerConfig)
+	}
+
+	updated := &Instance{ServiceType: "jellyfin"}
+	if err := h.applyMediaServerConfig(updated, nil, created); err != nil {
+		t.Fatal(err)
+	}
+	if updated.MediaServerConfig.MachineIdentifier != "machine-1" || !updated.MediaServerConfig.AutoApprove {
+		t.Fatalf("omitted config dropped the plex fields: %+v", updated.MediaServerConfig)
+	}
+	if resp := h.toResponse(created); resp.MediaServerConfig.MachineIdentifier != "machine-1" || !resp.MediaServerConfig.AutoApprove {
+		t.Fatalf("response dropped the plex fields: %+v", resp.MediaServerConfig)
+	}
+
+	for name, bad := range map[string]string{"whitespace": "mach ine", "too long": strings.Repeat("m", 129)} {
+		if err := h.applyMediaServerConfig(&Instance{ServiceType: "jellyfin"}, &MediaServerConfig{MachineIdentifier: bad}, nil); err == nil {
+			t.Errorf("%s machine identifier accepted", name)
+		}
 	}
 }

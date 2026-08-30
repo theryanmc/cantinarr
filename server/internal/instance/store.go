@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/windoze95/cantinarr-server/internal/mediapath"
+	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
@@ -365,6 +366,26 @@ func (s *Store) Update(inst *Instance) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("update instance: %w", err)
+	}
+	return nil
+}
+
+// SetPlexOwner records the plex.tv account a Plex instance's token belongs
+// to, patching only those fields so a concurrent admin save of the rest of
+// the config is never overwritten. It is how an instance linked before the
+// owner was recorded, or one created from a pasted token, learns its owner.
+func (s *Store) SetPlexOwner(id string, owner plex.Account) error {
+	res, err := s.db.Exec(
+		`UPDATE service_instances
+		    SET media_server_config = json_set(media_server_config, '$.plex_owner_id', ?, '$.plex_owner_username', ?, '$.plex_owner_email', ?)
+		  WHERE id = ? AND service_type = 'plex' AND json_valid(media_server_config)`,
+		owner.ID, owner.Username, owner.Email, id,
+	)
+	if err != nil {
+		return fmt.Errorf("set plex owner: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("set plex owner: no plex instance %s with a readable config", id)
 	}
 	return nil
 }

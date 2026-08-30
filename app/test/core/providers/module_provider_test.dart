@@ -33,6 +33,10 @@ void main() {
     // A granted media server is a guide, never a module.
     expect(_labels(modules), isNot(contains('Jellyfin')));
     expect(_labels(modules), isNot(contains('Home Jellyfin')));
+    expect(_labels(modules), isNot(contains('Emby')));
+    expect(_labels(modules), isNot(contains('Den Emby')));
+    expect(_labels(modules), isNot(contains('Plex')));
+    expect(_labels(modules), isNot(contains('Cantina Plex')));
   });
 
   test('admin module navigation is one row per app type', () async {
@@ -72,6 +76,10 @@ void main() {
     // source of library truth, and the guide is the media server's surface.
     expect(_labels(modules), isNot(contains('Jellyfin')));
     expect(_labels(modules), isNot(contains('Home Jellyfin')));
+    expect(_labels(modules), isNot(contains('Emby')));
+    expect(_labels(modules), isNot(contains('Den Emby')));
+    expect(_labels(modules), isNot(contains('Plex')));
+    expect(_labels(modules), isNot(contains('Cantina Plex')));
   });
 }
 
@@ -122,6 +130,16 @@ AuthState _authState({required bool isAdmin}) {
           id: 'jf-a',
           serviceType: 'jellyfin',
           name: 'Home Jellyfin',
+        ),
+        ServiceInstance(
+          id: 'em-a',
+          serviceType: 'emby',
+          name: 'Den Emby',
+        ),
+        ServiceInstance(
+          id: 'px-a',
+          serviceType: 'plex',
+          name: 'Cantina Plex',
         ),
       ],
     ),

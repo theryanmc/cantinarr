@@ -454,7 +454,8 @@ func (n *Notifier) notifyProfileChangePending(client *Client, data map[string]in
 // notifyPlexAccessRequested pushes "a user shared their Plex email" to
 // opted-in admins. The body is one of three FIXED templates picked by the
 // invite_state enum ("" needs a manual invite, "sent" auto-invite went out,
-// "failed" auto-invite needs a retry) — the username and email are
+// "failed" auto-invite needs a retry; "claimed", an address another user's
+// row holds, reads as waiting on the admin) — the username and email are
 // user-controlled and never placed on the lock screen; user_id rides along
 // for tap deep-linking to the Users screen. A collapse id per user keeps a
 // user editing their email from stacking alerts.

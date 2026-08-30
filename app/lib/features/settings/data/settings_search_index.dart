@@ -37,7 +37,7 @@ class SettingsSearchGates {
   /// advertises, so they hide it).
   final bool phoneAppsVisible;
 
-  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin)
+  /// `connection.mediaServerInstances.isNotEmpty` — a media server (Jellyfin, Emby)
   /// is shared with this account, so the access guide has something to show.
   final bool mediaServersVisible;
 
@@ -213,6 +213,7 @@ const List<SettingsSearchEntry> _rootEntries = [
       'download client',
       'tautulli',
       'jellyfin',
+      'emby',
       'media server',
       'connect',
       'server',
@@ -279,16 +280,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'Admin',
     keywords: ['sessions', 'sign out', 'revoke', 'phones'],
-    gate: gateAdmin,
-  ),
-  SettingsSearchEntry(
-    id: 'screen.plex-invites',
-    title: 'Plex Invites',
-    icon: Icons.play_circle_outline,
-    route: '/settings/plex',
-    screenTitle: 'Settings',
-    section: 'Admin',
-    keywords: ['plex account', 'link', 'libraries', 'auto invite', 'server'],
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
@@ -448,17 +439,6 @@ const List<SettingsSearchEntry> _rootEntries = [
     anchorId: SettingsAnchors.rootRequestUpdates,
   ),
   SettingsSearchEntry(
-    id: 'root.show-plex-guide',
-    title: 'Watch on Plex',
-    icon: Icons.play_circle_outline,
-    route: '/settings',
-    screenTitle: 'Settings',
-    section: 'Guides',
-    keywords: ['guide', 'install', 'plex app', 'menu', 'hide', 'show'],
-    gate: gateEveryone,
-    anchorId: SettingsAnchors.rootShowPlexGuide,
-  ),
-  SettingsSearchEntry(
     id: 'screen.media-servers',
     title: 'Media server access',
     icon: Icons.live_tv_outlined,
@@ -466,9 +446,13 @@ const List<SettingsSearchEntry> _rootEntries = [
     screenTitle: 'Settings',
     section: 'Guides',
     keywords: [
+      'plex',
       'jellyfin',
+      'emby',
       'media server',
       'account',
+      'invite',
+      'email',
       'sign in',
       'password',
       'watch',
@@ -864,7 +848,7 @@ const List<SettingsSearchEntry> _notificationEntries = [
     icon: Icons.notifications_outlined,
     route: '/settings/notifications',
     screenTitle: 'Notification Preferences',
-    keywords: ['push', 'email', 'invite'],
+    keywords: ['push', 'email', 'invite', 'grant'],
     gate: gateAdmin,
     anchorId: SettingsAnchors.notificationsPlexAccessRequests,
   ),
@@ -1030,21 +1014,6 @@ const List<SettingsSearchEntry> _credentialsEntries = [
   ),
 ];
 
-// ── Plex Invites — /settings/plex ───────────────────────────────────────────
-const List<SettingsSearchEntry> _plexEntries = [
-  SettingsSearchEntry(
-    id: SettingsAnchors.plexAutoInvite,
-    title: 'Auto-invite',
-    icon: Icons.play_circle_outline,
-    route: '/settings/plex',
-    screenTitle: 'Plex Invites',
-    section: 'Invites',
-    keywords: ['automatic', 'email', 'share'],
-    gate: gateAdmin,
-    anchorId: SettingsAnchors.plexAutoInvite,
-  ),
-];
-
 // ── Discover — /settings/discovery ──────────────────────────────────────────
 // TMDB/Trakt moved here with their credential sections; their anchor ids keep
 // the historic `credentials.` names so shared links stay meaningful.
@@ -1140,7 +1109,6 @@ const List<SettingsSearchEntry> settingsSearchIndex = [
   ..._aiRemediationEntries,
   ..._notificationEntries,
   ..._credentialsEntries,
-  ..._plexEntries,
   ..._discoveryEntries,
   ..._aiToolsEntries,
   ..._aiAccessEntries,
