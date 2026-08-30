@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -43,6 +44,9 @@ func TestWatchLinksForUser(t *testing.T) {
 	e.grantType(alice, "plex", plex)
 
 	want := mediaserver.ItemQuery{MediaType: "movie", TMDBID: 10378, Year: 2008, Title: "Big Buck Bunny"}
+	// The lookups run concurrently; what each was asked as is recorded
+	// under a lock and read once they have all answered.
+	var mu sync.Mutex
 	asked := map[string]string{}
 	finder := func(name string, item mediaserver.Item, err error) *finderProvider {
 		p := &finderProvider{fakeProvider: newFakeProvider()}
@@ -50,7 +54,9 @@ func TestWatchLinksForUser(t *testing.T) {
 			if q != want {
 				t.Errorf("%s asked %+v, want %+v", name, q, want)
 			}
+			mu.Lock()
 			asked[name] = remoteID
+			mu.Unlock()
 			return item, err
 		}
 		return p
@@ -95,6 +101,8 @@ func TestWatchLinksForUser(t *testing.T) {
 	if l := byName["C Dead"]; l.State != WatchUnreachable || l.URL != "" {
 		t.Fatalf("dead = %+v, want unreachable, never absence", l)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	for name, inst := range map[string]string{"found": found, "missing": missing, "dead": dead} {
 		if asked[name] != remotes[inst] {
 			t.Errorf("%s was asked as %q, want the linked account %q", name, asked[name], remotes[inst])
