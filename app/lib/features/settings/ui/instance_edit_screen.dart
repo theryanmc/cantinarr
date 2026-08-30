@@ -15,6 +15,7 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
 import '../logic/arr_path_match.dart';
+import '../logic/plex_invites_provider.dart';
 
 /// Form for creating or editing a service instance.
 class InstanceEditScreen extends ConsumerStatefulWidget {
@@ -669,6 +670,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         const Duration(seconds: 3),
         (_) => _checkPlexLink(silent: true),
       );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(_plexLinkFailure(e))));
+      return;
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -710,11 +716,35 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           content: Text('Linked as ${state.account}. Pick the server to '
               'share.')));
       _loadPlexServers();
+    } on DioException catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_plexLinkFailure(e))));
+      }
     } catch (_) {
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Could not reach plex.tv. Try again.')));
       }
+    }
+  }
+
+  /// Says which side failed. A 404 is a server from before Plex instances
+  /// (the arr proxy's wildcard answers it), a 502 is the server unable to
+  /// reach plex.tv, and no status at all is no answer from the server.
+  static String _plexLinkFailure(DioException e) {
+    switch (e.response?.statusCode) {
+      case 404:
+        return "This server doesn't have Plex linking yet. Update the "
+            'Cantinarr server, then try again.';
+      case 502:
+        return "Your server couldn't reach plex.tv. Check its internet "
+            'access and try again.';
+      case null:
+        return 'No answer from the server. Check your connection and try '
+            'again.';
+      default:
+        return 'Could not reach plex.tv. Try again.';
     }
   }
 
@@ -986,15 +1016,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 'Chaptarr instance they hold). Unselecting a user removes '
                 'their access.'
             : _isPlex
-                ? 'Selected users get a Plex invite to the shared libraries '
-                    'as soon as they share their Plex email from the menu. '
-                    'Unselecting a user removes their share; selecting them '
-                    'again sends a new invite.'
+                ? 'Selected users get this server under Watch on Plex, '
+                    'where they sign in with their own Plex account or share '
+                    'its email; the share of the chosen libraries goes out '
+                    'the moment they do. Select yourself too: the account '
+                    'that owns the server is recognised as the owner, never '
+                    'invited. Unselecting a user removes their share; '
+                    'selecting them again shares it again.'
                 : _isMediaServer
-                    ? 'Selected users can create their own account on this '
-                        'server from the menu. Unselecting a user turns their '
-                        'account off without deleting it; selecting them again '
-                        'turns it back on.'
+                    ? 'Selected users get this server under Watch on '
+                        '$_serviceLabel, where they create their own account '
+                        'or sign in with one they already have (administrator '
+                        'accounts included, so select yourself too). '
+                        'Unselecting a user turns their account off without '
+                        'deleting it; selecting them again turns it back on. '
+                        'Administrator accounts are never changed.'
                     : 'Selected users can use this library for requests alongside '
                     'their default $_serviceLabel library, choosing per '
                     'request. Unselecting a user removes their access to this '
@@ -1219,6 +1255,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   Future<void> _refreshConfigAfterSave() async {
     final activeBefore = ref.read(instanceProvider);
+    if (_isMediaServer) {
+      // A grant can settle a waiting Plex user (the share goes out off the
+      // request), so the drawer's waiting count is re-read here and again
+      // whenever the drawer opens.
+      ref.read(plexInvitesWaitingProvider.notifier).refresh();
+    }
     try {
       await ref.read(authProvider.notifier).refreshConfig();
       if (!mounted) return;

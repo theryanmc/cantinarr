@@ -27,7 +27,13 @@ class _FakeAdapter implements HttpClientAdapter {
       {'id': 'lib-shows', 'name': 'Series', 'collection_type': 'tvshows'},
     ],
     this.librariesError,
+    this.plexBeginStatus = 0,
   });
+
+  /// When set, the Plex link begin answers this status with a JSON error
+  /// body (404: a server from before Plex instances, whose arr proxy
+  /// wildcard answers; 502: the server could not reach plex.tv).
+  final int plexBeginStatus;
 
   final List<Map<String, dynamic>> instances;
   final List<Map<String, dynamic>> grants;
@@ -64,6 +70,15 @@ class _FakeAdapter implements HttpClientAdapter {
       return ResponseBody.fromString('', 204, headers: {});
     } else if (options.method == 'POST' &&
         path == '/api/instances/plex/link/begin') {
+      if (plexBeginStatus != 0) {
+        return ResponseBody.fromString(
+          '${jsonEncode({'error': 'not found'})}\n',
+          plexBeginStatus,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
       response = {'pin_id': 42, 'code': 'ABCD', 'url': 'https://app.plex.tv/auth#?code=ABCD'};
     } else if (options.method == 'POST' &&
         path == '/api/instances/plex/link/check') {
@@ -542,6 +557,36 @@ void main() {
     );
   });
 
+  testWidgets('a server without Plex linking says to update it, and one that '
+      'cannot reach plex.tv says that', (tester) async {
+    for (final (status, message) in [
+      (
+        404,
+        "This server doesn't have Plex linking yet. Update the Cantinarr "
+            'server, then try again.',
+      ),
+      (
+        502,
+        "Your server couldn't reach plex.tv. Check its internet access and "
+            'try again.',
+      ),
+    ]) {
+      final adapter = _FakeAdapter(plexBeginStatus: status);
+      await _pumpEdit(
+        tester,
+        adapter: adapter,
+        screen: const InstanceEditScreen(initialServiceType: 'plex'),
+      );
+      await tester
+          .tap(find.widgetWithText(OutlinedButton, 'Link Plex account'));
+      await tester.pumpAndSettle();
+      expect(find.text(message), findsOneWidget, reason: '$status');
+      expect(find.textContaining('Waiting for approval'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    }
+  });
+
   testWidgets(
       'Plex links an account by PIN, picks a server, and saves with the pin '
       'and no URL or key', (tester) async {
@@ -560,7 +605,7 @@ void main() {
     expect(
         find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
     expect(find.text('User Access'), findsOneWidget);
-    expect(find.textContaining('get a Plex invite to the shared libraries'),
+    expect(find.textContaining('recognised as the owner, never invited'),
         findsOneWidget);
     // The sign-in address is prefilled with where everyone signs in to Plex.
     expect(find.text('https://app.plex.tv'), findsOneWidget);

@@ -123,6 +123,10 @@ class _MediaServerSignInSheetState
     switch (e.status) {
       case 403:
         return 'That server is not available to you.';
+      case 404:
+        // A server from before this route exists; nothing else answers 404.
+        return "This server doesn't support linking an existing account "
+            'yet. Ask your admin to update it.';
       case 429:
         return 'Too many attempts. Wait a minute and try again.';
       default:

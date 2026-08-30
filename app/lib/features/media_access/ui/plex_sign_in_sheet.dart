@@ -73,6 +73,13 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
         const Duration(seconds: 3),
         (_) => _check(silent: true),
       );
+    } on MediaAccessException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _starting = false;
+        _error = _beginFailure(e);
+      });
+      return;
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -84,6 +91,26 @@ class _PlexSignInSheetState extends ConsumerState<PlexSignInSheet> {
     // A browser that will not open is not a failed sign-in: the Reopen
     // button stays, and the poll is already running.
     await _open();
+  }
+
+  /// Says which side failed: the server without this route (a build from
+  /// before the Plex sign-in), the server unable to reach plex.tv, or no
+  /// answer from the server at all.
+  static String _beginFailure(MediaAccessException e) {
+    if (e.isTransport) {
+      return "Couldn't reach the server. Check your connection and try again.";
+    }
+    switch (e.status) {
+      case 404:
+        return "This server doesn't support signing in with Plex yet. Ask "
+            'your admin to update it.';
+      case 502:
+        return "Your server couldn't reach plex.tv. Try again in a moment.";
+      case 429:
+        return 'Too many attempts. Wait a minute and try again.';
+      default:
+        return "Couldn't reach plex.tv. Try again.";
+    }
   }
 
   Future<void> _open() async {

@@ -530,6 +530,9 @@ class _AppShellState extends ConsumerState<AppShell>
                     : 'Open navigation',
                 onPressed: () {
                   _dismissKeyboard();
+                  // The waiting count only moves on events; a grant that
+                  // settled a request off the request is caught here.
+                  ref.read(plexInvitesWaitingProvider.notifier).refresh();
                   _scaffoldKey.currentState?.openDrawer();
                 },
               ),

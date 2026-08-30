@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -88,6 +89,8 @@ func (h *Handler) PlexLinkBegin(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	pin, err := client.CreatePin(ctx, clientID)
 	if err != nil {
+		// The answer is fixed; the reason is for the admin reading the log.
+		log.Printf("instance: plex link: could not mint a PIN at plex.tv: %v", err)
 		http.Error(w, `{"error":"could not reach plex.tv"}`, http.StatusBadGateway)
 		return
 	}
@@ -128,6 +131,7 @@ func (h *Handler) PlexLinkCheck(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	pin, err := client.CheckPin(ctx, link.clientID, body.PinID)
 	if err != nil {
+		log.Printf("instance: plex link: could not check the PIN at plex.tv: %v", err)
 		http.Error(w, `{"error":"could not reach plex.tv"}`, http.StatusBadGateway)
 		return
 	}
@@ -137,6 +141,7 @@ func (h *Handler) PlexLinkCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	account, err := client.GetUser(ctx, link.clientID, pin.AuthToken)
 	if err != nil {
+		log.Printf("instance: plex link: plex.tv did not accept the approved link: %v", err)
 		http.Error(w, `{"error":"plex.tv did not accept the approved link; try again"}`, http.StatusBadGateway)
 		return
 	}
@@ -167,6 +172,7 @@ func (h *Handler) PlexServers(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	servers, err := client.ListServers(ctx, inst.MediaServerConfig.ClientID, inst.APIKey)
 	if err != nil {
+		log.Printf("instance: plex link: could not list the account's servers: %v", err)
 		http.Error(w, `{"error":"could not list the account's servers; relink the Plex account"}`, http.StatusBadGateway)
 		return
 	}
