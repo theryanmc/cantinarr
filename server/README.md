@@ -169,7 +169,8 @@ POST   /api/media-servers/{instanceID}/account/link  # user: link an account tha
                                                    # 409 { code: account_exists | remote_already_linked }, 403 as above, 502 upstream failure
 POST   /api/media-servers/plex/sign-in/begin       # user: start a plex.tv sign-in with their own Plex account -> { pin_id, code, url }
 POST   /api/media-servers/plex/sign-in/check       # user: poll it { pin_id } -> { linked: false } until approved, then
-                                                   # { linked: true, username, email, invite_state: sent | adopted | failed | "" } (the same answer on every later poll);
+                                                   # { linked: true, username, email, invite_state: sent | adopted | failed | claimed | "" } (the same answer on every later poll;
+                                                   # claimed = the account belongs to another user's row here);
                                                    # 404 { code: pin_expired } for an unknown, expired, or someone else's pin
 GET    /api/admin/media-servers/accounts           # admin: every linked account (user, instance name/type, remote id + name, created_by_cantinarr, disabled)
 GET    /api/admin/media-servers/{instanceID}/users # admin: accounts on that server ({ id, name, is_administrator, is_disabled, pending }) for the link picker;

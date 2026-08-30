@@ -990,6 +990,37 @@ void main() {
     expect(adapter.calls('POST', '/api/media-servers/plex/sign-in/check'), 2);
   });
 
+  testWidgets('a Plex sign-in with an account someone else holds says so',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [_plexServer()]),
+        'POST /api/media-servers/plex/sign-in/begin': (_, __) =>
+            const _Reply(200, {'pin_id': 7, 'code': 'WXYZ', 'url': 'https://app.plex.tv/auth#?code=WXYZ'}),
+        'POST /api/media-servers/plex/sign-in/check': (_, __) =>
+            const _Reply(200, {
+              'linked': true,
+              'username': 'rey',
+              'email': 'rey@example.com',
+              'invite_state': 'claimed',
+            }),
+      },
+    );
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester
+        .tap(find.widgetWithText(OutlinedButton, "I've approved, check now"));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Signed in as rey, but that Plex account is already linked '
+          'to another Cantinarr user here. Ask your admin.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('the Plex owner reads as the owner', (tester) async {
     await _pumpGuide(
       tester,

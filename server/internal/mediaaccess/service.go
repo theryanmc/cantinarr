@@ -824,11 +824,17 @@ type emailSharedOutcome struct {
 }
 
 // adminState is the push's invite_state: whether anything is left for an
-// admin to do. Empty means nobody has granted this user an invite server.
+// admin to do. Empty means nobody has granted this user an invite server;
+// "claimed" means the address belongs to another user's row, which only an
+// admin can untangle (the push reads it as waiting on them).
 func (o emailSharedOutcome) adminState() string {
 	switch {
 	case o.invites.failed > 0:
 		return "failed"
+	case o.invites.sent > 0 || o.invites.adopted > 0:
+		return "sent"
+	case o.invites.claimed > 0:
+		return "claimed"
 	case o.granted > 0:
 		return "sent"
 	}
@@ -837,13 +843,18 @@ func (o emailSharedOutcome) adminState() string {
 
 // userState is what the person who signed in is told: an invite to accept
 // ("sent"), access already there ("adopted"), an invite that could not go
-// out yet ("failed"), or nothing until an admin grants them ("").
+// out yet ("failed"), an address that belongs to another user's row
+// ("claimed"), or nothing until an admin grants them ("").
 func (o emailSharedOutcome) userState() string {
 	switch {
 	case o.invites.failed > 0:
 		return "failed"
 	case o.invites.sent > 0:
 		return "sent"
+	case o.invites.adopted > 0:
+		return "adopted"
+	case o.invites.claimed > 0:
+		return "claimed"
 	case o.granted > 0:
 		return "adopted"
 	}
@@ -972,9 +983,11 @@ func (s *Service) grantedInviteServers(userID int64) ([]*instance.Instance, erro
 	return out, nil
 }
 
-// inviteOutcome counts one pass of inviteGranted.
+// inviteOutcome counts one pass of inviteGranted. claimed counts the servers
+// where the user's address belongs to another user's row: nothing can be
+// sent, and the person needs an admin.
 type inviteOutcome struct {
-	sent, adopted, failed int
+	sent, adopted, failed, claimed int
 }
 
 // inviteGranted sends the invites a user is owed: one per granted invite
@@ -1011,9 +1024,14 @@ func (s *Service) inviteGranted(ctx context.Context, userID int64) inviteOutcome
 			out.sent++
 		case err == nil:
 			out.adopted++
-		case errors.Is(err, ErrAccountExists), errors.Is(err, ErrNameTaken), errors.Is(err, ErrNotAvailable):
-			// Nothing owed here: the share exists, or the address belongs to
-			// someone else's row, or the grant went away meanwhile.
+		case errors.Is(err, ErrNameTaken):
+			// The address belongs to someone else's row: nothing to send,
+			// and only an admin can sort out whose it is.
+			out.claimed++
+			s.logger.Info("mediaaccess: invite: nothing to send", "reason", err, "user_id", userID, "instance_id", inst.ID)
+		case errors.Is(err, ErrAccountExists), errors.Is(err, ErrNotAvailable):
+			// Nothing owed here: the share exists, or the grant went away
+			// meanwhile.
 			s.logger.Info("mediaaccess: invite: nothing to send", "reason", err, "user_id", userID, "instance_id", inst.ID)
 		default:
 			out.failed++

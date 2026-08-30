@@ -322,6 +322,38 @@ func TestPlexSignInAdoptsAnExistingShareAndTellsAdminsWhenUngranted(t *testing.T
 	}
 }
 
+func TestPlexSignInWithAnAccountAnotherUserHoldsSaysClaimed(t *testing.T) {
+	e, f, plex := signInEnv(t)
+	pushes := e.notifier()
+	rey, finn := e.user("rey"), e.user("finn")
+	e.grantType(rey, "plex", plex)
+	e.grantType(finn, "plex", plex)
+	f.shares = `<SharedServer id="501" username="rey" email="rey@example.com" userID="2" acceptedAt="1700000000" invitedAt="1699999999"><Section id="101" shared="1"/></SharedServer>`
+	ctx := context.Background()
+	// rey's share is rey's row.
+	if _, err := e.svc.RequestInvite(ctx, rey, plex, "rey@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// finn approves the PIN with rey's Plex account (the wrong one).
+	if _, err := e.svc.PlexSignInBegin(ctx, finn); err != nil {
+		t.Fatal(err)
+	}
+	f.approve(userToken)
+	result, err := e.svc.PlexSignInCheck(ctx, finn, 777, "finn")
+	if err != nil || !result.Linked || result.InviteState != "claimed" {
+		t.Fatalf("result = %+v, %v; want claimed", result, err)
+	}
+	if e.row(finn, plex) != nil || e.row(rey, plex) == nil {
+		t.Fatal("the claimed sign-in moved a row")
+	}
+	if len(f.invited) != 0 {
+		t.Fatalf("invited = %v", f.invited)
+	}
+	if state, ok := pushes.lastAdminState(); !ok || state != "claimed" {
+		t.Fatalf("admin state = %q, %v; want claimed", state, ok)
+	}
+}
+
 func TestPlexSignInRecognisesTheOwner(t *testing.T) {
 	e, f, plex := signInEnv(t)
 	pushes := e.notifier()

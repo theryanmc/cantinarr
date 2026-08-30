@@ -115,6 +115,8 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         'adopted' => 'Signed in as $who. Your access is set up.',
         'failed' => "Signed in as $who, but the invite couldn't be sent yet. "
             'It will be retried.',
+        'claimed' => 'Signed in as $who, but that Plex account is already '
+            'linked to another Cantinarr user here. Ask your admin.',
         _ => 'Signed in as $who. Your admin has been notified.',
       }),
     ));

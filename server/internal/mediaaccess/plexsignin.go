@@ -35,8 +35,9 @@ type PlexSignInStart struct {
 // approved the PIN; once true, Email is the verified address (canonical) and
 // InviteState says what it led to: "sent" (an invite to accept), "adopted"
 // (access already there), "failed" (an invite that could not go out yet; the
-// drift sweep retries it), or "" (nobody has granted this user Plex yet, and
-// the admins were told).
+// drift sweep retries it), "claimed" (the account belongs to another user's
+// row here; an admin has to sort out whose it is), or "" (nobody has granted
+// this user Plex yet, and the admins were told).
 type PlexSignInResult struct {
 	Linked      bool   `json:"linked"`
 	Username    string `json:"username,omitempty"`
