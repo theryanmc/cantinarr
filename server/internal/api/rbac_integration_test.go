@@ -108,6 +108,7 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 			{http.MethodGet, "/api/ai/available", "", http.StatusOK},
 			{http.MethodGet, "/api/ai/settings", "", http.StatusOK},
 			{http.MethodGet, "/api/media-servers", "", http.StatusOK},
+			{http.MethodGet, "/api/media-servers/watch?media_type=movie&tmdb_id=1", "", http.StatusOK},
 			{http.MethodPost, "/api/ai/chat", `{"messages":[{"role":"user","content":"hello"}]}`, http.StatusServiceUnavailable},
 		} {
 			recorder := serveRBACRequestWithBody(harness.router, route.method, route.path, token, route.body)

@@ -461,6 +461,12 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         steps: [
           'Everything you request in Cantinarr shows up in $where once '
               'it is Available',
+          if (hasAccountServer)
+            "An available title's page in Cantinarr has a Watch on "
+                '${mediaServerNamesPhrase({
+                  for (final type in types)
+                    if (type != 'plex') type,
+                })} button that opens it on your server',
           'Missing something? Ask your admin',
         ],
       ),

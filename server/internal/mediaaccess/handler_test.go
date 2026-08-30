@@ -24,6 +24,7 @@ func newHandlerEnv(t *testing.T) (*env, http.Handler) {
 	h := NewHandler(e.svc, slog.New(slog.NewTextHandler(e.logs, nil)))
 	r := chi.NewRouter()
 	r.Get("/api/media-servers", h.List)
+	r.Get("/api/media-servers/watch", h.Watch)
 	r.Post("/api/media-servers/{instanceID}/account", h.CreateAccount)
 	r.Post("/api/media-servers/{instanceID}/account/link", h.LinkOwnAccount)
 	r.Post("/api/media-servers/plex/sign-in/begin", h.PlexSignInBegin)

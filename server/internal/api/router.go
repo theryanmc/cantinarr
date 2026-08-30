@@ -310,9 +310,10 @@ func NewRouter(
 		})
 
 		// Media-server accounts (authenticated, self-scoped): a granted user
-		// sees their media servers, creates their own account there, or links
-		// one that is already theirs (a password check against the server,
-		// or a plex.tv sign-in). The credential writes are rate-limited like
+		// sees their media servers, asks where a title can be watched on them,
+		// creates their own account there, or links one that is already
+		// theirs (a password check against the server, or a plex.tv
+		// sign-in). The credential writes are rate-limited like
 		// the other self-service ones; the sign-in poll is not, since the
 		// app polls it every few seconds and a pin can only be polled by the
 		// user who began it. Eligibility is checked inside, with one answer
@@ -320,6 +321,7 @@ func NewRouter(
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Get("/media-servers", mediaAccessHandler.List)
+			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account/link", mediaAccessHandler.LinkOwnAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/plex/sign-in/begin", mediaAccessHandler.PlexSignInBegin)

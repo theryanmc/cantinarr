@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 )
 
 const (
@@ -64,6 +65,52 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, views)
+}
+
+// maxWatchTitleLength bounds the title a watch lookup may narrow by.
+const maxWatchTitleLength = 256
+
+// Watch answers GET /api/media-servers/watch?media_type=movie|tv&tmdb_id=
+// &tvdb_id=&year=&title=: where the caller can watch that title on the media
+// servers they hold a linked account on, one entry per server with a state
+// (found with the item's page at the sign-in address, missing, or
+// unreachable). An empty list means no server was eligible to ask.
+func (h *Handler) Watch(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	params := r.URL.Query()
+	mediaType := params.Get("media_type")
+	if mediaType != "movie" && mediaType != "tv" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "media_type must be movie or tv"})
+		return
+	}
+	tmdbID, _ := strconv.ParseInt(params.Get("tmdb_id"), 10, 64)
+	tvdbID, _ := strconv.ParseInt(params.Get("tvdb_id"), 10, 64)
+	if tmdbID <= 0 && tvdbID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tmdb_id or tvdb_id required"})
+		return
+	}
+	year, _ := strconv.Atoi(params.Get("year"))
+	title := strings.TrimSpace(params.Get("title"))
+	if len(title) > maxWatchTitleLength {
+		title = title[:maxWatchTitleLength]
+	}
+	links, err := h.svc.WatchLinks(r.Context(), claims.UserID, mediaserver.ItemQuery{
+		MediaType: mediaType, TMDBID: tmdbID, TVDBID: tvdbID, Year: year, Title: title,
+	})
+	if err != nil {
+		h.logger.Error("mediaaccess: watch links", "err", err, "user_id", claims.UserID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily unavailable, retry shortly"})
+		return
+	}
+	if links == nil {
+		links = []WatchLink{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, links)
 }
 
 // CreateAccount answers POST /api/media-servers/{instanceID}/account. The

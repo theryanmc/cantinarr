@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../discover/data/tmdb_models.dart';
 import '../../../core/network/backend_client.dart';
 
 /// The live state of one user's account on a media server, as the server
@@ -82,6 +83,43 @@ class MediaServerImportResult {
 /// password the user picks (Jellyfin, Emby), or an invite sent to the email
 /// the user shares (Plex).
 enum MediaServerKind { account, invite }
+
+/// What a media server answered about one title: it holds it and the account
+/// can see it ([found]), it confirmed it has no such title the account can
+/// see ([missing]: not imported yet, or in a library not shared), or it
+/// could not answer ([unreachable]), which is never read as absence.
+enum WatchLinkState { found, missing, unreachable }
+
+/// Where one title can be watched on one media server, as the server
+/// answered just now. [url] is the title's page at the admin-typed sign-in
+/// address, set only when [state] is [WatchLinkState.found].
+class WatchLink {
+  final String instanceId;
+  final String name;
+  final String serviceType;
+  final WatchLinkState state;
+  final String url;
+
+  const WatchLink({
+    required this.instanceId,
+    required this.name,
+    required this.serviceType,
+    required this.state,
+    this.url = '',
+  });
+
+  factory WatchLink.fromJson(Map<String, dynamic> json) => WatchLink(
+        instanceId: json['instance_id'] as String? ?? '',
+        serviceType: json['service_type'] as String? ?? '',
+        name: json['name'] as String? ?? '',
+        state: switch (json['state']) {
+          'found' => WatchLinkState.found,
+          'missing' => WatchLinkState.missing,
+          _ => WatchLinkState.unreachable,
+        },
+        url: json['url'] as String? ?? '',
+      );
+}
 
 /// One media server the signed-in user was granted, with their account on it
 /// (null = no account yet). Carries the admin-typed sign-in address only,
@@ -358,6 +396,33 @@ class MediaAccessService {
     final resp = await _dio.get('/api/media-servers');
     return _list(resp.data)
         .map((raw) => MediaServerAccess.fromJson(raw))
+        .toList(growable: false);
+  }
+
+  /// Asks where a title can be watched on the media servers the user holds a
+  /// linked account on: one entry per server that was asked, each with the
+  /// server's own answer; empty when no server was eligible. The year, the
+  /// show's TVDB id, and the title narrow the lookup; the match itself is by
+  /// provider id.
+  Future<List<WatchLink>> watchLinks({
+    required MediaType mediaType,
+    required int tmdbId,
+    int? tvdbId,
+    int? year,
+    String? title,
+  }) async {
+    final resp = await _dio.get(
+      '/api/media-servers/watch',
+      queryParameters: {
+        'media_type': mediaType.name,
+        'tmdb_id': tmdbId,
+        if (tvdbId != null && tvdbId > 0) 'tvdb_id': tvdbId,
+        if (year != null && year > 0) 'year': year,
+        if (title != null && title.trim().isNotEmpty) 'title': title.trim(),
+      },
+    );
+    return _list(resp.data)
+        .map((raw) => WatchLink.fromJson(raw))
         .toList(growable: false);
   }
 
