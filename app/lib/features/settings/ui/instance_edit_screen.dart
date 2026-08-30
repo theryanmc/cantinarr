@@ -669,6 +669,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         const Duration(seconds: 3),
         (_) => _checkPlexLink(silent: true),
       );
+    } on DioException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(_plexLinkFailure(e))));
+      return;
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -710,11 +715,35 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           content: Text('Linked as ${state.account}. Pick the server to '
               'share.')));
       _loadPlexServers();
+    } on DioException catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_plexLinkFailure(e))));
+      }
     } catch (_) {
       if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Could not reach plex.tv. Try again.')));
       }
+    }
+  }
+
+  /// Says which side failed. A 404 is a server from before Plex instances
+  /// (the arr proxy's wildcard answers it), a 502 is the server unable to
+  /// reach plex.tv, and no status at all is no answer from the server.
+  static String _plexLinkFailure(DioException e) {
+    switch (e.response?.statusCode) {
+      case 404:
+        return "This server doesn't have Plex linking yet. Update the "
+            'Cantinarr server, then try again.';
+      case 502:
+        return "Your server couldn't reach plex.tv. Check its internet "
+            'access and try again.';
+      case null:
+        return 'No answer from the server. Check your connection and try '
+            'again.';
+      default:
+        return 'Could not reach plex.tv. Try again.';
     }
   }
 

@@ -3,9 +3,11 @@ package instance
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -330,6 +332,27 @@ func TestSetPlexOwnerPatchesOnlyTheConfig(t *testing.T) {
 	jf := mkInstance(t, s, "jellyfin", "Main")
 	if err := s.SetPlexOwner(jf, plex.Account{ID: 1}); err == nil {
 		t.Fatal("a Jellyfin instance took a Plex owner")
+	}
+}
+
+// A plex.tv call that fails answers the fixed 502 and logs the reason, so an
+// admin whose box cannot reach plex.tv can see why from the container log.
+func TestPlexLinkFailuresAreLogged(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	store := newTestStore(t)
+	h := NewHandler(store, NewRegistry(store))
+	h.SetPlexBaseURL("http://127.0.0.1:1")
+	router := newPlexRouter(h)
+	req := httptest.NewRequest("POST", "/instances/plex/link/begin", strings.NewReader(""))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "could not reach plex.tv") {
+		t.Fatalf("begin = %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "plex link: could not mint a PIN at plex.tv") {
+		t.Fatalf("the failure reason was not logged: %q", logs.String())
 	}
 }
 

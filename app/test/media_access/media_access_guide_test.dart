@@ -1021,6 +1021,27 @@ void main() {
     );
   });
 
+  testWidgets('a server without the Plex sign-in route says to update it',
+      (tester) async {
+    await _pumpGuide(
+      tester,
+      instances: const [_plex],
+      handlers: {
+        'GET /api/media-servers': (_, __) => _Reply(200, [_plexServer()]),
+        'POST /api/media-servers/plex/sign-in/begin': (_, __) =>
+            const _Reply(404, {'error': 'not found'}),
+      },
+    );
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Sign in with Plex'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text("This server doesn't support signing in with Plex yet. Ask "
+          'your admin to update it.'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(OutlinedButton, 'Start again'), findsOneWidget);
+  });
+
   testWidgets('the Plex owner reads as the owner', (tester) async {
     await _pumpGuide(
       tester,
