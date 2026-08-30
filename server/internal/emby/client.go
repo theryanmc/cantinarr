@@ -30,7 +30,20 @@ type Client struct {
 	httpClient *http.Client
 }
 
-var _ mediaserver.Provider = (*Client)(nil)
+var (
+	_ mediaserver.Provider      = (*Client)(nil)
+	_ mediaserver.Authenticator = (*Client)(nil)
+)
+
+// The API key acts under one device identity; a person's sign-in check runs
+// under a second, fixed one, so the check never attaches to the key's device
+// record and repeated checks never pile up devices on the server's dashboard.
+const (
+	apiDevice      = "Cantinarr"
+	apiDeviceID    = "cantinarr"
+	signInDevice   = "Cantinarr sign-in check"
+	signInDeviceID = "cantinarr-signin"
+)
 
 // NewClient creates a client for the server at baseURL. Redirects are never
 // followed: a redirect would otherwise hand the API key to whatever host the
@@ -62,9 +75,17 @@ func (e *statusError) Error() string {
 	}
 }
 
-// do performs one request. op names the operation in errors instead of the
-// URL, so nothing about the host ever appears in an error string.
+// do performs one request as the API key. op names the operation in errors
+// instead of the URL, so nothing about the host ever appears in an error
+// string.
 func (c *Client) do(ctx context.Context, method, path, op string, body, out any) error {
+	return c.doAs(ctx, method, path, op, c.apiKey, apiDevice, apiDeviceID, body, out)
+}
+
+// doAs is do under an explicit token and device identity. An empty token
+// sends the device header alone, which is how a sign-in check introduces
+// itself without any credential of Cantinarr's.
+func (c *Client) doAs(ctx context.Context, method, path, op, token, device, deviceID string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -79,8 +100,12 @@ func (c *Client) do(ctx context.Context, method, path, op string, body, out any)
 	}
 	// X-Emby-Token is what an API key travels in; X-Emby-Authorization is
 	// where Emby's own clients name themselves, and it is read first.
-	req.Header.Set("X-Emby-Token", c.apiKey)
-	req.Header.Set("X-Emby-Authorization", `MediaBrowser Client="Cantinarr", Device="Cantinarr", DeviceId="cantinarr", Version="1", Token="`+c.apiKey+`"`)
+	if token != "" {
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("X-Emby-Authorization", `MediaBrowser Client="Cantinarr", Device="`+device+`", DeviceId="`+deviceID+`", Version="1", Token="`+token+`"`)
+	} else {
+		req.Header.Set("X-Emby-Authorization", `MediaBrowser Client="Cantinarr", Device="`+device+`", DeviceId="`+deviceID+`", Version="1"`)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -274,6 +299,49 @@ func (c *Client) GetUser(ctx context.Context, remoteID string) (mediaserver.Remo
 		return mediaserver.RemoteUser{}, err
 	}
 	return dto.remoteUser(), nil
+}
+
+// authResult is what /Users/AuthenticateByName answers: the account and a
+// session token for the device that asked.
+type authResult struct {
+	User        userDTO `json:"User"`
+	AccessToken string  `json:"AccessToken"`
+}
+
+// Authenticate implements mediaserver.Authenticator: the person's own
+// username and password are checked with the server under the sign-in
+// check's device identity and without the API key, and the session the
+// check opened is closed again. A 401 is a wrong password or an unknown
+// name; a 403 is an account the server refuses (disabled, or a network or
+// schedule rule).
+func (c *Client) Authenticate(ctx context.Context, username, password string) (mediaserver.RemoteUser, error) {
+	body := struct {
+		Username string `json:"Username"`
+		Pw       string `json:"Pw"`
+	}{Username: username, Pw: password}
+	var result authResult
+	err := c.doAs(ctx, http.MethodPost, "/Users/AuthenticateByName", "sign-in check", "", signInDevice, signInDeviceID, body, &result)
+	switch statusOf(err) {
+	case http.StatusUnauthorized:
+		return mediaserver.RemoteUser{}, mediaserver.ErrBadCredentials
+	case http.StatusForbidden:
+		return mediaserver.RemoteUser{}, mediaserver.ErrAccountRefused
+	}
+	if err != nil {
+		return mediaserver.RemoteUser{}, err
+	}
+	if result.AccessToken != "" {
+		// Best effort, on a fresh context: the session is the check's to
+		// close, not to keep. A logout that fails leaves one idle session
+		// under the check's own device name for the server to expire.
+		logoutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_ = c.doAs(logoutCtx, http.MethodPost, "/Sessions/Logout", "sign-in check logout", result.AccessToken, signInDevice, signInDeviceID, nil, nil)
+	}
+	if result.User.ID == "" {
+		return mediaserver.RemoteUser{}, errors.New("emby sign-in check: response carried no user")
+	}
+	return result.User.remoteUser(), nil
 }
 
 // updatePolicy is the single path for every policy change. Emby's
