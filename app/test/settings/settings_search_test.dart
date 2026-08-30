@@ -91,9 +91,9 @@ void main() {
       (tester) async {
     await _pump(tester, isAdmin: true);
 
-    await tester.enterText(_searchField(), 'connect link');
+    await tester.enterText(_searchField(), 'external address');
     await tester.pumpAndSettle();
-    final result = find.text('Generate Connect Link');
+    final result = find.text('External Address');
     await _huntResult(tester, result);
     await tester.tap(result);
     await tester.pumpAndSettle();
@@ -102,10 +102,27 @@ void main() {
     expect(
       find.descendant(
         of: find.byType(AlertDialog),
-        matching: find.text('Generate Connect Link'),
+        matching: find.text('External Address'),
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('the old connect-link vocabulary routes to the Users screen',
+      (tester) async {
+    final pushed = <String>[];
+    await _pump(tester, isAdmin: true, pushed: pushed);
+
+    await tester.enterText(_searchField(), 'connect link');
+    await tester.pumpAndSettle();
+    final result = find.text('Users');
+    await _huntResult(tester, result);
+    await tester.ensureVisible(result);
+    await tester.pumpAndSettle();
+    await tester.tap(result);
+    await tester.pumpAndSettle();
+
+    expect(pushed, contains('/settings/users'));
   });
 
   testWidgets('clearing the query restores the browse list', (tester) async {
@@ -176,6 +193,13 @@ Future<void> _pump(
         builder: (_, state) {
           pushed?.add(state.uri.toString());
           return const Scaffold(body: Text('request settings route'));
+        },
+      ),
+      GoRoute(
+        path: '/settings/users',
+        builder: (_, state) {
+          pushed?.add(state.uri.toString());
+          return const Scaffold(body: Text('users route'));
         },
       ),
     ],

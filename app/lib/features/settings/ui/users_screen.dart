@@ -18,8 +18,8 @@ import '../data/credentials_service.dart';
 import '../data/request_settings_service.dart';
 import '../logic/plex_invites_provider.dart';
 
-/// Admin screen for managing user accounts: change roles, remove users, and
-/// see who still has an outstanding connect-link invite.
+/// Admin screen for managing user accounts: invite new users, change roles,
+/// remove users, and see who still has an outstanding connect-link invite.
 class UsersScreen extends ConsumerStatefulWidget {
   const UsersScreen({super.key});
 
@@ -169,11 +169,71 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
   /// username and attaches a new token — so a user stuck in invited limbo
   /// (lost or expired link) can be re-invited without losing their account.
   Future<void> _resendInvite(UserSummary user) async {
+    await _generateAndShowInviteLink(
+      user.username,
+      'Share this link with them. It signs one device into the app, '
+      'once. It replaces any previous link and expires in 7 days.',
+    );
+  }
+
+  /// Invite someone new: ask for a name, then mint their first connect link.
+  /// The connect-token endpoint creates the account on the spot, so the new
+  /// row is in the list by the time the link dialog shows.
+  Future<void> _inviteNewUser() async {
+    final nameController = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Invite a new user'),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Name',
+            hintText: 'e.g. Mom, Dad, Roommate',
+            prefixIcon: Icon(Icons.person_outline),
+          ),
+          textCapitalization: TextCapitalization.words,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (value) {
+            final trimmed = value.trim();
+            if (trimmed.isEmpty) return;
+            Navigator.of(dialogContext).pop(trimmed);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final trimmed = nameController.text.trim();
+              if (trimmed.isEmpty) return;
+              Navigator.of(dialogContext).pop(trimmed);
+            },
+            child: const Text('Create invite'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+    await _generateAndShowInviteLink(
+      name,
+      'Share this link with them. It signs one device into the app, '
+      'once, and expires in 7 days.',
+    );
+  }
+
+  Future<void> _generateAndShowInviteLink(
+    String username,
+    String description,
+  ) async {
     String? link;
     var originSource = '';
     try {
       final resp = await ref.read(authProvider.notifier).generateConnectToken(
-            user.username,
+            username,
           );
       link = resp.link;
       originSource = resp.originSource;
@@ -193,15 +253,14 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('Invite link for ${user.username}'),
+        title: Text('Invite link for $username'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Share this link with them. It signs one device into the app, '
-              'once. It replaces any previous link and expires in 7 days.',
-              style: TextStyle(color: AppTheme.textSecondary),
+            Text(
+              description,
+              style: const TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 12),
             Container(
@@ -657,6 +716,11 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
               icon: const Icon(Icons.group_add_outlined),
               onPressed: _isLoading ? null : _importFromMediaServer,
             ),
+          IconButton(
+            tooltip: 'Invite a new user',
+            icon: const Icon(Icons.person_add_outlined),
+            onPressed: _isLoading ? null : _inviteNewUser,
+          ),
         ],
       ),
       body: CenteredContent(child: _buildBody()),
