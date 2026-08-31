@@ -30,6 +30,18 @@ type LibraryTitle struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
 	Year   int    `json:"year"`
+	// Series is the series name parsed by parseSeriesTitle (library_series.go)
+	// from the record's raw seriesTitle string — the identity
+	// /api/requests/book-series-detail is addressed by. Empty when the library
+	// states no series for this title.
+	Series string `json:"series"`
+	// SeriesPosition is the raw position string passed through exactly as the
+	// library states it ("2", "2A", "1.5, 1.6, 1.7"), never normalised. Note
+	// SeriesTitle (library_series.go) keeps its own "position" key on the
+	// book-series-detail row — that redundancy is deliberate; renaming or
+	// moving SeriesTitle.Position would change an existing wire key and break
+	// the series page.
+	SeriesPosition string `json:"series_position"`
 	// ForeignBookID lets the app request the missing format of an owned book: the
 	// request carries it back and the backend completes the existing record.
 	ForeignBookID string `json:"foreign_book_id"`
@@ -111,6 +123,17 @@ func reduceLibrary(books []chaptarr.Book) BookLibraryDigest {
 		}
 		if g.title.ForeignBookID == "" {
 			g.title.ForeignBookID = book.ForeignBookID
+		}
+		// First record in the group that states a series wins; a later record
+		// simply not repeating it is not a claim that there is none — the two
+		// records are the same work. Guarded on the parsed name, not the raw
+		// string, so a record whose seriesTitle fails to parse to a name never
+		// clears what an earlier record already established.
+		if g.title.Series == "" {
+			if name, position := parseSeriesTitle(book.SeriesTitle); name != "" {
+				g.title.Series = name
+				g.title.SeriesPosition = position
+			}
 		}
 
 		own := FormatOwnership{

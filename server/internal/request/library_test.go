@@ -186,6 +186,50 @@ func TestReduceLibraryAggregatesDuplicateFormatTruth(t *testing.T) {
 	}
 }
 
+// TestReduceLibraryExtractsSeriesFirstStatingRecordWins asserts the digest
+// splits a record's seriesTitle into name+position via parseSeriesTitle, and
+// that an audiobook record stating no series does not clear what the ebook
+// record already established — the two records are the same work, and one of
+// them simply not repeating the series is not a claim that there is none.
+func TestReduceLibraryExtractsSeriesFirstStatingRecordWins(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID:            1,
+			Title:         "Lady of Shadows",
+			ForeignBookID: "fb-lady",
+			MediaType:     "ebook",
+			SeriesTitle:   "Lady of Darkness #2",
+		},
+		{
+			ID:            2,
+			Title:         "Lady of Shadows",
+			ForeignBookID: "fb-lady",
+			MediaType:     "audiobook",
+			SeriesTitle:   "",
+		},
+	}
+
+	digest := reduceLibrary(books)
+	lt := findTitle(t, digest, "Lady of Shadows")
+	if lt.Series != "Lady of Darkness" || lt.SeriesPosition != "2" {
+		t.Fatalf("series = %+v, want Lady of Darkness / 2", lt)
+	}
+}
+
+// TestReduceLibraryNoSeriesLeavesFieldsEmpty asserts a book with no
+// SeriesTitle leaves both digest fields empty rather than inventing a value.
+func TestReduceLibraryNoSeriesLeavesFieldsEmpty(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 40, Title: "Standalone", ForeignBookID: "fb-standalone", MediaType: "ebook"},
+	}
+
+	digest := reduceLibrary(books)
+	lt := findTitle(t, digest, "Standalone")
+	if lt.Series != "" || lt.SeriesPosition != "" {
+		t.Fatalf("series = %+v, want both empty", lt)
+	}
+}
+
 func TestSelectBookRootFailsClosedOnAmbiguity(t *testing.T) {
 	if _, ok := selectBookRoot([]chaptarr.RootFolder{
 		{Path: "/one/books", Accessible: true},

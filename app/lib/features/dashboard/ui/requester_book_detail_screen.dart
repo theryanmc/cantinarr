@@ -463,6 +463,14 @@ class _RequesterBookDetailScreenState
       live?.author?.authorName,
       owned?.author,
     ]);
+    // Navigation is gated on the digest specifically (D-06): only the
+    // digest's series name was produced by parseSeriesTitle against this
+    // library, so only it is guaranteed to address
+    // /api/requests/book-series-detail. A label sourced from a live Chaptarr
+    // record or from metadata always renders as plain, untappable text.
+    final seriesNavigableName = owned?.series.trim() ?? '';
+    final seriesLabel =
+        _seriesLabel(seriesNavigableName, owned?.seriesPosition ?? '');
     final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
     final year = releaseDate?.year ?? owned?.year ?? 0;
     final overview = _firstText([
@@ -552,6 +560,34 @@ class _RequesterBookDetailScreenState
                     color: AppTheme.textSecondary,
                   ),
             ),
+          ],
+          if (seriesLabel.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            seriesNavigableName.isEmpty
+                ? Text(
+                    seriesLabel,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                  )
+                : InkWell(
+                    key: const ValueKey('book-series-link'),
+                    onTap: () {
+                      final instanceId = _instanceId;
+                      context.push(
+                        '/detail/series/${Uri.encodeComponent(seriesNavigableName)}'
+                        '${instanceId == null ? '' : '?instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
+                      );
+                    },
+                    child: Text(
+                      seriesLabel,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppTheme.accent,
+                          ),
+                    ),
+                  ),
           ],
           if (year > 0 || pageCount > 0) ...[
             const SizedBox(height: 6),
@@ -807,6 +843,19 @@ String _bookFileLabel(ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';
   final parts = path.split('/').where((part) => part.isNotEmpty).toList();
   return parts.isEmpty ? 'File ${index + 1}' : parts.last;
+}
+
+/// Combines a series name and its position into one display label
+/// ("Name #Position"). This is the single place that assembly happens, so an
+/// empty position can never produce a trailing separator, and a blank name
+/// always yields a blank label.
+String _seriesLabel(String name, String position) {
+  final trimmedName = name.trim();
+  if (trimmedName.isEmpty) return '';
+  final trimmedPosition = position.trim();
+  return trimmedPosition.isEmpty
+      ? trimmedName
+      : '$trimmedName #$trimmedPosition';
 }
 
 String _firstText(Iterable<String?> values) {
