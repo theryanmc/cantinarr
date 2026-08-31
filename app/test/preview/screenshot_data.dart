@@ -622,6 +622,23 @@ Map<String, dynamic> _arrQueueRecord({
       'statusMessages': const [],
     };
 
+/// Calendar demo dates are anchored to the run date, not written down: a
+/// hard-coded date silently ages out of the Releases screens' upcoming window
+/// and shoots an empty screen months later, with nothing to say it went stale.
+final DateTime _calToday = DateTime.now();
+
+/// Midnight UTC [days] from today, as a calendar date string (movie releases).
+String _calDay(int days) =>
+    DateTime.utc(_calToday.year, _calToday.month, _calToday.day)
+        .add(Duration(days: days))
+        .toIso8601String();
+
+/// [days] from today at [hourUtc] UTC, as an instant (episode air times).
+String _calAir(int days, int hourUtc) =>
+    DateTime.utc(_calToday.year, _calToday.month, _calToday.day, hourUtc)
+        .add(Duration(days: days))
+        .toIso8601String();
+
 /// Radarr calendar (GET /calendar) -> RadarrMovie-shaped entries with release
 /// dates. Feeds the Releases-tab movie events.
 List<Map<String, dynamic>> _radarrCalendar() => [
@@ -632,8 +649,8 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/fCAURTUx3YfsJ8k9I0UamjSILiR.jpg',
           year: 2026,
           hasFile: false,
-          inCinemas: '2026-07-17T00:00:00Z',
-          digitalRelease: '2026-08-21T00:00:00Z'),
+          inCinemas: _calDay(-45),
+          digitalRelease: _calDay(21)),
       _radarrMovie(
           id: 207,
           tmdbId: 1081003,
@@ -641,7 +658,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/niSvU02l2BONH9ivubV6K1a5QiK.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-07-24T00:00:00Z'),
+          digitalRelease: _calDay(3)),
       _radarrMovie(
           id: 210,
           tmdbId: 936075,
@@ -649,7 +666,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/zm0KAbOjlt9eR5y7vDiL2dEOwMl.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-08-07T00:00:00Z'),
+          digitalRelease: _calDay(7)),
       _radarrMovie(
           id: 211,
           tmdbId: 1339713,
@@ -657,7 +674,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/bRwnj8WEKBCvmfeUNOukJPwB43K.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-08-14T00:00:00Z'),
+          digitalRelease: _calDay(14)),
       _radarrMovie(
           id: 201,
           tmdbId: 687163,
@@ -665,7 +682,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: _phm.poster,
           year: 2026,
           hasFile: true,
-          digitalRelease: '2026-07-10T00:00:00Z'),
+          digitalRelease: _calDay(-21)),
       _radarrMovie(
           id: 212,
           tmdbId: 1127384,
@@ -673,7 +690,7 @@ List<Map<String, dynamic>> _radarrCalendar() => [
           poster: '/kjcuS7xaRyqRjVaVcH4t0qHshuX.jpg',
           year: 2026,
           hasFile: false,
-          digitalRelease: '2026-07-31T00:00:00Z'),
+          digitalRelease: _calDay(1)),
     ];
 
 // ─── Sonarr (verbatim v3 proxy): library, calendar ───────────────────────────
@@ -894,40 +911,40 @@ Map<String, dynamic> _sonarrSeriesHotd() {
 /// the Releases timeline. Dates span July 2026 for a populated current month.
 List<Map<String, dynamic>> _sonarrCalendar() => [
       _sonarrCalEntry(101, 'House of the Dragon', 3, 3, 'The Red Sowing',
-          '2026-07-02T01:00:00Z', true),
+          _calAir(-18, 1), true),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 4, 'A Dance of Dragons',
-          '2026-07-06T01:00:00Z', false),
+          _calAir(-11, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 5, 'The Sowing of Seeds',
-          '2026-07-13T01:00:00Z', false),
+          _calAir(-4, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 6, 'Fire and Blood',
-          '2026-07-20T01:00:00Z', false),
+          _calAir(3, 1), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 7, 'The Green Council',
-          '2026-07-27T01:00:00Z', false),
+          _calAir(10, 1), false),
       _sonarrCalEntry(
           102, 'The Boys', 5, 1, 'Department of Dirty Tricks',
-          '2026-07-08T02:00:00Z', false),
+          _calAir(-13, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 2, 'Kill Your Heroes',
-          '2026-07-15T02:00:00Z', false),
+          _calAir(-6, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 3, 'Diabolical',
-          '2026-07-22T02:00:00Z', false),
+          _calAir(1, 2), false),
       _sonarrCalEntry(102, 'The Boys', 5, 4, 'Assembly Required',
-          '2026-07-29T02:00:00Z', false),
+          _calAir(8, 2), false),
       _sonarrCalEntry(106, "Grey's Anatomy", 21, 15, 'Wishin and Hopin',
-          '2026-07-09T01:00:00Z', false),
+          _calAir(-9, 1), false),
       _sonarrCalEntry(106, "Grey's Anatomy", 21, 16, 'Under Pressure',
-          '2026-07-16T01:00:00Z', false),
+          _calAir(5, 1), false),
       _sonarrCalEntry(111, 'The Rookie', 7, 9, 'Crossfire',
-          '2026-07-14T01:00:00Z', false),
+          _calAir(2, 1), false),
       _sonarrCalEntry(111, 'The Rookie', 7, 10, 'The Squad',
-          '2026-07-21T01:00:00Z', false),
+          _calAir(9, 1), false),
       _sonarrCalEntry(108, 'The Simpsons', 36, 12, 'Treehouse of Horror',
-          '2026-07-12T00:00:00Z', false),
+          _calAir(6, 0), false),
       _sonarrCalEntry(110, 'Dutton Ranch', 1, 1, 'Homecoming',
-          '2026-07-30T01:00:00Z', false),
+          _calAir(4, 1), false),
       _sonarrCalEntry(102, 'The Boys', 5, 5, 'The Big Ride',
-          '2026-08-05T02:00:00Z', false),
+          _calAir(15, 2), false),
       _sonarrCalEntry(101, 'House of the Dragon', 3, 8, 'The Dying of the Light',
-          '2026-08-03T01:00:00Z', false),
+          _calAir(17, 1), false),
     ];
 
 /// Poster per series id, joined into embedded `series` objects (calendar and
