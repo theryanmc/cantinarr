@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -250,6 +251,27 @@ func TestTrendingDefaultsToDayPageOne(t *testing.T) {
 	hit := e.upstream.hit(t, 0)
 	if hit.path != "/3/trending/all/day" || hit.query.Get("page") != "1" {
 		t.Errorf("upstream = %s?%v, want /3/trending/all/day with page=1", hit.path, hit.query)
+	}
+}
+
+// TestMovieDetailAppendsReleaseDatesAlongsideVideos pins the release-dates
+// wire change: the movie detail proxy must keep requesting videos while also
+// requesting release_dates, so the app can render the Release dates section
+// for any TMDB movie. Asserts membership, not exact string equality, so a
+// later third append does not break this test.
+func TestMovieDetailAppendsReleaseDatesAlongsideVideos(t *testing.T) {
+	e := newEnv(t, true)
+	e.doOK(t, "/media/movie/603")
+	hit := e.upstream.hit(t, 0)
+	if hit.path != "/3/movie/603" {
+		t.Errorf("upstream path = %s, want /3/movie/603", hit.path)
+	}
+	appends := strings.Split(hit.query.Get("append_to_response"), ",")
+	if !slices.Contains(appends, "videos") {
+		t.Errorf("append_to_response = %q, want it to contain videos", hit.query.Get("append_to_response"))
+	}
+	if !slices.Contains(appends, "release_dates") {
+		t.Errorf("append_to_response = %q, want it to contain release_dates", hit.query.Get("append_to_response"))
 	}
 }
 

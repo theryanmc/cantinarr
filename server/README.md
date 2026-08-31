@@ -344,7 +344,7 @@ GET /api/discover/movies/featured | /discover/tv/featured  # the configured head
 GET /api/discover/movies/top-rated | upcoming | now-playing
 GET /api/discover/movies | /api/discover/tv          # filterable discover
 GET /api/search                                      # multi-search
-GET /api/media/movie/{id} | /api/media/tv/{id}       # detail (+ /recommendations, /similar)
+GET /api/media/movie/{id} | /api/media/tv/{id}       # detail (+ /recommendations, /similar); movie body appends videos + per-region release_dates
 GET /api/media/person/{id} | /api/media/person/{id}/credits
 GET /api/genres/movie | /api/genres/tv | /api/providers/movie
 GET /api/trakt/trending | popular | lists | lists/{user}/{slug}/items
