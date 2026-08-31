@@ -38,6 +38,7 @@ import '../../sonarr/data/sonarr_models.dart';
 import '../../sonarr/ui/sonarr_series_detail_screen.dart';
 import '../logic/arr_deep_link.dart';
 import '../logic/media_detail_provider.dart';
+import '../logic/release_schedule.dart';
 import '../logic/release_window.dart';
 import 'media_hero.dart';
 import 'season_table.dart';
@@ -553,6 +554,24 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                     borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
+                              ),
+                            ),
+                          ],
+
+                          // Release dates: TMDB-backed cinema/digital/disc
+                          // schedule for any movie, library or not. See D-02
+                          // in the plan — this is deliberately separate from
+                          // _PendingReleaseLine in the request dock above.
+                          if (state.movieDetail != null) ...[
+                            const SizedBox(height: 24),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16),
+                              child: _ReleaseDatesSection(
+                                regions: state.movieDetail!.releaseDates,
+                                localeCountryCode: Localizations.maybeLocaleOf(
+                                        context)
+                                    ?.countryCode,
                               ),
                             ),
                           ],
@@ -1187,6 +1206,89 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
         seasons: _requestNotifier.state.seasons,
       ),
     );
+  }
+}
+
+/// The full release schedule for a movie: cinema, digital and disc dates
+/// TMDB knows for the resolved region, for any movie whether or not it is in
+/// a library. Renders nothing at all — not even a header — when
+/// [resolveReleaseSchedule] finds no shown milestone anywhere in the
+/// payload, matching the shrink-to-nothing discipline `_PendingReleaseLine`
+/// already uses below: the page never asserts a schedule it does not have.
+class _ReleaseDatesSection extends StatelessWidget {
+  final List<TmdbReleaseDateRegion> regions;
+  final String? localeCountryCode;
+
+  const _ReleaseDatesSection({
+    required this.regions,
+    required this.localeCountryCode,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final schedule = resolveReleaseSchedule(
+      regions,
+      preferredRegion: localeCountryCode,
+    );
+    if (schedule == null) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          title: 'Release dates',
+          trailing: Text(
+            schedule.regionCode,
+            style: const TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...schedule.milestones.map((m) => Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  Icon(_iconFor(m.label), size: 18, color: AppTheme.textSecondary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      m.label,
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    formatReleaseDate(m.date),
+                    style: TextStyle(
+                      color: m.isUpcoming
+                          ? AppTheme.accent
+                          : AppTheme.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            )),
+      ],
+    );
+  }
+
+  IconData _iconFor(String label) {
+    switch (label) {
+      case 'In cinemas (limited)':
+      case 'In cinemas':
+        return Icons.theaters_outlined;
+      case 'Digital':
+        return Icons.play_circle_outline;
+      case 'Blu-ray / DVD':
+        return Icons.album_outlined;
+      default:
+        return Icons.event_outlined;
+    }
   }
 }
 
