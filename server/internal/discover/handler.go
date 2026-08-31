@@ -235,7 +235,7 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) MovieDetail(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	key := "movie:" + id
-	params := url.Values{"append_to_response": {"videos"}}
+	params := url.Values{"append_to_response": {"videos,release_dates"}}
 	h.cachedTMDB(w, key, ttlDetails, fmt.Sprintf("/movie/%s", id), params)
 }
 
