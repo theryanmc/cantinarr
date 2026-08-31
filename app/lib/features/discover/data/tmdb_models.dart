@@ -164,6 +164,7 @@ class MovieDetail {
   final List<Video> videos;
   final int? budget;
   final int? revenue;
+  final List<TmdbReleaseDateRegion> releaseDates;
 
   const MovieDetail({
     required this.id,
@@ -180,6 +181,7 @@ class MovieDetail {
     this.videos = const [],
     this.budget,
     this.revenue,
+    this.releaseDates = const [],
   });
 
   factory MovieDetail.fromJson(Map<String, dynamic> json) => MovieDetail(
@@ -200,6 +202,7 @@ class MovieDetail {
         videos: _parseVideos(json),
         budget: json['budget'] as int?,
         revenue: json['revenue'] as int?,
+        releaseDates: _parseReleaseDates(json),
       );
 
   String? get trailerKey {
@@ -294,6 +297,47 @@ class ExternalIds {
   factory ExternalIds.fromJson(Map<String, dynamic> json) => ExternalIds(
         tvdbId: json['tvdb_id'] as int?,
         imdbId: json['imdb_id'] as String?,
+      );
+}
+
+/// One country's entries from TMDB's `release_dates` append
+/// (`release_dates.results[]`): an ISO-3166-1 country code plus its raw
+/// milestone list. Kept as transport shape only — interpreting which
+/// milestones matter and how to label them is
+/// `media_detail/logic/release_schedule.dart`'s job, not this file's.
+class TmdbReleaseDateRegion {
+  final String countryCode;
+  final List<TmdbReleaseDateEntry> entries;
+
+  const TmdbReleaseDateRegion({
+    required this.countryCode,
+    this.entries = const [],
+  });
+
+  factory TmdbReleaseDateRegion.fromJson(Map<String, dynamic> json) =>
+      TmdbReleaseDateRegion(
+        countryCode: (json['iso_3166_1'] ?? '') as String,
+        entries: (json['release_dates'] as List<dynamic>?)
+                ?.map((e) =>
+                    TmdbReleaseDateEntry.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            [],
+      );
+}
+
+/// One release milestone entry within a region: TMDB's integer `type` (1
+/// Premiere .. 6 TV) plus its parsed calendar date, or null when TMDB itself
+/// doesn't know the date for that entry.
+class TmdbReleaseDateEntry {
+  final int type;
+  final DateTime? date;
+
+  const TmdbReleaseDateEntry({required this.type, this.date});
+
+  factory TmdbReleaseDateEntry.fromJson(Map<String, dynamic> json) =>
+      TmdbReleaseDateEntry(
+        type: json['type'] as int? ?? 0,
+        date: _parseTmdbCalendarDate(json['release_date'] as String?),
       );
 }
 
@@ -456,4 +500,37 @@ List<Video> _parseVideos(Map<String, dynamic> json) {
         [];
   }
   return [];
+}
+
+/// Helper to parse the nested `release_dates` append. Tolerates a missing or
+/// wrongly-shaped key by yielding an empty list rather than throwing: a
+/// server that hasn't yet added the append, or is serving a cached
+/// pre-change body, sends exactly that shape, and this must not blank the
+/// rest of the detail page over it.
+List<TmdbReleaseDateRegion> _parseReleaseDates(Map<String, dynamic> json) {
+  final releaseDatesData = json['release_dates'];
+  if (releaseDatesData is Map<String, dynamic>) {
+    return (releaseDatesData['results'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map((r) => TmdbReleaseDateRegion.fromJson(r))
+            .toList() ??
+        [];
+  }
+  return [];
+}
+
+/// Parses a `YYYY-MM-DDTHH:mm:ss.SSSZ` TMDB release-date string into local
+/// midnight, reading only the `YYYY-MM-DD` calendar prefix. TMDB's release
+/// dates carry no meaningful time-of-day, so `DateTime.parse(...).toLocal()`
+/// would shift a midnight-UTC date onto the previous day for anyone west of
+/// UTC — the same trap `radarr/client.go` and
+/// `request_service.dart:_parseCalendarDate` already document. Returns null
+/// for a missing or unparseable value.
+DateTime? _parseTmdbCalendarDate(String? value) {
+  if (value == null || value.length < 10) return null;
+  final year = int.tryParse(value.substring(0, 4));
+  final month = int.tryParse(value.substring(5, 7));
+  final day = int.tryParse(value.substring(8, 10));
+  if (year == null || month == null || day == null) return null;
+  return DateTime(year, month, day);
 }
