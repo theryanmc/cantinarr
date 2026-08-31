@@ -405,7 +405,6 @@ class _NotificationPreferencesScreenState
     final tile = SwitchListTile(
       value: value,
       onChanged: onChanged,
-      activeThumbColor: AppTheme.accent,
       title: Text(title,
           style: const TextStyle(
               color: AppTheme.textPrimary, fontWeight: FontWeight.w500)),

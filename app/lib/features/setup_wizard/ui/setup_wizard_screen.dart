@@ -213,7 +213,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           value: ref.watch(setupReminderEnabledProvider),
           onChanged: (v) =>
               ref.read(setupReminderEnabledProvider.notifier).set(v),
-          activeThumbColor: AppTheme.accent,
           secondary: const Icon(Icons.notifications_outlined,
               color: AppTheme.textSecondary),
           title: const Text('Remind me in the menu',

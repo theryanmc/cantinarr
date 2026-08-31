@@ -388,7 +388,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 value: ref.watch(requestNotificationsEnabledProvider),
                 onChanged: (v) =>
                     ref.read(requestNotificationsEnabledProvider.notifier).set(v),
-                activeThumbColor: AppTheme.accent,
                 secondary: const Icon(Icons.notifications_active_outlined,
                     color: AppTheme.textSecondary),
                 title: const Text('Request updates',

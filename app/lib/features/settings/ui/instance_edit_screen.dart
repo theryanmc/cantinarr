@@ -1681,7 +1681,6 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _plexAutoApprove = value;
         _mediaServerConfigDirty = true;
       }),
-      activeThumbColor: AppTheme.accent,
       contentPadding: EdgeInsets.zero,
     );
   }
