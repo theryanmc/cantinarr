@@ -1051,7 +1051,6 @@ class _UserTile extends StatelessWidget {
               child: Switch(
                 value: user.sharedAiEnabled,
                 onChanged: (_) {},
-                activeThumbColor: AppTheme.accent,
               ),
             ),
             contentPadding: EdgeInsets.zero,
