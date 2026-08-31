@@ -199,9 +199,51 @@ jobs:
             /usr/local/bin/codex-app-server --help | grep -q -- --listen
           '
 
+      # Fork PRs run with a read-only GITHUB_TOKEN, so pushing their pr-N tag
+      # from this job is denied. Instead the already-cached amd64 build is
+      # retagged with the labels the direct push would have applied and handed
+      # to pr-preview-publish.yml as a run artifact; that workflow pushes the
+      # tag from base-repo context, so fork PRs get the same pullable preview
+      # image as same-repo PRs, a couple of minutes after this run completes.
+      - name: Build preview image for the fork handoff
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            APP_BUILD_NUMBER=${{ steps.app_build.outputs.number }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ghcr.io/windoze95/cantinarr:pr-${{ github.event.pull_request.number }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=published
+          cache-to: type=gha,mode=max,scope=published
+
+      - name: Save preview image for the publish workflow
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          docker save ghcr.io/windoze95/cantinarr:pr-${{ github.event.pull_request.number }} \
+            | zstd -T0 -o "$RUNNER_TEMP/pr-preview-image.tar.zst"
+
+      - name: Upload preview image artifact
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-preview-image
+          path: ${{ runner.temp }}/pr-preview-image.tar.zst
+          # Only needs to survive the minutes until pr-preview-publish.yml
+          # picks it up; days are headroom for manual re-runs.
+          retention-days: 3
+          # The tarball is already zstd-compressed; zipping it again would
+          # spend minutes for nothing.
+          compression-level: 0
+
       - name: Build and push
-        # Fork PRs run with a read-only GITHUB_TOKEN, so pushing the pr-N tag
-        # is denied; the smoke-test builds above still prove both Dockerfiles.
+        # Fork PRs can't push from this run (read-only GITHUB_TOKEN); their
+        # preview is published by pr-preview-publish.yml from the artifact
+        # saved above.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v6
         with:
