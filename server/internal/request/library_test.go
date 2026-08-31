@@ -230,6 +230,61 @@ func TestReduceLibraryNoSeriesLeavesFieldsEmpty(t *testing.T) {
 	}
 }
 
+// TestStampAuthorsFromLibraryFillsBlankAuthor asserts the join fills a title
+// whose reduction left Author blank, using the book's authorId to find the
+// matching author record.
+func TestStampAuthorsFromLibraryFillsBlankAuthor(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Lady of Shadows", ForeignBookID: "fb-lady", MediaType: "ebook", AuthorID: 7},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 7, AuthorName: "Melissa K. Roehrich"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	lt := titles[0]
+	if lt.Author != "Melissa K. Roehrich" {
+		t.Fatalf("author = %q, want Melissa K. Roehrich", lt.Author)
+	}
+}
+
+// TestStampAuthorsFromLibraryNeverOverwritesStatedName asserts a title whose
+// reduction already filled Author (the record embedded an author object)
+// keeps that name — the join never overwrites a name the record itself
+// stated.
+func TestStampAuthorsFromLibraryNeverOverwritesStatedName(t *testing.T) {
+	books := []chaptarr.Book{
+		{
+			ID: 1, Title: "Heir to the Empire", ForeignBookID: "fb-1", MediaType: "ebook",
+			AuthorID: 9, Author: &chaptarr.AuthorContext{AuthorName: "Timothy Zahn"},
+		},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 9, AuthorName: "Wrong Name"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if titles[0].Author != "Timothy Zahn" {
+		t.Fatalf("author = %q, want the record's own stated name unchanged", titles[0].Author)
+	}
+}
+
+// TestStampAuthorsFromLibraryUnmatchedAuthorIDStaysBlank asserts a title
+// whose authorId matches no author record stays blank rather than guessing.
+func TestStampAuthorsFromLibraryUnmatchedAuthorIDStaysBlank(t *testing.T) {
+	books := []chaptarr.Book{
+		{ID: 1, Title: "Orphaned", ForeignBookID: "fb-orphan", MediaType: "ebook", AuthorID: 99},
+	}
+	titles := reduceLibrary(books).Titles
+	authors := []chaptarr.Author{{ID: 1, AuthorName: "Someone Else"}}
+
+	stampAuthorsFromLibrary(titles, books, authors)
+
+	if titles[0].Author != "" {
+		t.Fatalf("author = %q, want empty (authorId 99 matches no author record)", titles[0].Author)
+	}
+}
+
 func TestSelectBookRootFailsClosedOnAmbiguity(t *testing.T) {
 	if _, ok := selectBookRoot([]chaptarr.RootFolder{
 		{Path: "/one/books", Accessible: true},

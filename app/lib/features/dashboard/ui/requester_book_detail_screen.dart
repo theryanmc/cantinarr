@@ -469,8 +469,19 @@ class _RequesterBookDetailScreenState
     // /api/requests/book-series-detail. A label sourced from a live Chaptarr
     // record or from metadata always renders as plain, untappable text.
     final seriesNavigableName = owned?.series.trim() ?? '';
-    final seriesLabel =
-        _seriesLabel(seriesNavigableName, owned?.seriesPosition ?? '');
+    // The digest's assembled "Name #Position" label leads, and a live/
+    // metadata record's raw seriesTitle is only a display fallback for a book
+    // whose digest row hasn't resolved yet (admin / downloads-enabled path).
+    // This deliberately inverts the _metadata-first order the neighbouring
+    // title/author/overview derivations use: the series page shows the
+    // library's own run, and the digest is the one value that was parsed
+    // against it, so the label and the tap target always agree on source
+    // (D-06). The navigable name above stays the digest's alone regardless.
+    final seriesLabel = _firstText([
+      _seriesLabel(seriesNavigableName, owned?.seriesPosition ?? ''),
+      live?.seriesTitle,
+      _metadata?.seriesTitle,
+    ]);
     final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
     final year = releaseDate?.year ?? owned?.year ?? 0;
     final overview = _firstText([

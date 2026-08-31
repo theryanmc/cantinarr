@@ -331,12 +331,69 @@ func (s *Service) GetBookLibraryDigestForInstance(userID int64, requestedInstanc
 	}
 	digest := reduceLibrary(books)
 
+	// The full-library book list carries no embedded author object (Chaptarr
+	// only nests it on per-author reads), so the name is joined from the
+	// library's own author records. This is the opposite of
+	// GetLibraryAuthorsForInstance, which fails closed on the same read: there,
+	// a missing book list would yield a confident wrong *count* ("0 books" on
+	// an author whose shelf is full). Here, a missing author list yields an
+	// absent author *name* — no claim at all. Ownership truth is this digest's
+	// job and is unaffected, so the error is not returned (AGENTS.md
+	// absence-vs-blindness; D-04). Nothing derived from it reaches the
+	// response, so an upstream host in an error string can never surface here.
+	if authors, err := client.GetAllAuthors(); err == nil {
+		stampAuthorsFromLibrary(digest.Titles, books, authors)
+	}
+
 	if s.libraryCache != nil {
 		if data, err := json.Marshal(digest); err == nil {
 			s.libraryCache.Set(cacheKey, data, bookLibraryCacheTTL)
 		}
 	}
 	return &digest, nil
+}
+
+// stampAuthorsFromLibrary fills each reduced title's empty Author by joining
+// the books it was reduced from to the library's author records via
+// authorId. Per D-04, an author name a record already stated is never
+// overwritten — mirrors stampAuthorName's guard.
+//
+// The join is keyed on ForeignBookID only: a record with no foreignBookId
+// groups under the per-record "id:" key (see groupKey), which LibraryTitle
+// does not carry, so that title is left with an empty author rather than
+// being matched by slice position — an absent name is honest, a
+// positionally guessed one is not.
+func stampAuthorsFromLibrary(titles []LibraryTitle, books []chaptarr.Book, authors []chaptarr.Author) {
+	authorIDByForeignBookID := make(map[string]int, len(books))
+	for _, book := range books {
+		id := strings.TrimSpace(book.ForeignBookID)
+		if id == "" || book.AuthorID <= 0 {
+			continue
+		}
+		if _, seen := authorIDByForeignBookID[id]; !seen {
+			authorIDByForeignBookID[id] = book.AuthorID
+		}
+	}
+	nameByAuthorID := make(map[int]string, len(authors))
+	for _, author := range authors {
+		nameByAuthorID[author.ID] = strings.TrimSpace(author.AuthorName)
+	}
+	for i := range titles {
+		if strings.TrimSpace(titles[i].Author) != "" {
+			continue
+		}
+		id := strings.TrimSpace(titles[i].ForeignBookID)
+		if id == "" {
+			continue
+		}
+		authorID, ok := authorIDByForeignBookID[id]
+		if !ok {
+			continue
+		}
+		if name := nameByAuthorID[authorID]; name != "" {
+			titles[i].Author = name
+		}
+	}
 }
 
 // getChaptarrWithID resolves the same Chaptarr client as getChaptarr but also
