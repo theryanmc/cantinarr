@@ -562,8 +562,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           // schedule for any movie, library or not. See D-02
                           // in the plan — this is deliberately separate from
                           // _PendingReleaseLine in the request dock above.
-                          if (state.movieDetail != null) ...[
-                            const SizedBox(height: 24),
+                          if (state.movieDetail != null)
                             Padding(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16),
@@ -574,7 +573,6 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                     ?.countryCode,
                               ),
                             ),
-                          ],
 
                           // Seasons (TV only): interactive per-season request table
                           // fed by live availability from the request notifier.
@@ -1234,6 +1232,10 @@ class _ReleaseDatesSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // The leading gap lives inside the Column, past the early return
+        // above, so a movie with no resolvable schedule leaves no dead space
+        // between the trailer button and whatever follows.
+        const SizedBox(height: 24),
         SectionHeader(
           title: 'Release dates',
           trailing: Text(
@@ -1249,7 +1251,7 @@ class _ReleaseDatesSection extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  Icon(_iconFor(m.label), size: 18, color: AppTheme.textSecondary),
+                  Icon(_iconFor(m.type), size: 18, color: AppTheme.textSecondary),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -1277,14 +1279,16 @@ class _ReleaseDatesSection extends StatelessWidget {
     );
   }
 
-  IconData _iconFor(String label) {
-    switch (label) {
-      case 'In cinemas (limited)':
-      case 'In cinemas':
+  /// Keyed on the TMDB release type, not the display label — rewording a
+  /// label must never silently drop a row back to the generic icon.
+  IconData _iconFor(int type) {
+    switch (type) {
+      case 2:
+      case 3:
         return Icons.theaters_outlined;
-      case 'Digital':
+      case 4:
         return Icons.play_circle_outline;
-      case 'Blu-ray / DVD':
+      case 5:
         return Icons.album_outlined;
       default:
         return Icons.event_outlined;

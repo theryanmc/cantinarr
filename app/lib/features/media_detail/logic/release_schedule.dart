@@ -18,6 +18,12 @@ const Map<int, String> _typeLabels = {
 /// One release milestone TMDB knows about, already filtered and labeled for
 /// display.
 class ReleaseMilestone {
+  /// TMDB release-date type code (a key of [_typeLabels]). Carried alongside
+  /// the label so presentation can branch on the milestone's identity rather
+  /// than string-matching display copy, which would break silently the first
+  /// time a label is reworded.
+  final int type;
+
   /// Requester-facing label, e.g. "In cinemas" / "Digital".
   final String label;
 
@@ -32,6 +38,7 @@ class ReleaseMilestone {
   final bool isUpcoming;
 
   const ReleaseMilestone({
+    required this.type,
     required this.label,
     required this.date,
     required this.isUpcoming,
@@ -81,6 +88,7 @@ List<ReleaseMilestone> _milestonesFor(
       .map((e) {
         final date = _dateOnly(e.value);
         return ReleaseMilestone(
+          type: e.key,
           label: _typeLabels[e.key]!,
           date: date,
           isUpcoming: !date.isBefore(today),
@@ -94,13 +102,7 @@ List<ReleaseMilestone> _milestonesFor(
   milestones.sort((a, b) {
     final byDate = a.date.compareTo(b.date);
     if (byDate != 0) return byDate;
-    final aType = earliestByType.entries
-        .firstWhere((e) => _typeLabels[e.key] == a.label)
-        .key;
-    final bType = earliestByType.entries
-        .firstWhere((e) => _typeLabels[e.key] == b.label)
-        .key;
-    return aType.compareTo(bType);
+    return a.type.compareTo(b.type);
   });
 
   return milestones;
