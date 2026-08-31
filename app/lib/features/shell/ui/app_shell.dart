@@ -99,6 +99,11 @@ class _AppShellState extends ConsumerState<AppShell>
   SearchMode _prevMode = SearchMode.search;
   bool? _prevReduceMotion;
 
+  /// Whether the drawer's "Needs attention" row is showing its queues.
+  /// Deliberately not persisted: the group is a peek, so a reopened drawer
+  /// starts collapsed again and the navigation stays one screen of modules.
+  bool _attentionExpanded = false;
+
   @override
   void initState() {
     super.initState();
@@ -763,6 +768,14 @@ class _AppShellState extends ConsumerState<AppShell>
 
     final scaffold = Scaffold(
       key: _scaffoldKey,
+      // A closed drawer collapses its attention group again, so reopening it
+      // always lands on the same short menu rather than on however far the
+      // last visit had unfolded it.
+      onDrawerChanged: (isOpened) {
+        if (!isOpened && _attentionExpanded) {
+          setState(() => _attentionExpanded = false);
+        }
+      },
       body: SafeArea(
         bottom: false,
         child: Stack(
@@ -1107,12 +1120,66 @@ class _AppShellState extends ConsumerState<AppShell>
         !ref.watch(profileApprovalsMenuOnlyWhenPendingProvider) ||
             profileProposalsStale ||
             pendingProfileProposals > 0;
-    final showNeedsAttentionSection = showApprovals ||
-        showIssues ||
-        showAgentFixes ||
-        showProfileApprovals ||
-        plexInvitesWaiting > 0 ||
-        showSetupReminder;
+    // The admin queues, as data rather than as six inline rows: the collapsed
+    // "Needs attention" entry's total is summed from this same list, so the
+    // number on the closed row can never disagree with what opening it shows.
+    final attentionEntries = <_AttentionEntry>[
+      if (showApprovals)
+        _AttentionEntry(
+          icon: Icons.fact_check_outlined,
+          title: 'Approvals',
+          semanticsIdentifier: 'nav-action-approvals',
+          count: pendingApprovals,
+          route: '/approvals',
+        ),
+      if (showIssues)
+        _AttentionEntry(
+          icon: Icons.flag_outlined,
+          title: 'Issues',
+          semanticsIdentifier: 'nav-action-issues',
+          count: openIssues,
+          route: '/issues',
+        ),
+      if (showAgentFixes)
+        _AttentionEntry(
+          icon: Icons.build_circle_outlined,
+          title: 'Agent fixes',
+          semanticsIdentifier: 'nav-action-agent-fixes',
+          count: pendingAgentActions,
+          route: '/agent-actions',
+        ),
+      if (showProfileApprovals)
+        _AttentionEntry(
+          icon: Icons.tune,
+          title: 'Profile approvals',
+          semanticsIdentifier: 'nav-action-profile-approvals',
+          count: pendingProfileProposals,
+          route: '/settings/profile-approvals',
+        ),
+      // Appears only while someone is waiting on a Plex invite (e.g. the push
+      // was missed or an auto-invite failed); lands on the Users screen where
+      // the invite is one tap.
+      if (plexInvitesWaiting > 0)
+        _AttentionEntry(
+          icon: Icons.play_circle_outline,
+          title: 'Plex invites',
+          semanticsIdentifier: 'nav-action-plex-invites',
+          count: plexInvitesWaiting,
+          route: '/settings/users',
+        ),
+      // Setup reminder: how many features are still unconfigured. Muteable
+      // from the checklist; the Settings tile always remains.
+      if (showSetupReminder)
+        _AttentionEntry(
+          icon: Icons.checklist_outlined,
+          title: 'Setup checklist',
+          semanticsIdentifier: 'nav-action-setup-checklist',
+          count: setupRemaining,
+          route: '/setup',
+        ),
+    ];
+    final attentionTotal =
+        attentionEntries.fold<int>(0, (sum, entry) => sum + entry.count);
 
     // AI Assistant is a tool, not a library, so it sits with the footer actions
     // instead of under the "Libraries" header. It's always last in
@@ -1275,93 +1342,83 @@ class _AppShellState extends ConsumerState<AppShell>
           ),
           const Divider(color: AppTheme.border),
 
-          // Admin action queues — kept above the modules so a waiting count is
-          // the first thing an admin sees when the drawer opens.
-          if (isAdmin && showNeedsAttentionSection) ...[
-            const _DrawerSectionHeader('Needs attention'),
-            if (showApprovals)
-              _DrawerItem(
-                icon: Icons.fact_check_outlined,
-                title: 'Approvals',
-                semanticsIdentifier: 'nav-action-approvals',
-                badgeCount: pendingApprovals,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/approvals');
-                },
-              ),
-            if (showIssues)
-              _DrawerItem(
-                icon: Icons.flag_outlined,
-                title: 'Issues',
-                semanticsIdentifier: 'nav-action-issues',
-                badgeCount: openIssues,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/issues');
-                },
-              ),
-            if (showAgentFixes)
-              _DrawerItem(
-                icon: Icons.build_circle_outlined,
-                title: 'Agent fixes',
-                semanticsIdentifier: 'nav-action-agent-fixes',
-                badgeCount: pendingAgentActions,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/agent-actions');
-                },
-              ),
-            if (showProfileApprovals)
-              _DrawerItem(
-                icon: Icons.tune,
-                title: 'Profile approvals',
-                semanticsIdentifier: 'nav-action-profile-approvals',
-                badgeCount: pendingProfileProposals,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/settings/profile-approvals');
-                },
-              ),
-            // Appears only while someone is waiting on a Plex invite (e.g.
-            // the push was missed or an auto-invite failed); lands on the
-            // Users screen where the invite is one tap.
-            if (plexInvitesWaiting > 0)
-              _DrawerItem(
-                icon: Icons.play_circle_outline,
-                title: 'Plex invites',
-                semanticsIdentifier: 'nav-action-plex-invites',
-                badgeCount: plexInvitesWaiting,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/settings/users');
-                },
-              ),
-            // Setup reminder: how many features are still unconfigured.
-            // Muteable from the checklist; the Settings tile always remains.
-            if (showSetupReminder)
-              _DrawerItem(
-                icon: Icons.checklist_outlined,
-                title: 'Setup checklist',
-                semanticsIdentifier: 'nav-action-setup-checklist',
-                badgeCount: setupRemaining,
-                onTap: () {
-                  if (isOverlay) Navigator.pop(context);
-                  context.push('/setup');
-                },
-              ),
-            const Divider(color: AppTheme.border),
-          ],
-
           // Module navigation. Discover (the browse/home surface) leads on its
           // own; the "Libraries" header groups the managed arr modules beneath
           // it. On desktop the active module also expands into its pages — those
           // replace the module shell's bottom nav there. The mobile drawer stays
           // modules-only because the bottom nav covers page switching.
+          //
+          // The admin queues ride at the top of this same list rather than as
+          // fixed rows above it: six of them left the modules a ~40px slot on a
+          // phone, so Discover and the libraries were scrolled out of a menu
+          // that is supposed to show them.
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
               children: [
+                // Admin action queues, behind one row carrying their running
+                // total — the first thing an admin sees, without the queues
+                // themselves crowding out the navigation. Tapping unfolds them
+                // in place; nothing here navigates.
+                if (isAdmin && attentionEntries.isNotEmpty) ...[
+                  _DrawerItem(
+                    icon: Icons.notifications_active_outlined,
+                    title: 'Needs attention',
+                    semanticsIdentifier: 'nav-action-needs-attention',
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (attentionTotal > 0) ...[
+                          _CountPill(count: attentionTotal),
+                          const SizedBox(width: 6),
+                        ],
+                        AnimatedRotation(
+                          turns: _attentionExpanded ? 0.5 : 0,
+                          duration: AppTheme.motionFast,
+                          child: const Icon(
+                            Icons.expand_more,
+                            size: 20,
+                            color: AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    onTap: () => setState(
+                      () => _attentionExpanded = !_attentionExpanded,
+                    ),
+                  ),
+                  AnimatedSize(
+                    duration: AppTheme.motionMedium,
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _attentionExpanded
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (final entry in attentionEntries)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 12),
+                                  child: _DrawerItem(
+                                    icon: entry.icon,
+                                    title: entry.title,
+                                    semanticsIdentifier:
+                                        entry.semanticsIdentifier,
+                                    badgeCount: entry.count,
+                                    onTap: () {
+                                      setState(
+                                        () => _attentionExpanded = false,
+                                      );
+                                      if (isOverlay) Navigator.pop(context);
+                                      context.push(entry.route);
+                                    },
+                                  ),
+                                ),
+                            ],
+                          )
+                        : const SizedBox(width: double.infinity),
+                  ),
+                  const Divider(color: AppTheme.border),
+                ],
                 if (libraryModules.isNotEmpty)
                   buildModuleTile(libraryModules.first),
                 if (libraryModules.length > 1) ...[
@@ -1638,8 +1695,31 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
+/// One admin queue listed under the drawer's "Needs attention" row.
+///
+/// Describing them as data keeps the collapsed row's total and the rows it
+/// hides derived from one list: the badge is the sum of these counts, so it
+/// cannot claim a number the expanded group doesn't account for.
+class _AttentionEntry {
+  const _AttentionEntry({
+    required this.icon,
+    required this.title,
+    required this.semanticsIdentifier,
+    required this.count,
+    required this.route,
+  });
+
+  final IconData icon;
+  final String title;
+  final String semanticsIdentifier;
+
+  /// How many items are waiting in this queue; 0 renders no badge.
+  final int count;
+  final String route;
+}
+
 /// A small caps label that segments the drawer into scannable groups
-/// (e.g. "Needs attention", "Libraries"). Purely visual — not tappable.
+/// (e.g. "Libraries"). Purely visual — not tappable.
 class _DrawerSectionHeader extends StatelessWidget {
   final String label;
 
