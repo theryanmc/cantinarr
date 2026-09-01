@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../navigation/ambient_page_route.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_ambient_background.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../core/widgets/error_banner.dart';
 import '../data/lidarr_api_service.dart';
 import '../data/lidarr_models.dart';
+import 'lidarr_releases_screen.dart';
 
 /// Artist detail: an artist summary plus the artist's albums, each with an
 /// availability line, a monitor toggle, and an automatic-search action.
@@ -115,6 +117,18 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
         genres: album.genres,
       );
 
+  void _interactiveSearch(LidarrAlbum album) {
+    Navigator.of(context, rootNavigator: true).push(
+      AmbientPageRoute(
+        builder: (_) => LidarrReleasesScreen(
+          instanceId: widget.instanceId,
+          albumId: album.id,
+          albumTitle: album.title,
+        ),
+      ),
+    );
+  }
+
   Future<void> _searchAlbum(LidarrAlbum album) async {
     try {
       await _service.searchAlbums([album.id]);
@@ -171,6 +185,7 @@ class _LidarrArtistScreenState extends ConsumerState<LidarrArtistScreen> {
               toggling: _togglingAlbums.contains(album.id),
               onToggleMonitored: () => _toggleMonitored(album),
               onSearch: () => _searchAlbum(album),
+              onInteractiveSearch: () => _interactiveSearch(album),
             ),
           if (_albums.isEmpty)
             const Padding(
@@ -266,12 +281,14 @@ class _AlbumCard extends StatelessWidget {
   final bool toggling;
   final VoidCallback onToggleMonitored;
   final VoidCallback onSearch;
+  final VoidCallback onInteractiveSearch;
 
   const _AlbumCard({
     required this.album,
     required this.toggling,
     required this.onToggleMonitored,
     required this.onSearch,
+    required this.onInteractiveSearch,
   });
 
   @override
@@ -320,6 +337,12 @@ class _AlbumCard extends StatelessWidget {
                 color: AppTheme.textSecondary, size: 20),
             tooltip: 'Find automatically',
             onPressed: onSearch,
+          ),
+          IconButton(
+            icon: const Icon(Icons.manage_search,
+                color: AppTheme.textSecondary, size: 20),
+            tooltip: 'Choose a download',
+            onPressed: onInteractiveSearch,
           ),
           toggling
               ? const Padding(

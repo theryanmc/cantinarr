@@ -80,12 +80,17 @@ Color lidarrQueueStatusColor(LidarrQueueItem item) {
 class LidarrQueueItemCard extends StatelessWidget {
   final LidarrQueueItem item;
 
+  /// When provided, an "Issues" affordance opens this callback instead of
+  /// showing the inline issues box (used by the Import Doctor).
+  final VoidCallback? onTap;
+
   /// When provided, a Remove action is offered in the overflow menu.
   final VoidCallback? onRemove;
 
   const LidarrQueueItemCard({
     super.key,
     required this.item,
+    this.onTap,
     this.onRemove,
   });
 
@@ -240,7 +245,9 @@ class LidarrQueueItemCard extends StatelessWidget {
           if (item.hasIssues && issues.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 8, right: 8),
-              child: _IssuesBox(text: issues.join('\n')),
+              child: onTap != null
+                  ? _IssuesButton(count: issues.length, onTap: onTap!)
+                  : _IssuesBox(text: issues.join('\n')),
             ),
         ],
       ),
@@ -248,8 +255,7 @@ class LidarrQueueItemCard extends StatelessWidget {
   }
 }
 
-/// The inline amber issues box. The Import Doctor's music arm is a planned
-/// follow-up; until then the arr's own messages render verbatim.
+/// The inline amber issues box (default rendering when no Doctor handler set).
 class _IssuesBox extends StatelessWidget {
   final String text;
   const _IssuesBox({required this.text});
@@ -277,6 +283,49 @@ class _IssuesBox extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A tappable "Messages" affordance that defers to the Import Doctor.
+class _IssuesButton extends StatelessWidget {
+  final int count;
+  final VoidCallback onTap;
+  const _IssuesButton({required this.count, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppTheme.requested.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded,
+                size: 16, color: AppTheme.requested),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                count == 1
+                    ? '1 message — tap to resolve'
+                    : '$count messages — tap to resolve',
+                style: const TextStyle(
+                    color: AppTheme.requested,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500),
+              ),
+            ),
+            const Icon(Icons.chevron_right,
+                size: 18, color: AppTheme.requested),
+          ],
+        ),
       ),
     );
   }

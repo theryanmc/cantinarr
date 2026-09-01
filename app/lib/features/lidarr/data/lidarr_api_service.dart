@@ -223,4 +223,61 @@ class LidarrApiService {
     await _dio.post('$_basePath/command',
         data: {'name': 'RescanFolders', 'artistId': artistId});
   }
+
+  /// Interactive release search for one album. Queries every indexer live,
+  /// so this is slow (up to a minute) by design.
+  Future<List<LidarrRelease>> getReleases(int albumId) async {
+    final resp = await _dio.get(
+      '$_basePath/release',
+      queryParameters: {'albumId': albumId},
+      options: longRequestOptions(),
+    );
+    return _jsonList(resp.data)
+        .whereType<Map<String, dynamic>>()
+        .map(LidarrRelease.fromJson)
+        .toList();
+  }
+
+  /// Sends a release from interactive search to the download client.
+  Future<void> grabRelease(String guid, int indexerId) async {
+    await _dio.post(
+      '$_basePath/release',
+      data: {'guid': guid, 'indexerId': indexerId},
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
+    );
+  }
+
+  // --- Import Doctor (admin; proxy requires instances:manage) ---
+
+  /// Lists the importable files Lidarr found for a finished download, with
+  /// any rejection reasons. Backs the manual-import recovery flow.
+  Future<List<LidarrManualImportCandidate>> getManualImportCandidates(
+    String downloadId,
+  ) async {
+    final resp = await _dio.get(
+      '$_basePath/manualimport',
+      queryParameters: {
+        'downloadId': downloadId,
+        'filterExistingFiles': false,
+      },
+      options: longRequestOptions(timeout: const Duration(seconds: 60)),
+    );
+    return (resp.data as List<dynamic>)
+        .map((c) =>
+            LidarrManualImportCandidate.fromJson(c as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Imports the given candidate files. [importMode] must be lowercase
+  /// (`move`/`copy`/`auto`); `copy` preserves seeding for torrents.
+  Future<void> executeManualImport(
+    List<Map<String, dynamic>> files, {
+    String importMode = 'move',
+  }) async {
+    await _dio.post('$_basePath/command', data: {
+      'name': 'ManualImport',
+      'importMode': importMode,
+      'files': files,
+    });
+  }
 }
