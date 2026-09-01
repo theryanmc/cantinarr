@@ -43,6 +43,8 @@ var arrReadResources = map[string]map[string]bool{
 	"lidarr": {
 		"artist":     true,
 		"album":      true,
+		"track":      true,
+		"trackfile":  true,
 		"calendar":   true,
 		"queue":      true,
 		"history":    true,
@@ -111,7 +113,7 @@ func isArrReadResource(serviceType, forwardPath string) bool {
 
 	suffix := segments[1:]
 	switch resource {
-	case "movie", "series", "episode", "author", "book", "bookfile", "artist", "album":
+	case "movie", "series", "episode", "author", "book", "bookfile", "artist", "album", "track", "trackfile":
 		if len(suffix) == 0 {
 			return true
 		}

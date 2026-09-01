@@ -80,6 +80,9 @@ func TestIsArrReadPath(t *testing.T) {
 		{"lidarr queue", "lidarr", "api/v1/queue", true},
 		{"lidarr history", "lidarr", "api/v1/history", true},
 		{"lidarr wanted", "lidarr", "api/v1/wanted/missing", true},
+		{"lidarr track list", "lidarr", "api/v1/track", true},
+		{"lidarr album track files", "lidarr", "api/v1/trackfile", true},
+		{"lidarr track file detail", "lidarr", "api/v1/trackfile/19", true},
 		{"lidarr artist portrait", "lidarr", "api/v1/mediacover/artist/7/poster.jpg", true},
 		{"lidarr album cover", "lidarr", "api/v1/mediacover/album/9/cover.jpg", true},
 
@@ -133,7 +136,6 @@ func TestIsArrReadPath(t *testing.T) {
 		{"lidarr cannot read chaptarr resource", "lidarr", "api/v1/book", false},
 		{"chaptarr cannot read lidarr resource", "chaptarr", "api/v1/artist", false},
 		{"lidarr v3 rejected", "lidarr", "api/v3/artist", false},
-		{"lidarr trackfile remains admin only", "lidarr", "api/v1/trackfile", false},
 		{"lidarr quality profiles", "lidarr", "api/v1/qualityprofile", false},
 		{"lidarr metadata profiles", "lidarr", "api/v1/metadataprofile", false},
 		{"lidarr root folders", "lidarr", "api/v1/rootfolder", false},

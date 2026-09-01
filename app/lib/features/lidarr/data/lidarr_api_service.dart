@@ -229,6 +229,32 @@ class LidarrApiService {
         .toList();
   }
 
+  /// Lists the music files on disk for one album. `trackfile` is in the
+  /// requester read allowlist for exactly this: album downloads need the
+  /// file ids and reported paths.
+  Future<List<LidarrTrackFile>> getTrackFiles({required int albumId}) async {
+    final resp = await _dio.get('$_basePath/trackfile', queryParameters: {
+      'albumId': albumId,
+    });
+    return _jsonList(resp.data)
+        .whereType<Map<String, dynamic>>()
+        .map(LidarrTrackFile.fromJson)
+        .where((f) => f.albumId == albumId || f.albumId == 0)
+        .toList();
+  }
+
+  /// Lists one album's tracks — the naming join for downloads (a track file
+  /// carries only a path; the track knows its number and title).
+  Future<List<LidarrTrack>> getTracks({required int albumId}) async {
+    final resp = await _dio.get('$_basePath/track', queryParameters: {
+      'albumId': albumId,
+    });
+    return _jsonList(resp.data)
+        .whereType<Map<String, dynamic>>()
+        .map(LidarrTrack.fromJson)
+        .toList();
+  }
+
   /// Nudges Lidarr to run its completed-download import pass now (clears
   /// items stuck "waiting to import").
   Future<void> processMonitoredDownloads() async {

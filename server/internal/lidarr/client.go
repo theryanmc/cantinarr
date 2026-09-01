@@ -711,6 +711,18 @@ func (c *Client) GetTrackFilesForArtist(artistID int) ([]TrackFile, error) {
 	return files, nil
 }
 
+// GetTrackFile returns live metadata for one completed music file in Lidarr —
+// the single-file read the media-download resolver turns a ticket's file id
+// into a path with.
+func (c *Client) GetTrackFile(id int) (*TrackFile, error) {
+	var file TrackFile
+	path := fmt.Sprintf("/api/v1/trackfile/%d", id)
+	if err := c.do("GET", path, nil, &file); err != nil {
+		return nil, fmt.Errorf("lidarr track file: %w", err)
+	}
+	return &file, nil
+}
+
 // GetDiskSpace reports disk usage for Lidarr's mounted volumes.
 func (c *Client) GetDiskSpace() ([]DiskSpace, error) {
 	var disks []DiskSpace
