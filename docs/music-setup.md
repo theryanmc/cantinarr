@@ -4,6 +4,7 @@ Music works like books, minus the part that makes books complicated:
 
 - **Lidarr has no global default instance.** The per-user pin *is* the access grant, so a user who hasn't been pinned to a Lidarr instance doesn't see the Music tab at all — exactly the Chaptarr rule.
 - **One album is one record.** There is no eBook/Audiobook-style format split, so a request is a single tap and a single status.
+- **A single can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to play" notification reliable.
 
 This page is the whole path, in order.
 
@@ -37,7 +38,7 @@ Adding the instance already turned these on: the server rotates a per-instance c
 
 If it couldn't — most commonly because the callback wasn't reachable — open the instance: the **Instant updates** section shows the live state, read from Lidarr itself, and **Configure instant updates** re-runs the install. Set `CANTINARR_ARR_CALLBACK_URL` first if Cantinarr sits behind a reverse proxy. The callback has to be resolvable **from inside the Lidarr container**, so in Docker or Kubernetes a cluster-internal origin like `http://cantinarr:8585` is usually the right value.
 
-Without this, Cantinarr falls back to polling, and an album that imports between two polls shows up late on the Music tab instead of right away.
+Without this, Cantinarr falls back to polling, and a fast grab can land and be announced late — or show up on the Music tab only on the next 30-second check instead of right away. The "New music available" push rides the same webhook, so instant updates are what make it land the moment an album imports.
 
 ## 5. How requests pick profiles
 

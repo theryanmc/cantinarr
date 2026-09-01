@@ -133,7 +133,8 @@ class PushService {
   /// the approvals queue for `request_pending`; the media detail page for an
   /// approval decision or a new-content alert (a book payload — decision or
   /// `new_book` availability — opens the book detail via its `foreign_id`, or
-  /// the Books tab when an older server's payload omits it); the agent
+  /// the Books tab when an older server's payload omits it; a music payload
+  /// opens the album detail the same way, falling back to the Music tab); the agent
   /// approval queue for a pending fix; the issue thread for an issue/decision
   /// update; and the remediation settings for the auto-dispatch
   /// circuit-breaker notice.
@@ -181,9 +182,10 @@ class PushService {
       case 'new_movie':
       case 'new_episode':
       case 'new_book':
+      case 'new_music':
       // An admin's quality-upgrade alert carries the same identity shape as
       // the new-content payloads (tmdb_id for movie/tv, foreign_id for
-      // books), so it deep-links to the same media detail.
+      // books and music), so it deep-links to the same media detail.
       case 'content_upgraded':
         // Books never carry a TMDB id (the server sends tmdb_id 0; a book is
         // keyed on its Chaptarr foreignBookId, carried as foreign_id on

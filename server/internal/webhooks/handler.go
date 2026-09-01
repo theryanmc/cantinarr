@@ -133,6 +133,15 @@ type arrPayload struct {
 	Books []struct {
 		ID int `json:"id"`
 	} `json:"books"`
+	// Lidarr sends a plural albums list on both grab and import (and a singular
+	// album on delete events). Only the record id is read; identity comes from
+	// a live lookup.
+	Album *struct {
+		ID int `json:"id"`
+	} `json:"album"`
+	Albums []struct {
+		ID int `json:"id"`
+	} `json:"albums"`
 }
 
 // checkPreAirImport hands an import that landed on an unaired episode to the
@@ -198,6 +207,31 @@ func (p arrPayload) bookIDs() []int {
 	}
 	for _, b := range p.Books {
 		add(b.ID)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// albumIDs is bookIDs' Lidarr twin: the usable album record ids in the
+// payload, deduplicated and ordered.
+func (p arrPayload) albumIDs() []int {
+	seen := make(map[int]struct{})
+	var ids []int
+	add := func(id int) {
+		if id <= 0 {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if p.Album != nil {
+		add(p.Album.ID)
+	}
+	for _, a := range p.Albums {
+		add(a.ID)
 	}
 	sort.Ints(ids)
 	return ids
@@ -411,9 +445,11 @@ var musicLibraryEvents = map[string]struct{}{
 // handleMusicEvent applies a Lidarr callback.
 //
 // Music has no TMDB id, so this path never emits request_status_changed;
-// arr_queue_changed is the invalidation ping the app already consumes. Wave
-// one carries no music push category, so an import invalidates and pings but
-// announces nothing — the freshness story is the whole job here.
+// arr_queue_changed is the invalidation ping the app already consumes. The
+// payload is treated purely as a trigger, exactly like handleBookEvent: only
+// the event name and record id are read, and the alert itself is built from a
+// live read of the record, so a drifted or forged body cannot fabricate an
+// alert.
 func (h *Handler) handleMusicEvent(instanceID string, payload arrPayload) {
 	event := lidarr.NormalizeEventType(payload.EventType)
 	if event == "test" {
@@ -425,6 +461,8 @@ func (h *Handler) handleMusicEvent(instanceID string, payload arrPayload) {
 		return
 	}
 
+	// Invalidate before announcing so a user who taps the alert lands on fresh
+	// availability rather than a cached "Requested".
 	h.requests.InvalidateMusicDigests(instanceID)
 	h.hub.Broadcast(ws.Event{
 		Type: "arr_queue_changed",
@@ -433,6 +471,57 @@ func (h *Handler) handleMusicEvent(instanceID string, payload arrPayload) {
 			"service_type": "lidarr",
 		},
 	})
+	if !isImport {
+		return
+	}
+
+	ids := payload.albumIDs()
+	if len(ids) == 0 {
+		log.Printf("webhooks: lidarr %q import carried no album id; leaving it to the queue poller", payload.EventType)
+		return
+	}
+	for _, id := range ids {
+		h.musicImported(instanceID, id, payload.IsUpgrade)
+	}
+}
+
+// musicImported announces a completed album import after confirming it against
+// the live record, applying the same guards as the queue-departure witness so
+// the two witnesses produce an identical alert and dedupe against each other.
+// isUpgrade reroutes the alert to the admin content_upgraded category.
+func (h *Handler) musicImported(instanceID string, albumID int, isUpgrade bool) {
+	if h.content == nil || h.registry == nil {
+		return
+	}
+	client, err := h.registry.GetLidarrClient(instanceID)
+	if err != nil {
+		log.Printf("webhooks: lidarr client for imported album %d: %v", albumID, err)
+		return
+	}
+	album, err := client.GetAlbum(albumID)
+	if err != nil {
+		log.Printf("webhooks: get imported lidarr album %d: %v", albumID, err)
+		return
+	}
+	// Lidarr answers 404 with (nil, nil) for a record deleted between the
+	// import and this read.
+	if album == nil {
+		return
+	}
+	// No file means the import ghosted or the files were already removed; the
+	// queue witness stays silent in the same case.
+	if album.Statistics.TrackFileCount == 0 {
+		return
+	}
+	artist := ""
+	if album.Artist != nil {
+		artist = album.Artist.ArtistName
+	}
+	if isUpgrade {
+		h.content.NotifyUpgradedMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+	} else {
+		h.content.NotifyNewMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+	}
 }
 
 // tokenMatches checks the Basic Auth password against every credential valid

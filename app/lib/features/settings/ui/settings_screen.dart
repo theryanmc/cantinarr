@@ -80,6 +80,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final gates = SettingsSearchGates(
       user: user,
       chaptarrEnabled: connection?.services.chaptarr ?? false,
+      lidarrEnabled: connection?.services.lidarr ?? false,
       donateVisible: _donateVisible,
       phoneAppsVisible: phoneAppsVisible,
       mediaServersVisible: mediaServersVisible,

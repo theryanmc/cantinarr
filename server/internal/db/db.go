@@ -162,8 +162,8 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 -- Per-user push notification preferences. A missing row means "all defaults",
 -- so a user only gets a row once they change something. Defaults match the
 -- self-service API: request_decision off, everything else (request_pending,
--- the new_movie/new_episode/new_book content alerts, ...) on. Kept separate
--- from user_request_settings (admin-managed request policy).
+-- the new_movie/new_episode/new_book/new_music content alerts, ...) on. Kept
+-- separate from user_request_settings (admin-managed request policy).
 CREATE TABLE IF NOT EXISTS notification_prefs (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     request_decision INTEGER NOT NULL DEFAULT 0,
@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS notification_prefs (
     new_movie        INTEGER NOT NULL DEFAULT 1,
     new_episode      INTEGER NOT NULL DEFAULT 1,
     new_book         INTEGER NOT NULL DEFAULT 1,
+    new_music        INTEGER NOT NULL DEFAULT 1,
     issue_created    INTEGER NOT NULL DEFAULT 1,
     agent_action_pending INTEGER NOT NULL DEFAULT 1,
     plex_access_request INTEGER NOT NULL DEFAULT 1,
@@ -973,6 +974,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// address shown to granted users plus the shared library ids, as one
 		// JSON document; '{}' for every other service type.
 		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
+		// Music availability alerts: pushed when a Lidarr album import lands.
+		// On by default like the other new-content categories; the audience is
+		// additionally scoped in SQL to users who can see the instance.
+		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {
