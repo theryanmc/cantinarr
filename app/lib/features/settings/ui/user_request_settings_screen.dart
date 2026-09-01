@@ -263,7 +263,7 @@ class _UserRequestSettingsScreenState
   /// Service types whose default instance is a per-user "source" override.
   /// Download clients and Tautulli are admin-only infrastructure (not a
   /// per-user content source), so they are excluded from this section.
-  static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr'};
+  static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr', 'lidarr'};
 
   Map<String, List<ServiceInstance>> _instancesByType() {
     final instances =
@@ -297,10 +297,11 @@ class _UserRequestSettingsScreenState
         padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
         child: Text(
           'Pin which instance this user defaults to per service. For regular '
-          'users, choosing a Chaptarr instance grants Books access. Admins can '
-          'pin their own request target here too. Below each default, extra '
-          'libraries can be granted so the user chooses per request — a grant '
-          'never moves the default.',
+          'users, choosing a Chaptarr instance grants Books access and a '
+          'Lidarr instance grants Music access. Admins can pin their own '
+          'request target here too. Below each default, extra libraries can '
+          'be granted so the user chooses per request — a grant never moves '
+          'the default.',
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
       ),
@@ -361,9 +362,9 @@ class _UserRequestSettingsScreenState
     required String serviceType,
     required List<ServiceInstance> instances,
   }) {
-    // Chaptarr grants are per-user for regular users. Admins can also use this
-    // setting to pin their own request target.
-    final isChaptarr = serviceType == 'chaptarr';
+    // Chaptarr and Lidarr grants are per-user for regular users. Admins can
+    // also use this setting to pin their own request target.
+    final isGrantOnly = serviceType == 'chaptarr' || serviceType == 'lidarr';
     final value = _defaultInstances[serviceType];
     // Guard against a stored id that's no longer in the instance list.
     final hasValue = value != null && instances.any((i) => i.id == value);
@@ -388,8 +389,8 @@ class _UserRequestSettingsScreenState
           DropdownMenuItem<String?>(
             value: null,
             child: Text(
-              isChaptarr
-                  ? 'No per-user Chaptarr assignment'
+              isGrantOnly
+                  ? 'No per-user ${_serviceLabel(serviceType)} assignment'
                   : 'Inherit (global default)',
               style: const TextStyle(color: AppTheme.textSecondary),
             ),
@@ -414,6 +415,8 @@ class _UserRequestSettingsScreenState
         return 'Sonarr';
       case 'chaptarr':
         return 'Chaptarr';
+      case 'lidarr':
+        return 'Lidarr';
       case 'sabnzbd':
         return 'SABnzbd';
       case 'qbittorrent':

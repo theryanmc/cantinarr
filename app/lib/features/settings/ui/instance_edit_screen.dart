@@ -138,6 +138,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('radarr', 'Radarr'),
     ('sonarr', 'Sonarr'),
     ('chaptarr', 'Chaptarr'),
+    ('lidarr', 'Lidarr'),
     ('sabnzbd', 'SABnzbd'),
     ('qbittorrent', 'qBittorrent'),
     ('nzbget', 'NZBGet'),
@@ -164,9 +165,14 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'transmission';
 
   bool get _supportsWebhook =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+      _serviceType == 'radarr' ||
+      _serviceType == 'sonarr' ||
+      _isChaptarr ||
+      _isLidarr;
 
   bool get _isChaptarr => _serviceType == 'chaptarr';
+
+  bool get _isLidarr => _serviceType == 'lidarr';
 
   /// Media servers (Jellyfin, Emby, Plex): users sign in there to watch, so
   /// the form carries a sign-in address and a shared-library choice instead
@@ -185,7 +191,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Types with no global default: their instances reach users only through
   /// access grants, so the default toggle is hidden and never sent.
-  bool get _grantOnly => _isChaptarr || _isMediaServer;
+  bool get _grantOnly => _isChaptarr || _isLidarr || _isMediaServer;
 
   bool get _supportsMediaDownloads =>
       _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
@@ -203,6 +209,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _serviceType == 'radarr' ||
       _serviceType == 'sonarr' ||
       _isChaptarr ||
+      _isLidarr ||
       _isMediaServer;
 
   /// Chaptarr and media servers have no global default — their instances are
@@ -1002,7 +1009,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return [
       const SizedBox(height: 16),
       Text(
-        _isChaptarr ? 'Assigned Users' : 'User Access',
+        _grantOnly && !_isMediaServer ? 'Assigned Users' : 'User Access',
         style: const TextStyle(
             color: AppTheme.textSecondary,
             fontSize: 13,
@@ -1015,6 +1022,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                 'Books access through this instance (alongside any other '
                 'Chaptarr instance they hold). Unselecting a user removes '
                 'their access.'
+            : _isLidarr
+                ? 'Lidarr instances are assigned per user: selected users get '
+                    'Music access through this instance (alongside any other '
+                    'Lidarr instance they hold). Unselecting a user removes '
+                    'their access.'
             : _isPlex
                 ? 'Selected users get this server under Watch on Plex, '
                     'where they sign in with their own Plex account or share '
@@ -1282,6 +1294,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               .any((instance) => instance.id == chaptarrId)) {
         notifier.setActiveChaptarrInstance(chaptarrId);
       }
+      final lidarrId = activeBefore.activeLidarrInstanceId;
+      if (lidarrId != null &&
+          refreshed.lidarrInstances
+              .any((instance) => instance.id == lidarrId)) {
+        notifier.setActiveLidarrInstance(lidarrId);
+      }
       final downloadId = activeBefore.activeDownloadInstanceId;
       if (downloadId != null &&
           refreshed.downloadInstances
@@ -1382,6 +1400,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://sonarr:8989';
       case 'chaptarr':
         return 'http://chaptarr:8787';
+      case 'lidarr':
+        return 'http://lidarr:8686';
       case 'sabnzbd':
         return 'http://sabnzbd:8080';
       case 'qbittorrent':
@@ -1426,6 +1446,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your Tautulli API key';
       case 'chaptarr':
         return 'Your Chaptarr API key';
+      case 'lidarr':
+        return 'Your Lidarr API key';
       case 'jellyfin':
         return 'Your Jellyfin API key (Dashboard > API Keys)';
       case 'emby':

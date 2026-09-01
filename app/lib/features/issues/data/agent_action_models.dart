@@ -360,6 +360,10 @@ class AgentAction {
       'movie' => 'radarr',
       'tv' => 'sonarr',
       'book' => 'chaptarr',
+      // Music issues are fail-closed server-side this wave; the mapping is
+      // display-only safety so a future row can never pass a wrong-service
+      // check.
+      'music' => 'lidarr',
       _ => '',
     };
     if (expectedService.isNotEmpty && targetService != expectedService) {
@@ -378,6 +382,7 @@ class AgentAction {
   String get instanceServiceLabel => switch (instanceServiceType) {
         'radarr' => 'Radarr',
         'sonarr' => 'Sonarr',
+        'lidarr' => 'Lidarr',
         'chaptarr' => 'Chaptarr',
         final value when value.trim().isNotEmpty => value.trim(),
         _ => 'Unknown service',

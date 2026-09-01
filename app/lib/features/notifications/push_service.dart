@@ -217,6 +217,29 @@ class PushService {
           );
           return;
         }
+        // Music follows the book shape: no TMDB id, keyed on the MusicBrainz
+        // release-group id carried as foreign_id on decision payloads. With a
+        // foreign_id, deep-link to the requester album detail; without one
+        // the Music tab is the only reachable music surface.
+        if (data['media_type'] == 'music') {
+          final foreignId = _asTrimmedString(data['foreign_id']);
+          if (foreignId == null) {
+            router.go('/dashboard/music');
+            return;
+          }
+          final title = _asTrimmedString(data['title']);
+          final instanceId = _asTrimmedString(data['instance_id']);
+          final query = <String>[
+            if (title != null) 'title=${Uri.encodeComponent(title)}',
+            if (instanceId != null)
+              'instance_id=${Uri.encodeComponent(instanceId)}',
+          ];
+          final suffix = query.isEmpty ? '' : '?${query.join('&')}';
+          router.push(
+            '/detail/album/${Uri.encodeComponent(foreignId)}$suffix',
+          );
+          return;
+        }
         final tmdbId = _asInt(data['tmdb_id']);
         if (tmdbId == null || tmdbId <= 0) return;
         final mediaType = data['media_type'] == 'tv' ? 'tv' : 'movie';

@@ -184,6 +184,8 @@ func serviceMediaType(serviceType string) string {
 		return "tv"
 	case "chaptarr":
 		return "book"
+	case "lidarr":
+		return "music"
 	default:
 		return serviceType
 	}
@@ -197,6 +199,8 @@ func mediaServiceType(mediaType string) string {
 		return "sonarr"
 	case "book":
 		return "chaptarr"
+	case "music":
+		return "lidarr"
 	default:
 		return mediaType
 	}

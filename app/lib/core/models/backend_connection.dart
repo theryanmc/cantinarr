@@ -125,6 +125,12 @@ class BackendConnection {
   List<ServiceInstance> get chaptarrInstances =>
       instances.where((i) => i.serviceType == 'chaptarr').toList();
 
+  /// Get all Lidarr (music) instances. Like Chaptarr, the backend only
+  /// includes a lidarr instance for users an admin has explicitly granted
+  /// access, so its mere presence means the user may see the Music module.
+  List<ServiceInstance> get lidarrInstances =>
+      instances.where((i) => i.serviceType == 'lidarr').toList();
+
   /// Get all download client instances, usenet clients (SABnzbd, NZBGet)
   /// before torrent clients (qBittorrent, Transmission); the server's order
   /// is preserved within each group. Every download-client menu and the
@@ -204,6 +210,13 @@ class BackendConnection {
     return chaptarr.firstWhere((i) => i.isDefault,
         orElse: () => chaptarr.first);
   }
+
+  /// Get the default Lidarr instance, if any (the user's granted instance).
+  ServiceInstance? get defaultLidarrInstance {
+    final lidarr = lidarrInstances;
+    if (lidarr.isEmpty) return null;
+    return lidarr.firstWhere((i) => i.isDefault, orElse: () => lidarr.first);
+  }
 }
 
 /// Which services the backend has configured.
@@ -211,6 +224,7 @@ class AvailableServices {
   final bool radarr;
   final bool sonarr;
   final bool chaptarr;
+  final bool lidarr;
   final bool ai;
   final bool tmdb;
   final bool trakt;
@@ -220,6 +234,7 @@ class AvailableServices {
     this.radarr = false,
     this.sonarr = false,
     this.chaptarr = false,
+    this.lidarr = false,
     this.ai = false,
     this.tmdb = false,
     this.trakt = false,
@@ -231,6 +246,7 @@ class AvailableServices {
         radarr: json['radarr'] as bool? ?? false,
         sonarr: json['sonarr'] as bool? ?? false,
         chaptarr: json['chaptarr'] as bool? ?? false,
+        lidarr: json['lidarr'] as bool? ?? false,
         ai: json['ai'] as bool? ?? false,
         tmdb: json['tmdb'] as bool? ?? false,
         trakt: json['trakt'] as bool? ?? false,
@@ -241,6 +257,7 @@ class AvailableServices {
         'radarr': radarr,
         'sonarr': sonarr,
         'chaptarr': chaptarr,
+        'lidarr': lidarr,
         'ai': ai,
         'tmdb': tmdb,
         'trakt': trakt,

@@ -1004,14 +1004,14 @@ func passthrough(eventType string, data map[string]interface{}) map[string]any {
 	if v := str(data["media_type"]); v != "" {
 		out["media_type"] = v
 	}
-	// Books have no TMDB id. Keep the canonical identity, selected library, title
-	// hint, and decision scope together so a tap cannot drift to whichever
-	// Chaptarr instance happens to be active later. Movie/TV payloads remain
-	// unchanged.
+	// Books and music have no TMDB id. Keep the canonical identity, selected
+	// library, title hint, and (for books) decision scope together so a tap
+	// cannot drift to whichever instance happens to be active later. Movie/TV
+	// payloads remain unchanged.
 	if v := str(data["foreign_id"]); v != "" {
 		out["foreign_id"] = v
 	}
-	if str(data["media_type"]) == "book" {
+	if mediaType := str(data["media_type"]); mediaType == "book" || mediaType == "music" {
 		if v := str(data["instance_id"]); v != "" {
 			out["instance_id"] = v
 		}

@@ -25,6 +25,13 @@ type setupItem struct {
 	// Optional separates "the app doesn't work without this" (Radarr/Sonarr/
 	// TMDB) from features an admin may deliberately skip.
 	Optional bool `json:"optional"`
+	// Skipped marks an optional item an admin acknowledged and dismissed, so
+	// clients can stop counting it as unfinished without a persistent nag.
+	// Only optional items ever carry it — an essential in the stored skip set
+	// is ignored rather than silenced — and a skipped item that later becomes
+	// configured simply reads as configured. Stored server-wide (the
+	// checklist grades the server, not a device) and reversible in place.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // setupFacts is the configuration state the checklist derives from, gathered by
@@ -33,6 +40,7 @@ type setupFacts struct {
 	HasRadarr         bool
 	HasSonarr         bool
 	HasChaptarr       bool
+	HasLidarr         bool
 	HasDownloadClient bool
 	MediaDownloads    bool
 	HasTautulli       bool
@@ -160,6 +168,13 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "music",
+			Title:       "Music (Lidarr)",
+			Description: "Let users request albums; access is granted per user.",
+			Configured:  f.HasLidarr,
+			Optional:    true,
+		},
+		{
 			Key:         "ai",
 			Title:       "AI assistant",
 			Description: "Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
@@ -193,6 +208,8 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasSonarr = true
 				case "chaptarr":
 					facts.HasChaptarr = true
+				case "lidarr":
+					facts.HasLidarr = true
 				case "tautulli":
 					facts.HasTautulli = true
 				case "sabnzbd", "qbittorrent", "nzbget", "transmission":
@@ -221,6 +238,19 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 		}
 
 		items := buildSetupItems(facts)
+		if serverSettings != nil {
+			skipped := make(map[string]bool)
+			for _, key := range serverSettings.Get().SetupSkippedItems {
+				skipped[key] = true
+			}
+			for i := range items {
+				// Optional-only: a skip stored against an essential (a
+				// downgraded build, a hand-edited row) fails toward showing
+				// the item rather than silencing something the server cannot
+				// work without.
+				items[i].Skipped = items[i].Optional && skipped[items[i].Key]
+			}
+		}
 		configured := 0
 		for _, item := range items {
 			if item.Configured {
@@ -234,5 +264,50 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 			"configured": configured,
 			"total":      len(items),
 		})
+	}
+}
+
+// setupSkipHandler records or clears one checklist skip. Only keys the
+// current build's checklist actually contains may be written, and only
+// optional ones: an essential can never be acknowledged away, because the
+// alarm it carries is about capability, not tidiness.
+func setupSkipHandler(serverSettings *serversettings.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if serverSettings == nil {
+			http.Error(w, `{"error":"setup skips are unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		var body struct {
+			Key     string `json:"key"`
+			Skipped bool   `json:"skipped"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		// Keys and optionality are static facts about the item list, so an
+		// empty facts build enumerates them without touching configuration.
+		valid := false
+		for _, item := range buildSetupItems(setupFacts{}) {
+			if item.Key != body.Key {
+				continue
+			}
+			if !item.Optional {
+				http.Error(w, `{"error":"only optional setup items can be skipped"}`, http.StatusBadRequest)
+				return
+			}
+			valid = true
+			break
+		}
+		if !valid {
+			http.Error(w, `{"error":"unknown setup item"}`, http.StatusBadRequest)
+			return
+		}
+		if _, err := serverSettings.SetSetupItemSkipped(body.Key, body.Skipped); err != nil {
+			http.Error(w, `{"error":"could not save the skip"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"key": body.Key, "skipped": body.Skipped})
 	}
 }
