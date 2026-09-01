@@ -209,6 +209,70 @@ void main() {
         reason: 'no mappings means the arr is never asked for file records');
     expect(find.textContaining('Download track'), findsNothing);
   });
+
+  testWidgets('an owned album offers Report a problem when reporting is on',
+      (tester) async {
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    );
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+      state: _musicReportingState,
+    );
+
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(find.text('Report a problem'), findsOneWidget);
+  });
+
+  testWidgets(
+      'no report entry without the server toggle or without a library record',
+      (tester) async {
+    // Reporting off: an owned album still shows no entry.
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    );
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+    expect(find.text('Report a problem'), findsNothing);
+  });
+
+  testWidgets('an unowned album cannot be reported even with reporting on',
+      (tester) async {
+    // No library record means nothing to remediate; the gate mirrors books.
+    final adapter = _MusicAdapter();
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+      state: _musicReportingState,
+    );
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+    expect(find.text('Report a problem'), findsNothing);
+  });
 }
 
 /// The downloads-enabled twin of [_musicState]: the instance reports saved
@@ -226,6 +290,26 @@ const _musicDownloadsState = AuthState(
         name: 'Music',
         isDefault: true,
         mediaDownloads: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+/// The reporting-enabled twin of [_musicState].
+const _musicReportingState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(lidarr: true),
+    allowReporting: true,
+    instances: [
+      ServiceInstance(
+        id: 'music-1',
+        serviceType: 'lidarr',
+        name: 'Music',
+        isDefault: true,
       ),
     ],
   ),
