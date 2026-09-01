@@ -313,6 +313,100 @@ void main() {
   });
 
   testWidgets(
+      'a Music-tab question reaches the assistant framed while the bubble '
+      'shows the raw text', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final chatNotifier = _FakeAiChatNotifier();
+    final router = GoRouter(
+      initialLocation: '/dashboard/music',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) =>
+              AppShell(currentPath: state.uri.path, child: child),
+          routes: [
+            GoRoute(
+              path: '/dashboard/music',
+              builder: (_, __) => const Scaffold(body: Text('Music home')),
+            ),
+          ],
+        ),
+        GoRoute(
+          path: '/assistant',
+          builder: (_, __) => const AiChatScreen(aiAvailable: true),
+        ),
+      ],
+    );
+
+    final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+      ..httpClientAdapter = const _JsonAdapter();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(() => _FakeAuthNotifier(_musicAiState)),
+          backendClientProvider.overrideWithValue(dio),
+          aiChatProvider.overrideWith((ref) {
+            ref.keepAlive();
+            return chatNotifier;
+          }),
+          codexConnectionStatusProvider.overrideWith(
+            (_) => const CodexConnectionStatus(
+              selected: false,
+              available: false,
+              connected: false,
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.byType(TextField).first, 'what should I listen to next?');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    // Arm the pause detector behind the Ask AI pill; bounded pumps only from
+    // here — the pill's shimmer repeats forever while aiReady, so
+    // pumpAndSettle would never return.
+    await tester.pump(const Duration(milliseconds: 1200));
+    await tester.pump(const Duration(milliseconds: 150));
+    await tester.tap(find.text('Ask AI'));
+    await tester.pump();
+
+    await tester.tap(find.byIcon(Icons.send_rounded));
+    await tester.pumpAndSettle();
+
+    expect(
+      chatNotifier.sentMessage,
+      'what should I listen to next?',
+      reason: 'the bubble renders the raw text, never the framing — '
+          'whole-string equality',
+    );
+    expect(chatNotifier.sentWireContent, isNotNull);
+    expect(
+      chatNotifier.sentWireContent,
+      startsWith('Context: this question was asked from the Music tab'),
+    );
+    expect(
+      chatNotifier.sentWireContent,
+      endsWith('what should I listen to next?'),
+      reason: "the user's own words are appended unchanged, never reworded",
+    );
+    expect(
+      find.byType(AiChatScreen),
+      findsOneWidget,
+      reason: 'the assistant still opens with the prompt in flight',
+    );
+  });
+
+  testWidgets(
       'Ask AI pill surfaces on typed pause and never lingers on an empty field',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -1496,6 +1590,26 @@ const _authenticatedAiState = AuthState(
     services: AvailableServices(ai: true),
   ),
   user: UserProfile(id: 1, username: 'tester', role: 'admin'),
+);
+
+/// The music twin of [_authenticatedAiState]: AI plus a Lidarr grant, so the
+/// Music tab exists to hand a question off from.
+const _musicAiState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(ai: true, lidarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'music-1',
+        serviceType: 'lidarr',
+        name: 'Music',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
 );
 
 /// SEARCH-05 pin fixture: AI is off (all services false) so `SearchMode`

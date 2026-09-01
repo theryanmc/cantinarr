@@ -460,6 +460,9 @@ func (h *Handler) configuredServices() []string {
 	if h.toolServer.GetChaptarr() != nil {
 		services = append(services, "Chaptarr (books)")
 	}
+	if h.toolServer.GetLidarr() != nil {
+		services = append(services, "Lidarr (music)")
+	}
 	return services
 }
 

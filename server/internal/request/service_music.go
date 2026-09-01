@@ -795,3 +795,108 @@ func clientReachableAlbumCover(album lidarr.Album) string {
 func clientReachableArtistImage(artist lidarr.Artist) string {
 	return lidarrClientReachableImage(artist.Images, "poster")
 }
+
+// MusicSearchResult is one album row from a user-scoped Lidarr metadata
+// lookup, shaped for the AI tools (search_music / display_media).
+type MusicSearchResult struct {
+	Title          string `json:"title"`
+	ArtistName     string `json:"artist_name,omitempty"`
+	Year           int    `json:"year,omitempty"`
+	ForeignAlbumID string `json:"foreign_album_id"`
+	Overview       string `json:"overview,omitempty"`
+	RemoteCover    string `json:"remote_cover,omitempty"`
+}
+
+// ErrNoLidarrAccess reports that the user has no usable Lidarr instance (none
+// configured, or no per-user music grant).
+var ErrNoLidarrAccess = errors.New("music is not available for this account")
+
+// musicSearchCacheTTL keeps just-searched results addressable by foreign id
+// for the immediate follow-up (display_media verification) without
+// re-querying Lidarr once per displayed item.
+const musicSearchCacheTTL = 60 * time.Second
+
+// SearchAlbumsForUser looks a query up on the user's effective Lidarr
+// instance (their per-user grant, or the admin default for admins) — the same
+// resolution every music request uses, so the AI assistant sees exactly the
+// catalog the Music tab would.
+func (s *Service) SearchAlbumsForUser(userID int64, query string) ([]MusicSearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	client, instanceID, err := s.resolveLidarr(userID, "")
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, ErrNoLidarrAccess
+	}
+	results, err := client.LookupAlbum(query)
+	if err != nil {
+		return nil, fmt.Errorf("album lookup: %w", err)
+	}
+	out := make([]MusicSearchResult, 0, len(results))
+	for _, r := range results {
+		if strings.TrimSpace(r.ForeignAlbumID) == "" {
+			continue // not addressable by any request flow
+		}
+		cover := externalCoverURL(r.RemoteCover)
+		for _, img := range r.Images {
+			if remote := externalCoverURL(img.RemoteURL); remote != "" {
+				cover = remote // images[].remoteUrl is the repo-preferred source
+				break
+			}
+		}
+		artist := ""
+		if r.Artist != nil {
+			artist = r.Artist.ArtistName
+		}
+		year := 0
+		if r.ReleaseDate != nil {
+			year = r.ReleaseDate.Year()
+		}
+		result := MusicSearchResult{
+			Title:          r.Title,
+			ArtistName:     artist,
+			Year:           year,
+			ForeignAlbumID: r.ForeignAlbumID,
+			Overview:       r.Overview,
+			RemoteCover:    cover,
+		}
+		out = append(out, result)
+		if s.libraryCache != nil {
+			if data, err := json.Marshal(result); err == nil {
+				s.libraryCache.Set(musicSearchCacheKey(instanceID, r.ForeignAlbumID), data, musicSearchCacheTTL)
+			}
+		}
+	}
+	return out, nil
+}
+
+func musicSearchCacheKey(instanceID, foreignID string) string {
+	return "musicsearch|" + instanceID + "|" + foreignID
+}
+
+// CachedAlbumByForeignID returns an album the user's own recent search
+// surfaced, keyed by foreign id on their effective instance. It performs no
+// network I/O: a miss means the id was not in a recent search and the caller
+// must re-verify with a live lookup (or reject).
+func (s *Service) CachedAlbumByForeignID(userID int64, foreignID string) (*MusicSearchResult, bool) {
+	if s.libraryCache == nil {
+		return nil, false
+	}
+	_, instanceID, err := s.resolveLidarr(userID, "")
+	if err != nil || instanceID == "" {
+		return nil, false
+	}
+	data, ok := s.libraryCache.Get(musicSearchCacheKey(instanceID, strings.TrimSpace(foreignID)))
+	if !ok {
+		return nil, false
+	}
+	var result MusicSearchResult
+	if json.Unmarshal(data, &result) != nil {
+		return nil, false
+	}
+	return &result, true
+}

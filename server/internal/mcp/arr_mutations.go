@@ -51,7 +51,7 @@ func mutationNotStarted(detail string) (string, error) {
 }
 
 // CustomFormatMutator is the complete remote surface used by the canonical
-// custom-format upsert. Radarr, Sonarr, and Chaptarr clients satisfy it.
+// custom-format upsert. Radarr, Sonarr, Chaptarr, and Lidarr clients satisfy it.
 type CustomFormatMutator interface {
 	GetCustomFormatsRawContext(context.Context) ([]json.RawMessage, error)
 	GetQualityProfilesRawContext(context.Context) ([]json.RawMessage, error)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -240,6 +241,31 @@ func (s *ToolServer) GetChaptarrFor(instanceID string) *chaptarr.Client {
 	return nil
 }
 
+// GetLidarr returns the default Lidarr client. Lidarr has no global default
+// flag (grant-only, like Chaptarr), so GetDefaultLidarrClient resolves an
+// arbitrary configured instance (and returns a nil client, no error, when
+// none is configured).
+func (s *ToolServer) GetLidarr() *lidarr.Client {
+	return s.GetLidarrFor("")
+}
+
+func (s *ToolServer) GetLidarrFor(instanceID string) *lidarr.Client {
+	if s.registry != nil {
+		if instanceID != "" {
+			client, err := s.registry.GetLidarrClient(instanceID)
+			if err == nil {
+				return client
+			}
+			return nil
+		}
+		client, _, err := s.registry.GetDefaultLidarrClient()
+		if err == nil && client != nil {
+			return client
+		}
+	}
+	return nil
+}
+
 // AllTools returns every tool definition regardless of enabled state.
 func (s *ToolServer) AllTools() []Tool {
 	return toolDefinitions
@@ -368,6 +394,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.listMyRequests(callCtx.UserID)
 	case "search_books":
 		return s.searchBooks(input, callCtx.UserID)
+	case "search_music":
+		return s.searchMusic(input, callCtx.UserID)
 	case "display_media":
 		return s.displayMedia(input, callCtx.UserID)
 	case "get_queue":
@@ -400,6 +428,8 @@ func (s *ToolServer) ExecuteTool(ctx context.Context, name string, input json.Ra
 		return s.getServiceConfig(input, callCtx.InstanceID)
 	case "get_book_timeline":
 		return s.getBookTimeline(input, callCtx.InstanceID)
+	case "get_album_timeline":
+		return s.getAlbumTimeline(input, callCtx.InstanceID)
 	case "get_manual_import_candidates":
 		return s.getManualImportCandidates(input, callCtx.InstanceID)
 	case "execute_manual_import":

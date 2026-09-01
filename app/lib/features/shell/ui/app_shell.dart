@@ -329,6 +329,13 @@ class _AppShellState extends ConsumerState<AppShell>
       'book library. Treat it as a question about books, authors and '
       'reading.\n\n';
 
+  /// The Music tab's twin of [_booksAiHandoffPrefix] — the same compile-time
+  /// literal rule (T-04-01: nothing interpolated; user text only appended).
+  static const String _musicAiHandoffPrefix = 'Context: this question was '
+      'asked from the Music tab of Cantinarr, which searches the user\'s '
+      'music library. Treat it as a question about albums, artists and '
+      'listening.\n\n';
+
   /// Shows the books of an author the library does not hold, by running the
   /// search the user could have typed themselves.
   ///
@@ -347,6 +354,9 @@ class _AppShellState extends ConsumerState<AppShell>
     _searchController.text = term;
     _searchController.selection =
         TextSelection.collapsed(offset: term.length);
+    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
+    // rather than firing off the tap that just happened.
+    _resetAskAiIdle();
     ref.read(shellMusicSearchProvider.notifier).updateSearch(term);
   }
 
@@ -370,9 +380,14 @@ class _AppShellState extends ConsumerState<AppShell>
     // Captured before `_exitAiMode()`/the route push change `currentPath` —
     // reading it from inside the post-frame callback below would ask "which
     // tab am I on?" of the assistant route and always answer "not Books".
-    final wireContent = _isBooksTab(widget.currentPath)
-        ? '$_booksAiHandoffPrefix$text'
-        : null;
+    final String? wireContent;
+    if (_isBooksTab(widget.currentPath)) {
+      wireContent = '$_booksAiHandoffPrefix$text';
+    } else if (_isMusicTab(widget.currentPath)) {
+      wireContent = '$_musicAiHandoffPrefix$text';
+    } else {
+      wireContent = null;
+    }
 
     _exitAiMode();
     context.push('/assistant');

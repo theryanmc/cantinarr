@@ -79,7 +79,7 @@ func TestArrToolsOfferOptionalInstanceID(t *testing.T) {
 		"trigger_search", "search_releases", "grab_release",
 		"remove_queue_item", "get_disk_space", "get_arr_health",
 		"get_episode_timeline", "get_media_file_details", "get_service_config",
-		"get_book_timeline", "diagnose_queue", "get_manual_import_candidates",
+		"get_book_timeline", "get_album_timeline", "diagnose_queue", "get_manual_import_candidates",
 		"execute_manual_import", "remediate_queue_item", "rescan_media",
 	} {
 		tool := findToolDefinition(name)

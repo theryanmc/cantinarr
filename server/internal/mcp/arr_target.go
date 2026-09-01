@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -83,6 +84,19 @@ func (s *ToolServer) chaptarrTargetFor(modelID, callID string) (*chaptarr.Client
 		return nil, "", "Chaptarr is not configured."
 	}
 	return client, s.arrTargetLabel("chaptarr", instanceID), ""
+}
+
+// lidarrTargetFor is radarrTargetFor's Lidarr twin.
+func (s *ToolServer) lidarrTargetFor(modelID, callID string) (*lidarr.Client, string, string) {
+	instanceID := arrToolInstanceID(modelID, callID)
+	client := s.GetLidarrFor(instanceID)
+	if client == nil {
+		if callID == "" && modelID != "" && s.registry != nil {
+			return nil, "", s.instanceResolveFailureText("lidarr", modelID)
+		}
+		return nil, "", "Lidarr is not configured."
+	}
+	return client, s.arrTargetLabel("lidarr", instanceID), ""
 }
 
 // arrClientsFor resolves all three service clients for the helper-style tools
