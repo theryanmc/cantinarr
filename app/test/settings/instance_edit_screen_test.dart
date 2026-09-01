@@ -999,6 +999,52 @@ void main() {
     expect(find.text('Choose a service type'), findsNothing);
   });
 
+  testWidgets(
+      'Lidarr hides the default toggle, assigns selected users, and installs '
+      'its webhook on create', (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester,
+        adapter: adapter, users: [_user(1, 'alice'), _user(2, 'bob')]);
+
+    // Switch the service type to Lidarr.
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Lidarr').last);
+    await tester.pumpAndSettle();
+
+    // Grant-only like Chaptarr: no global default, per-user assignment.
+    expect(
+        find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
+    expect(find.text('Assigned Users'), findsOneWidget);
+    // Media downloads are deliberately not offered for music this wave.
+    expect(find.textContaining('path mapping'), findsNothing);
+
+    await _fillForm(tester, 'Music');
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests
+        .singleWhere((r) => r.method == 'POST' && r.path == '/api/instances');
+    expect(post.body['service_type'], 'lidarr');
+    expect(post.body['is_default'], isFalse);
+    final putGrants = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' &&
+        r.path == '/api/instances/lidarr-new/grant-users');
+    expect(putGrants.body, {
+      'user_ids': [1]
+    });
+    // Instant updates install automatically at create, exactly like the
+    // other webhook-capable arrs.
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'POST' &&
+          r.path == '/api/instances/lidarr-new/webhook'),
+      isTrue,
+    );
+  });
+
   testWidgets('offers instant updates for a Chaptarr instance',
       (tester) async {
     // Books are the surface that needs this most: a small ebook can finish

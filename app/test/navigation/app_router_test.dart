@@ -12,6 +12,7 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/set_password_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
+import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -242,6 +243,79 @@ void main() {
     expect(screen.instanceId, 'books-two');
   });
 
+  testWidgets('music route requires the Lidarr grant', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
+  testWidgets('music route remains available with the Lidarr grant',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/music');
+  });
+
+  testWidgets('album detail route requires the Lidarr grant', (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _authedState);
+
+    router.go('/detail/album/mb-1234');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
+  testWidgets('album detail route resolves and preserves a pinned instance',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/mb-1234?instance_id=music-two');
+    await tester.pumpAndSettle();
+
+    final screen = tester.widget<RequesterAlbumDetailScreen>(
+      find.byType(RequesterAlbumDetailScreen),
+    );
+    expect(screen.foreignId, 'mb-1234');
+    expect(screen.instanceId, 'music-two');
+  });
+
+  testWidgets('a blank album detail id degrades to the Music tab',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _musicState);
+
+    router.go('/detail/album/%20');
+    await tester.pumpAndSettle();
+
+    expect(router.routeInformationProvider.value.uri.path, '/dashboard/music');
+  });
+
+  testWidgets('a Chaptarr grant alone opens no music surface',
+      (tester) async {
+    // The two grant-only modules gate independently: holding Books must not
+    // leak Music, and the redirect degrades to the movies dashboard.
+    final (:router, container: _) = await _pumpRouter(tester, _booksState);
+
+    router.go('/dashboard/music');
+    await tester.pumpAndSettle();
+
+    expect(
+      router.routeInformationProvider.value.uri.path,
+      '/dashboard/movies',
+    );
+  });
+
   testWidgets('instance/new carries the checklist extras into the form',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(tester, _adminState);
@@ -429,6 +503,24 @@ const _booksState = AuthState(
         id: 'books',
         serviceType: 'chaptarr',
         name: 'Books',
+        isDefault: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
+
+const _musicState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(lidarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'music',
+        serviceType: 'lidarr',
+        name: 'Music',
         isDefault: true,
       ),
     ],
