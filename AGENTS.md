@@ -50,7 +50,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 
 - **The live DB schema is code, not SQL files.** It lives in `server/internal/db/db.go` (`initSQL` plus the in-code migration/`ALTER` list). Schema changes go there.
 - **Never trust a stored copy of *arr state.** Admins edit Radarr/Sonarr/Chaptarr directly, so any snapshot drifts. Availability and library state are computed live from the arrs; if you must cache, you must also have a freshness story (webhook invalidation, short TTL, or refetch-on-view).
-- **Media types vs service types.** `movie`/`tv`/`book` describe media; `radarr`/`sonarr`/`chaptarr` describe services. Store and compare media types — don't substitute one for the other.
+- **Media types vs service types.** `movie`/`tv`/`book`/`music` describe media; `radarr`/`sonarr`/`chaptarr`/`lidarr` describe services. Store and compare media types — don't substitute one for the other.
 - **Never silently dedupe or merge distinct records in search results.** Surface each record and let the user decide (e.g. two library entries for the same title are two results).
 - **Instance URLs resolve only from the server; clients must never dereference arr-origin URLs.** Cluster-internal names (`http://radarr:7878`) are a supported production configuration, so anything handed to a client must be client-reachable: use `images[].remoteUrl` (external CDN) for artwork, resolve arr-relative paths through `/api/instances/{id}/…`, and never surface an arr-origin absolute URL from a proxied body. Server-side, keep hosts out of error strings that can reach non-admins.
 - **Secrets stay server-side and encrypted.** Instance API keys and credentials are AES-256-GCM encrypted at rest; never log them, return them in API responses, or write them into docs/examples.
@@ -68,6 +68,7 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
 | `docs/books-setup.md` | End-to-end book automation setup: Chaptarr instance, per-user access grant (no global default), instant updates, download path mappings |
+| `docs/music-setup.md` | End-to-end music automation setup: Lidarr instance, per-user access grant (no global default), instant updates, how requests pick profiles |
 | `docs/store-release.md` | Store release pipeline: how builds reach TestFlight/Play, signing secrets, one-time store-console setup |
 | [`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid) | Unraid Community Applications listing: published port, appdata path, the deployment env vars an admin is offered, and the listing copy |
 | `AGENTS.md` | Workflows, verification, conventions (this file) |
