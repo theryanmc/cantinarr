@@ -12,6 +12,9 @@ import '../../../core/widgets/cached_image.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
 import '../../lidarr/data/lidarr_image.dart';
 import '../../lidarr/data/lidarr_models.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../../media_download/data/media_download_models.dart';
+import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/album_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/album_request_panel.dart';
@@ -63,6 +66,16 @@ class _RequesterAlbumDetailScreenState
   /// once known.
   String? _canonicalForeignId;
 
+  /// Live Lidarr file records for the owned album, fetched only when this
+  /// instance offers downloads. Lookup records and the requester digest lack
+  /// trustworthy numeric ids, so only this live list backs downloads.
+  List<LidarrTrackFile> _trackFiles = const [];
+
+  /// Track records keyed by the file that holds them — the naming join, so a
+  /// download row reads "3. Track Title" instead of a file basename.
+  Map<int, LidarrTrack> _trackByFileId = const {};
+  int _recordsLoadGeneration = 0;
+
   String get _effectiveForeignId => _canonicalForeignId ?? widget.foreignId;
 
   @override
@@ -104,8 +117,11 @@ class _RequesterAlbumDetailScreenState
     _canonicalForeignId = null;
     _metadataLoading = widget.initialAlbum == null &&
         (widget.titleHint?.trim().isNotEmpty ?? false);
+    _trackFiles = const [];
+    _trackByFileId = const {};
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _resolveMetadata(generation);
+      _resolveTrackFiles();
     });
   }
 
@@ -171,6 +187,108 @@ class _RequesterAlbumDetailScreenState
   Future<void> _refreshMusicTruth() async {
     ref.invalidate(ownedAlbumsForInstanceProvider(_instanceId));
     ref.read(libraryRefreshTickProvider.notifier).state++;
+    _resolveTrackFiles();
+  }
+
+  /// Resolves the live album record and its files for the download button.
+  /// Gated on the instance actually offering downloads (server-computed:
+  /// explicit path mappings exist), which also covers admins — without
+  /// mappings the server has no bytes to serve anyone.
+  Future<void> _resolveTrackFiles() async {
+    final auth = ref.read(authProvider).valueOrNull;
+    final downloadsEnabled =
+        auth?.connection?.mediaDownloadsEnabledFor(_instanceId) ?? false;
+    if (!downloadsEnabled) return;
+    final service = _lidarrService();
+    if (service == null) return;
+    final generation = ++_recordsLoadGeneration;
+    try {
+      final albums = await service.getAlbums();
+      LidarrAlbum? record;
+      for (final album in albums) {
+        if (album.id > 0 && album.foreignAlbumId == _effectiveForeignId) {
+          record = album;
+          break;
+        }
+      }
+      if (record == null) {
+        if (mounted && generation == _recordsLoadGeneration) {
+          setState(() {
+            _trackFiles = const [];
+            _trackByFileId = const {};
+          });
+        }
+        return;
+      }
+      final results = await Future.wait([
+        service.getTrackFiles(albumId: record.id),
+        service.getTracks(albumId: record.id).then<List<LidarrTrack>>(
+          (tracks) => tracks,
+          onError: (_) => const <LidarrTrack>[],
+        ),
+      ]);
+      final files = (results[0] as List<LidarrTrackFile>)
+          .where((file) => file.id > 0)
+          .toList(growable: false);
+      final byFile = <int, LidarrTrack>{};
+      for (final track in results[1] as List<LidarrTrack>) {
+        if (track.trackFileId > 0) {
+          byFile.putIfAbsent(track.trackFileId, () => track);
+        }
+      }
+      if (!mounted || generation != _recordsLoadGeneration) return;
+      setState(() {
+        _trackFiles = files;
+        _trackByFileId = byFile;
+      });
+    } catch (_) {
+      // The page stays useful without downloads; the button simply
+      // doesn't render, exactly like an instance with no mappings.
+    }
+  }
+
+  /// One download choice per file on disk, ordered by disc + track number
+  /// (unmatched files trail, by name). Labels come from the track record —
+  /// "3. Track Title" — with the file basename as the fallback.
+  List<MediaDownloadChoice> _trackDownloadChoices() {
+    final ordered = [..._trackFiles];
+    int orderOf(LidarrTrackFile file) {
+      final track = _trackByFileId[file.id];
+      if (track == null) return 1 << 20;
+      return track.mediumNumber * 1000 + track.absoluteTrackNumber;
+    }
+
+    ordered.sort((a, b) {
+      final byTrack = orderOf(a).compareTo(orderOf(b));
+      if (byTrack != 0) return byTrack;
+      return a.fileName.compareTo(b.fileName);
+    });
+    return [
+      for (final file in ordered)
+        MediaDownloadChoice(
+          fileId: file.id,
+          label: _trackLabel(file),
+          subtitle: _trackDetails(file),
+          reportedPath: file.path,
+        ),
+    ];
+  }
+
+  String? _trackDetails(LidarrTrackFile file) {
+    final details = [
+      if (file.qualityName?.isNotEmpty ?? false) file.qualityName!,
+      if (file.size > 0) file.sizeFormatted,
+    ].join(' · ');
+    return details.isEmpty ? null : details;
+  }
+
+  String _trackLabel(LidarrTrackFile file) {
+    final track = _trackByFileId[file.id];
+    if (track == null || track.title.isEmpty) return file.fileName;
+    final number =
+        track.absoluteTrackNumber > 0 ? '${track.absoluteTrackNumber}. ' : '';
+    final disc = track.mediumNumber > 1 ? 'Disc ${track.mediumNumber} · ' : '';
+    return '$disc$number${track.title}';
   }
 
   @override
@@ -311,6 +429,18 @@ class _RequesterAlbumDetailScreenState
             onCanonicalForeignId: _onCanonicalForeignId,
             onRequestCompleted: _onRequestCompleted,
           ),
+          if (instanceId != null && _trackFiles.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            MediaDownloadChoiceButton(
+              instanceId: instanceId,
+              choices: _trackDownloadChoices(),
+              label: _trackFiles.length == 1
+                  ? 'Download track'
+                  : 'Download tracks',
+              sheetTitle: 'Download a track',
+              outlined: true,
+            ),
+          ],
           if (genres.isNotEmpty) ...[
             const SizedBox(height: 22),
             Wrap(

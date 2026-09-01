@@ -714,3 +714,67 @@ class LidarrRelease {
     return '<1h';
   }
 }
+/// One completed music file on disk, as Lidarr reports it. The id is what the
+/// media-download ticket API takes; [path] is the arr-reported path the
+/// coverage check maps against the server's roots.
+class LidarrTrackFile {
+  final int id;
+  final int albumId;
+  final String path;
+  final int size;
+  final String? qualityName;
+
+  const LidarrTrackFile({
+    required this.id,
+    this.albumId = 0,
+    this.path = '',
+    this.size = 0,
+    this.qualityName,
+  });
+
+  factory LidarrTrackFile.fromJson(Map<String, dynamic> json) =>
+      LidarrTrackFile(
+        id: json['id'] as int? ?? 0,
+        albumId: json['albumId'] as int? ?? 0,
+        path: json['path'] as String? ?? '',
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        qualityName: (json['quality'] as Map<String, dynamic>?)?['quality']
+            ?['name'] as String?,
+      );
+
+  String get sizeFormatted => _formatBytes(size);
+
+  /// The file's basename, the label fallback when no track record names it.
+  String get fileName {
+    final segments = path.split(RegExp(r'[\\/]'));
+    return segments.isEmpty ? path : segments.last;
+  }
+}
+
+/// One track of an album — the naming join for downloads: a track knows its
+/// number, title, and which file (if any) holds it.
+class LidarrTrack {
+  final int id;
+  final int trackFileId;
+  final int absoluteTrackNumber;
+  final int mediumNumber;
+  final String title;
+
+  const LidarrTrack({
+    required this.id,
+    this.trackFileId = 0,
+    this.absoluteTrackNumber = 0,
+    this.mediumNumber = 0,
+    this.title = '',
+  });
+
+  factory LidarrTrack.fromJson(Map<String, dynamic> json) => LidarrTrack(
+        id: json['id'] as int? ?? 0,
+        trackFileId: json['trackFileId'] as int? ?? 0,
+        absoluteTrackNumber: (json['absoluteTrackNumber'] as num?)?.toInt() ??
+            int.tryParse(json['trackNumber']?.toString() ?? '') ??
+            0,
+        mediumNumber: (json['mediumNumber'] as num?)?.toInt() ?? 0,
+        title: json['title'] as String? ?? '',
+      );
+}

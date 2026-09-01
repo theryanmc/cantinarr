@@ -151,9 +151,9 @@ func (h *Handler) applyMediaPathMappings(inst *Instance, provided *[]mediapath.M
 		return nil
 	}
 
-	if inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" {
+	if inst.ServiceType != "radarr" && inst.ServiceType != "sonarr" && inst.ServiceType != "chaptarr" && inst.ServiceType != "lidarr" {
 		if len(*provided) > 0 {
-			return fmt.Errorf("media path mappings are supported only for Radarr, Sonarr, and Chaptarr")
+			return fmt.Errorf("media path mappings are supported only for Radarr, Sonarr, Chaptarr, and Lidarr")
 		}
 		inst.MediaDownloadMode = MediaDownloadModeDisabled
 		inst.MediaPathMappings = nil

@@ -194,7 +194,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   bool get _grantOnly => _isChaptarr || _isLidarr || _isMediaServer;
 
   bool get _supportsMediaDownloads =>
-      _serviceType == 'radarr' || _serviceType == 'sonarr' || _isChaptarr;
+      _serviceType == 'radarr' ||
+      _serviceType == 'sonarr' ||
+      _isChaptarr ||
+      _isLidarr;
 
   bool get _shouldSubmitMediaPathMappings =>
       _supportsMediaDownloads &&

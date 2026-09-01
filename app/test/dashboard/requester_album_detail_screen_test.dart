@@ -106,7 +106,131 @@ void main() {
         reason: 'an outage must not mint requests');
     expect(find.textContaining('could not be read'), findsOneWidget);
   });
+
+  testWidgets('a downloads-enabled instance offers labelled per-track rows',
+      (tester) async {
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    )
+      ..libraryAlbums = const [
+        {'id': 9, 'title': 'Pinkerton', 'artistId': 4, 'foreignAlbumId': 'mb-1'},
+      ]
+      ..trackFiles = const [
+        {
+          'id': 72,
+          'albumId': 9,
+          'path': '/music/Weezer/Pinkerton/02 - Getchoo.flac',
+          'size': 31000000,
+          'quality': {
+            'quality': {'name': 'FLAC'}
+          },
+        },
+        {
+          'id': 71,
+          'albumId': 9,
+          'path': '/music/Weezer/Pinkerton/01 - Tired of Sex.flac',
+          'size': 30000000,
+          'quality': {
+            'quality': {'name': 'FLAC'}
+          },
+        },
+      ]
+      ..tracks = const [
+        {
+          'id': 2,
+          'trackFileId': 72,
+          'absoluteTrackNumber': 2,
+          'title': 'Getchoo',
+        },
+        {
+          'id': 1,
+          'trackFileId': 71,
+          'absoluteTrackNumber': 1,
+          'title': 'Tired of Sex',
+        },
+      ];
+    final (:router, container: _) = await _pumpRouter(
+      tester,
+      adapter: adapter,
+      state: _musicDownloadsState,
+    );
+
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    // The live record was resolved and both reads went to that album id.
+    expect(adapter.fileReads, containsAll(['album', 'trackfile:9', 'track:9']));
+    expect(find.text('Download tracks'), findsOneWidget);
+
+    await tester.tap(find.text('Download tracks'));
+    await tester.pumpAndSettle();
+
+    // Rows are track-ordered and track-named, never bare file paths.
+    final first = tester.getTopLeft(find.text('1. Tired of Sex'));
+    final second = tester.getTopLeft(find.text('2. Getchoo'));
+    expect(first.dy, lessThan(second.dy),
+        reason: 'files sort by track number, not by file id');
+    expect(find.textContaining('FLAC'), findsWidgets);
+  });
+
+  testWidgets('without downloads the page fetches no files and shows no button',
+      (tester) async {
+    final adapter = _MusicAdapter(
+      owned: const [
+        {
+          'title': 'Pinkerton',
+          'artist': 'Weezer',
+          'year': 1996,
+          'foreign_album_id': 'mb-1',
+          'cover': '',
+          'monitored': true,
+          'downloaded': true,
+        },
+      ],
+    )..libraryAlbums = const [
+        {'id': 9, 'title': 'Pinkerton', 'artistId': 4, 'foreignAlbumId': 'mb-1'},
+      ];
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+
+    router.go('/detail/album/mb-1?title=Pinkerton');
+    await tester.pumpAndSettle();
+
+    expect(adapter.fileReads, isEmpty,
+        reason: 'no mappings means the arr is never asked for file records');
+    expect(find.textContaining('Download track'), findsNothing);
+  });
 }
+
+/// The downloads-enabled twin of [_musicState]: the instance reports saved
+/// path mappings, which is what turns the per-track download surface on.
+const _musicDownloadsState = AuthState(
+  connection: BackendConnection(
+    serverUrl: 'http://localhost',
+    accessToken: 'access',
+    refreshToken: 'refresh',
+    services: AvailableServices(lidarr: true),
+    instances: [
+      ServiceInstance(
+        id: 'music-1',
+        serviceType: 'lidarr',
+        name: 'Music',
+        isDefault: true,
+        mediaDownloads: true,
+      ),
+    ],
+  ),
+  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+);
 
 const _musicState = AuthState(
   connection: BackendConnection(
@@ -129,6 +253,7 @@ const _musicState = AuthState(
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   WidgetTester tester, {
   required _MusicAdapter adapter,
+  AuthState state = _musicState,
 }) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
@@ -140,7 +265,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   dio.httpClientAdapter = adapter;
   final container = ProviderContainer(
     overrides: [
-      authProvider.overrideWith(() => _FakeAuthNotifier(_musicState)),
+      authProvider.overrideWith(() => _FakeAuthNotifier(state)),
       backendClientProvider.overrideWithValue(dio),
     ],
   );
@@ -182,6 +307,12 @@ class _MusicAdapter implements HttpClientAdapter {
   final int statusCode;
   final submissions = <Map<String, dynamic>>[];
 
+  /// Library records served from GET /album, for the downloads flow.
+  List<Map<String, dynamic>> libraryAlbums = const [];
+  List<Map<String, dynamic>> trackFiles = const [];
+  List<Map<String, dynamic>> tracks = const [];
+  final fileReads = <String>[];
+
   static final _defaultLookup = [
     {
       'id': 0,
@@ -211,6 +342,26 @@ class _MusicAdapter implements HttpClientAdapter {
     }
     if (options.path.endsWith('/api/v1/album/lookup')) {
       return _json(lookupAlbums);
+    }
+    if (options.path.endsWith('/api/v1/album')) {
+      fileReads.add('album');
+      return _json(libraryAlbums);
+    }
+    if (options.path.endsWith('/api/v1/trackfile')) {
+      fileReads.add('trackfile:${options.queryParameters['albumId']}');
+      return _json(trackFiles);
+    }
+    if (options.path.endsWith('/api/v1/track')) {
+      fileReads.add('track:${options.queryParameters['albumId']}');
+      return _json(tracks);
+    }
+    if (options.path == '/api/media-files/coverage') {
+      final raw = options.data;
+      final body = raw is Map<String, dynamic>
+          ? raw
+          : jsonDecode(raw as String) as Map<String, dynamic>;
+      final paths = (body['paths'] as List).length;
+      return _json({'covered': List.filled(paths, true)});
     }
     if (options.path == '/api/requests/music-status') {
       if (statusCode != 200) {

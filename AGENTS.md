@@ -68,7 +68,7 @@ Docs are part of the change, not a follow-up. A feature is not merged-complete u
 | `server/README.md` | API route reference, MCP tool table (incl. the tool count), DB tables, WebSocket events, env vars, server package tree |
 | `app/README.md` | App features/screens, navigation map, project structure, key dependencies |
 | `docs/books-setup.md` | End-to-end book automation setup: Chaptarr instance, per-user access grant (no global default), instant updates, download path mappings |
-| `docs/music-setup.md` | End-to-end music automation setup: Lidarr instance, per-user access grant (no global default), instant updates, how requests pick profiles |
+| `docs/music-setup.md` | End-to-end music automation setup: Lidarr instance, per-user access grant (no global default), instant updates, how requests pick profiles, download path mappings |
 | `docs/store-release.md` | Store release pipeline: how builds reach TestFlight/Play, signing secrets, one-time store-console setup |
 | [`windoze95/cantinarr-unraid`](https://github.com/windoze95/cantinarr-unraid) | Unraid Community Applications listing: published port, appdata path, the deployment env vars an admin is offered, and the listing copy |
 | `AGENTS.md` | Workflows, verification, conventions (this file) |

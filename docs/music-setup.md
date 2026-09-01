@@ -49,11 +49,21 @@ Requests never ask the user to choose quality — the instance's own configurati
 
 A request adds the artist with only the requested album monitored, so one request never subscribes an artist's whole discography. Adding more of an artist later is more requests — or the admin monitoring albums directly in the Lidarr module.
 
-## 6. Verify
+## 6. Optional — let people download the files
+
+Off by default, and the same two layers as every other module. Lidarr reports file paths but doesn't serve the bytes, so the deployment has to hand Cantinarr the files itself:
+
+1. Mount each library read-only into the container and list the visible boundary in `CANTINARR_MEDIA_ROOTS` (for example `- /mnt/nas/music:/media/music:ro` with `CANTINARR_MEDIA_ROOTS=/media`).
+2. In the instance editor, map each path Lidarr reports to a folder inside that boundary.
+
+An instance offers downloads only once explicit mappings are saved for it. With them in place, an owned album's detail page grows a **Download tracks** button: albums are delivered per track — each row named by its track number and title, with quality and size — never repackaged into an archive.
+
+## 7. Verify
 
 - The Music tab appears for a pinned non-admin user, opening on **Recently Added** and **Artists** rows once the library holds something.
 - Searching an album or artist returns results, and requesting an album reads **Requested** until it downloads.
 - A grab that completes in Lidarr flips the album to available within seconds, not on the next poll — that's the webhook working.
+- If downloads are on, an owned album's detail offers its tracks as working downloads from a device.
 
 ## Requests that land in the approval queue instead
 
