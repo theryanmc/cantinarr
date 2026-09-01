@@ -33,6 +33,7 @@ type setupFacts struct {
 	HasRadarr         bool
 	HasSonarr         bool
 	HasChaptarr       bool
+	HasLidarr         bool
 	HasDownloadClient bool
 	MediaDownloads    bool
 	HasTautulli       bool
@@ -160,6 +161,13 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			Key:         "music",
+			Title:       "Music (Lidarr)",
+			Description: "Let users request albums; access is granted per user.",
+			Configured:  f.HasLidarr,
+			Optional:    true,
+		},
+		{
 			Key:         "ai",
 			Title:       "AI assistant",
 			Description: "Conversational discovery, requests, and server management. Configure a shared provider; users may override it with their own credentials.",
@@ -193,6 +201,8 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasSonarr = true
 				case "chaptarr":
 					facts.HasChaptarr = true
+				case "lidarr":
+					facts.HasLidarr = true
 				case "tautulli":
 					facts.HasTautulli = true
 				case "sabnzbd", "qbittorrent", "nzbget", "transmission":

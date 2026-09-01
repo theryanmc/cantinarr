@@ -371,6 +371,11 @@ func NewRouter(
 			r.Get("/requests/book-author", requestHandler.GetBookAuthor)
 			r.Get("/requests/book-series", requestHandler.GetBookSeries)
 			r.Get("/requests/book-series-detail", requestHandler.GetBookSeriesDetail)
+			r.Get("/requests/music-status", requestHandler.GetMusicStatus)
+			r.Get("/requests/music-library", requestHandler.GetMusicLibrary)
+			r.Get("/requests/music-recent", requestHandler.GetMusicRecent)
+			r.Get("/requests/music-artists", requestHandler.GetMusicArtists)
+			r.Get("/requests/music-artist", requestHandler.GetMusicArtist)
 			r.Get("/requests/{tmdb_id}/status", requestHandler.GetStatus)
 		})
 
@@ -662,7 +667,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// Media servers are listed too so a granted user's app can offer
 			// the account guide; their grant-only rules make the visible set
 			// exactly the grants (see EffectiveDefaultInstanceID).
-			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr"}, instance.MediaServerTypes()...) {
+			for _, serviceType := range append([]string{"radarr", "sonarr", "chaptarr", "lidarr"}, instance.MediaServerTypes()...) {
 				visibleIDs, err := store.VisibleInstanceIDs(userID, serviceType)
 				if err != nil {
 					http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
@@ -727,6 +732,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"radarr":          false,
 			"sonarr":          false,
 			"chaptarr":        false,
+			"lidarr":          false,
 			"media_downloads": false,
 			"ai":              aiAvailable,
 			"tmdb":            creds.TMDBAvailable(),
@@ -743,6 +749,8 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 				services["sonarr"] = true
 			case "chaptarr":
 				services["chaptarr"] = true
+			case "lidarr":
+				services["lidarr"] = true
 			}
 		}
 

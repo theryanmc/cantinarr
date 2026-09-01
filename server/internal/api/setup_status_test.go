@@ -9,8 +9,8 @@ import (
 
 func TestBuildSetupItemsNothingConfigured(t *testing.T) {
 	items := buildSetupItems(setupFacts{})
-	if len(items) != 13 {
-		t.Fatalf("items = %d, want 13", len(items))
+	if len(items) != 14 {
+		t.Fatalf("items = %d, want 14", len(items))
 	}
 	for _, item := range items {
 		if item.Configured {
@@ -59,6 +59,7 @@ func TestBuildSetupItemsMapsFacts(t *testing.T) {
 		"trakt":           false,
 		"discovery_prefs": false,
 		"books":           false,
+		"music":           false,
 		"ai":              false,
 	}
 	for key, expect := range want {

@@ -21,6 +21,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -153,6 +154,7 @@ type Hub struct {
 	prevRadarrQueue   map[string]map[int]float64  // instanceID -> movieId -> progress
 	prevSonarrQueue   map[string]map[int]float64  // instanceID -> seriesId -> progress
 	prevChaptarrQueue map[string]map[int]struct{} // instanceID -> set of book record ids
+	prevLidarrQueue   map[string]map[int]struct{} // instanceID -> set of album record ids
 
 	// witness persists the three prev*Queue maps so a restart resumes the
 	// departure diff instead of re-seeding from empty. nil disables persistence
@@ -209,6 +211,7 @@ func NewHub(authService *auth.Service, registry *instance.Registry, store *insta
 		prevRadarrQueue:    make(map[string]map[int]float64),
 		prevSonarrQueue:    make(map[string]map[int]float64),
 		prevChaptarrQueue:  make(map[string]map[int]struct{}),
+		prevLidarrQueue:    make(map[string]map[int]struct{}),
 		prevArrQueueHash:   make(map[string]string),
 		prevDownloadsHash:  make(map[string]string),
 		downloadsErrLogged: make(map[string]bool),
@@ -467,6 +470,7 @@ func (h *Hub) pollLoop(ctx context.Context) {
 			h.pollAllRadarr()
 			h.pollAllSonarr()
 			h.pollAllChaptarr()
+			h.pollAllLidarr()
 		case <-downloadsTicker.C:
 			h.pollAllDownloadClients()
 		}
@@ -501,12 +505,16 @@ func (h *Hub) restoreQueueWitness() {
 			} else {
 				h.prevSonarrQueue[instanceID] = seeded
 			}
-		case "chaptarr":
+		case "chaptarr", "lidarr":
 			seeded := make(map[int]struct{}, len(row.ids))
 			for _, id := range row.ids {
 				seeded[id] = struct{}{}
 			}
-			h.prevChaptarrQueue[instanceID] = seeded
+			if row.serviceType == "chaptarr" {
+				h.prevChaptarrQueue[instanceID] = seeded
+			} else {
+				h.prevLidarrQueue[instanceID] = seeded
+			}
 		default:
 			continue
 		}
@@ -1281,6 +1289,55 @@ func (h *Hub) pollAllChaptarr() {
 		}
 		h.pollChaptarrInstance(inst.ID, client)
 	}
+}
+
+func (h *Hub) pollAllLidarr() {
+	if h.store == nil || h.registry == nil {
+		return
+	}
+	instances, err := h.store.List("lidarr")
+	if err != nil {
+		return
+	}
+	for _, inst := range instances {
+		client, err := h.registry.GetLidarrClient(inst.ID)
+		if err != nil {
+			continue
+		}
+		h.pollLidarrInstance(inst.ID, client)
+	}
+}
+
+// pollLidarrInstance keeps music queue views fresh: composition changes ping
+// arr_queue_changed, and queue membership is witnessed durably so the future
+// music push category starts with continuity instead of amnesia. Nothing is
+// announced — wave one carries no music alert — and nothing is dispatched to
+// remediation, whose music support is deliberately fail-closed for now.
+func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
+	queue, err := client.GetQueue()
+	if err != nil {
+		log.Printf("websocket: poll lidarr queue (%s): %v", instanceID, err)
+		return
+	}
+
+	currentQueue := make(map[int]struct{}, len(queue))
+	tuples := make([]string, 0, len(queue))
+	for _, item := range queue {
+		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.AlbumID, item.Status, item.Sizeleft))
+		if item.AlbumID <= 0 {
+			// A queue row Lidarr could not match to a library album has no id
+			// to witness; it still counts toward the composition tuple above
+			// so its arrival/departure invalidates queue views.
+			continue
+		}
+		currentQueue[item.AlbumID] = struct{}{}
+	}
+
+	h.prevLidarrQueue[instanceID] = currentQueue
+	h.saveQueueWitness(instanceID, "lidarr", setKeys(currentQueue))
+	h.lastPollAt[instanceID] = time.Now()
+
+	h.noteArrQueueComposition(instanceID, "lidarr", tuples)
 }
 
 func (h *Hub) pollRadarrInstance(instanceID string, client *radarr.Client) {

@@ -533,7 +533,7 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			if err := json.Unmarshal(payload["services"], &services); err != nil {
 				t.Fatalf("decode services: %v", err)
 			}
-			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "media_downloads", "ai", "tmdb", "trakt")
+			assertExactMapKeys(t, services, "radarr", "sonarr", "chaptarr", "lidarr", "media_downloads", "ai", "tmdb", "trakt")
 			for _, serviceType := range []string{"radarr", "sonarr", "chaptarr", "ai", "tmdb", "trakt"} {
 				if !services[serviceType] {
 					t.Errorf("services[%q] = false, want true", serviceType)

@@ -100,9 +100,9 @@ CREATE TABLE IF NOT EXISTS service_instances (
 -- Per-user default *arr instance override (admin-managed). A row pins which
 -- instance is THIS user's default source for a service type, overriding the
 -- global service_instances.is_default. For service types that have NO global
--- default (chaptarr), a row is ALSO the per-user access grant: without one the
--- user can neither see nor proxy to that instance. Absent row = inherit the
--- global default (or, for chaptarr, no access). At most one row per
+-- default (chaptarr/lidarr), a row is ALSO the per-user access grant: without
+-- one the user can neither see nor proxy to that instance. Absent row =
+-- inherit the global default (or, for chaptarr/lidarr, no access). At most one row per
 -- (user, service_type). Mirrors user_request_settings (admin-managed per-user).
 CREATE TABLE IF NOT EXISTS user_default_instances (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS user_default_instances (
 -- person can hold e.g. an HD and a 4K Radarr at once and choose per request.
 -- The user_default_instances pin stays the user's default among their granted
 -- set. With no grant rows the old model applies unchanged: the pin alone, or
--- the global default (chaptarr stays grant-only, never falling back).
+-- the global default (chaptarr/lidarr stay grant-only, never falling back).
 CREATE TABLE IF NOT EXISTS user_instance_grants (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
@@ -989,12 +989,13 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear legacy agent-run cost estimates: %w", err)
 	}
 
-	// Chaptarr and the media servers (Jellyfin, Emby, Plex) have no global default —
-	// instances are granted per user — but older versions let the flag be
-	// set. Zero any legacy rows so the admin/AI fallback (GetDefault) resolves
-	// purely by sort order. Runs every boot; idempotent and the table is tiny.
+	// Chaptarr, Lidarr, and the media servers (Jellyfin, Emby, Plex) have no
+	// global default — instances are granted per user — but older versions let
+	// the flag be set. Zero any legacy rows so the admin/AI fallback
+	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
+	// and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
