@@ -246,7 +246,7 @@ One authenticated shell hosts both module pages and secondary work screens over 
 | `/radarr` | Library · Queue · History · Wanted · Calendar | admin |
 | `/sonarr` | Library · Queue · History · Wanted · Calendar | admin |
 | `/chaptarr` | Library · Queue · History · Wanted | admin |
-| `/lidarr` | Library · Queue · History · Wanted | admin |
+| `/lidarr` | Library · Queue · History · Wanted · Calendar | admin |
 | `/downloads` | Queue · History | admin |
 | `/tautulli` | Activity · History · Stats | admin |
 

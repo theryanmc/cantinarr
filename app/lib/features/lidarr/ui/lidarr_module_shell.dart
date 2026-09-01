@@ -6,11 +6,9 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
 import '../../../core/widgets/module_scaffold.dart';
 
-/// Lidarr module shell: Library | Queue | History | Wanted.
-/// Calendar is intentionally omitted this wave (album release dates are a
-/// planned follow-up). Pages render as a bottom nav on mobile and sidebar
-/// items on desktop. Shows the instance dropdown in the header when 2+
-/// instances exist.
+/// Lidarr module shell: Library | Queue | History | Wanted | Calendar.
+/// Pages render as a bottom nav on mobile and sidebar items on desktop.
+/// Shows the instance dropdown in the header when 2+ instances exist.
 class LidarrModuleShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;

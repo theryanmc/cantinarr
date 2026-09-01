@@ -210,6 +210,25 @@ class LidarrApiService {
     return LidarrWantedPage.fromJson(resp.data as Map<String, dynamic>);
   }
 
+  /// Fetches the album calendar for a date window, with artist context so
+  /// rows can be labelled without a fan-out. Album release dates are calendar
+  /// dates (no meaningful time-of-day).
+  Future<List<LidarrAlbum>> getCalendar({
+    required String start,
+    required String end,
+  }) async {
+    final resp = await _dio.get('$_basePath/calendar', queryParameters: {
+      'start': start,
+      'end': end,
+      'unmonitored': 'false',
+      'includeArtist': 'true',
+    });
+    return _jsonList(resp.data)
+        .whereType<Map<String, dynamic>>()
+        .map(LidarrAlbum.fromJson)
+        .toList();
+  }
+
   /// Nudges Lidarr to run its completed-download import pass now (clears
   /// items stuck "waiting to import").
   Future<void> processMonitoredDownloads() async {

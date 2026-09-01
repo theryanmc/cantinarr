@@ -208,6 +208,12 @@ List<ModulePage> modulePagesFor(ModuleType type,
           activeIcon: Icons.warning_amber,
           route: '/lidarr/wanted',
         ),
+        ModulePage(
+          label: 'Calendar',
+          icon: Icons.calendar_month_outlined,
+          activeIcon: Icons.calendar_month,
+          route: '/lidarr/calendar',
+        ),
       ];
     case ModuleType.downloads:
       return const [
