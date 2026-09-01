@@ -29,7 +29,16 @@ type FormatOwnership struct {
 type LibraryTitle struct {
 	Title  string `json:"title"`
 	Author string `json:"author"`
-	Year   int    `json:"year"`
+	// AuthorForeignID is the library's OWN author identity — the id
+	// /detail/author/{id} is addressed by, and the same one the Books page's
+	// authors row already navigates with. It is deliberately taken from the
+	// library's author record rather than from a metadata lookup or a live
+	// book record: those disagree across providers (a Hardcover-seeded
+	// library row against Goodreads lookup results), and the library's own
+	// answer is the only one its author page can resolve. Empty when the
+	// library states no author for this title.
+	AuthorForeignID string `json:"author_foreign_id"`
+	Year            int    `json:"year"`
 	// Series is the series name parsed by parseSeriesTitle (library_series.go)
 	// from the record's raw seriesTitle string — the identity
 	// /api/requests/book-series-detail is addressed by. Empty when the library
@@ -375,11 +384,19 @@ func stampAuthorsFromLibrary(titles []LibraryTitle, books []chaptarr.Book, autho
 		}
 	}
 	nameByAuthorID := make(map[int]string, len(authors))
+	foreignIDByAuthorID := make(map[int]string, len(authors))
 	for _, author := range authors {
 		nameByAuthorID[author.ID] = strings.TrimSpace(author.AuthorName)
+		foreignIDByAuthorID[author.ID] = strings.TrimSpace(author.ForeignAuthorID)
 	}
 	for i := range titles {
-		if strings.TrimSpace(titles[i].Author) != "" {
+		// The name and the foreign id are stamped independently: a title that
+		// already carries an embedded author NAME still needs the id before its
+		// author line can be tapped, so an early `continue` on a non-empty name
+		// would silently leave those rows unlinkable.
+		haveName := strings.TrimSpace(titles[i].Author) != ""
+		haveForeignID := strings.TrimSpace(titles[i].AuthorForeignID) != ""
+		if haveName && haveForeignID {
 			continue
 		}
 		id := strings.TrimSpace(titles[i].ForeignBookID)
@@ -390,8 +407,15 @@ func stampAuthorsFromLibrary(titles []LibraryTitle, books []chaptarr.Book, autho
 		if !ok {
 			continue
 		}
-		if name := nameByAuthorID[authorID]; name != "" {
-			titles[i].Author = name
+		if !haveName {
+			if name := nameByAuthorID[authorID]; name != "" {
+				titles[i].Author = name
+			}
+		}
+		if !haveForeignID {
+			if foreignID := foreignIDByAuthorID[authorID]; foreignID != "" {
+				titles[i].AuthorForeignID = foreignID
+			}
 		}
 	}
 }

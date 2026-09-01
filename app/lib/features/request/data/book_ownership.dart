@@ -56,6 +56,12 @@ class BookOwnership {
 class OwnedTitle {
   final String title;
   final String author;
+
+  /// The library's own author identity, as the server stamped it from the
+  /// library's author record. This is the id `/detail/author/{id}` resolves,
+  /// so it is the only value that may back a tap on the author line. Empty
+  /// when the library states no author for this title.
+  final String authorForeignId;
   final int year;
 
   /// The series name the server parsed off the record's raw seriesTitle (the
@@ -89,6 +95,7 @@ class OwnedTitle {
   const OwnedTitle({
     required this.title,
     required this.author,
+    this.authorForeignId = '',
     this.year = 0,
     this.series = '',
     this.seriesPosition = '',
@@ -98,12 +105,13 @@ class OwnedTitle {
     this.statusKnown = true,
   });
 
-  /// Parses one digest entry: `title`/`author`/`year`/`series`/
+  /// Parses one digest entry: `title`/`author`/`author_foreign_id`/`year`/`series`/
   /// `series_position`/`cover`/`foreign_book_id` plus the `ebook` and
   /// `audiobook` format objects.
   factory OwnedTitle.fromJson(Map<String, dynamic> json) => OwnedTitle(
         title: json['title'] as String? ?? '',
         author: json['author'] as String? ?? '',
+        authorForeignId: json['author_foreign_id'] as String? ?? '',
         year: json['year'] as int? ?? 0,
         series: json['series'] as String? ?? '',
         seriesPosition: json['series_position'] as String? ?? '',

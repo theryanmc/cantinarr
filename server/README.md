@@ -247,7 +247,8 @@ GET    /api/requests/options               # user: what this user may choose (se
                                            #   optional instance_id scopes quality profiles to that library
 GET    /api/requests/book-status           # user: per-format live state by foreign_id; optional instance_id
 GET    /api/requests/book-library          # user: owned/monitored digest, with each title's series
-                                           #   (name/position) and author; optional instance_id (brief cache)
+                                           #   (name/position) and author (name + the library's own
+                                           #   author_foreign_id); optional instance_id (brief cache)
 GET    /api/requests/book-recent           # user: newest book-file imports; optional instance_id, limit (cached)
 GET    /api/requests/book-authors          # user: the library's authors with per-title counts;
                                            #   optional instance_id (cached), sort=books|name|added

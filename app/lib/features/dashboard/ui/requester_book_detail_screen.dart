@@ -463,6 +463,13 @@ class _RequesterBookDetailScreenState
       live?.author?.authorName,
       owned?.author,
     ]);
+    // Navigation is gated on the digest for the same reason the series line is:
+    // /detail/author/{id} resolves the LIBRARY's author identity, and the
+    // digest is the only source stamped from the library's own author record.
+    // A name that came from a metadata lookup or a live record may belong to a
+    // different provider's idea of this author, so it renders as plain,
+    // untappable text rather than pointing at a page that cannot resolve it.
+    final authorNavigableId = owned?.authorForeignId.trim() ?? '';
     // Navigation is gated on the digest specifically (D-06): only the
     // digest's series name was produced by parseSeriesTitle against this
     // library, so only it is guaranteed to address
@@ -564,13 +571,32 @@ class _RequesterBookDetailScreenState
           ),
           if (author.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(
-              author,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppTheme.textSecondary,
+            authorNavigableId.isEmpty
+                ? Text(
+                    author,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                  )
+                : InkWell(
+                    key: const ValueKey('book-author-link'),
+                    onTap: () {
+                      final instanceId = _instanceId;
+                      context.push(
+                        '/detail/author/${Uri.encodeComponent(authorNavigableId)}'
+                        '?name=${Uri.encodeQueryComponent(author)}'
+                        '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
+                      );
+                    },
+                    child: Text(
+                      author,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: AppTheme.accent,
+                          ),
+                    ),
                   ),
-            ),
           ],
           if (seriesLabel.isNotEmpty) ...[
             const SizedBox(height: 6),
