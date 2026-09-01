@@ -356,7 +356,8 @@ Color? _setupCountColor(WidgetTester tester) {
   return (span.children!.first as TextSpan).style?.color;
 }
 
-Map<String, dynamic> _setupPayload(List<(String, bool)> items) => {
+Map<String, dynamic> _setupPayload(List<(String, bool)> items,
+        {Set<String> skipped = const {}}) => {
       'items': [
         for (final (key, configured) in items)
           {
@@ -365,6 +366,7 @@ Map<String, dynamic> _setupPayload(List<(String, bool)> items) => {
             'description': 'about $key',
             'configured': configured,
             'optional': key != 'radarr' && key != 'sonarr' && key != 'tmdb',
+            if (skipped.contains(key)) 'skipped': true,
           },
       ],
       'configured': items.where((i) => i.$2).length,
@@ -409,6 +411,29 @@ void _setupChecklistTileTests() {
         tester, find.textContaining('features configured'));
 
     expect(_setupCountColor(tester), AppTheme.warning);
+  });
+
+  testWidgets('greens the count once everything left is skipped',
+      (tester) async {
+    // The admin acknowledged the optional rows this deployment doesn't want;
+    // the tile must read finished — no permanent amber nag — and its
+    // denominator must shed the skips rather than counting them configured.
+    await _pumpSettings(
+      tester,
+      _settings(source: AiAccessSource.shared),
+      isAdmin: true,
+      setupStatus: _setupPayload([
+        ('radarr', true),
+        ('sonarr', true),
+        ('tmdb', true),
+        ('music', false),
+      ], skipped: {'music'}),
+    );
+    await _dragSettingsUntilFound(
+        tester, find.textContaining('features configured'));
+
+    expect(_setupCountColor(tester), AppTheme.available);
+    expect(find.text('3 of 3 features configured'), findsOneWidget);
   });
 
   testWidgets('greens the count once nothing is left', (tester) async {

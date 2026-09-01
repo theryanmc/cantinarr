@@ -909,7 +909,7 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
       onTap: open,
     );
   }
-  final tail = ' of ${status.total} features configured';
+  final tail = ' of ${status.effectiveTotal} features configured';
   final countColor = status.missingCoreCapability
       ? AppTheme.danger
       : status.remaining > 0

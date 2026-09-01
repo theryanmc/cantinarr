@@ -183,6 +183,7 @@ func NewRouter(
 			// Setup checklist: which features are configured, derived live on
 			// every request (drives the app's setup wizard + reminders).
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/setup-status", setupStatusHandler(cfg, instanceStore, creds, aiHandler, serverSettings, remediationService))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/setup-status/skips", setupSkipHandler(serverSettings))
 
 			// Update availability + the admin-configured management-portal URL the
 			// app's version warnings link to. GET returns both; PUT sets the
