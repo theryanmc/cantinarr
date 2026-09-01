@@ -19,6 +19,7 @@ import '../features/chaptarr/ui/chaptarr_module_shell.dart';
 import '../features/chaptarr/ui/chaptarr_queue_screen.dart';
 import '../features/chaptarr/ui/chaptarr_wanted_screen.dart';
 import '../features/lidarr/data/lidarr_models.dart';
+import '../features/lidarr/ui/lidarr_calendar_screen.dart';
 import '../features/lidarr/ui/lidarr_history_screen.dart';
 import '../features/lidarr/ui/lidarr_home_screen.dart';
 import '../features/lidarr/ui/lidarr_module_shell.dart';
@@ -457,6 +458,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   GoRoute(
                     path: '/lidarr/wanted',
                     builder: (_, __) => const LidarrWantedScreen(),
+                  ),
+                ],
+              ),
+              StatefulShellBranch(
+                routes: [
+                  GoRoute(
+                    path: '/lidarr/calendar',
+                    builder: (_, __) => const LidarrCalendarScreen(),
                   ),
                 ],
               ),
