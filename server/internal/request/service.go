@@ -1370,6 +1370,20 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit pending book request: %w", err)
 		}
+	} else if r.mediaType == "music" {
+		// Music pending rows are per-user like movie/TV (no format axis means
+		// no shared work item), but keyed on the foreignAlbumId + pinned
+		// instance the way books key: two users asking for one album are two
+		// rows, and each approval replays an idempotent add.
+		res, err = s.db.Exec(
+			`INSERT INTO request_log (user_id, tmdb_id, foreign_id, instance_id, media_type, title, status, search_term, add_failure_reason)
+			 SELECT ?, 0, ?, ?, 'music', ?, ?, ?, ?
+			 WHERE NOT EXISTS (
+			     SELECT 1 FROM request_log WHERE user_id = ? AND foreign_id = ? AND media_type = 'music' AND status = ? AND COALESCE(instance_id, '') = COALESCE(?, '')
+			 )`,
+			r.userID, r.foreignID, sqlNullStr(r.instanceID), r.title, StatusPending, sqlNullStr(r.searchTerm), sqlNullStr(r.addFailure),
+			r.userID, r.foreignID, StatusPending, sqlNullStr(r.instanceID),
+		)
 	} else {
 		// The duplicate guard is per target library: the same title pending on
 		// a sibling instance is a distinct request, never absorbed. Legacy
@@ -1417,6 +1431,10 @@ func (s *Service) createPendingUnlocked(r *resolvedRequest) (*CreateResponse, er
 		if r.mediaType == "book" {
 			data["foreign_id"] = r.foreignID
 			data["book_format"] = insertedBookFormat
+			data["instance_id"] = r.instanceID
+		}
+		if r.mediaType == "music" {
+			data["foreign_id"] = r.foreignID
 			data["instance_id"] = r.instanceID
 		}
 		s.notifier.NotifyAdmins("request_pending", data)
@@ -3961,7 +3979,9 @@ func (s *Service) scanPending(parked bool) ([]PendingRequest, error) {
 		if err := rows.Scan(&p.ID, &p.UserID, &p.Username, &p.TmdbID, &p.TvdbID, &p.ForeignID, &p.MediaType, &p.Title, &p.BookFormat, &p.InstanceID, &p.InstanceName, &p.RequesterCount, &p.SeasonScope, &p.QualityProfileID, &p.RequestedAt, &parkReason, &p.AddFailureReason); err != nil {
 			return nil, fmt.Errorf("scan pending request: %w", err)
 		}
-		p.BookFormat = normalizeBookFormat(p.BookFormat)
+		if p.MediaType == "book" {
+			p.BookFormat = normalizeBookFormat(p.BookFormat)
+		}
 		if parkReason != "" {
 			wait := s.bookFormatWaitFor(parkReason, p.RequestedAt)
 			p.WaitReason = wait.Reason
