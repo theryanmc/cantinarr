@@ -151,7 +151,9 @@ type AddArtistRequest struct {
 	AddOptions      struct {
 		// Monitor is the monitor scope applied at add time: one of
 		// all/future/missing/existing/first/latest/none. Single-album adds
-		// use "none"; the album's own monitored flag carries the intent.
+		// OMIT it (verified live): "none" unmonitors the artist itself, whose
+		// albums then never count as wanted. With it omitted the artist stays
+		// monitored and the album's own monitored flag carries the intent.
 		Monitor                string `json:"monitor,omitempty"`
 		SearchForMissingAlbums bool   `json:"searchForMissingAlbums"`
 	} `json:"addOptions"`

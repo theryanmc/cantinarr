@@ -87,7 +87,12 @@ func TestAddAlbumPinsWirePayload(t *testing.T) {
 			t.Errorf("artist fields = %v", artist)
 		}
 		artistOptions, _ := artist["addOptions"].(map[string]any)
-		if artistOptions["monitor"] != "none" || artistOptions["searchForMissingAlbums"] != false {
+		// The monitor option must be ABSENT: "none" would unmonitor the
+		// artist itself (verified live), stranding the album outside wanted.
+		if _, present := artistOptions["monitor"]; present {
+			t.Errorf("artist addOptions carried a monitor option: %v", artistOptions)
+		}
+		if artistOptions["searchForMissingAlbums"] != false {
 			t.Errorf("artist addOptions = %v", artistOptions)
 		}
 		_, _ = w.Write([]byte(`{"id":77,"title":"Blue Album","foreignAlbumId":"mbid-1234","monitored":true}`))
@@ -105,8 +110,6 @@ func TestAddAlbumPinsWirePayload(t *testing.T) {
 		Monitored:         true,
 		MonitorNewItems:   "none",
 	}
-	req.Artist.AddOptions.Monitor = "none"
-
 	created, err := NewClient(server.URL, "k").AddAlbum(req)
 	if err != nil {
 		t.Fatalf("AddAlbum() error = %v", err)

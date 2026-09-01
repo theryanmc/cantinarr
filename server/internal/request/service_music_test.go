@@ -244,7 +244,12 @@ func TestMusicRequestAddsNewAlbumWithRootFolderDefaults(t *testing.T) {
 		t.Fatalf("monitorNewItems = %v", artist["monitorNewItems"])
 	}
 	artistOptions, _ := artist["addOptions"].(map[string]any)
-	if artistOptions["monitor"] != "none" || artistOptions["searchForMissingAlbums"] != false {
+	// The monitor option must be absent: "none" would unmonitor the artist
+	// itself (verified live), whose albums then never count as wanted.
+	if _, present := artistOptions["monitor"]; present {
+		t.Fatalf("artist addOptions carried a monitor option: %v", artistOptions)
+	}
+	if artistOptions["searchForMissingAlbums"] != false {
 		t.Fatalf("artist addOptions = %v", artistOptions)
 	}
 	options, _ := payload["addOptions"].(map[string]any)

@@ -238,11 +238,17 @@ func (s *Service) addToLidarr(r *resolvedRequest) (string, string, error) {
 		RootFolderPath:    config.rootFolderPath,
 		Monitored:         true,
 		// A request for one album must never silently subscribe the whole
-		// discography: no albums are auto-monitored at add time, and albums
-		// released later stay unmonitored too.
+		// discography: albums released later stay unmonitored, and the add's
+		// hydrated siblings arrive unmonitored on their own (verified live).
 		MonitorNewItems: "none",
 	}
-	addReq.Artist.AddOptions.Monitor = "none"
+	// No addOptions.monitor is sent on purpose (verified live against Lidarr):
+	// "none" does not mean "monitor no OTHER albums" — it unmonitors the
+	// artist itself, and an unmonitored artist's albums never count as
+	// wanted, so nothing would ever search for the requested album again.
+	// With the option omitted, the artist stays monitored, exactly the
+	// album-add body's own monitored flag is honored, and only the requested
+	// album becomes wanted.
 	addReq.Artist.AddOptions.SearchForMissingAlbums = false
 
 	created, err := client.AddAlbum(addReq)
