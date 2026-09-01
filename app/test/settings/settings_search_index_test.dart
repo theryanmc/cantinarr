@@ -8,6 +8,7 @@ const _user = UserProfile(id: 2, username: 'user', role: 'user');
 const _adminGates = SettingsSearchGates(
   user: _admin,
   chaptarrEnabled: true,
+  lidarrEnabled: true,
   donateVisible: true,
   phoneAppsVisible: true,
   mediaServersVisible: true,
@@ -122,6 +123,20 @@ void main() {
         searchSettingsIndex('book', noBooks)
             .map((e) => e.id)
             .contains('notifications.new-book'),
+        isFalse,
+      );
+    });
+
+    test('lidarr gate controls the new-music toggle', () {
+      expect(
+        searchSettingsIndex('music', _adminGates).map((e) => e.id),
+        contains('notifications.new-music'),
+      );
+      const noMusic = SettingsSearchGates(user: _admin);
+      expect(
+        searchSettingsIndex('music', noMusic)
+            .map((e) => e.id)
+            .contains('notifications.new-music'),
         isFalse,
       );
     });

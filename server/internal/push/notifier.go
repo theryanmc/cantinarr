@@ -563,6 +563,57 @@ func bookReadyBody(title, format string) string {
 	}
 }
 
+// NotifyNewMusic pushes an "album became available" alert for a completed
+// Lidarr import. The audience is users opted into the new_music category (on
+// by default) whose music library is the instance the import landed on — a
+// lidarr assignment is the music access model, exactly like books, and it
+// scopes admins too; only an admin with no music assignment hears every
+// instance. artist rides along for copy only: an album title alone is far
+// more ambiguous than a book title, but the claim and collapse identity stays
+// the release-group id, which already names exactly one album.
+func (n *Notifier) NotifyNewMusic(title, artist, foreignID, instanceID string) {
+	client := n.client()
+	if client == nil || title == "" {
+		return
+	}
+	// The claim id carries the library: the audience is per-instance, so the
+	// same album importing on two Lidarr instances inside the window must
+	// alert both instances' listeners.
+	if !n.claimContentAlert(CategoryNewMusic, "music", contentClaimID(instanceID, foreignID), title) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedIntoNewMusic(instanceID)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryNewMusic)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	// Music has no TMDB id: the payload carries the same deep-link identity a
+	// music request decision does (foreign_id, pinned instance, title hint),
+	// so the app's existing album tap routing applies unchanged.
+	data := map[string]any{
+		"type":        CategoryNewMusic,
+		"media_type":  "music",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	n.sendWithOptions(client, recipients, "New music available", musicReadyBody(title, artist), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s", CategoryNewMusic, foreignID),
+	})
+}
+
+// musicReadyBody names the artist when the record carries one and degrades to
+// the bare album title when it does not.
+func musicReadyBody(title, artist string) string {
+	if artist != "" {
+		return title + " by " + artist + " is ready to play"
+	}
+	return title + " is ready to play"
+}
+
 // NotifyUpgradedMovie pushes a "movie file was upgraded" alert to admins opted
 // into the content_upgraded category (off by default). See
 // notifyUpgradedContent for why the broadcast key is claimed first.
@@ -632,6 +683,56 @@ func bookUpgradedBody(title, format string) string {
 	default:
 		return title + " was upgraded"
 	}
+}
+
+// NotifyUpgradedMusic pushes an "album file was upgraded" alert to admins
+// opted into the content_upgraded category (off by default). Like books, the
+// audience is NOT narrowed to the instance's assigned listeners: an upgrade
+// is operational oversight, not a "ready to play" call to action, so it takes
+// the standard admin-scoped path. The payload still carries the same
+// deep-link identity as new_music so the app's album tap routing applies
+// unchanged.
+func (n *Notifier) NotifyUpgradedMusic(title, artist, foreignID, instanceID string) {
+	if title == "" {
+		return
+	}
+	// Absorb the poller before anything else can bail: the silent claim must
+	// land even when the gateway is unenrolled or the admin alert is deduped.
+	// Byte-identical to NotifyNewMusic's claim id for the same import.
+	n.claimContentAlertSilently(CategoryNewMusic, "music", contentClaimID(instanceID, foreignID), title)
+	client := n.client()
+	if client == nil {
+		return
+	}
+	if !n.claimContentAlertScoped(CategoryContentUpgraded, "music", contentClaimID(instanceID, foreignID), title, stormScopeUpgrade) {
+		return
+	}
+	recipients, err := n.prefs.usersOptedInto(CategoryContentUpgraded)
+	if err != nil {
+		n.logger.Error("push: resolve new-content recipients", "err", err, "category", CategoryContentUpgraded)
+		return
+	}
+	if len(recipients) == 0 {
+		return
+	}
+	data := map[string]any{
+		"type":        CategoryContentUpgraded,
+		"media_type":  "music",
+		"foreign_id":  foreignID,
+		"instance_id": instanceID,
+		"title":       title,
+	}
+	n.sendWithOptions(client, recipients, "Album upgraded", musicUpgradedBody(title, artist), data, SendOptions{
+		CollapseID: fmt.Sprintf("%s:%s", CategoryContentUpgraded, foreignID),
+	})
+}
+
+// musicUpgradedBody is musicReadyBody's upgrade twin.
+func musicUpgradedBody(title, artist string) string {
+	if artist != "" {
+		return title + " by " + artist + " was upgraded"
+	}
+	return title + " was upgraded"
 }
 
 // notifyUpgradedContent is the shared body for the movie/TV upgrade alerts.

@@ -91,12 +91,14 @@ type ContentNotifier interface {
 	NotifyNewMovie(title string, tmdbID int, instanceID string)
 	NotifyNewEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyNewBook(title, foreignID, instanceID, format string)
+	NotifyNewMusic(title, artist, foreignID, instanceID string)
 	// The Upgraded variants page only admins opted into content_upgraded and
 	// silently claim the matching broadcast key, which is what keeps the queue
 	// poller from re-announcing a proven upgrade as new content.
 	NotifyUpgradedMovie(title string, tmdbID int, instanceID string)
 	NotifyUpgradedEpisode(seriesTitle string, tmdbID int, instanceID string)
 	NotifyUpgradedBook(title, foreignID, instanceID, format string)
+	NotifyUpgradedMusic(title, artist, foreignID, instanceID string)
 }
 
 // IssueOpener is the auto-dispatch seam: after every successful detailed queue
@@ -917,6 +919,71 @@ func chaptarrUpgradeDeletesSince(client *chaptarr.Client, since time.Time) map[i
 	return counts
 }
 
+// lidarrImportsSince is the Lidarr analogue of chaptarrImportsSince, sharing
+// the webhook receiver's import vocabulary (lidarr.IsImportEventType) so the
+// two witnesses can never disagree about what counts as an import. Upgrade
+// proof pairs per album record, count-aware like the other splits.
+func lidarrImportsSince(client *lidarr.Client, since time.Time) (fresh, upgraded []int, err error) {
+	records, complete, err := client.GetImportHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !complete {
+		return nil, nil, errImportBacklogOverflow
+	}
+	imports := make(map[int]int, len(records))
+	var ids []int
+	for _, rec := range records {
+		if !lidarr.IsImportEventType(rec.EventType) || rec.AlbumID <= 0 {
+			continue
+		}
+		if imports[rec.AlbumID] == 0 {
+			ids = append(ids, rec.AlbumID)
+		}
+		imports[rec.AlbumID]++
+	}
+	sort.Ints(ids)
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	deletes := lidarrUpgradeDeletesSince(client, since)
+	for _, id := range ids {
+		if deletes[id] >= imports[id] {
+			upgraded = append(upgraded, id)
+		} else {
+			fresh = append(fresh, id)
+		}
+	}
+	return fresh, upgraded, nil
+}
+
+// lidarrUpgradeDeletesSince counts the window's delete-for-upgrade records per
+// album, failing open exactly like chaptarrUpgradeDeletesSince. Lidarr has no
+// trackFileDelete webhook toggle, so this history read is the only witness
+// upgrade-deletes have.
+func lidarrUpgradeDeletesSince(client *lidarr.Client, since time.Time) map[int]int {
+	records, complete, err := client.GetUpgradeDeleteHistorySince(since, catchUpHistoryPageSize)
+	if err != nil {
+		log.Printf("websocket: lidarr upgrade-delete catch-up: %v (announcing all imports as new)", err)
+		return nil
+	}
+	if !complete {
+		log.Printf("websocket: lidarr upgrade-delete catch-up: window over one page (announcing all imports as new)")
+		return nil
+	}
+	counts := make(map[int]int, len(records))
+	for _, rec := range records {
+		if !strings.EqualFold(rec.EventType, "trackFileDeleted") || rec.AlbumID <= 0 {
+			continue
+		}
+		if !strings.EqualFold(historyDataValue(rec.Data, "reason"), "Upgrade") {
+			continue
+		}
+		counts[rec.AlbumID]++
+	}
+	return counts
+}
+
 // saveQueueWitness records this instance's current queue membership. A failure
 // is logged and swallowed: degrading to in-memory-only behavior is right, but
 // suppressing the alerts this poll already found is not.
@@ -1308,11 +1375,14 @@ func (h *Hub) pollAllLidarr() {
 	}
 }
 
-// pollLidarrInstance keeps music queue views fresh: composition changes ping
-// arr_queue_changed, and queue membership is witnessed durably so the future
-// music push category starts with continuity instead of amnesia. Nothing is
-// announced — wave one carries no music alert — and nothing is dispatched to
-// remediation, whose music support is deliberately fail-closed for now.
+// pollLidarrInstance emits an arr_queue_changed invalidation ping whenever the
+// instance's download queue composition changes, and witnesses queue departures
+// to push new_music alerts — the same completion witness the Chaptarr poller
+// uses. It is the fallback witness for music: instances where the admin never
+// configured instant updates, and imports of files already on disk. Like
+// Chaptarr it emits no per-item download_progress events (albums carry no TMDB
+// id, which those events key on). Nothing is dispatched to remediation, whose
+// music support is deliberately fail-closed for now.
 func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 	queue, err := client.GetQueue()
 	if err != nil {
@@ -1326,16 +1396,79 @@ func (h *Hub) pollLidarrInstance(instanceID string, client *lidarr.Client) {
 		tuples = append(tuples, fmt.Sprintf("%d|%s|%.0f", item.AlbumID, item.Status, item.Sizeleft))
 		if item.AlbumID <= 0 {
 			// A queue row Lidarr could not match to a library album has no id
-			// to witness; it still counts toward the composition tuple above
-			// so its arrival/departure invalidates queue views.
+			// to witness or announce; it still counts toward the composition
+			// tuple above so its arrival/departure invalidates queue views.
 			continue
 		}
 		currentQueue[item.AlbumID] = struct{}{}
 	}
 
+	// An album that left the queue and now has files finished importing; one
+	// that departed without a file failed or was removed — say nothing.
+	var departed []int
+	if prevQueue := h.prevLidarrQueue[instanceID]; prevQueue != nil {
+		for albumID := range prevQueue {
+			if _, stillInQueue := currentQueue[albumID]; stillInQueue || albumID <= 0 {
+				continue
+			}
+			departed = append(departed, albumID)
+		}
+		sort.Ints(departed)
+	}
+
+	announce, upgraded, hold := h.resolveAnnouncements(instanceID, departed, func(since time.Time) (fresh, upgrades []int, err error) {
+		return lidarrImportsSince(client, since)
+	})
+	if hold {
+		// Keep the restored membership and retry next tick, so these
+		// completions are not lost to an unenrolled gateway.
+		h.noteArrQueueComposition(instanceID, "lidarr", tuples)
+		return
+	}
+
+	// Persist before announcing: a crash between the two costs this batch of
+	// alerts, whereas announcing first would re-announce them on every restart
+	// of a crashlooping container. The save is deliberately outside the
+	// h.content check — enabling push later must not start from amnesia.
 	h.prevLidarrQueue[instanceID] = currentQueue
 	h.saveQueueWitness(instanceID, "lidarr", setKeys(currentQueue))
 	h.lastPollAt[instanceID] = time.Now()
+
+	if h.content != nil {
+		// Upgrades pass the same live re-verification as broadcasts; only the
+		// audience differs (admins opted into content_upgraded).
+		announceAlbum := func(albumID int, upgrade bool) {
+			album, err := client.GetAlbum(albumID)
+			if err != nil {
+				log.Printf("websocket: get completed lidarr album %d: %v", albumID, err)
+				return
+			}
+			// Lidarr answers 404 with (nil, nil) for a record deleted while it
+			// was downloading. Dereferencing that would panic the poll
+			// goroutine and take the process down.
+			if album == nil {
+				return
+			}
+			if album.Statistics.TrackFileCount == 0 {
+				return
+			}
+			artist := ""
+			if album.Artist != nil {
+				artist = album.Artist.ArtistName
+			}
+			if upgrade {
+				h.content.NotifyUpgradedMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+			} else {
+				h.content.NotifyNewMusic(album.Title, artist, album.ForeignAlbumID, instanceID)
+			}
+		}
+		for _, albumID := range announce {
+			announceAlbum(albumID, false)
+		}
+		for _, albumID := range upgraded {
+			announceAlbum(albumID, true)
+		}
+	}
 
 	h.noteArrQueueComposition(instanceID, "lidarr", tuples)
 }
