@@ -27,6 +27,7 @@ var allowedServiceTypes = map[string]bool{
 	"radarr":       true,
 	"sonarr":       true,
 	"chaptarr":     true,
+	"lidarr":       true,
 	"sabnzbd":      true,
 	"qbittorrent":  true,
 	"nzbget":       true,
@@ -37,7 +38,7 @@ var allowedServiceTypes = map[string]bool{
 	"plex":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and Tautulli are admin surfaces with no per-user routing,
@@ -47,6 +48,7 @@ var grantableServiceTypes = map[string]bool{
 	"radarr":   true,
 	"sonarr":   true,
 	"chaptarr": true,
+	"lidarr":   true,
 	"jellyfin": true,
 	"emby":     true,
 	"plex":     true,
@@ -788,7 +790,7 @@ func validateRequiredFields(inst *Instance) error {
 		if inst.APIKey == "" {
 			return fmt.Errorf("link a Plex account first")
 		}
-	default: // radarr, sonarr, chaptarr, sabnzbd, tautulli
+	default: // radarr, sonarr, chaptarr, lidarr, sabnzbd, tautulli
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")
 		}
@@ -801,8 +803,8 @@ func validateConnection(inst *Instance) error {
 	switch inst.ServiceType {
 	case "radarr", "sonarr":
 		return validateArrURL(inst.URL, inst.APIKey, "v3")
-	case "chaptarr":
-		// Chaptarr is a Readarr fork speaking the Servarr /api/v1 API.
+	case "chaptarr", "lidarr":
+		// Chaptarr (a Readarr fork) and Lidarr speak the Servarr /api/v1 API.
 		return validateArrURL(inst.URL, inst.APIKey, "v1")
 	case "sabnzbd":
 		_, err := sabnzbd.NewClient(inst.URL, inst.APIKey).Version()

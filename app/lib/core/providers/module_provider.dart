@@ -91,6 +91,14 @@ class ModuleNotifier extends Notifier<ModuleState> {
         ));
       }
 
+      if (isAdmin && connection.lidarrInstances.isNotEmpty) {
+        modules.add(const AppModule(
+          type: ModuleType.lidarr,
+          label: 'Lidarr',
+          icon: Icons.library_music,
+        ));
+      }
+
       if (isAdmin && connection.downloadInstances.isNotEmpty) {
         modules.add(const AppModule(
           type: ModuleType.downloads,

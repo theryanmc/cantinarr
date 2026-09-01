@@ -26,6 +26,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -42,6 +43,7 @@ type Broadcaster interface {
 type AvailabilityInvalidator interface {
 	InvalidateAvailabilityDigests(instanceID string)
 	InvalidateBookDigests(instanceID string)
+	InvalidateMusicDigests(instanceID string)
 }
 
 // PreAirImportWitness is told when an import lands on an episode that has not
@@ -229,9 +231,12 @@ func (h *Handler) HandleArr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if inst.ServiceType == "chaptarr" {
+	switch inst.ServiceType {
+	case "chaptarr":
 		h.handleBookEvent(instanceID, payload)
-	} else {
+	case "lidarr":
+		h.handleMusicEvent(instanceID, payload)
+	default:
 		h.handleVideoEvent(instanceID, inst.ServiceType, payload)
 	}
 
@@ -390,6 +395,44 @@ func (h *Handler) bookImported(instanceID string, bookID int, isUpgrade bool) {
 	} else {
 		h.content.NotifyNewBook(book.Title, book.ForeignBookID, instanceID, book.MediaType)
 	}
+}
+
+// musicLibraryEvents are the normalized non-import Lidarr event names that
+// still change what the library shows (grabs, adds, deletes, retags): they
+// invalidate caches and ping clients. Lidarr's import event arrives as
+// "Download" and is recognized by lidarr.IsImportEventType — the same
+// vocabulary the queue poller's catch-up uses.
+var musicLibraryEvents = map[string]struct{}{
+	"grab": {}, "albumadd": {}, "albumadded": {}, "artistadd": {}, "artistadded": {},
+	"albumdelete": {}, "artistdelete": {}, "trackfiledelete": {}, "rename": {},
+	"retag": {}, "trackretag": {},
+}
+
+// handleMusicEvent applies a Lidarr callback.
+//
+// Music has no TMDB id, so this path never emits request_status_changed;
+// arr_queue_changed is the invalidation ping the app already consumes. Wave
+// one carries no music push category, so an import invalidates and pings but
+// announces nothing — the freshness story is the whole job here.
+func (h *Handler) handleMusicEvent(instanceID string, payload arrPayload) {
+	event := lidarr.NormalizeEventType(payload.EventType)
+	if event == "test" {
+		return
+	}
+	isImport := lidarr.IsImportEventType(payload.EventType)
+	_, isLibraryChange := musicLibraryEvents[event]
+	if !isImport && !isLibraryChange {
+		return
+	}
+
+	h.requests.InvalidateMusicDigests(instanceID)
+	h.hub.Broadcast(ws.Event{
+		Type: "arr_queue_changed",
+		Data: map[string]interface{}{
+			"instance_id":  instanceID,
+			"service_type": "lidarr",
+		},
+	})
 }
 
 // tokenMatches checks the Basic Auth password against every credential valid

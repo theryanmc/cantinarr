@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/nzbget"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
@@ -23,6 +24,7 @@ type Registry struct {
 	radarrClients       map[string]*radarr.Client
 	sonarrClients       map[string]*sonarr.Client
 	chaptarrClients     map[string]*chaptarr.Client
+	lidarrClients       map[string]*lidarr.Client
 	sabnzbdClients      map[string]*sabnzbd.Client
 	qbittorrentClients  map[string]*qbittorrent.Client
 	nzbgetClients       map[string]*nzbget.Client
@@ -37,6 +39,7 @@ func NewRegistry(store *Store) *Registry {
 		radarrClients:       make(map[string]*radarr.Client),
 		sonarrClients:       make(map[string]*sonarr.Client),
 		chaptarrClients:     make(map[string]*chaptarr.Client),
+		lidarrClients:       make(map[string]*lidarr.Client),
 		sabnzbdClients:      make(map[string]*sabnzbd.Client),
 		qbittorrentClients:  make(map[string]*qbittorrent.Client),
 		nzbgetClients:       make(map[string]*nzbget.Client),
@@ -124,6 +127,14 @@ func (r *Registry) GetFreshChaptarrClient(instanceID string) (*chaptarr.Client, 
 		return nil, ArrSettingsFingerprint{}, err
 	}
 	return chaptarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
+}
+
+func (r *Registry) GetFreshLidarrClient(instanceID string) (*lidarr.Client, ArrSettingsFingerprint, error) {
+	inst, err := r.getInstanceOfType(instanceID, "lidarr")
+	if err != nil {
+		return nil, ArrSettingsFingerprint{}, err
+	}
+	return lidarr.NewClient(inst.URL, inst.APIKey), fingerprintArrSettings(inst), nil
 }
 
 // ListInstanceSummaries returns identity-only views of the configured
@@ -227,6 +238,32 @@ func (r *Registry) GetChaptarrClient(instanceID string) (*chaptarr.Client, error
 	client := chaptarr.NewClient(inst.URL, inst.APIKey)
 
 	r.chaptarrClients[instanceID] = client
+
+	return client, nil
+}
+
+// GetLidarrClient returns a cached or new Lidarr client for the given instance ID.
+func (r *Registry) GetLidarrClient(instanceID string) (*lidarr.Client, error) {
+	r.mu.RLock()
+	if client, ok := r.lidarrClients[instanceID]; ok {
+		r.mu.RUnlock()
+		return client, nil
+	}
+	r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if client, ok := r.lidarrClients[instanceID]; ok {
+		return client, nil
+	}
+
+	inst, err := r.getInstanceOfType(instanceID, "lidarr")
+	if err != nil {
+		return nil, err
+	}
+
+	client := lidarr.NewClient(inst.URL, inst.APIKey)
+
+	r.lidarrClients[instanceID] = client
 
 	return client, nil
 }
@@ -485,6 +522,22 @@ func (r *Registry) GetUserChaptarrClient(userID int64) (*chaptarr.Client, string
 	return client, id, err
 }
 
+// GetUserLidarrClient returns the Lidarr client for a user's effective
+// granted instance (their pin, else their first grant). Lidarr has NO global
+// default: a user with no explicit rows gets a nil client and an empty ID,
+// which callers surface as "no access / not configured".
+func (r *Registry) GetUserLidarrClient(userID int64) (*lidarr.Client, string, error) {
+	id, err := r.store.EffectiveDefaultInstanceID(userID, "lidarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get user lidarr: %w", err)
+	}
+	if id == "" {
+		return nil, "", nil
+	}
+	client, err := r.GetLidarrClient(id)
+	return client, id, err
+}
+
 // GetDefaultChaptarrClient returns a client for an arbitrary configured Chaptarr
 // instance (lowest sort_order). Chaptarr has no global default flag; this exists
 // for admin/AI contexts that operate without a specific user identity. Returns a
@@ -498,6 +551,22 @@ func (r *Registry) GetDefaultChaptarrClient() (*chaptarr.Client, string, error) 
 		return nil, "", nil
 	}
 	client, err := r.GetChaptarrClient(inst.ID)
+	return client, inst.ID, err
+}
+
+// GetDefaultLidarrClient returns a client for an arbitrary configured Lidarr
+// instance (lowest sort_order). Lidarr has no global default flag; this exists
+// for admin contexts that operate without a specific user identity. Returns a
+// nil client when no Lidarr instance is configured.
+func (r *Registry) GetDefaultLidarrClient() (*lidarr.Client, string, error) {
+	inst, err := r.store.GetDefault("lidarr")
+	if err != nil {
+		return nil, "", fmt.Errorf("get default lidarr: %w", err)
+	}
+	if inst == nil {
+		return nil, "", nil
+	}
+	client, err := r.GetLidarrClient(inst.ID)
 	return client, inst.ID, err
 }
 
@@ -521,6 +590,7 @@ func (r *Registry) InvalidateClient(instanceID string) {
 	delete(r.radarrClients, instanceID)
 	delete(r.sonarrClients, instanceID)
 	delete(r.chaptarrClients, instanceID)
+	delete(r.lidarrClients, instanceID)
 	delete(r.sabnzbdClients, instanceID)
 	delete(r.qbittorrentClients, instanceID)
 	delete(r.nzbgetClients, instanceID)

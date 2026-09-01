@@ -23,6 +23,7 @@ func (f *fakeBroadcaster) Broadcast(e ws.Event) { f.events = append(f.events, e)
 type fakeInvalidator struct {
 	instanceIDs []string
 	bookIDs     []string
+	musicIDs    []string
 }
 
 func (f *fakeInvalidator) InvalidateAvailabilityDigests(id string) {
@@ -31,6 +32,10 @@ func (f *fakeInvalidator) InvalidateAvailabilityDigests(id string) {
 
 func (f *fakeInvalidator) InvalidateBookDigests(id string) {
 	f.bookIDs = append(f.bookIDs, id)
+}
+
+func (f *fakeInvalidator) InvalidateMusicDigests(id string) {
+	f.musicIDs = append(f.musicIDs, id)
 }
 
 type fakeContent struct {

@@ -22,6 +22,7 @@ import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../discover/logic/search_library_status.dart';
 import '../../discover/ui/book_search_results_view.dart';
+import '../../discover/ui/music_search_results_view.dart';
 import '../../discover/ui/search_results_view.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../media_access/data/media_access_service.dart';
@@ -34,6 +35,7 @@ import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
 import '../logic/shell_book_search_provider.dart';
+import '../logic/shell_music_search_provider.dart';
 import '../logic/shell_search_provider.dart';
 
 /// The root shell widget with persistent search bar and navigation chrome.
@@ -150,6 +152,7 @@ class _AppShellState extends ConsumerState<AppShell>
         if (!mounted) return;
         ref.read(shellSearchProvider.notifier).updateSearch('');
         ref.read(shellBookSearchProvider.notifier).reset();
+        ref.read(shellMusicSearchProvider.notifier).reset();
       });
     }
   }
@@ -292,9 +295,10 @@ class _AppShellState extends ConsumerState<AppShell>
   void _exitAiMode() {
     _searchController.clear();
     ref.read(shellSearchProvider.notifier).exitAiMode();
-    // GAP-SC1 desync: reset the book notifier too, so a book result hidden
-    // by an AI-mode entry can never reappear stale after a clear.
+    // GAP-SC1 desync: reset the book and music notifiers too, so a result
+    // hidden by an AI-mode entry can never reappear stale after a clear.
     ref.read(shellBookSearchProvider.notifier).reset();
+    ref.read(shellMusicSearchProvider.notifier).reset();
     _dismissKeyboard();
   }
 
@@ -308,6 +312,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // bump, so no Chaptarr request is issued for a query the user just
     // converted into an AI question.
     ref.read(shellBookSearchProvider.notifier).reset();
+    ref.read(shellMusicSearchProvider.notifier).reset();
     ref.read(shellSearchProvider.notifier).enterAiMode();
     // The pill sits in a TextFieldTapRegion so tapping it doesn't blur the
     // field; re-assert focus anyway so typing can continue immediately.
@@ -332,6 +337,19 @@ class _AppShellState extends ConsumerState<AppShell>
   /// this same overlay, are the useful destination: each row is already a
   /// requestable book. Setting the field programmatically does not fire
   /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
+  /// Shows the albums of an artist the library does not hold, by running the
+  /// search the user could have typed themselves — the music sibling of
+  /// [_searchAuthorBooks], for the same reason: a metadata-only artist has no
+  /// detail screen to open.
+  void _searchArtistAlbums(String artistName) {
+    final term = artistName.trim();
+    if (term.isEmpty) return;
+    _searchController.text = term;
+    _searchController.selection =
+        TextSelection.collapsed(offset: term.length);
+    ref.read(shellMusicSearchProvider.notifier).updateSearch(term);
+  }
+
   void _searchAuthorBooks(String authorName) {
     final term = authorName.trim();
     if (term.isEmpty) return;
@@ -383,6 +401,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/radarr')) return ModuleType.radarr;
     if (path.startsWith('/sonarr')) return ModuleType.sonarr;
     if (path.startsWith('/chaptarr')) return ModuleType.chaptarr;
+    if (path.startsWith('/lidarr')) return ModuleType.lidarr;
     if (path.startsWith('/downloads')) return ModuleType.downloads;
     if (path.startsWith('/tautulli')) return ModuleType.tautulli;
     return null;
@@ -396,6 +415,12 @@ class _AppShellState extends ConsumerState<AppShell>
   /// Chaptarr (WR-01).
   static bool _isBooksTab(String path) =>
       path == '/dashboard/books' || path.startsWith('/dashboard/books/');
+
+  /// True on the Music discovery tab, where the toolbar searches Lidarr
+  /// albums and artists instead of TMDB. Same route-boundary rule as
+  /// [_isBooksTab] (WR-01).
+  static bool _isMusicTab(String path) =>
+      path == '/dashboard/music' || path.startsWith('/dashboard/music/');
 
   bool _handleScrollNotification(ScrollNotification notification) {
     // Side-scrolling shelves (poster rows, chip strips) bubble their
@@ -494,15 +519,32 @@ class _AppShellState extends ConsumerState<AppShell>
         });
       },
     );
+    // The music sibling of the listener above, for the same reason: an
+    // instance switch re-runs the typed search against the new Lidarr.
+    ref.listen(
+      instanceProvider.select((state) => state.activeLidarrInstance?.id),
+      (previous, next) {
+        if (previous == next) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ref.read(shellMusicSearchProvider.notifier).rerunForInstance();
+        });
+      },
+    );
 
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final bookSearchState = ref.watch(shellBookSearchProvider);
     final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
+    final musicSearchState = ref.watch(shellMusicSearchProvider);
+    final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
     final hasChaptarrService =
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
+    final hasLidarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
             false;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
@@ -551,6 +593,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // `_isBooksTab(widget.currentPath)` call sites) — every gate below reads
     // this local rather than re-deriving it.
     final booksTab = _isBooksTab(widget.currentPath);
+    final musicTab = _isMusicTab(widget.currentPath);
     // The prefix badge's glyph: the sparkle while the bar is actually in AI
     // mode, otherwise the active discovery tab's own icon (read from the
     // same `modulePagesFor` table the drawer already uses — no second icon
@@ -566,7 +609,7 @@ class _AppShellState extends ConsumerState<AppShell>
       contextIcon = Icons.auto_awesome_rounded;
     } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
       final dashboardPages = modulePagesFor(ModuleType.dashboard,
-          includeBooks: hasChaptarrService);
+          includeBooks: hasChaptarrService, includeMusic: hasLidarrService);
       for (final page in dashboardPages) {
         if (page.route == widget.currentPath) {
           contextIcon = page.activeIcon;
@@ -578,8 +621,11 @@ class _AppShellState extends ConsumerState<AppShell>
     // reads the Chaptarr notifier, never the TMDB one, so the overlay and
     // scroll gates cannot be driven by a notifier that no longer receives
     // Books-tab keystrokes.
-    final searchOverlayActive =
-        booksTab ? bookSearchState.isSearching : searchState.isSearching;
+    final searchOverlayActive = booksTab
+        ? bookSearchState.isSearching
+        : musicTab
+            ? musicSearchState.isSearching
+            : searchState.isSearching;
 
     final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
@@ -604,9 +650,11 @@ class _AppShellState extends ConsumerState<AppShell>
               ? 'Ask the AI anything...'
               : (booksTab
                   ? 'Search books or authors...'
-                  : (hasAi
-                      ? 'Search or ask AI...'
-                      : 'Search by title or person...')),
+                  : (musicTab
+                      ? 'Search albums or artists...'
+                      : (hasAi
+                          ? 'Search or ask AI...'
+                          : 'Search by title or person...'))),
           aiEnabled: hasAi,
           contextIcon: contextIcon,
           onSubmitted: _submitSearchBar,
@@ -636,6 +684,13 @@ class _AppShellState extends ConsumerState<AppShell>
                 // empty-results auto-escalation is ever consulted.
                 searchNotifier.updateSearch('');
               }
+            } else if (musicTab) {
+              if (!isAiReady) {
+                musicSearchNotifier.updateSearch(q);
+              } else if (q.trim().isEmpty) {
+                // Same AI-mode exit parity as the Books arm above.
+                searchNotifier.updateSearch('');
+              }
             } else {
               searchNotifier.updateSearch(q);
             }
@@ -646,13 +701,9 @@ class _AppShellState extends ConsumerState<AppShell>
                   // Clear means "nothing is being searched anywhere" — both
                   // notifiers are reset in both directions so a stale query
                   // can never linger in the one that wasn't being fed.
-                  if (booksTab) {
-                    ref.read(shellBookSearchProvider.notifier).reset();
-                    searchNotifier.updateSearch('');
-                  } else {
-                    searchNotifier.updateSearch('');
-                    ref.read(shellBookSearchProvider.notifier).reset();
-                  }
+                  ref.read(shellBookSearchProvider.notifier).reset();
+                  ref.read(shellMusicSearchProvider.notifier).reset();
+                  searchNotifier.updateSearch('');
                 },
         ),
       ),
@@ -911,6 +962,20 @@ class _AppShellState extends ConsumerState<AppShell>
                                     onResultTap: _dismissKeyboard,
                                     onAuthorDrillDown: _searchAuthorBooks,
                                   )
+                                : musicTab
+                                ? MusicSearchResultsView(
+                                    results: musicSearchState.results,
+                                    artists: musicSearchState.artists,
+                                    query: musicSearchState.searchQuery,
+                                    isLoading:
+                                        musicSearchState.isLoadingSearch,
+                                    searched: musicSearchState.searched,
+                                    error: musicSearchState.error,
+                                    artistsUnavailable:
+                                        musicSearchState.artistsUnavailable,
+                                    onResultTap: _dismissKeyboard,
+                                    onArtistDrillDown: _searchArtistAlbums,
+                                  )
                                 : SearchResultsView(
                                     results: searchState.searchResults,
                                     isLoading: searchState.isLoadingSearch,
@@ -1078,6 +1143,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final pathModule = _moduleTypeForPath(widget.currentPath);
     final hasChaptarrService =
         ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
+            false;
+    final hasLidarrService =
+        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
             false;
     // The backend lists a media server only for users an admin granted it,
     // so its presence alone decides whether the access guide is offered —
@@ -1257,7 +1325,9 @@ class _AppShellState extends ConsumerState<AppShell>
       );
 
       final pages = !isOverlay && isActive
-          ? modulePagesFor(module.type, includeBooks: hasChaptarrService)
+          ? modulePagesFor(module.type,
+              includeBooks: hasChaptarrService,
+              includeMusic: hasLidarrService)
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
@@ -1482,6 +1552,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.tautulliInstances;
       case ModuleType.chaptarr:
         return state.chaptarrInstances;
+      case ModuleType.lidarr:
+        return state.lidarrInstances;
       default:
         return const [];
     }
@@ -1502,6 +1574,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.activeTautulliInstance;
       case ModuleType.chaptarr:
         return state.activeChaptarrInstance;
+      case ModuleType.lidarr:
+        return state.activeLidarrInstance;
       default:
         return null;
     }
@@ -1544,6 +1618,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveTautulliInstance(instanceId);
         case ModuleType.chaptarr:
           instances.setActiveChaptarrInstance(instanceId);
+        case ModuleType.lidarr:
+          instances.setActiveLidarrInstance(instanceId);
         default:
           break;
       }
@@ -1557,6 +1633,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/sonarr/library');
       case ModuleType.chaptarr:
         context.go('/chaptarr/library');
+      case ModuleType.lidarr:
+        context.go('/lidarr/library');
       case ModuleType.downloads:
         context.go('/downloads/queue');
       case ModuleType.tautulli:
