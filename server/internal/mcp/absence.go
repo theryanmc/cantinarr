@@ -28,8 +28,12 @@ func (s mediaReadScope) searchedScope() string {
 		return fmt.Sprintf("queue item %d", s.QueueID)
 	case s.BookID > 0:
 		return "this book"
+	case s.AlbumID > 0:
+		return "this album"
 	case s.AuthorID > 0:
 		return "this author"
+	case s.ArtistID > 0:
+		return "this artist"
 	case s.EpisodeNumber > 0:
 		return fmt.Sprintf("season %d episode %d of this series", s.SeasonNumber, s.EpisodeNumber)
 	case s.SeasonNumber > 0:

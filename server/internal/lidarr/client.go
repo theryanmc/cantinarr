@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +17,14 @@ import (
 	"strings"
 	"time"
 
+	arrcommon "github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/transporterr"
 )
+
+// ErrCustomFormatsNotFound reports a 404 from the custom format endpoint. It
+// lets settings readers distinguish "this Lidarr build has no custom formats"
+// from a transport failure.
+var ErrCustomFormatsNotFound = errors.New("lidarr: the custom format endpoint returned 404")
 
 type Client struct {
 	baseURL    string
@@ -722,4 +729,173 @@ func (c *Client) GetHealth() ([]HealthCheck, error) {
 		return nil, fmt.Errorf("lidarr health: %w", err)
 	}
 	return checks, nil
+}
+
+// GetCalendar returns the albums whose release dates fall inside [start, end].
+// Album release dates are calendar dates (MusicBrainz release-group dates with
+// no meaningful time-of-day), so callers should read the Y/M/D components the
+// way the Radarr calendar convention does. includeArtist embeds the artist so
+// rows can be labelled without a fan-out.
+func (c *Client) GetCalendar(start, end time.Time) ([]Album, error) {
+	var albums []Album
+	path := fmt.Sprintf("/api/v1/calendar?start=%s&end=%s&unmonitored=false&includeArtist=true",
+		url.QueryEscape(start.UTC().Format(time.RFC3339)), url.QueryEscape(end.UTC().Format(time.RFC3339)))
+	if err := c.do("GET", path, nil, &albums); err != nil {
+		return nil, fmt.Errorf("lidarr calendar: %w", err)
+	}
+	return albums, nil
+}
+
+// GetTrackFilesForAlbum lists the music files on disk for one album, with the
+// same defensive re-filter as GetAlbumsForArtist: only rows matching the
+// requested album are returned even if the server answers wider.
+func (c *Client) GetTrackFilesForAlbum(albumID int) ([]TrackFile, error) {
+	var files []TrackFile
+	path := fmt.Sprintf("/api/v1/trackfile?albumId=%d", albumID)
+	if err := c.do("GET", path, nil, &files); err != nil {
+		return nil, fmt.Errorf("lidarr album track files: %w", err)
+	}
+	matched := files[:0]
+	for _, f := range files {
+		if f.AlbumID == albumID {
+			matched = append(matched, f)
+		}
+	}
+	return matched, nil
+}
+
+// GetAlbumGrabs returns the grab history for one album, newest first
+// (eventType=1 — grabbed), from one bounded page.
+func (c *Client) GetAlbumGrabs(albumID, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=1&albumId=%d",
+		pageSize, albumID)
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("lidarr album grabs: %w", err)
+	}
+	return hp.Records, nil
+}
+
+// GetImportHistory returns the completed-import history for one album
+// (eventType=3 — trackFileImported), newest first, optionally narrowed to one
+// download id, from one bounded page. It errors rather than truncating when
+// the record count exceeds the page, so a partial answer can never read as a
+// complete one.
+func (c *Client) GetImportHistory(albumID int, downloadID string, pageSize int) ([]HistoryRecord, error) {
+	var hp HistoryPage
+	path := fmt.Sprintf("/api/v1/history?page=1&pageSize=%d&sortKey=date&sortDirection=descending&eventType=3&albumId=%d&downloadId=%s",
+		pageSize, albumID, url.QueryEscape(downloadID))
+	if err := c.do("GET", path, nil, &hp); err != nil {
+		return nil, fmt.Errorf("lidarr import history: %w", err)
+	}
+	if hp.TotalRecords > pageSize {
+		return nil, fmt.Errorf("lidarr import history incomplete: %d records exceeds bound %d", hp.TotalRecords, pageSize)
+	}
+	return hp.Records, nil
+}
+
+// GetConfigSummary returns bounded, credential-free entries for one settings
+// section. The raw payloads never leave this method (see arr.ConfigEntry).
+func (c *Client) GetConfigSummary(section string) ([]arrcommon.ConfigEntry, error) {
+	paths := map[string]string{
+		arrcommon.ConfigIndexers:           "/api/v1/indexer",
+		arrcommon.ConfigDelayProfiles:      "/api/v1/delayprofile",
+		arrcommon.ConfigReleaseProfiles:    "/api/v1/releaseprofile",
+		arrcommon.ConfigDownloadClients:    "/api/v1/downloadclient",
+		arrcommon.ConfigRemotePathMappings: "/api/v1/remotepathmapping",
+	}
+	path, ok := paths[section]
+	if !ok {
+		return nil, fmt.Errorf("unknown config section %q", section)
+	}
+	var raws []json.RawMessage
+	if err := c.do("GET", path, nil, &raws); err != nil {
+		return nil, fmt.Errorf("read %s: %w", section, err)
+	}
+	return arrcommon.SummarizeConfigSection(section, raws), nil
+}
+
+// GetQualityProfilesRaw returns every quality profile exactly as Lidarr sent
+// it. Settings objects must round-trip verbatim on a future PUT (modeling and
+// re-serializing them risks losing fields Lidarr requires), so callers decode
+// only the fields they need from each raw object.
+func (c *Client) GetQualityProfilesRaw() ([]json.RawMessage, error) {
+	return c.GetQualityProfilesRawContext(context.Background())
+}
+
+func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v1/qualityprofile")
+	if err != nil {
+		return nil, fmt.Errorf("lidarr quality profiles: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("lidarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode)
+	}
+	var profiles []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
+		return nil, fmt.Errorf("decode quality profiles: %w", err)
+	}
+	return profiles, nil
+}
+
+// UpdateQualityProfileRaw fully replaces one credential-free quality profile.
+func (c *Client) UpdateQualityProfileRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateQualityProfileRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateQualityProfileRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v1/qualityprofile/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "lidarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
+}
+
+// GetCustomFormatsRaw returns every custom format exactly as Lidarr sent it,
+// verbatim for the same round-trip reason as GetQualityProfilesRaw. A 404
+// maps to ErrCustomFormatsNotFound.
+func (c *Client) GetCustomFormatsRaw() ([]json.RawMessage, error) {
+	return c.GetCustomFormatsRawContext(context.Background())
+}
+
+// GetCustomFormatsRawContext is the cancellation-aware mutation preflight.
+func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMessage, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v1/customformat")
+	if err != nil {
+		return nil, fmt.Errorf("lidarr custom formats: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ErrCustomFormatsNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("lidarr GET /api/v1/customformat returned status %d", resp.StatusCode)
+	}
+	var formats []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
+		return nil, fmt.Errorf("decode custom formats: %w", err)
+	}
+	return formats, nil
+}
+
+// CreateCustomFormatRaw creates one credential-free custom-format object. Its
+// dedicated write path is the only Lidarr client path allowed to surface the
+// typed, redacted validation details from an HTTP 400 response.
+func (c *Client) CreateCustomFormatRaw(body json.RawMessage) (json.RawMessage, error) {
+	return c.CreateCustomFormatRawContext(context.Background(), body)
+}
+
+func (c *Client) CreateCustomFormatRawContext(ctx context.Context, body json.RawMessage) (json.RawMessage, error) {
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "lidarr", c.baseURL, c.apiKey, http.MethodPost, "/api/v1/customformat", body)
+	return raw, err
+}
+
+// UpdateCustomFormatRaw fully replaces one custom-format object.
+func (c *Client) UpdateCustomFormatRaw(id int, body json.RawMessage) (json.RawMessage, error) {
+	return c.UpdateCustomFormatRawContext(context.Background(), id, body)
+}
+
+func (c *Client) UpdateCustomFormatRawContext(ctx context.Context, id int, body json.RawMessage) (json.RawMessage, error) {
+	path := fmt.Sprintf("/api/v1/customformat/%d", id)
+	raw, _, err := arrcommon.DoSettingsWrite(ctx, c.httpClient, "lidarr", c.baseURL, c.apiKey, http.MethodPut, path, body)
+	return raw, err
 }

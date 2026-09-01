@@ -106,6 +106,9 @@ func TestSearchedScopeNarrowsToTheMostExactThingKnown(t *testing.T) {
 		{"title only", mediaReadScope{TmdbID: 615}, "this title"},
 		{"book", mediaReadScope{BookID: 9}, "this book"},
 		{"author", mediaReadScope{AuthorID: 4}, "this author"},
+		{"album", mediaReadScope{AlbumID: 12}, "this album"},
+		{"artist", mediaReadScope{ArtistID: 6}, "this artist"},
+		{"album over artist", mediaReadScope{ArtistID: 6, AlbumID: 12}, "this album"},
 		{"nothing", mediaReadScope{}, ""},
 	} {
 		if got := tc.scope.searchedScope(); got != tc.want {

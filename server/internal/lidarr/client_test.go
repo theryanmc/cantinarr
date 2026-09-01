@@ -2,6 +2,7 @@ package lidarr
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -430,5 +431,122 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	}
 	if redirectedRequests.Load() != 0 {
 		t.Fatalf("client followed a redirect %d time(s), leaking the API key", redirectedRequests.Load())
+	}
+}
+
+func TestGetTrackFilesForAlbumRefiltersResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/trackfile" || r.URL.Query().Get("albumId") != "9" {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		// A wider answer than asked for: the client must re-filter.
+		_, _ = w.Write([]byte(`[{"id":1,"albumId":9,"path":"/music/a.flac","size":1000},{"id":2,"albumId":10,"path":"/music/b.flac","size":1000}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	files, err := NewClient(server.URL, "k").GetTrackFilesForAlbum(9)
+	if err != nil {
+		t.Fatalf("GetTrackFilesForAlbum() error = %v", err)
+	}
+	if len(files) != 1 || files[0].ID != 1 {
+		t.Fatalf("files = %#v, want only album 9's row", files)
+	}
+}
+
+func TestGetCalendarQueriesWindowWithArtist(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.URL.Path != "/api/v1/calendar" || q.Get("unmonitored") != "false" || q.Get("includeArtist") != "true" ||
+			q.Get("start") == "" || q.Get("end") == "" {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[{"id":9,"title":"Fear Inoculum","releaseDate":"2026-09-05T00:00:00Z","artist":{"artistName":"Tool"}}]`))
+	}))
+	t.Cleanup(server.Close)
+
+	albums, err := NewClient(server.URL, "k").GetCalendar(time.Now(), time.Now().Add(14*24*time.Hour))
+	if err != nil {
+		t.Fatalf("GetCalendar() error = %v", err)
+	}
+	if len(albums) != 1 || albums[0].Artist == nil || albums[0].Artist.ArtistName != "Tool" {
+		t.Fatalf("albums = %#v", albums)
+	}
+}
+
+func TestAlbumHistoryReadsPinTheirQueries(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		_, _ = w.Write([]byte(`{"page":1,"pageSize":30,"totalRecords":1,"records":[{"id":501,"eventType":"grabbed","albumId":9}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(server.URL, "k")
+	if _, err := c.GetAlbumGrabs(9, 30); err != nil {
+		t.Fatalf("GetAlbumGrabs() error = %v", err)
+	}
+	if _, err := c.GetImportHistory(9, "NZB-R", 30); err != nil {
+		t.Fatalf("GetImportHistory() error = %v", err)
+	}
+	if len(paths) != 2 ||
+		!strings.Contains(paths[0], "eventType=1") || !strings.Contains(paths[0], "albumId=9") ||
+		!strings.Contains(paths[1], "eventType=3") || !strings.Contains(paths[1], "albumId=9") || !strings.Contains(paths[1], "downloadId=NZB-R") {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestGetImportHistoryRefusesOverflowingWindow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"page":1,"pageSize":30,"totalRecords":99,"records":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if _, err := NewClient(server.URL, "k").GetImportHistory(9, "", 30); err == nil {
+		t.Fatal("an overflowing import window must error, never truncate silently")
+	}
+}
+
+func TestSettingsRawReadsAndConfigSummary(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/qualityprofile":
+			_, _ = w.Write([]byte(`[{"id":1,"name":"Lossless","extra":"must-round-trip"}]`))
+		case "/api/v1/customformat":
+			_, _ = w.Write([]byte(`[{"id":4,"name":"Vinyl Rip"}]`))
+		case "/api/v1/indexer":
+			_, _ = w.Write([]byte(`[{"id":2,"name":"Indexer A","enableRss":true}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	c := NewClient(server.URL, "k")
+	profiles, err := c.GetQualityProfilesRaw()
+	if err != nil || len(profiles) != 1 {
+		t.Fatalf("GetQualityProfilesRaw() = %v, %v", profiles, err)
+	}
+	// Raw means verbatim: unknown fields survive for a future round-trip PUT.
+	if !strings.Contains(string(profiles[0]), "must-round-trip") {
+		t.Fatalf("profile lost fields: %s", profiles[0])
+	}
+	formats, err := c.GetCustomFormatsRaw()
+	if err != nil || len(formats) != 1 {
+		t.Fatalf("GetCustomFormatsRaw() = %v, %v", formats, err)
+	}
+	entries, err := c.GetConfigSummary("indexers")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("GetConfigSummary(indexers) = %v, %v", entries, err)
+	}
+}
+
+func TestCustomFormats404MapsToSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	if _, err := NewClient(server.URL, "k").GetCustomFormatsRaw(); !errors.Is(err, ErrCustomFormatsNotFound) {
+		t.Fatalf("err = %v, want ErrCustomFormatsNotFound", err)
 	}
 }

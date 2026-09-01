@@ -7,6 +7,7 @@ import (
 
 	"github.com/windoze95/cantinarr-server/internal/arr"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/lidarr"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 )
@@ -191,7 +192,7 @@ func toolCall(name, args string) string {
 // are skipped so the agent only sees actionable config problems). The generic
 // parameter lets the one renderer serve both sonarr.HealthCheck and
 // radarr.HealthCheck, which are structurally identical but distinct types.
-func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.HealthCheck](label string, checks []T) string {
+func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.HealthCheck | lidarr.HealthCheck](label string, checks []T) string {
 	var sb strings.Builder
 	shown := 0
 	for _, c := range checks {
@@ -202,6 +203,8 @@ func renderHealthSection[T sonarr.HealthCheck | radarr.HealthCheck | chaptarr.He
 		case radarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		case chaptarr.HealthCheck:
+			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
+		case lidarr.HealthCheck:
 			source, ctype, message, wiki = v.Source, v.Type, v.Message, v.WikiURL
 		}
 		if strings.EqualFold(ctype, "ok") {
@@ -273,6 +276,22 @@ func (s *ToolServer) getArrHealth(input json.RawMessage, callInstanceID string) 
 		client, label, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
 		if client == nil {
 			if mediaType == "book" {
+				return &ToolResult{Text: refusal}, nil
+			}
+			sections = append(sections, refusal)
+		} else {
+			checks, err := client.GetHealth()
+			if err != nil {
+				return nil, err
+			}
+			sections = append(sections, renderHealthSection(label, checks))
+		}
+	}
+
+	if mediaType == "music" || mediaType == "all" {
+		client, label, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if client == nil {
+			if mediaType == "music" {
 				return &ToolResult{Text: refusal}, nil
 			}
 			sections = append(sections, refusal)

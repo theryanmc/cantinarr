@@ -492,3 +492,65 @@ func TestMusicRequestExplicitForeignInstanceForbidden(t *testing.T) {
 		t.Fatalf("foreign instance error = %v, want ErrLidarrInstanceForbidden", err)
 	}
 }
+
+// SearchAlbumsForUser resolves the user's own instance and shapes results for
+// the AI tools: artist and year mapped, external covers preferred, arr-relative
+// cover paths dropped, and each addressable row cached for the immediate
+// display_media verification.
+func TestSearchAlbumsForUserScopesAndCaches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/v1/album/lookup" || r.URL.Query().Get("term") != "fear" {
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`[
+			{"title":"Fear Inoculum","artist":{"artistName":"Tool"},"foreignAlbumId":"fa-1","releaseDate":"2019-08-30T00:00:00Z","overview":"Fifth.","images":[{"coverType":"cover","url":"/mediacover/1.jpg","remoteUrl":"https://covers.example.org/1.jpg"}]},
+			{"title":"Relative Only","foreignAlbumId":"fa-2","remoteCover":"/MediaCover/Albums/2/cover.jpg"},
+			{"title":"Unaddressable","foreignAlbumId":"  "}
+		]`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc, uid, _ := newLidarrMusicTestService(t, srv.URL)
+
+	results, err := svc.SearchAlbumsForUser(uid, "fear")
+	if err != nil {
+		t.Fatalf("SearchAlbumsForUser: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %#v, want the two addressable rows", results)
+	}
+	first := results[0]
+	if first.Title != "Fear Inoculum" || first.ArtistName != "Tool" || first.Year != 2019 ||
+		first.ForeignAlbumID != "fa-1" || first.RemoteCover != "https://covers.example.org/1.jpg" {
+		t.Fatalf("first = %#v", first)
+	}
+	// An arr-relative cover must be dropped, never handed to a client.
+	if results[1].RemoteCover != "" {
+		t.Fatalf("relative cover leaked: %q", results[1].RemoteCover)
+	}
+
+	cached, ok := svc.CachedAlbumByForeignID(uid, "fa-1")
+	if !ok || cached.Title != "Fear Inoculum" {
+		t.Fatalf("cache miss for a just-searched id: %#v %v", cached, ok)
+	}
+	if _, ok := svc.CachedAlbumByForeignID(uid, "fa-unknown"); ok {
+		t.Fatal("an unsearched id must miss the cache (callers re-verify live)")
+	}
+}
+
+func TestSearchAlbumsForUserWithoutAccessFailsClosed(t *testing.T) {
+	database, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	res, _ := database.Exec("INSERT INTO users (username, password_hash, role) VALUES ('nobody', '', 'user')")
+	uid, _ := res.LastInsertId()
+	cipher, _ := secrets.NewCipher(bytes.Repeat([]byte{0x42}, 32))
+	svc := NewService(database, instance.NewRegistry(instance.NewStore(database, cipher)), nil, nil)
+
+	if _, err := svc.SearchAlbumsForUser(uid, "anything"); !errors.Is(err, ErrNoLidarrAccess) {
+		t.Fatalf("err = %v, want ErrNoLidarrAccess", err)
+	}
+}
