@@ -210,6 +210,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'radarr',
       'sonarr',
       'chaptarr',
+      'lidarr',
+      'music',
       'download client',
       'tautulli',
       'jellyfin',

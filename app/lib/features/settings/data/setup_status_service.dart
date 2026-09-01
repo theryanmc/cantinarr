@@ -43,10 +43,11 @@ class SetupStatus {
 
   int get remaining => total - configured;
 
-  /// The checklist keys that give a request somewhere to go. Chaptarr is one of
-  /// them on purpose: a books-only server is a real deployment, and calling it
-  /// broken because it has no Radarr would be wrong.
-  static const _libraryKeys = {'radarr', 'sonarr', 'books'};
+  /// The checklist keys that give a request somewhere to go. Chaptarr and
+  /// Lidarr are among them on purpose: a books-only or music-only server is a
+  /// real deployment, and calling it broken because it has no Radarr would be
+  /// wrong.
+  static const _libraryKeys = {'radarr', 'sonarr', 'books', 'music'};
 
   bool _isConfigured(String key) =>
       items.any((i) => i.key == key && i.configured);

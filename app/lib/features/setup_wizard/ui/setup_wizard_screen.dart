@@ -39,6 +39,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'download_client':
       case 'tautulli':
       case 'books':
+      case 'music':
       case 'media_servers':
         return '/settings/instance/new';
       case 'media_downloads':
@@ -80,6 +81,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return Icons.live_tv_outlined;
       case 'books':
         return Icons.menu_book;
+      case 'music':
+        return Icons.library_music_outlined;
       case 'ai':
         return Icons.smart_toy_outlined;
       case 'remediation':
@@ -103,6 +106,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         return {'service_type': 'tautulli'};
       case 'books':
         return {'service_type': 'chaptarr'};
+      case 'music':
+        return {'service_type': 'lidarr'};
       case 'media_servers':
         return {'service_type_prompt': 'Select a media server'};
       case 'download_client':

@@ -13,11 +13,13 @@ class InstanceState {
   final List<ServiceInstance> radarrInstances;
   final List<ServiceInstance> sonarrInstances;
   final List<ServiceInstance> chaptarrInstances;
+  final List<ServiceInstance> lidarrInstances;
   final List<ServiceInstance> downloadInstances;
   final List<ServiceInstance> tautulliInstances;
   final String? activeRadarrInstanceId;
   final String? activeSonarrInstanceId;
   final String? activeChaptarrInstanceId;
+  final String? activeLidarrInstanceId;
   final String? activeDownloadInstanceId;
   final String? activeTautulliInstanceId;
 
@@ -25,11 +27,13 @@ class InstanceState {
     this.radarrInstances = const [],
     this.sonarrInstances = const [],
     this.chaptarrInstances = const [],
+    this.lidarrInstances = const [],
     this.downloadInstances = const [],
     this.tautulliInstances = const [],
     this.activeRadarrInstanceId,
     this.activeSonarrInstanceId,
     this.activeChaptarrInstanceId,
+    this.activeLidarrInstanceId,
     this.activeDownloadInstanceId,
     this.activeTautulliInstanceId,
   });
@@ -38,11 +42,13 @@ class InstanceState {
     List<ServiceInstance>? radarrInstances,
     List<ServiceInstance>? sonarrInstances,
     List<ServiceInstance>? chaptarrInstances,
+    List<ServiceInstance>? lidarrInstances,
     List<ServiceInstance>? downloadInstances,
     List<ServiceInstance>? tautulliInstances,
     String? activeRadarrInstanceId,
     String? activeSonarrInstanceId,
     String? activeChaptarrInstanceId,
+    String? activeLidarrInstanceId,
     String? activeDownloadInstanceId,
     String? activeTautulliInstanceId,
   }) =>
@@ -50,6 +56,7 @@ class InstanceState {
         radarrInstances: radarrInstances ?? this.radarrInstances,
         sonarrInstances: sonarrInstances ?? this.sonarrInstances,
         chaptarrInstances: chaptarrInstances ?? this.chaptarrInstances,
+        lidarrInstances: lidarrInstances ?? this.lidarrInstances,
         downloadInstances: downloadInstances ?? this.downloadInstances,
         tautulliInstances: tautulliInstances ?? this.tautulliInstances,
         activeRadarrInstanceId:
@@ -58,6 +65,8 @@ class InstanceState {
             activeSonarrInstanceId ?? this.activeSonarrInstanceId,
         activeChaptarrInstanceId:
             activeChaptarrInstanceId ?? this.activeChaptarrInstanceId,
+        activeLidarrInstanceId:
+            activeLidarrInstanceId ?? this.activeLidarrInstanceId,
         activeDownloadInstanceId:
             activeDownloadInstanceId ?? this.activeDownloadInstanceId,
         activeTautulliInstanceId:
@@ -99,6 +108,18 @@ class InstanceState {
     }
     return chaptarrInstances.firstWhere((i) => i.isDefault,
         orElse: () => chaptarrInstances.first);
+  }
+
+  /// Get the active Lidarr instance, falling back to default.
+  ServiceInstance? get activeLidarrInstance {
+    if (lidarrInstances.isEmpty) return null;
+    if (activeLidarrInstanceId != null) {
+      final found =
+          lidarrInstances.where((i) => i.id == activeLidarrInstanceId).toList();
+      if (found.isNotEmpty) return found.first;
+    }
+    return lidarrInstances.firstWhere((i) => i.isDefault,
+        orElse: () => lidarrInstances.first);
   }
 
   /// Whether the aggregate "All" downloads view is active. Only meaningful
@@ -148,6 +169,7 @@ class InstanceNotifier extends Notifier<InstanceState> {
     final radarr = connection.radarrInstances;
     final sonarr = connection.sonarrInstances;
     final chaptarr = connection.chaptarrInstances;
+    final lidarr = connection.lidarrInstances;
     final downloads = connection.downloadInstances;
     final tautulli = connection.tautulliInstances;
 
@@ -155,6 +177,7 @@ class InstanceNotifier extends Notifier<InstanceState> {
       radarrInstances: radarr,
       sonarrInstances: sonarr,
       chaptarrInstances: chaptarr,
+      lidarrInstances: lidarr,
       downloadInstances: downloads,
       tautulliInstances: tautulli,
       activeRadarrInstanceId: radarr.isNotEmpty
@@ -168,6 +191,10 @@ class InstanceNotifier extends Notifier<InstanceState> {
       activeChaptarrInstanceId: chaptarr.isNotEmpty
           ? (chaptarr.firstWhere((i) => i.isDefault,
                   orElse: () => chaptarr.first))
+              .id
+          : null,
+      activeLidarrInstanceId: lidarr.isNotEmpty
+          ? (lidarr.firstWhere((i) => i.isDefault, orElse: () => lidarr.first))
               .id
           : null,
       // With several download clients the aggregate "All" view is the
@@ -194,6 +221,10 @@ class InstanceNotifier extends Notifier<InstanceState> {
 
   void setActiveChaptarrInstance(String instanceId) {
     state = state.copyWith(activeChaptarrInstanceId: instanceId);
+  }
+
+  void setActiveLidarrInstance(String instanceId) {
+    state = state.copyWith(activeLidarrInstanceId: instanceId);
   }
 
   void setActiveDownloadInstance(String instanceId) {
