@@ -8,6 +8,7 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../data/lidarr_api_service.dart';
 import '../data/lidarr_models.dart';
+import 'lidarr_import_doctor_sheet.dart';
 import 'widgets/lidarr_queue_item_card.dart';
 
 /// Shows the current Lidarr download queue with per-item actions.
@@ -96,6 +97,15 @@ class _LidarrQueueScreenState extends ConsumerState<LidarrQueueScreen> {
         _error = 'Failed to load queue: $e';
       });
     }
+  }
+
+  void _showDoctor(LidarrQueueItem item) {
+    final service = _buildService();
+    if (service == null) return;
+    showLidarrImportDoctorSheet(context, service: service, item: item)
+        .then((changed) {
+      if (changed == true) _loadQueue(silent: true);
+    });
   }
 
   Future<void> _removeItem(LidarrQueueItem item) async {
@@ -191,6 +201,7 @@ class _LidarrQueueScreenState extends ConsumerState<LidarrQueueScreen> {
           final item = _queue[index];
           return LidarrQueueItemCard(
             item: item,
+            onTap: item.hasIssues ? () => _showDoctor(item) : null,
             onRemove: () => _removeItem(item),
           );
         },

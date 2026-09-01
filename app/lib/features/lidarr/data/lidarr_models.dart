@@ -553,3 +553,164 @@ class LidarrWantedPage {
         totalRecords: json['totalRecords'] as int? ?? 0,
       );
 }
+
+/// One rejection reason attached to a manual-import candidate.
+class LidarrImportRejection {
+  final String reason;
+  final String type;
+
+  const LidarrImportRejection({this.reason = '', this.type = ''});
+
+  factory LidarrImportRejection.fromJson(Map<String, dynamic> json) =>
+      LidarrImportRejection(
+        reason: json['reason'] as String? ?? '',
+        type: json['type'] as String? ?? '',
+      );
+
+  bool get isPermanent => type.toLowerCase() == 'permanent';
+}
+
+/// One importable file returned by GET /manualimport for a download. Mirrors
+/// [ChaptarrManualImportCandidate] but keyed by `artistId` + `albumId` +
+/// matched track ids. The `quality` blob is kept VERBATIM and round-tripped
+/// back into the ManualImport command unchanged (re-modelling it loses fields
+/// Lidarr needs).
+class LidarrManualImportCandidate {
+  final int id;
+  final String path;
+  final String? folderName;
+  final String name;
+  final int size;
+  final int? artistId;
+  final int? albumId;
+  final int? albumReleaseId;
+  final List<int> trackIds;
+  final Map<String, dynamic>? quality;
+  final String? releaseGroup;
+  final String? downloadId;
+  final List<LidarrImportRejection> rejections;
+
+  const LidarrManualImportCandidate({
+    required this.id,
+    required this.path,
+    this.folderName,
+    this.name = '',
+    this.size = 0,
+    this.artistId,
+    this.albumId,
+    this.albumReleaseId,
+    this.trackIds = const [],
+    this.quality,
+    this.releaseGroup,
+    this.downloadId,
+    this.rejections = const [],
+  });
+
+  factory LidarrManualImportCandidate.fromJson(Map<String, dynamic> json) =>
+      LidarrManualImportCandidate(
+        id: json['id'] as int? ?? 0,
+        path: json['path'] as String? ?? '',
+        folderName: json['folderName'] as String?,
+        name: json['name'] as String? ??
+            (json['relativePath'] as String?) ??
+            (json['path'] as String? ?? ''),
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        artistId: (json['artist'] as Map<String, dynamic>?)?['id'] as int?,
+        albumId: (json['album'] as Map<String, dynamic>?)?['id'] as int?,
+        albumReleaseId: (json['albumReleaseId'] as num?)?.toInt(),
+        trackIds: (json['tracks'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((t) => (t['id'] as num?)?.toInt() ?? 0)
+            .where((id) => id > 0)
+            .toList(),
+        quality: json['quality'] as Map<String, dynamic>?,
+        releaseGroup: json['releaseGroup'] as String?,
+        downloadId: json['downloadId'] as String?,
+        rejections:
+            _modelList(json['rejections'], LidarrImportRejection.fromJson),
+      );
+
+  bool get hasPermanentRejection => rejections.any((r) => r.isPermanent);
+
+  /// A candidate is importable once Lidarr has matched it to an album's
+  /// tracks — an album guess with no matched track still cannot import.
+  bool get isMapped => albumId != null && trackIds.isNotEmpty;
+  String get sizeFormatted => _formatBytes(size);
+
+  /// The file entry for the ManualImport command, with quality sent back
+  /// exactly as received.
+  Map<String, dynamic> toImportFile() => {
+        'path': path,
+        if (folderName != null) 'folderName': folderName,
+        if (artistId != null) 'artistId': artistId,
+        if (albumId != null) 'albumId': albumId,
+        if (albumReleaseId != null) 'albumReleaseId': albumReleaseId,
+        if (trackIds.isNotEmpty) 'trackIds': trackIds,
+        if (quality != null) 'quality': quality,
+        if (releaseGroup != null) 'releaseGroup': releaseGroup,
+        if (downloadId != null) 'downloadId': downloadId,
+      };
+}
+
+/// One release row from Lidarr's interactive search for an album.
+class LidarrRelease {
+  final String guid;
+  final int indexerId;
+  final String title;
+  final String? quality;
+  final int size;
+  final int age;
+  final double ageHours;
+  final String? indexer;
+  final String protocol;
+  final int? seeders;
+  final int? leechers;
+  final bool rejected;
+  final List<String> rejections;
+
+  const LidarrRelease({
+    required this.guid,
+    required this.indexerId,
+    required this.title,
+    this.quality,
+    this.size = 0,
+    this.age = 0,
+    this.ageHours = 0,
+    this.indexer,
+    this.protocol = 'unknown',
+    this.seeders,
+    this.leechers,
+    this.rejected = false,
+    this.rejections = const [],
+  });
+
+  factory LidarrRelease.fromJson(Map<String, dynamic> json) => LidarrRelease(
+        guid: json['guid'] as String? ?? '',
+        indexerId: json['indexerId'] as int? ?? 0,
+        title: json['title'] as String? ?? 'Unknown',
+        quality: (json['quality'] as Map<String, dynamic>?)?['quality']?['name']
+            as String?,
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        age: json['age'] as int? ?? 0,
+        ageHours: (json['ageHours'] as num?)?.toDouble() ?? 0,
+        indexer: json['indexer'] as String?,
+        protocol: json['protocol'] as String? ?? 'unknown',
+        seeders: json['seeders'] as int?,
+        leechers: json['leechers'] as int?,
+        rejected: json['rejected'] as bool? ?? false,
+        rejections: _asList(json['rejections'])
+            .map((r) => r is Map<String, dynamic>
+                ? (r['reason']?.toString() ?? '')
+                : r.toString())
+            .where((r) => r.isNotEmpty)
+            .toList(),
+      );
+
+  bool get isTorrent => protocol == 'torrent';
+  String get sizeFormatted => _formatBytes(size);
+  String get ageFormatted {
+    if (age >= 1) return '${age}d';
+    if (ageHours >= 1) return '${ageHours.round()}h';
+    return '<1h';
+  }
+}
