@@ -31,7 +31,7 @@ Discover and request movies, TV shows, books, and music. Get push notifications.
   └────────┘ └────────┘ └──────────┘ └──────┘  (+ SABnzbd,
                                       qBittorrent, NZBGet,
                                       Transmission, Tautulli,
-                                      push gateway)
+                                      Tracearr, push gateway)
 
 ┌───────────────────────────────┐
 │  Cantinarr App (Flutter)      │      ┌─────────────────────┐
@@ -61,7 +61,7 @@ Discover and request movies, TV shows, books, and music. Get push notifications.
 - **Always in sync** -- availability is computed live from the arrs (never from a stale snapshot), and server-managed Radarr/Sonarr/Chaptarr/Lidarr webhooks -- installed automatically the moment you add an instance -- push manual imports, deletes, and adds into the app the moment they happen without exposing callback credentials to a device. Books gain the most: an ebook can finish downloading between two polls, so instant updates are what make its "ready to read" alert reliable.
 - **Push notifications** -- APNs (iOS) and FCM (Android) via a self-hosted push gateway with zero-config auto-enrollment: new-content alerts for movies, episodes, and books, approval/issue alerts for admins, per-user preference toggles, deep links into the right screen.
 - **Plex, Jellyfin, and Emby access** -- connect your media server and choose which users get access. On Jellyfin or Emby each of them creates their own account from the app with a password only they know, or links one they already have by signing in with it once (administrator accounts included; Cantinarr never changes those); on Plex they sign in with their own Plex account, or share its email, and the invite goes out the moment you grant them (or on its own, with auto-approve). Already have users on the server? Import them from Users: each picked account becomes a Cantinarr user of the same name, granted and linked, with a connect link to hand out. Everyone sees the libraries you picked and the address to sign in at, an available title's page gets a **Watch on Jellyfin** / **Watch on Emby** button that opens it on your server (looked up live as their own account, so it appears only for what they can actually see), and the app shows the live state: invite pending, accepted, or switched off. Take access away and a Jellyfin or Emby account is switched off rather than deleted, so watch history survives, and a Plex share is removed; grant again and it comes back (for someone still connected to your Plex account, without another invite).
-- **Tautulli** -- watch what's playing on Plex right now: active streams with quality/transcode badges, watch history, and top movies/shows/users stats.
+- **Monitoring** -- watch what's playing right now: active streams with quality/transcode badges and the server they play from, watch history, and top movies/shows/users stats. Tautulli covers Plex; Tracearr covers Plex, Jellyfin, and Emby from one instance, and both feed the same module.
 - **Secrets encrypted at rest** -- arr API keys, download-client passwords, webhook tokens, shared and personal AI credentials, and OpenAI/xAI OAuth authorizations are AES-256-GCM encrypted in the database.
 - **Household-friendly** -- Connect links, passwordless by default, role-based access, per-user default instances. Admins manage services; users just browse and request.
 - **Guided setup** -- a live checklist wizard derived from what's actually configured: every step opens the real settings screen, progress can't go stale, and newly shipped features appear on the list automatically.
@@ -181,14 +181,15 @@ cantinarr/
 │                           # config, credentials, db, discover, downloads, emby, grokoauth, instance, jellyfin,
 │                           # mcp, mcpserver, mediaaccess, mediafiles, mediapath, mediaserver, nzbget, proxy, push, qbittorrent,
 │                           # radarr, remediation, request, sabnzbd, secrets,
-│                           # sonarr, tautulli, tmdb, trakt, transmission,
-│                           # web, webhooks, websocket
+│                           # sonarr, tautulli, tmdb, tracearr, trakt,
+│                           # transmission, watchhistory, web, webhooks,
+│                           # websocket
 │
 ├── app/                    # Flutter client (iOS, web) -- see app/README.md
 │   ├── lib/
 │   │   ├── core/           # Models, networking, realtime, theme, widgets
 │   │   ├── features/       # auth, discover, request, dashboard, sonarr,
-│   │   │                   # radarr, chaptarr, downloads, media_download, tautulli, issues,
+│   │   │                   # radarr, chaptarr, downloads, media_download, monitoring, issues,
 │   │   │                   # ai_assistant, notifications, settings, ...
 │   │   └── navigation/     # GoRouter with auth guard
 │   └── test/
@@ -214,7 +215,7 @@ Included AI is an explicit per-user entitlement for new accounts; the initial ad
 | Chaptarr instance | Admin UI | Books module; grant access per user from the instance editor or user settings -- full walkthrough in [`docs/books-setup.md`](docs/books-setup.md) |
 | Lidarr instance | Admin UI | Music module; grant access per user the same way -- full walkthrough in [`docs/music-setup.md`](docs/music-setup.md) |
 | SABnzbd/qBittorrent/NZBGet/Transmission | Admin UI | Download client modules (queue, history, speeds) |
-| Tautulli instance | Admin UI | Plex activity, watch history, stats |
+| Tautulli or Tracearr instance | Admin UI | Monitoring: live streams, watch history, stats. Tautulli watches Plex; Tracearr watches Plex, Jellyfin, and Emby (public API key from its Settings > General) |
 | Plex, Jellyfin, or Emby instance | Admin UI | Media server access: per-user grants, shared libraries, and the sign-in address users see; Plex links a plex.tv account with a PIN and picks the server to share |
 | Anthropic/OpenAI/Gemini/xAI API key | Admin UI | Enables shared API-key-backed AI chat and autonomous remediation |
 | OpenAI reasoning effort | Admin UI | Optional; pins `reasoning_effort` for the shared OpenAI provider (none/minimal/low/medium/high). Auto sends no effort field; endpoints that reject the field fall back automatically |

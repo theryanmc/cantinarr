@@ -1,6 +1,6 @@
 # Media services and download clients
 
-End-to-end journeys against real Radarr, Sonarr, Chaptarr, download-client, and Tautulli services — grabs, Import Doctor fixes, and per-client remove semantics. Screen contracts, queue normalization, and authorization are proven by the hermetic suites.
+End-to-end journeys against real Radarr, Sonarr, Chaptarr, download-client, Tautulli, and Tracearr services — grabs, Import Doctor fixes, and per-client remove semantics. Screen contracts, queue normalization, and authorization are proven by the hermetic suites.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -38,6 +38,7 @@ Run client-specific cases once for **each** of SABnzbd, qBittorrent, NZBGet, and
 - [ ] `DOWN-005` · P0 · LIVE — Remove a disposable item with data/files preserved; verify queue removal and data retention using that client's semantics. NZBGet offers no delete-files choice and the dialog states files stay on disk.
 - [ ] `DOWN-006` · P0 · LIVE — Remove a disposable item with data/files deletion explicitly selected (not offered for NZBGet); verify confirmation and exact external deletion.
 
-## Tautulli
+## Tautulli and Tracearr
 
 - [ ] `TAUT-001` · P0 · LIVE — Load active direct-play, direct-stream, video-transcode, and audio-transcode sessions; verify user/title/player/progress/quality/decision badges and session count.
+- [ ] `TRR-001` · P0 · LIVE — Against a Tracearr instance watching a real Jellyfin (or Plex/Emby) server: add it with its public API key and confirm a wrong key fails the connection test naming the rejected key and no host; with a live and a paused session, verify the Monitoring Activity badges (decision, quality, the server's name, a media badge for music) and the count; verify History is newest-first with the server in each row and the coverage note at the end; verify Stats ranks movies/shows/users for 7 and 30 days with the "Based on N plays since …" note, and that a second read of the same window is served without new Tracearr requests.
