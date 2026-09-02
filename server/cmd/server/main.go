@@ -34,11 +34,11 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
 	"github.com/windoze95/cantinarr-server/internal/trakt"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
 )
@@ -128,8 +128,8 @@ func main() {
 	// Downloads handler (SABnzbd / qBittorrent / NZBGet / Transmission queue management)
 	downloadsHandler := downloads.NewHandler(instanceStore, registry)
 
-	// Tautulli handler (Plex monitoring)
-	tautulliHandler := tautulli.NewHandler(instanceStore, registry)
+	// Watch-history handler (Tautulli and Tracearr monitoring)
+	watchHistoryHandler := watchhistory.NewHandler(instanceStore, registry)
 
 	// Server-lifetime context: drives the WebSocket hub and the push manager's
 	// background enrollment retry.
@@ -344,7 +344,7 @@ func main() {
 	updateChecker := update.NewChecker(version.Version, cfg.DisableUpdateCheck)
 
 	// Router
-	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, tautulliHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings)
+	router := api.NewRouter(cfg, authHandler, authService, requestHandler, remediationService, remediationHandler, proxyHandler, wsHub, aiHandler, discoverHandler, instanceHandler, instanceStore, downloadsHandler, mediaFilesHandler, watchHistoryHandler, creds, credHandler, toolServer, pushHandler, webhookHandler, mediaAccessHandler, updateChecker, serverSettings)
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	log.Printf("Cantinarr server starting on %s", addr)

@@ -574,6 +574,7 @@ func TestValidateConnectionDoesNotFollowServiceRedirects(t *testing.T) {
 		"nzbget",
 		"transmission",
 		"tautulli",
+		"tracearr",
 		"jellyfin",
 		"emby",
 		"plex",

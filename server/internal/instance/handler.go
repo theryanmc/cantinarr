@@ -18,7 +18,6 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/plex"
 	"github.com/windoze95/cantinarr-server/internal/qbittorrent"
 	"github.com/windoze95/cantinarr-server/internal/sabnzbd"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/transmission"
 )
 
@@ -33,16 +32,18 @@ var allowedServiceTypes = map[string]bool{
 	"nzbget":       true,
 	"transmission": true,
 	"tautulli":     true,
+	"tracearr":     true,
 	"jellyfin":     true,
 	"emby":         true,
 	"plex":         true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
-// Download clients and Tautulli are admin surfaces with no per-user routing,
-// so granting them would only invite confusion. For media servers a grant is
+// Download clients and watch-history providers (Tautulli, Tracearr) are admin
+// surfaces with no per-user routing, so granting them would only invite
+// confusion. For media servers a grant is
 // the eligibility to create an account there.
 var grantableServiceTypes = map[string]bool{
 	"radarr":   true,
@@ -790,7 +791,7 @@ func validateRequiredFields(inst *Instance) error {
 		if inst.APIKey == "" {
 			return fmt.Errorf("link a Plex account first")
 		}
-	default: // radarr, sonarr, chaptarr, lidarr, sabnzbd, tautulli
+	default: // radarr, sonarr, chaptarr, lidarr, sabnzbd, tautulli, tracearr
 		if inst.APIKey == "" {
 			return fmt.Errorf("name, url, and api_key are required")
 		}
@@ -822,9 +823,8 @@ func validateConnection(inst *Instance) error {
 	case "transmission":
 		_, err := transmission.NewClient(inst.URL, inst.Username, inst.Password).SessionGet()
 		return err
-	case "tautulli":
-		_, err := tautulli.NewClient(inst.URL, inst.APIKey).GetServerInfo()
-		return err
+	case "tautulli", "tracearr":
+		return validateWatchHistoryConnection(inst)
 	default:
 		if IsMediaServerType(inst.ServiceType) {
 			return validateMediaServerConnection(inst)

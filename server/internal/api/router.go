@@ -24,9 +24,9 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/remediation"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/serversettings"
-	"github.com/windoze95/cantinarr-server/internal/tautulli"
 	"github.com/windoze95/cantinarr-server/internal/update"
 	"github.com/windoze95/cantinarr-server/internal/version"
+	"github.com/windoze95/cantinarr-server/internal/watchhistory"
 	"github.com/windoze95/cantinarr-server/internal/web"
 	"github.com/windoze95/cantinarr-server/internal/webhooks"
 	ws "github.com/windoze95/cantinarr-server/internal/websocket"
@@ -47,7 +47,7 @@ func NewRouter(
 	instanceStore *instance.Store,
 	downloadsHandler *downloads.Handler,
 	mediaFilesHandler *mediafiles.Handler,
-	tautulliHandler *tautulli.Handler,
+	watchHistoryHandler *watchhistory.Handler,
 	creds *credentials.Registry,
 	credHandler *credentials.Handler,
 	toolServer *mcp.ToolServer,
@@ -538,14 +538,18 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionDownloadsRead)).Get("/downloads/{instanceID}/history", downloadsHandler.GetHistory)
 		})
 
-		// Tautulli (Plex monitoring) routes (admin only)
+		// Watch-history (Tautulli, Tracearr) routes (admin only). The
+		// /api/tautulli prefix predates Tracearr and stays mounted on the same
+		// handler so older apps keep working; new clients use /api/watch-history.
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
 			r.Use(auth.RequirePermission(auth.PermissionMonitoringRead))
 
-			r.Get("/tautulli/{instanceID}/activity", tautulliHandler.GetActivity)
-			r.Get("/tautulli/{instanceID}/history", tautulliHandler.GetHistory)
-			r.Get("/tautulli/{instanceID}/stats", tautulliHandler.GetStats)
+			for _, prefix := range []string{"/watch-history", "/tautulli"} {
+				r.Get(prefix+"/{instanceID}/activity", watchHistoryHandler.GetActivity)
+				r.Get(prefix+"/{instanceID}/history", watchHistoryHandler.GetHistory)
+				r.Get(prefix+"/{instanceID}/stats", watchHistoryHandler.GetStats)
+			}
 		})
 
 	})

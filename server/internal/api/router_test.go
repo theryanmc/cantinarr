@@ -105,6 +105,7 @@ func TestConfigHandlerFiltersInstancesForNonAdmin(t *testing.T) {
 	createConfigInstance(t, store, "chaptarr", "Private Books", false)
 	createConfigInstance(t, store, "sabnzbd", "Downloads", false)
 	createConfigInstance(t, store, "tautulli", "Tautulli", false)
+	createConfigInstance(t, store, "tracearr", "Tracearr", false)
 	homeJellyfin := createConfigInstance(t, store, "jellyfin", "Home Jellyfin", false)
 	createConfigInstance(t, store, "jellyfin", "Other Jellyfin", false)
 	denEmby := createConfigInstance(t, store, "emby", "Den Emby", false)
