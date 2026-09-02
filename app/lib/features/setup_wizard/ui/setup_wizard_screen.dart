@@ -93,9 +93,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   /// Route extras for the instance rows: the add-instance form opens already
-  /// on the service type this row named. The download-client row names a
-  /// category with four members, so instead of guessing one it sends a
-  /// selection prompt the form shows as its disabled placeholder option.
+  /// on the service type this row named. Rows that name a category with
+  /// several members (download clients, media servers, and the monitoring
+  /// row, whose key predates Tracearr) send a selection prompt instead of
+  /// guessing one; the form shows it as its disabled placeholder option.
   Map<String, dynamic>? _extraFor(String key) {
     switch (key) {
       case 'radarr':
@@ -103,7 +104,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       case 'sonarr':
         return {'service_type': 'sonarr'};
       case 'tautulli':
-        return {'service_type': 'tautulli'};
+        return {'service_type_prompt': 'Select a monitoring service'};
       case 'books':
         return {'service_type': 'chaptarr'};
       case 'music':

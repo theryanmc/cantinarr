@@ -67,13 +67,14 @@ void main() {
     addTearDown(tester.view.reset);
 
     // What each row must send: the service type when the row names one.
-    // The download-client row names a category of four services, so it sends
-    // a selection prompt instead of guessing a member the admin would then
-    // have to correct — the same correction the Radarr default used to force.
+    // Rows naming a category (download clients, media servers, and the
+    // monitoring row, whose key predates Tracearr) send a selection prompt
+    // instead of guessing a member the admin would then have to correct —
+    // the same correction the Radarr default used to force.
     const expectedExtras = <String, Map<String, dynamic>>{
       'radarr': {'service_type': 'radarr'},
       'sonarr': {'service_type': 'sonarr'},
-      'tautulli': {'service_type': 'tautulli'},
+      'tautulli': {'service_type_prompt': 'Select a monitoring service'},
       'books': {'service_type': 'chaptarr'},
       'media_servers': {'service_type_prompt': 'Select a media server'},
       'download_client': {'service_type_prompt': 'Select a download client'},

@@ -76,10 +76,10 @@ import '../features/sonarr/ui/sonarr_home_screen.dart';
 import '../features/sonarr/ui/sonarr_module_shell.dart';
 import '../features/sonarr/ui/sonarr_queue_screen.dart';
 import '../features/sonarr/ui/sonarr_wanted_screen.dart';
-import '../features/tautulli/ui/tautulli_activity_screen.dart';
-import '../features/tautulli/ui/tautulli_history_screen.dart';
-import '../features/tautulli/ui/tautulli_module_shell.dart';
-import '../features/tautulli/ui/tautulli_stats_screen.dart';
+import '../features/monitoring/ui/monitoring_activity_screen.dart';
+import '../features/monitoring/ui/monitoring_history_screen.dart';
+import '../features/monitoring/ui/monitoring_module_shell.dart';
+import '../features/monitoring/ui/monitoring_stats_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -502,11 +502,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Tautulli module (Activity/History/Stats tabs, admin only)
+          // Monitoring module (Tautulli or Tracearr; Activity/History/Stats
+          // tabs, admin only)
           StatefulShellRoute.indexedStack(
             pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(
               key: state.pageKey,
-              child: TautulliModuleShell(
+              child: MonitoringModuleShell(
                 currentIndex: navigationShell.currentIndex,
                 onTabChanged: (index) => navigationShell.goBranch(index),
                 child: navigationShell,
@@ -516,24 +517,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/activity',
-                    builder: (_, __) => const TautulliActivityScreen(),
+                    path: '/monitoring/activity',
+                    builder: (_, __) => const MonitoringActivityScreen(),
                   ),
                 ],
               ),
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/history',
-                    builder: (_, __) => const TautulliHistoryScreen(),
+                    path: '/monitoring/history',
+                    builder: (_, __) => const MonitoringHistoryScreen(),
                   ),
                 ],
               ),
               StatefulShellBranch(
                 routes: [
                   GoRoute(
-                    path: '/tautulli/stats',
-                    builder: (_, __) => const TautulliStatsScreen(),
+                    path: '/monitoring/stats',
+                    builder: (_, __) => const MonitoringStatsScreen(),
                   ),
                 ],
               ),
@@ -788,6 +789,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/plex-guide',
             redirect: (_, __) => '/media-servers',
           ),
+          // The Tautulli-only module became the provider-neutral Monitoring
+          // module; old bookmarks land on the same tab.
+          GoRoute(
+            path: '/tautulli/:tab',
+            redirect: (_, state) {
+              const tabs = {'activity', 'history', 'stats'};
+              final tab = state.pathParameters['tab'];
+              return '/monitoring/${tabs.contains(tab) ? tab : 'activity'}';
+            },
+          ),
           GoRoute(
             path: '/media-servers',
             builder: (_, __) =>
@@ -825,7 +836,7 @@ bool _isAdminOnlyRoute(String path) {
     '/chaptarr',
     '/lidarr',
     '/downloads',
-    '/tautulli',
+    '/monitoring',
     '/approvals',
     '/agent-actions',
     '/agent-runs',

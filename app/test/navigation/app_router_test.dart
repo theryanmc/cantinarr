@@ -15,6 +15,7 @@ import 'package:cantinarr/features/dashboard/ui/dashboard_shell.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_album_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
+import 'package:cantinarr/features/monitoring/ui/monitoring_module_shell.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/features/shell/ui/app_shell.dart';
 import 'package:cantinarr/features/sonarr/ui/sonarr_module_shell.dart';
@@ -110,6 +111,9 @@ void main() {
     final (:router, container: _) = await _pumpRouter(tester, _authedState);
 
     for (final path in [
+      '/monitoring/activity',
+      // The old module path stays admin-only through its redirect.
+      '/tautulli/activity',
       '/approvals',
       '/agent-actions',
       '/agent-runs/1',
@@ -133,6 +137,25 @@ void main() {
         reason: '$path must remain admin-only',
       );
     }
+  });
+
+  testWidgets('old Tautulli tab paths redirect to the Monitoring module',
+      (tester) async {
+    final (:router, container: _) = await _pumpRouter(tester, _adminState);
+
+    for (final tab in ['activity', 'history', 'stats']) {
+      router.go('/tautulli/$tab');
+      await tester.pumpAndSettle();
+      expect(router.routeInformationProvider.value.uri.path,
+          '/monitoring/$tab');
+      expect(find.byType(MonitoringModuleShell), findsOneWidget);
+    }
+
+    // An unknown tab lands on the first one rather than an error page.
+    router.go('/tautulli/bogus');
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path,
+        '/monitoring/activity');
   });
 
   testWidgets('a requester keeps /issues — it is their My Reports inbox',

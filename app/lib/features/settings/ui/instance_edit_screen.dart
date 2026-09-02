@@ -144,6 +144,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('nzbget', 'NZBGet'),
     ('transmission', 'Transmission'),
     ('tautulli', 'Tautulli'),
+    ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
     ('emby', 'Emby'),
     ('plex', 'Plex'),
@@ -179,6 +180,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   /// of media downloads or instant updates.
   bool get _isMediaServer => mediaServerServiceTypes.contains(_serviceType);
 
+  /// Watch-history providers (Tautulli, Tracearr): admin-only monitoring
+  /// with a global default, the plain name + URL + API key form.
+  bool get _isWatchHistory => watchHistoryServiceTypes.contains(_serviceType);
+
   /// Plex has no URL or API key to type: the credential is a plex.tv account
   /// linked with a PIN, and the server to share is picked from the ones that
   /// account owns.
@@ -207,7 +212,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   /// Source types feed requests and dashboard statuses, so they support
   /// per-user assignment, and a media server's grant is what lets a user
-  /// create an account there; download clients and Tautulli are global-only.
+  /// create an account there; download clients, Tautulli and Tracearr are
+  /// global-only.
   bool get _supportsUserAssignment =>
       _serviceType == 'radarr' ||
       _serviceType == 'sonarr' ||
@@ -1309,11 +1315,11 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
               .any((instance) => instance.id == downloadId)) {
         notifier.setActiveDownloadInstance(downloadId);
       }
-      final tautulliId = activeBefore.activeTautulliInstanceId;
-      if (tautulliId != null &&
-          refreshed.tautulliInstances
-              .any((instance) => instance.id == tautulliId)) {
-        notifier.setActiveTautulliInstance(tautulliId);
+      final watchHistoryId = activeBefore.activeWatchHistoryInstanceId;
+      if (watchHistoryId != null &&
+          refreshed.watchHistoryInstances
+              .any((instance) => instance.id == watchHistoryId)) {
+        notifier.setActiveWatchHistoryInstance(watchHistoryId);
       }
     } catch (_) {
       // The instance itself is already saved. The normal resume/config refresh
@@ -1415,6 +1421,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://transmission:9091';
       case 'tautulli':
         return 'http://tautulli:8181';
+      case 'tracearr':
+        return 'http://tracearr:3000';
       case 'jellyfin':
         return 'http://jellyfin:8096';
       case 'emby':
@@ -1429,6 +1437,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     switch (_serviceType) {
       case 'tautulli':
         return 'e.g. Tautulli';
+      case 'tracearr':
+        return 'e.g. Tracearr';
       case 'jellyfin':
         return 'e.g. Home Jellyfin';
       case 'emby':
@@ -1447,6 +1457,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your SABnzbd API key';
       case 'tautulli':
         return 'Your Tautulli API key';
+      case 'tracearr':
+        return 'Your Tracearr API key (Settings > General, starts with trr_pub_)';
       case 'chaptarr':
         return 'Your Chaptarr API key';
       case 'lidarr':
@@ -1462,8 +1474,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   String get _defaultSubtitle {
     if (_isDownloadClient) return 'Use this as the default download client';
-    if (_serviceType == 'tautulli') {
-      return 'Use this as the default Tautulli instance';
+    if (_isWatchHistory) {
+      return 'Use this as the default $_serviceLabel instance';
     }
     return 'Use this as the default for media requests';
   }

@@ -5,6 +5,11 @@
 /// creates; Plex holds shares Cantinarr sends to the user's Plex email.
 const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex'};
 
+/// Service types that watch a media server's playback: Tautulli (Plex) and
+/// Tracearr (Plex, Jellyfin, Emby). Admin-only infrastructure with a global
+/// default, never granted per user; both feed the shared Monitoring module.
+const watchHistoryServiceTypes = {'tautulli', 'tracearr'};
+
 /// Represents a configured service instance (Radarr or Sonarr).
 class ServiceInstance {
   final String id;
@@ -144,9 +149,10 @@ class BackendConnection {
     ];
   }
 
-  /// Get all Tautulli instances.
-  List<ServiceInstance> get tautulliInstances =>
-      instances.where((i) => i.serviceType == 'tautulli').toList();
+  /// Get all watch-history (Tautulli, Tracearr) instances, in server order.
+  List<ServiceInstance> get watchHistoryInstances => instances
+      .where((i) => watchHistoryServiceTypes.contains(i.serviceType))
+      .toList();
 
   /// Get all media-server (Jellyfin, Emby, Plex) instances. The backend lists
   /// one for a requester only when an admin granted them access, so its mere

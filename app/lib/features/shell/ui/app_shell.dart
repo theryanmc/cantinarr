@@ -418,7 +418,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (path.startsWith('/chaptarr')) return ModuleType.chaptarr;
     if (path.startsWith('/lidarr')) return ModuleType.lidarr;
     if (path.startsWith('/downloads')) return ModuleType.downloads;
-    if (path.startsWith('/tautulli')) return ModuleType.tautulli;
+    if (path.startsWith('/monitoring')) return ModuleType.monitoring;
     return null;
   }
 
@@ -613,7 +613,7 @@ class _AppShellState extends ConsumerState<AppShell>
     // mode, otherwise the active discovery tab's own icon (read from the
     // same `modulePagesFor` table the drawer already uses — no second icon
     // map). Gated on `ModuleType.dashboard` specifically, not on
-    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Tautulli get no
+    // `showGlobalSearch`: Radarr/Sonarr/Chaptarr/Downloads/Monitoring get no
     // context of their own this phase (SEARCH-06, deferred) and keep the
     // generic search glyph. A dashboard path matching no tab (a bare
     // `/dashboard`, or `/dashboard/books` without the Chaptarr grant) also
@@ -1563,8 +1563,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.sonarrInstances;
       case ModuleType.downloads:
         return state.downloadInstances;
-      case ModuleType.tautulli:
-        return state.tautulliInstances;
+      case ModuleType.monitoring:
+        return state.watchHistoryInstances;
       case ModuleType.chaptarr:
         return state.chaptarrInstances;
       case ModuleType.lidarr:
@@ -1585,8 +1585,8 @@ class _AppShellState extends ConsumerState<AppShell>
         return state.activeSonarrInstance;
       case ModuleType.downloads:
         return state.activeDownloadInstance;
-      case ModuleType.tautulli:
-        return state.activeTautulliInstance;
+      case ModuleType.monitoring:
+        return state.activeWatchHistoryInstance;
       case ModuleType.chaptarr:
         return state.activeChaptarrInstance;
       case ModuleType.lidarr:
@@ -1629,8 +1629,8 @@ class _AppShellState extends ConsumerState<AppShell>
           instances.setActiveSonarrInstance(instanceId);
         case ModuleType.downloads:
           instances.setActiveDownloadInstance(instanceId);
-        case ModuleType.tautulli:
-          instances.setActiveTautulliInstance(instanceId);
+        case ModuleType.monitoring:
+          instances.setActiveWatchHistoryInstance(instanceId);
         case ModuleType.chaptarr:
           instances.setActiveChaptarrInstance(instanceId);
         case ModuleType.lidarr:
@@ -1652,8 +1652,8 @@ class _AppShellState extends ConsumerState<AppShell>
         context.go('/lidarr/library');
       case ModuleType.downloads:
         context.go('/downloads/queue');
-      case ModuleType.tautulli:
-        context.go('/tautulli/activity');
+      case ModuleType.monitoring:
+        context.go('/monitoring/activity');
       case ModuleType.assistant:
         context.push('/assistant');
     }

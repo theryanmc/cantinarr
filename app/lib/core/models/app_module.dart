@@ -8,7 +8,7 @@ enum ModuleType {
   chaptarr,
   lidarr,
   downloads,
-  tautulli,
+  monitoring,
   assistant
 }
 
@@ -230,25 +230,25 @@ List<ModulePage> modulePagesFor(ModuleType type,
           route: '/downloads/history',
         ),
       ];
-    case ModuleType.tautulli:
+    case ModuleType.monitoring:
       return const [
         ModulePage(
           label: 'Activity',
           icon: Icons.play_circle_outline,
           activeIcon: Icons.play_circle,
-          route: '/tautulli/activity',
+          route: '/monitoring/activity',
         ),
         ModulePage(
           label: 'History',
           icon: Icons.history_outlined,
           activeIcon: Icons.history,
-          route: '/tautulli/history',
+          route: '/monitoring/history',
         ),
         ModulePage(
           label: 'Stats',
           icon: Icons.insights_outlined,
           activeIcon: Icons.insights,
-          route: '/tautulli/stats',
+          route: '/monitoring/stats',
         ),
       ];
     case ModuleType.assistant:

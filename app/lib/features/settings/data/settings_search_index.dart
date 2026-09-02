@@ -219,6 +219,8 @@ const List<SettingsSearchEntry> _rootEntries = [
       'music',
       'download client',
       'tautulli',
+      'tracearr',
+      'monitoring',
       'jellyfin',
       'emby',
       'media server',
