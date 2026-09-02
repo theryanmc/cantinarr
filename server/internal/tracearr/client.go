@@ -159,6 +159,36 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, op stri
 	return nil
 }
 
+// flexInt is an int64 that tolerates how Tracearr's Postgres driver hands
+// over bigint columns: as JSON strings ("1609"), sometimes null. Junk decodes
+// as zero rather than failing the whole page.
+type flexInt int64
+
+func (f *flexInt) UnmarshalJSON(b []byte) error {
+	*f = flexInt(flexNumber(b))
+	return nil
+}
+
+// flexFloat is the float64 twin of flexInt.
+type flexFloat float64
+
+func (f *flexFloat) UnmarshalJSON(b []byte) error {
+	*f = flexFloat(flexNumber(b))
+	return nil
+}
+
+func flexNumber(b []byte) float64 {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "" || s == "null" {
+		return 0
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // HealthServer is one monitored media server as /health reports it.
 type HealthServer struct {
 	ID            string `json:"id"`
@@ -188,36 +218,37 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 }
 
 // ActiveStream is one playing session from GET /api/v2/public/streams.
-// Nullable upstream numbers decode as zero and nullable strings as empty.
+// Numbers are flexInt because Tracearr serves bigint columns as strings;
+// nullable strings decode as empty.
 type ActiveStream struct {
-	ID                      string `json:"id"`
-	ServerID                string `json:"server_id"`
-	ServerName              string `json:"server_name"`
-	ServerType              string `json:"server_type"`
-	Username                string `json:"username"`
-	MediaType               string `json:"media_type"`
-	MediaTitle              string `json:"media_title"`
-	ShowTitle               string `json:"show_title"`
-	SeasonNumber            int    `json:"season_number"`
-	EpisodeNumber           int    `json:"episode_number"`
-	Year                    int    `json:"year"`
-	ArtistName              string `json:"artist_name"`
-	AlbumName               string `json:"album_name"`
-	DurationMS              int64  `json:"duration_ms"`
-	State                   string `json:"state"`
-	ProgressMS              int64  `json:"progress_ms"`
-	StartedAt               string `json:"started_at"`
-	IsTranscode             bool   `json:"is_transcode"`
-	VideoDecision           string `json:"video_decision"`
-	AudioDecision           string `json:"audio_decision"`
-	Bitrate                 int    `json:"bitrate"`
-	Resolution              string `json:"resolution"`
-	SourceVideoCodecDisplay string `json:"source_video_codec_display"`
-	StreamVideoCodecDisplay string `json:"stream_video_codec_display"`
-	Device                  string `json:"device"`
-	Player                  string `json:"player"`
-	Product                 string `json:"product"`
-	Platform                string `json:"platform"`
+	ID                      string  `json:"id"`
+	ServerID                string  `json:"server_id"`
+	ServerName              string  `json:"server_name"`
+	ServerType              string  `json:"server_type"`
+	Username                string  `json:"username"`
+	MediaType               string  `json:"media_type"`
+	MediaTitle              string  `json:"media_title"`
+	ShowTitle               string  `json:"show_title"`
+	SeasonNumber            flexInt `json:"season_number"`
+	EpisodeNumber           flexInt `json:"episode_number"`
+	Year                    flexInt `json:"year"`
+	ArtistName              string  `json:"artist_name"`
+	AlbumName               string  `json:"album_name"`
+	DurationMS              flexInt `json:"duration_ms"`
+	State                   string  `json:"state"`
+	ProgressMS              flexInt `json:"progress_ms"`
+	StartedAt               string  `json:"started_at"`
+	IsTranscode             bool    `json:"is_transcode"`
+	VideoDecision           string  `json:"video_decision"`
+	AudioDecision           string  `json:"audio_decision"`
+	Bitrate                 flexInt `json:"bitrate"`
+	Resolution              string  `json:"resolution"`
+	SourceVideoCodecDisplay string  `json:"source_video_codec_display"`
+	StreamVideoCodecDisplay string  `json:"stream_video_codec_display"`
+	Device                  string  `json:"device"`
+	Player                  string  `json:"player"`
+	Product                 string  `json:"product"`
+	Platform                string  `json:"platform"`
 }
 
 // StreamsResponse is the streams envelope; the summary block is skipped
@@ -243,7 +274,8 @@ type HistoryUser struct {
 }
 
 // HistoryRecord is one play chain from GET /api/v2/public/history: every
-// segment of one sitting rolled into a row, newest first.
+// segment of one sitting rolled into a row, newest first. Tracearr only
+// lists chains with at least one segment of two minutes of watch time.
 type HistoryRecord struct {
 	ID                      string      `json:"id"`
 	ServerID                string      `json:"server_id"`
@@ -253,19 +285,19 @@ type HistoryRecord struct {
 	MediaType               string      `json:"media_type"`
 	MediaTitle              string      `json:"media_title"`
 	ShowTitle               string      `json:"show_title"`
-	SeasonNumber            int         `json:"season_number"`
-	EpisodeNumber           int         `json:"episode_number"`
-	Year                    int         `json:"year"`
+	SeasonNumber            flexInt     `json:"season_number"`
+	EpisodeNumber           flexInt     `json:"episode_number"`
+	Year                    flexInt     `json:"year"`
 	ArtistName              string      `json:"artist_name"`
 	AlbumName               string      `json:"album_name"`
-	DurationMS              int64       `json:"duration_ms"`
-	ProgressMS              int64       `json:"progress_ms"`
-	TotalDurationMS         int64       `json:"total_duration_ms"`
-	PercentComplete         float64     `json:"percent_complete"`
+	DurationMS              flexInt     `json:"duration_ms"`
+	ProgressMS              flexInt     `json:"progress_ms"`
+	TotalDurationMS         flexInt     `json:"total_duration_ms"`
+	PercentComplete         flexFloat   `json:"percent_complete"`
 	StartedAt               string      `json:"started_at"`
 	StoppedAt               string      `json:"stopped_at"`
 	Watched                 bool        `json:"watched"`
-	SegmentCount            int         `json:"segment_count"`
+	SegmentCount            flexInt     `json:"segment_count"`
 	Device                  string      `json:"device"`
 	Player                  string      `json:"player"`
 	Product                 string      `json:"product"`
@@ -273,7 +305,7 @@ type HistoryRecord struct {
 	IsTranscode             bool        `json:"is_transcode"`
 	VideoDecision           string      `json:"video_decision"`
 	AudioDecision           string      `json:"audio_decision"`
-	Bitrate                 int         `json:"bitrate"`
+	Bitrate                 flexInt     `json:"bitrate"`
 	Resolution              string      `json:"resolution"`
 	SourceVideoCodecDisplay string      `json:"source_video_codec_display"`
 	StreamVideoCodecDisplay string      `json:"stream_video_codec_display"`

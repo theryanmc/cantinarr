@@ -89,18 +89,18 @@ func (p *Provider) Activity(ctx context.Context) (watchhistory.Activity, error) 
 		Streams:     make([]watchhistory.Stream, 0, len(streams.Data)),
 	}
 	for _, s := range streams.Data {
-		out.TotalBandwidthKbps += s.Bitrate
+		out.TotalBandwidthKbps += int(s.Bitrate)
 		out.Streams = append(out.Streams, watchhistory.Stream{
 			User:            s.Username,
 			Title:           s.MediaTitle,
-			FullTitle:       fullTitle(s.MediaType, s.MediaTitle, s.ShowTitle, s.SeasonNumber, s.EpisodeNumber, s.ArtistName),
+			FullTitle:       fullTitle(s.MediaType, s.MediaTitle, s.ShowTitle, int(s.SeasonNumber), int(s.EpisodeNumber), s.ArtistName),
 			Player:          firstNonEmpty(s.Player, s.Device),
 			Product:         s.Product,
 			State:           s.State,
-			ProgressPercent: percent(s.ProgressMS, s.DurationMS),
+			ProgressPercent: percent(int64(s.ProgressMS), int64(s.DurationMS)),
 			Quality:         quality(s.Resolution, s.StreamVideoCodecDisplay, s.SourceVideoCodecDisplay),
 			StreamType:      streamType(s.IsTranscode, s.VideoDecision, s.AudioDecision),
-			BandwidthKbps:   s.Bitrate,
+			BandwidthKbps:   int(s.Bitrate),
 			MediaType:       s.MediaType,
 			Server:          s.ServerName,
 			ServerType:      s.ServerType,
@@ -272,10 +272,10 @@ func firstNonEmpty(values ...string) string {
 func historyEntry(r HistoryRecord) watchhistory.HistoryEntry {
 	return watchhistory.HistoryEntry{
 		User:            r.User.Username,
-		FullTitle:       fullTitle(r.MediaType, r.MediaTitle, r.ShowTitle, r.SeasonNumber, r.EpisodeNumber, r.ArtistName),
+		FullTitle:       fullTitle(r.MediaType, r.MediaTitle, r.ShowTitle, int(r.SeasonNumber), int(r.EpisodeNumber), r.ArtistName),
 		Date:            parseTime(r.StartedAt),
-		DurationSeconds: int(r.DurationMS / 1000),
-		PercentComplete: roundPercent(r.PercentComplete),
+		DurationSeconds: int(int64(r.DurationMS) / 1000),
+		PercentComplete: roundPercent(float64(r.PercentComplete)),
 		Player:          firstNonEmpty(r.Player, r.Device),
 		Platform:        r.Platform,
 		MediaType:       r.MediaType,

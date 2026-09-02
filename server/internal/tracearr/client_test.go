@@ -111,6 +111,25 @@ func TestStreamsDecodesNullsAsZero(t *testing.T) {
 	}
 }
 
+// TestHistoryDecodesStringNumbers pins what the live Tracearr taught us:
+// its Postgres driver serves bigint columns (progress_ms, total_duration_ms)
+// as JSON strings, and a page must still decode; the first live pass
+// answered 502 on every history row before this.
+func TestHistoryDecodesStringNumbers(t *testing.T) {
+	f := &fake{t: t, answers: map[string]string{
+		"/api/v2/public/history": `{"data":[{"id":"h1","media_type":"episode","media_title":"Pilot","show_title":"Breaking Bad","season_number":"1","episode_number":"1","year":"2008","duration_ms":"61912","progress_ms":"1609","total_duration_ms":"2000","percent_complete":"80.5","bitrate":null,"segment_count":"1","user":{"id":"u1","username":"luke"}}],"meta":{"nextCursor":null,"pageSize":1}}`,
+	}}
+	c := f.serve()
+	page, err := c.HistoryPage(context.Background(), HistoryQuery{PageSize: 1})
+	if err != nil {
+		t.Fatalf("HistoryPage: %v", err)
+	}
+	r := page.Data[0]
+	if r.SeasonNumber != 1 || r.EpisodeNumber != 1 || r.Year != 2008 || r.DurationMS != 61912 || r.ProgressMS != 1609 || r.TotalDurationMS != 2000 || r.PercentComplete != 80.5 || r.Bitrate != 0 || r.SegmentCount != 1 {
+		t.Errorf("record = %+v, want string numbers decoded and null as zero", r)
+	}
+}
+
 func TestHistoryPageEncodesQuery(t *testing.T) {
 	f := &fake{t: t, answers: map[string]string{
 		"/api/v2/public/history": `{"data":[{"id":"h1","media_type":"episode","media_title":"Pilot","show_title":"Breaking Bad","season_number":1,"episode_number":1,"duration_ms":120000,"percent_complete":98.7,"started_at":"2026-08-30T20:00:00.000Z","watched":true,"user":{"id":"u1","username":"kylo"}}],"meta":{"nextCursor":"c2","pageSize":25}}`,
