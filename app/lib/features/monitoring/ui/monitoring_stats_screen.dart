@@ -4,20 +4,22 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
-import '../data/tautulli_api_service.dart';
-import '../data/tautulli_models.dart';
+import '../data/watch_history_api_service.dart';
+import '../data/watch_history_models.dart';
 
-/// Watch statistics: top movies, shows and users over a selectable period.
-class TautulliStatsScreen extends ConsumerStatefulWidget {
-  const TautulliStatsScreen({super.key});
+/// Watch statistics: top movies, shows and users over a selectable period,
+/// with a note on what the ranking was computed from.
+class MonitoringStatsScreen extends ConsumerStatefulWidget {
+  const MonitoringStatsScreen({super.key});
 
   @override
-  ConsumerState<TautulliStatsScreen> createState() =>
-      _TautulliStatsScreenState();
+  ConsumerState<MonitoringStatsScreen> createState() =>
+      _MonitoringStatsScreenState();
 }
 
-class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
-  TautulliStats? _stats;
+class _MonitoringStatsScreenState
+    extends ConsumerState<MonitoringStatsScreen> {
+  StatsSnapshot? _stats;
   bool _isLoading = true;
   String? _error;
   int _days = 30;
@@ -28,12 +30,12 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  TautulliApiService? _buildService() {
-    final instanceId = ref.read(instanceProvider).activeTautulliInstance?.id;
-    if (instanceId == null) return null;
-    return TautulliApiService(
+  WatchHistoryApiService? _buildService() {
+    final instance = ref.read(instanceProvider).activeWatchHistoryInstance;
+    if (instance == null) return null;
+    return WatchHistoryApiService(
       backendDio: ref.read(backendClientProvider),
-      instanceId: instanceId,
+      instance: instance,
     );
   }
 
@@ -42,7 +44,7 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli instance configured';
+        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
       });
       return;
     }
@@ -51,13 +53,13 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
     // selected period (or instance) can't overwrite the current selection.
     final days = _days;
     final instanceId =
-        ref.read(instanceProvider.select((s) => s.activeTautulliInstanceId));
+        ref.read(instanceProvider.select((s) => s.activeWatchHistoryInstanceId));
     bool stale() =>
         !mounted ||
         days != _days ||
         instanceId !=
             ref.read(
-                instanceProvider.select((s) => s.activeTautulliInstanceId));
+                instanceProvider.select((s) => s.activeWatchHistoryInstanceId));
 
     setState(() => _isLoading = true);
     try {
@@ -86,7 +88,7 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
   @override
   Widget build(BuildContext context) {
     // Reload when the active instance changes.
-    ref.listen(instanceProvider.select((s) => s.activeTautulliInstanceId),
+    ref.listen(instanceProvider.select((s) => s.activeWatchHistoryInstanceId),
         (_, __) => _load());
 
     final daysSelector = Padding(
@@ -123,7 +125,7 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
       );
     }
 
-    final stats = _stats ?? const TautulliStats();
+    final stats = _stats ?? const StatsSnapshot();
     final isEmpty = stats.topMovies.isEmpty &&
         stats.topShows.isEmpty &&
         stats.topUsers.isEmpty;
@@ -131,6 +133,17 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
     return Column(
       children: [
         daysSelector,
+        // What the ranking was computed from: which provider, which window,
+        // and for Tracearr how many plays were read.
+        if (stats.coverage.note.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Text(
+              stats.coverage.note,
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+          ),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _load,
@@ -188,7 +201,7 @@ class _TautulliStatsScreenState extends ConsumerState<TautulliStatsScreen> {
 class _StatSection extends StatelessWidget {
   final String title;
   final IconData icon;
-  final List<TautulliStatEntry> entries;
+  final List<StatEntry> entries;
 
   const _StatSection({
     required this.title,
@@ -236,7 +249,7 @@ class _StatSection extends StatelessWidget {
 
 class _StatTile extends StatelessWidget {
   final int rank;
-  final TautulliStatEntry entry;
+  final StatEntry entry;
 
   const _StatTile({required this.rank, required this.entry});
 

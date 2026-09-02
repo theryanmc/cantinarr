@@ -6,15 +6,16 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/instance_dropdown.dart';
 import '../../../core/widgets/module_scaffold.dart';
 
-/// Tautulli module shell: Activity | History | Stats.
+/// Monitoring module shell: Activity | History | Stats.
 /// Pages render as a bottom nav on mobile and sidebar items on desktop.
-/// Shows instance dropdown in the header when 2+ Tautulli instances exist.
-class TautulliModuleShell extends ConsumerWidget {
+/// Shows an instance dropdown in the header when 2+ watch-history
+/// (Tautulli or Tracearr) instances exist.
+class MonitoringModuleShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
   final Widget child;
 
-  const TautulliModuleShell({
+  const MonitoringModuleShell({
     super.key,
     required this.currentIndex,
     required this.onTabChanged,
@@ -26,20 +27,20 @@ class TautulliModuleShell extends ConsumerWidget {
     final instanceState = ref.watch(instanceProvider);
 
     return ModuleScaffold(
-      appBar: instanceState.tautulliInstances.length > 1
+      appBar: instanceState.watchHistoryInstances.length > 1
           ? AppBar(
               title: InstanceDropdown(
-                instances: instanceState.tautulliInstances,
-                activeInstanceId: instanceState.activeTautulliInstanceId,
+                instances: instanceState.watchHistoryInstances,
+                activeInstanceId: instanceState.activeWatchHistoryInstanceId,
                 onChanged: (id) => ref
                     .read(instanceProvider.notifier)
-                    .setActiveTautulliInstance(id),
+                    .setActiveWatchHistoryInstance(id),
               ),
               backgroundColor: AppTheme.background,
               elevation: 0,
             )
           : null,
-      pages: modulePagesFor(ModuleType.tautulli),
+      pages: modulePagesFor(ModuleType.monitoring),
       currentIndex: currentIndex,
       onTabChanged: onTabChanged,
       child: child,

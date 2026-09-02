@@ -43,7 +43,7 @@ type setupFacts struct {
 	HasLidarr         bool
 	HasDownloadClient bool
 	MediaDownloads    bool
-	HasTautulli       bool
+	HasWatchHistory   bool
 	HasMediaServer    bool
 	TMDB              bool
 	Trakt             bool
@@ -154,10 +154,12 @@ func buildSetupItems(f setupFacts) []setupItem {
 			Optional:    true,
 		},
 		{
+			// The key predates Tracearr and stays: admins' dismissals are
+			// stored against it.
 			Key:         "tautulli",
-			Title:       "Plex monitoring (Tautulli)",
-			Description: "Watch live Plex streams, history, and stats from the app.",
-			Configured:  f.HasTautulli,
+			Title:       "Monitoring (Tautulli or Tracearr)",
+			Description: "See live streams, watch history, and stats in the Monitoring module. Tautulli covers Plex; Tracearr covers Plex, Jellyfin, and Emby.",
+			Configured:  f.HasWatchHistory,
 			Optional:    true,
 		},
 		{
@@ -210,8 +212,8 @@ func setupStatusHandler(cfg *config.Config, store *instance.Store, creds *creden
 					facts.HasChaptarr = true
 				case "lidarr":
 					facts.HasLidarr = true
-				case "tautulli":
-					facts.HasTautulli = true
+				case "tautulli", "tracearr":
+					facts.HasWatchHistory = true
 				case "sabnzbd", "qbittorrent", "nzbget", "transmission":
 					facts.HasDownloadClient = true
 				default:

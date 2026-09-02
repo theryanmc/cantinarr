@@ -83,6 +83,22 @@ void main() {
   });
 
   group('matching', () {
+    test('tracearr and monitoring find Add Instance for admins only', () {
+      for (final query in ['tracearr', 'monitoring']) {
+        expect(
+          searchSettingsIndex(query, _adminGates).map((e) => e.id),
+          contains('screen.add-instance'),
+          reason: '$query must reach the add-instance entry',
+        );
+        expect(
+          searchSettingsIndex(query, _userGates)
+              .map((e) => e.id)
+              .contains('screen.add-instance'),
+          isFalse,
+        );
+      }
+    });
+
     test('empty and whitespace queries return nothing', () {
       expect(searchSettingsIndex('', _adminGates), isEmpty);
       expect(searchSettingsIndex('   ', _adminGates), isEmpty);

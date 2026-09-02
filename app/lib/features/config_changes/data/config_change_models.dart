@@ -170,6 +170,7 @@ class ConfigChange {
         'nzbget' => 'NZBGet',
         'transmission' => 'Transmission',
         'tautulli' => 'Tautulli',
+        'tracearr' => 'Tracearr',
         'jellyfin' => 'Jellyfin',
         'emby' => 'Emby',
         _ => serviceType.trim().isEmpty ? 'Connected app' : serviceType,

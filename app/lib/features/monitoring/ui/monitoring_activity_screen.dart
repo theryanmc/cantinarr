@@ -5,22 +5,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
-import '../data/tautulli_api_service.dart';
-import '../data/tautulli_models.dart';
+import '../data/watch_history_api_service.dart';
+import '../data/watch_history_models.dart';
 
-/// Now-playing view: one card per active Plex stream, with a header showing
-/// total stream count and bandwidth. Auto-refreshes every 10 seconds.
-class TautulliActivityScreen extends ConsumerStatefulWidget {
-  const TautulliActivityScreen({super.key});
+/// Now-playing view: one card per active stream on the monitored servers,
+/// with a header showing total stream count and bandwidth. Auto-refreshes
+/// every 10 seconds.
+class MonitoringActivityScreen extends ConsumerStatefulWidget {
+  const MonitoringActivityScreen({super.key});
 
   @override
-  ConsumerState<TautulliActivityScreen> createState() =>
-      _TautulliActivityScreenState();
+  ConsumerState<MonitoringActivityScreen> createState() =>
+      _MonitoringActivityScreenState();
 }
 
-class _TautulliActivityScreenState
-    extends ConsumerState<TautulliActivityScreen> {
-  TautulliActivity? _activity;
+class _MonitoringActivityScreenState
+    extends ConsumerState<MonitoringActivityScreen> {
+  ActivitySnapshot? _activity;
   bool _isLoading = true;
   String? _error;
   Timer? _refreshTimer;
@@ -49,12 +50,12 @@ class _TautulliActivityScreenState
     _load(silent: true);
   }
 
-  TautulliApiService? _buildService() {
-    final instanceId = ref.read(instanceProvider).activeTautulliInstance?.id;
-    if (instanceId == null) return null;
-    return TautulliApiService(
+  WatchHistoryApiService? _buildService() {
+    final instance = ref.read(instanceProvider).activeWatchHistoryInstance;
+    if (instance == null) return null;
+    return WatchHistoryApiService(
       backendDio: ref.read(backendClientProvider),
-      instanceId: instanceId,
+      instance: instance,
     );
   }
 
@@ -63,7 +64,7 @@ class _TautulliActivityScreenState
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli instance configured';
+        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
       });
       return;
     }
@@ -91,7 +92,7 @@ class _TautulliActivityScreenState
   @override
   Widget build(BuildContext context) {
     // Reload when the active instance changes.
-    ref.listen(instanceProvider.select((s) => s.activeTautulliInstanceId),
+    ref.listen(instanceProvider.select((s) => s.activeWatchHistoryInstanceId),
         (_, __) => _load());
 
     if (_isLoading) {
@@ -116,7 +117,7 @@ class _TautulliActivityScreenState
       );
     }
 
-    final activity = _activity ?? const TautulliActivity();
+    final activity = _activity ?? const ActivitySnapshot();
 
     return Column(
       children: [
@@ -205,7 +206,7 @@ class _ActivityHeader extends StatelessWidget {
 }
 
 ({IconData icon, Color color, String label}) _stateStyle(
-    TautulliStream stream) {
+    ActiveStream stream) {
   if (stream.isPaused) {
     return (
       icon: Icons.pause_circle_outline,
@@ -228,9 +229,9 @@ class _ActivityHeader extends StatelessWidget {
 }
 
 /// One active stream: user, title, player/product, state, progress bar,
-/// quality, stream-decision badge and bandwidth.
+/// quality, stream-decision badge, the server it plays from, and bandwidth.
 class _StreamCard extends StatelessWidget {
-  final TautulliStream stream;
+  final ActiveStream stream;
 
   const _StreamCard({required this.stream});
 
@@ -316,6 +317,14 @@ class _StreamCard extends StatelessWidget {
                     if (stream.quality.isNotEmpty)
                       _StreamBadge(
                           text: stream.quality, color: AppTheme.accent),
+                    if (stream.serverLabel.isNotEmpty)
+                      _StreamBadge(
+                          text: stream.serverLabel,
+                          color: AppTheme.textSecondary),
+                    if (stream.mediaTypeLabel.isNotEmpty)
+                      _StreamBadge(
+                          text: stream.mediaTypeLabel,
+                          color: AppTheme.textSecondary),
                   ],
                 ),
               ),

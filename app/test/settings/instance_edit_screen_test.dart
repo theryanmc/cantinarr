@@ -350,6 +350,31 @@ void main() {
     expect(post.body['is_default'], isTrue);
   });
 
+  testWidgets('Tracearr is a plain name + URL + API key form with a default',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: [_user(1, 'alice')]);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tracearr').last);
+    await tester.pumpAndSettle();
+
+    // Hints name the port and where the key comes from.
+    expect(find.text('http://tracearr:3000'), findsOneWidget);
+    expect(find.textContaining('trr_pub_'), findsOneWidget);
+    // Admin-only monitoring: a global default, no per-user assignment, no
+    // username/password, no media downloads or instant updates.
+    final toggle = tester.widget<SwitchListTile>(
+        find.widgetWithText(SwitchListTile, 'Default Instance'));
+    expect(toggle.value, isTrue);
+    expect(find.text('Use this as the default Tracearr instance'),
+        findsOneWidget);
+    expect(find.text('Assigned Users'), findsNothing);
+    expect(find.text('Password'), findsNothing);
+    expect(find.text('Media Downloads'), findsNothing);
+  });
+
   testWidgets('Chaptarr hides the default toggle and assigns selected users',
       (tester) async {
     final adapter = _FakeAdapter();

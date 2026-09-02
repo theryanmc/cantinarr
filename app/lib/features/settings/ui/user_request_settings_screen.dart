@@ -261,8 +261,8 @@ class _UserRequestSettingsScreenState
   /// The admin's connection lists every configured instance; group them by
   /// service type (first-seen order) so we can render one dropdown per type.
   /// Service types whose default instance is a per-user "source" override.
-  /// Download clients and Tautulli are admin-only infrastructure (not a
-  /// per-user content source), so they are excluded from this section.
+  /// Download clients, Tautulli and Tracearr are admin-only infrastructure
+  /// (not a per-user content source), so they are excluded from this section.
   static const _sourceServiceTypes = {'radarr', 'sonarr', 'chaptarr', 'lidarr'};
 
   Map<String, List<ServiceInstance>> _instancesByType() {
@@ -427,6 +427,8 @@ class _UserRequestSettingsScreenState
         return 'Transmission';
       case 'tautulli':
         return 'Tautulli';
+      case 'tracearr':
+        return 'Tracearr';
       case 'jellyfin':
         return 'Jellyfin';
       case 'emby':

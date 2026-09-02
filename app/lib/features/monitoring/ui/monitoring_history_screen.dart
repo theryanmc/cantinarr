@@ -5,20 +5,23 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_banner.dart';
-import '../data/tautulli_api_service.dart';
-import '../data/tautulli_models.dart';
+import '../data/watch_history_api_service.dart';
+import '../data/watch_history_models.dart';
 
-/// Recent Plex watch history: who watched what, when and how much of it.
-class TautulliHistoryScreen extends ConsumerStatefulWidget {
-  const TautulliHistoryScreen({super.key});
+/// Recent watch history across the monitored servers: who watched what,
+/// when, how much of it, and where.
+class MonitoringHistoryScreen extends ConsumerStatefulWidget {
+  const MonitoringHistoryScreen({super.key});
 
   @override
-  ConsumerState<TautulliHistoryScreen> createState() =>
-      _TautulliHistoryScreenState();
+  ConsumerState<MonitoringHistoryScreen> createState() =>
+      _MonitoringHistoryScreenState();
 }
 
-class _TautulliHistoryScreenState extends ConsumerState<TautulliHistoryScreen> {
-  List<TautulliHistoryItem> _items = [];
+class _MonitoringHistoryScreenState
+    extends ConsumerState<MonitoringHistoryScreen> {
+  List<HistoryItem> _items = [];
+  Coverage _coverage = const Coverage();
   bool _isLoading = true;
   String? _error;
 
@@ -28,12 +31,12 @@ class _TautulliHistoryScreenState extends ConsumerState<TautulliHistoryScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  TautulliApiService? _buildService() {
-    final instanceId = ref.read(instanceProvider).activeTautulliInstance?.id;
-    if (instanceId == null) return null;
-    return TautulliApiService(
+  WatchHistoryApiService? _buildService() {
+    final instance = ref.read(instanceProvider).activeWatchHistoryInstance;
+    if (instance == null) return null;
+    return WatchHistoryApiService(
       backendDio: ref.read(backendClientProvider),
-      instanceId: instanceId,
+      instance: instance,
     );
   }
 
@@ -42,17 +45,18 @@ class _TautulliHistoryScreenState extends ConsumerState<TautulliHistoryScreen> {
     if (service == null) {
       setState(() {
         _isLoading = false;
-        _error = 'No Tautulli instance configured';
+        _error = 'No Tautulli or Tracearr instance configured. Add one from Settings > Add Instance.';
       });
       return;
     }
 
     setState(() => _isLoading = true);
     try {
-      final items = await service.getHistory(limit: 50);
+      final history = await service.getHistory(limit: 50);
       if (!mounted) return;
       setState(() {
-        _items = items;
+        _items = history.items;
+        _coverage = history.coverage;
         _isLoading = false;
         _error = null;
       });
@@ -68,7 +72,7 @@ class _TautulliHistoryScreenState extends ConsumerState<TautulliHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     // Reload when the active instance changes.
-    ref.listen(instanceProvider.select((s) => s.activeTautulliInstanceId),
+    ref.listen(instanceProvider.select((s) => s.activeWatchHistoryInstanceId),
         (_, __) => _load());
 
     if (_isLoading && _items.isEmpty) {
@@ -98,14 +102,30 @@ class _TautulliHistoryScreenState extends ConsumerState<TautulliHistoryScreen> {
       );
     }
 
+    // The coverage note closes the list: it says what the rows were read
+    // from, so the end of the list is not mistaken for the end of history.
+    final hasNote = _coverage.note.isNotEmpty;
     return RefreshIndicator(
       onRefresh: _load,
       color: AppTheme.accent,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _items.length,
-        itemBuilder: (context, index) => _HistoryTile(item: _items[index]),
+        itemCount: _items.length + (hasNote ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == _items.length) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Text(
+                _coverage.note,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
+          return _HistoryTile(item: _items[index]);
+        },
       ),
     );
   }
@@ -126,7 +146,7 @@ String _relativeTime(DateTime? date) {
 }
 
 class _HistoryTile extends StatelessWidget {
-  final TautulliHistoryItem item;
+  final HistoryItem item;
 
   const _HistoryTile({required this.item});
 
@@ -138,6 +158,7 @@ class _HistoryTile extends StatelessWidget {
       if (item.user.isNotEmpty) item.user,
       '${item.percentComplete}%',
       if (item.platform.isNotEmpty) item.platform,
+      if (item.serverLabel.isNotEmpty) item.serverLabel,
     ];
 
     return ListTile(
