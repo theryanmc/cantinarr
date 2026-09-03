@@ -149,7 +149,7 @@ func buildSetupItems(f setupFacts) []setupItem {
 		{
 			Key:         "media_downloads",
 			Title:       "Completed media downloads",
-			Description: "Mount media read-only on the server, then map paths inside each Radarr, Sonarr, or Chaptarr instance.",
+			Description: "Mount media read-only on the server, then map paths inside each Radarr, Sonarr, Chaptarr, or Lidarr instance.",
 			Configured:  f.MediaDownloads,
 			Optional:    true,
 		},

@@ -76,7 +76,7 @@ var arrToolDefinitions = []Tool{
 				"media_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "book", "music"},
-					"description": "Whether to list movies, TV series, or books",
+					"description": "Whether to list movies, TV series, books, or music",
 				},
 				"filter": map[string]interface{}{
 					"type":        "string",
@@ -94,6 +94,14 @@ var arrToolDefinitions = []Tool{
 				"book_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Book only: show this exact Chaptarr book record",
+				},
+				"artist_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: list this Lidarr artist's albums with their album ids",
+				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: show this exact Lidarr album record",
 				},
 			},
 			"required": []string{"media_type"},
@@ -113,7 +121,7 @@ var arrToolDefinitions = []Tool{
 				"media_type": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"movie", "tv", "book", "music"},
-					"description": "Whether to fetch movie, TV, or book history",
+					"description": "Whether to fetch movie, TV, book, or music history",
 				},
 				"limit": map[string]interface{}{
 					"type":        "integer",
@@ -126,7 +134,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "trigger_search",
 		Permission:  auth.PermissionArrSearch,
-		Description: "Trigger an automatic indexer search for a movie, series, or book that is already in the library. For movies/TV pass tmdb_id (and, for TV, season_number to search a single season). For books pass book_id to search one book or author_id to search all of an author's monitored books (books have no tmdb_id). Admin only",
+		Description: "Trigger an automatic indexer search for a movie, series, book, or album that is already in the library. For movies/TV pass tmdb_id (and, for TV, season_number to search a single season). For books pass book_id to search one book or author_id to search all of an author's monitored books (books have no tmdb_id). For music pass album_id to search one album or artist_id to search all of an artist's monitored albums (music has no tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -140,8 +148,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether this is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether this is a movie, TV show, book, or album",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
@@ -163,6 +171,14 @@ var arrToolDefinitions = []Tool{
 					"type":        "integer",
 					"description": "Book only: search this single Chaptarr book id",
 				},
+				"artist_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: search all monitored albums of this Lidarr artist id (used when album_id is absent)",
+				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: search this single Lidarr album id",
+				},
 			},
 			"required": []string{"media_type"},
 		},
@@ -171,7 +187,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "search_releases",
 		AdminOnly:   true,
 		Permission:  auth.PermissionArrSearch,
-		Description: "Interactively search indexers for downloadable releases of a library item and list them with a one-way release reference and indexer_id. Raw release GUID capabilities are never exposed. For movies/TV pass tmdb_id (TV also requires season_number and may include episode_number). For books pass book_id (books have no tmdb_id). Admin only",
+		Description: "Interactively search indexers for downloadable releases of a library item and list them with a one-way release reference and indexer_id. Raw release GUID capabilities are never exposed. For movies/TV pass tmdb_id (TV also requires season_number and may include episode_number). For books pass book_id and for music pass album_id (neither has a tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -185,8 +201,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether this is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether this is a movie, TV show, book, or album",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
@@ -200,6 +216,10 @@ var arrToolDefinitions = []Tool{
 					"type":        "integer",
 					"description": "Book only: the Chaptarr book id to search releases for (required for book)",
 				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: the Lidarr album id to search releases for (required for music)",
+				},
 			},
 			"required": []string{"media_type"},
 		},
@@ -208,7 +228,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "grab_release",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "Freshly re-search the exact movie, TV season/episode, or book scope and send the release matching a one-way reference from search_releases to the download client. Admin only",
+		Description: "Freshly re-search the exact movie, TV season/episode, book, or album scope and send the release matching a one-way reference from search_releases to the download client. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -228,8 +248,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the release is for a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the release is for a movie, TV show, book, or album",
 				},
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
@@ -251,6 +271,11 @@ var arrToolDefinitions = []Tool{
 					"minimum":     1,
 					"description": "Required for book: the exact Chaptarr book id used for the fresh scoped search",
 				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"minimum":     1,
+					"description": "Required for music: the exact Lidarr album id used for the fresh scoped search",
+				},
 			},
 			"required": []string{"guid", "indexer_id", "media_type"},
 			"oneOf": []interface{}{
@@ -265,6 +290,10 @@ var arrToolDefinitions = []Tool{
 				map[string]interface{}{
 					"properties": map[string]interface{}{"media_type": map[string]interface{}{"const": "book"}},
 					"required":   []string{"book_id"},
+				},
+				map[string]interface{}{
+					"properties": map[string]interface{}{"media_type": map[string]interface{}{"const": "music"}},
+					"required":   []string{"album_id"},
 				},
 			},
 		},
@@ -287,8 +316,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the queue item is a movie, TV, or book download",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the queue item is a movie, TV, book, or music download",
 				},
 				"blocklist": map[string]interface{}{
 					"type":        "boolean",
@@ -363,7 +392,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_media_file_details",
 		Permission:  auth.PermissionArrRead,
-		Description: "Inspect the file(s) the library actually holds for one movie or one TV season: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk. Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
+		Description: "Inspect the file(s) the library actually holds for one movie, one TV season, or one album: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk (for music: Lidarr's codec, bit depth, sample rate, channels, and bitrate per track file). Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -373,31 +402,38 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Book files carry no media-property analysis in Chaptarr",
+					"enum":        []string{"movie", "tv", "music"},
+					"description": "Movie, TV, or music; book files carry no media-property analysis in Chaptarr",
 				},
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The title's TMDB id, from get_library",
+					"description": "Movie/TV: the title's TMDB id, from get_library (required for movie and tv)",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
 					"description": "TV: which season's files to inspect",
 				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music: the Lidarr album id whose track files to inspect, from get_library (required for music; music has no tmdb_id)",
+				},
 			},
-			"required": []string{"media_type", "tmdb_id"},
+			// tmdb_id is required for movie/tv and album_id for music; that is
+			// enforced server-side rather than with a root oneOf, which the
+			// Anthropic converter would have to strip anyway (#497).
+			"required": []string{"media_type"},
 		},
 	},
 	{
 		Name:        "get_service_config",
 		Permission:  auth.PermissionArrRead,
-		Description: "Read-only summary of one settings section on Radarr, Sonarr, or Chaptarr: indexers (protocol, rss/auto-search, priority, min seeders), delay_profiles, release_profiles (Sonarr/Chaptarr only), download_clients (protocol, enabled, category), or remote_path_mappings. These are the settings recurring problems trace back to; values are bounded summaries and credentials/URLs are never included. Admin only",
+		Description: "Read-only summary of one settings section on Radarr, Sonarr, Chaptarr, or Lidarr: indexers (protocol, rss/auto-search, priority, min seeders), delay_profiles, release_profiles (Sonarr/Chaptarr/Lidarr only), download_clients (protocol, enabled, category), or remote_path_mappings. These are the settings recurring problems trace back to; values are bounded summaries and credentials/URLs are never included. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"service": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"radarr", "sonarr", "chaptarr"},
+					"enum":        []string{"radarr", "sonarr", "chaptarr", "lidarr"},
 					"description": "Which service to read",
 				},
 				"instance_id": map[string]interface{}{
@@ -464,7 +500,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "diagnose_queue",
 		Permission:  auth.PermissionArrRead,
-		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
+		Description: "Import Doctor: scan the Radarr/Sonarr/Chaptarr/Lidarr download queue for items that are stuck, failed, or blocked from importing, and explain each problem in plain language with the queue_id and suggested fix actions (process, manual_import, force_import, remove, blocklist_search, blocklist_only, change_category, rescan). For each problem it also prints the exact next MCP tool call to run. Use this before the fix tools. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -474,7 +510,7 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book", "all"},
+					"enum":        []string{"movie", "tv", "book", "music", "all"},
 					"description": "Which queue to diagnose (default: all)",
 				},
 			},
@@ -484,7 +520,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "get_manual_import_candidates",
 		AdminOnly:   true,
 		Permission:  auth.PermissionDownloadsManage,
-		Description: "List the files Radarr/Sonarr/Chaptarr found for a stuck download (from its queue_id), including each file's mapped movie/series/episodes/book and any rejection reasons that blocked an automatic import. Use this to understand why an item won't import before calling execute_manual_import. Admin only",
+		Description: "List the files Radarr/Sonarr/Chaptarr/Lidarr found for a stuck download (from its queue_id), including each file's mapped movie/series/episodes/book/album tracks and any rejection reasons that blocked an automatic import. Use this to understand why an item won't import before calling execute_manual_import. Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -498,8 +534,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the queue item is a movie, TV, or book download",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the queue item is a movie, TV, book, or music download",
 				},
 			},
 			"required": []string{"queue_id", "media_type"},
@@ -523,8 +559,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the queue item is a movie, TV, or book download",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the queue item is a movie, TV, book, or music download",
 				},
 				"force": map[string]interface{}{
 					"type":        "boolean",
@@ -552,8 +588,8 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether the queue item is a movie, TV, or book download",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether the queue item is a movie, TV, book, or music download",
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
@@ -568,7 +604,7 @@ var arrToolDefinitions = []Tool{
 		Name:        "rescan_media",
 		AdminOnly:   true,
 		Permission:  auth.PermissionArrSearch,
-		Description: "Rescan the files on disk for a library movie, series, or author, then run the import pass. Use this after fixing a disk-space, path, or permissions problem so the service picks up files that are already there. For movies/TV pass tmdb_id; for books pass author_id (books have no tmdb_id). Admin only",
+		Description: "Rescan the files on disk for a library movie, series, author, or artist, then run the import pass. Use this after fixing a disk-space, path, or permissions problem so the service picks up files that are already there. For movies/TV pass tmdb_id; for books pass author_id and for music pass artist_id (neither has a tmdb_id). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -582,12 +618,16 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv", "book"},
-					"description": "Whether this is a movie, TV show, or book",
+					"enum":        []string{"movie", "tv", "book", "music"},
+					"description": "Whether this is a movie, TV show, book, or album",
 				},
 				"author_id": map[string]interface{}{
 					"type":        "integer",
 					"description": "Book only: the Chaptarr author id to rescan (required for book)",
+				},
+				"artist_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music only: the Lidarr artist id to rescan (required for music)",
 				},
 			},
 			"required": []string{"media_type"},
@@ -1890,6 +1930,40 @@ func formatChaptarrReleases(releases []chaptarr.Release) string {
 	return scrubRawReleaseGUIDs(sb.String(), capabilities)
 }
 
+// formatLidarrReleases renders an album's release search like the book one:
+// Lidarr's release resource has the same shape as Chaptarr's, including the
+// optional seeder counts usenet omits.
+func formatLidarrReleases(releases []lidarr.Release) string {
+	capabilities := lidarrReleaseCapabilities(releases)
+	sort.SliceStable(releases, func(i, j int) bool {
+		if releases[i].Rejected != releases[j].Rejected {
+			return !releases[i].Rejected
+		}
+		si, sj := chaptarrSeeders(releases[i].Seeders), chaptarrSeeders(releases[j].Seeders)
+		if si != sj {
+			return si > sj
+		}
+		return releases[i].Size > releases[j].Size
+	})
+	if len(releases) > maxReleaseResults {
+		releases = releases[:maxReleaseResults]
+	}
+	var sb strings.Builder
+	for i, rel := range releases {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, rel.Title)
+		fmt.Fprintf(&sb, "   size: %s | %s", humanBytes(float64(rel.Size)), rel.Protocol)
+		if rel.Protocol == "torrent" {
+			fmt.Fprintf(&sb, " (%d seeders / %d leechers)", chaptarrSeeders(rel.Seeders), chaptarrSeeders(rel.Leechers))
+		}
+		fmt.Fprintf(&sb, " | indexer: %s (indexer_id: %d) | age: %.1f days\n", rel.Indexer, rel.IndexerID, rel.AgeHours/24)
+		if rel.Rejected {
+			fmt.Fprintf(&sb, "   rejected: %s\n", strings.Join(rel.Rejections, "; "))
+		}
+		fmt.Fprintf(&sb, "   reference: %s\n", releaseGUIDReference(rel.GUID))
+	}
+	return scrubRawReleaseGUIDs(sb.String(), capabilities)
+}
+
 func safeReleaseText(value string, releases []releaseCapability) string {
 	return secrets.RedactText(scrubRawReleaseGUIDs(value, releases))
 }
@@ -1953,6 +2027,23 @@ func chaptarrReleaseCandidates(releases []chaptarr.Release) []ReleaseCandidate {
 	return out
 }
 
+func lidarrReleaseCandidates(releases []lidarr.Release) []ReleaseCandidate {
+	capabilities := lidarrReleaseCapabilities(releases)
+	if len(releases) > maxReleaseResults {
+		releases = releases[:maxReleaseResults]
+	}
+	out := make([]ReleaseCandidate, 0, len(releases))
+	for _, release := range releases {
+		out = append(out, ReleaseCandidate{
+			Reference: releaseGUIDReference(release.GUID), IndexerID: release.IndexerID,
+			Title: safeReleaseText(release.Title, capabilities), Size: release.Size,
+			Protocol: safeReleaseText(release.Protocol, capabilities), Indexer: safeReleaseText(release.Indexer, capabilities),
+			Rejected: release.Rejected, Rejections: safeReleaseRejections(release.Rejections, capabilities),
+		})
+	}
+	return out
+}
+
 func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string) (*ToolResult, error) {
 	var params struct {
 		TmdbID        int    `json:"tmdb_id"`
@@ -1961,6 +2052,7 @@ func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string
 		SeasonNumber  *int   `json:"season_number"`
 		EpisodeNumber *int   `json:"episode_number"`
 		BookID        int    `json:"book_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -1974,7 +2066,7 @@ func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string
 
 	switch params.MediaType {
 	case "movie":
-		if params.TmdbID <= 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil || params.BookID != 0 {
+		if params.TmdbID <= 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil || params.BookID != 0 || params.AlbumID != 0 {
 			return &ToolResult{Text: "Movie release search requires only a positive tmdb_id as its media scope."}, nil
 		}
 		radarrClient, _, refusal := s.radarrTargetFor(params.InstanceID, callInstanceID)
@@ -2004,7 +2096,7 @@ func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string
 		return &ToolResult{Text: text, ReleaseCandidates: radarrReleaseCandidates(releases)}, nil
 
 	case "tv":
-		if params.TmdbID <= 0 || params.SeasonNumber == nil || *params.SeasonNumber < 0 || params.BookID != 0 ||
+		if params.TmdbID <= 0 || params.SeasonNumber == nil || *params.SeasonNumber < 0 || params.BookID != 0 || params.AlbumID != 0 ||
 			(params.EpisodeNumber != nil && *params.EpisodeNumber <= 0) {
 			return &ToolResult{Text: "TV release search requires a positive tmdb_id, a non-negative season_number, and optionally a positive episode_number."}, nil
 		}
@@ -2065,7 +2157,7 @@ func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string
 		return &ToolResult{Text: text, ReleaseCandidates: sonarrReleaseCandidates(releases)}, nil
 
 	case "book":
-		if params.BookID <= 0 || params.TmdbID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil {
+		if params.BookID <= 0 || params.TmdbID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil || params.AlbumID != 0 {
 			return &ToolResult{Text: "Book release search requires only a positive book_id as its media scope."}, nil
 		}
 		chaptarrClient, _, refusal := s.chaptarrTargetFor(params.InstanceID, callInstanceID)
@@ -2084,8 +2176,28 @@ func (s *ToolServer) searchReleases(input json.RawMessage, callInstanceID string
 		text := scrubRawReleaseGUIDs(header+formatChaptarrReleases(releases), chaptarrReleaseCapabilities(releases))
 		return &ToolResult{Text: text, ReleaseCandidates: chaptarrReleaseCandidates(releases)}, nil
 
+	case "music":
+		if params.AlbumID <= 0 || params.TmdbID != 0 || params.BookID != 0 || params.SeasonNumber != nil || params.EpisodeNumber != nil {
+			return &ToolResult{Text: "Music release search requires only a positive album_id as its media scope."}, nil
+		}
+		lidarrClient, _, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if lidarrClient == nil {
+			return &ToolResult{Text: refusal}, nil
+		}
+		releases, err := lidarrClient.SearchReleases(params.AlbumID)
+		if err != nil {
+			return nil, err
+		}
+		if len(releases) == 0 {
+			return &ToolResult{Text: fmt.Sprintf("No releases found for album id %d.", params.AlbumID)}, nil
+		}
+		header := fmt.Sprintf("Found %d release(s) for album id %d, showing top %d. Use grab_release with guid=<one-way reference>, indexer_id, media_type=music, and album_id=%d.%s\n",
+			len(releases), params.AlbumID, min(len(releases), maxReleaseResults), params.AlbumID, grabInstanceHint)
+		text := scrubRawReleaseGUIDs(header+formatLidarrReleases(releases), lidarrReleaseCapabilities(releases))
+		return &ToolResult{Text: text, ReleaseCandidates: lidarrReleaseCandidates(releases)}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", \"book\", or \"music\"."}, nil
 	}
 }
 
@@ -2263,9 +2375,9 @@ func (s *ToolServer) getDiskSpace(input json.RawMessage, callInstanceID string) 
 
 	if len(sections) == 0 {
 		if only != "" && !matchedOnly && callInstanceID == "" {
-			return &ToolResult{Text: fmt.Sprintf("No Radarr, Sonarr, or Chaptarr instance with ID %q. Call list_arr_instances to see the configured instances.", only)}, nil
+			return &ToolResult{Text: fmt.Sprintf("No Radarr, Sonarr, Chaptarr, or Lidarr instance with ID %q. Call list_arr_instances to see the configured instances.", only)}, nil
 		}
-		return &ToolResult{Text: "Radarr/Sonarr/Chaptarr is not configured."}, nil
+		return &ToolResult{Text: "Radarr/Sonarr/Chaptarr/Lidarr is not configured."}, nil
 	}
 	return &ToolResult{Text: strings.Join(sections, "\n\n")}, nil
 }

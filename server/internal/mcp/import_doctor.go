@@ -187,13 +187,17 @@ func nextCalls(mediaType string, queueID, tmdbID int, verbs []string) string {
 	for _, v := range verbs {
 		switch v {
 		case arr.ActionProcess, arr.ActionRescan:
-			// rescan_media runs Rescan{Series,Movie,Author} then the import pass.
-			// For movies/TV it needs a tmdb_id (the Sonarr queue item only carries
-			// a TVDB id, so we fall back to naming the tool when we could not
-			// resolve one). Books carry no TMDB id at all — rescan_media takes an
-			// author_id there — so book always renders a resolve hint.
+			// rescan_media runs Rescan{Series,Movie,Author,Artist} then the import
+			// pass. For movies/TV it needs a tmdb_id (the Sonarr queue item only
+			// carries a TVDB id, so we fall back to naming the tool when we could
+			// not resolve one). Books and music carry no TMDB id at all —
+			// rescan_media takes an author_id or artist_id there — so both always
+			// render a resolve hint.
 			if mediaType == "book" {
 				return "rescan_media (resolve this item's author_id first — get_library media_type=book by author/title — then call it with that author_id)"
+			}
+			if mediaType == "music" {
+				return "rescan_media (resolve this item's artist_id first — get_queue media_type=music, or get_library media_type=music by artist/title — then call it with that artist_id)"
 			}
 			if tmdbID != 0 {
 				return toolCall("rescan_media", fmt.Sprintf(`{"tmdb_id": %d, "media_type": %q}`, tmdbID, mediaType))
@@ -351,6 +355,8 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		EpisodeNumber int    `json:"episode_number"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
+		ArtistID      int    `json:"artist_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -360,6 +366,7 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
 		AuthorID: params.AuthorID, BookID: params.BookID,
+		ArtistID: params.ArtistID, AlbumID: params.AlbumID,
 	}
 
 	var sb strings.Builder
@@ -468,6 +475,33 @@ func (s *ToolServer) diagnoseQueue(input json.RawMessage, callInstanceID string)
 		}
 	}
 
+	if mediaType == "music" || mediaType == "all" {
+		lidarrClient, _, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if lidarrClient == nil {
+			if mediaType == "music" {
+				return &ToolResult{Text: refusal}, nil
+			}
+			notes = append(notes, refusal)
+		} else {
+			items, err := lidarrClient.GetQueueDetailed()
+			if err != nil {
+				return nil, err
+			}
+			items = filterLidarrQueue(items, scope)
+			for _, item := range items {
+				d := arr.Diagnose(lidarrSignal(item))
+				if d.Severity == arr.SeverityOK {
+					healthy++
+					continue
+				}
+				problems++
+				// Lidarr albums carry no TMDB id either; nextCalls renders the
+				// artist_id resolve hint for rescan_media.
+				renderDiagnosis(&sb, "music", item.ID, 0, lidarrQueueTitle(item), d)
+			}
+		}
+	}
+
 	var header strings.Builder
 	if problems == 0 {
 		header.WriteString(noQueueProblemsText(healthy, scope))
@@ -571,6 +605,8 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		EpisodeNumber int    `json:"episode_number"`
 		AuthorID      int    `json:"author_id"`
 		BookID        int    `json:"book_id"`
+		ArtistID      int    `json:"artist_id"`
+		AlbumID       int    `json:"album_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
@@ -579,6 +615,7 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		QueueID: params.QueueID, DownloadID: params.DownloadID, TmdbID: params.TmdbID, TvdbID: params.TvdbID,
 		SeasonNumber: params.SeasonNumber, EpisodeNumber: params.EpisodeNumber,
 		AuthorID: params.AuthorID, BookID: params.BookID,
+		ArtistID: params.ArtistID, AlbumID: params.AlbumID,
 	}
 
 	switch params.MediaType {
@@ -726,8 +763,51 @@ func (s *ToolServer) getManualImportCandidates(input json.RawMessage, callInstan
 		sb.WriteString(" Note: Chaptarr re-checks identification at import time — a candidate with no rejections listed can still be rejected when the import runs; if that happens the file is not moved and the queue item will show the reason.")
 		return &ToolResult{Text: sb.String()}, nil
 
+	case "music":
+		client, _, refusal := s.lidarrTargetFor(params.InstanceID, callInstanceID)
+		if client == nil {
+			return &ToolResult{Text: refusal}, nil
+		}
+		item, err := findLidarrQueueItem(client, params.QueueID)
+		if err != nil {
+			return nil, err
+		}
+		if item != nil && len(filterLidarrQueue([]lidarr.DetailedQueueItem{*item}, scope)) == 0 {
+			item = nil
+		}
+		if item == nil {
+			return &ToolResult{Text: fmt.Sprintf("No music queue item with id %d in this scope. Run get_queue or diagnose_queue for current ids.", params.QueueID)}, nil
+		}
+		if item.DownloadID == "" {
+			return &ToolResult{Text: fmt.Sprintf("Queue item %d has no download-client id yet, so its files cannot be inspected. Wait until it has been handed to the download client.", params.QueueID)}, nil
+		}
+		candidates, err := client.GetManualImportCandidates(item.DownloadID)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			return &ToolResult{Text: fmt.Sprintf("No importable files found for %s. The folder may be empty, an unextracted archive, or inaccessible.", lidarrQueueTitle(*item))}, nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%d candidate file(s) for %s:", len(candidates), lidarrQueueTitle(*item))
+		for _, c := range candidates {
+			fmt.Fprintf(&sb, "\n- %s (%s)", c.Name, humanBytes(float64(c.Size)))
+			// Lidarr silently skips a manual-import file that lacks any of the
+			// artist, album, and track ids, so say which mapping is missing.
+			if c.AlbumID != 0 && len(c.TrackIDs) != 0 {
+				fmt.Fprintf(&sb, "\n  maps to artist id %d, album id %d, %d track(s)", c.ArtistID, c.AlbumID, len(c.TrackIDs))
+			} else {
+				sb.WriteString("\n  not matched to an album's tracks (cannot be imported without artist, album, and track mappings)")
+			}
+			if rej := formatRejections(toRejectionViews(c.Rejections)); rej != "" {
+				fmt.Fprintf(&sb, "\n  rejections: %s", rej)
+			}
+		}
+		sb.WriteString("\n\nUse execute_manual_import to import these (add force=true to import despite permanent rejections).")
+		return &ToolResult{Text: sb.String()}, nil
+
 	default:
-		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", or \"book\"."}, nil
+		return &ToolResult{Text: "media_type must be \"movie\", \"tv\", \"book\", or \"music\"."}, nil
 	}
 }
 

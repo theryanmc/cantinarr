@@ -165,6 +165,7 @@ class ConfigChange {
         'radarr' => 'Radarr',
         'sonarr' => 'Sonarr',
         'chaptarr' => 'Chaptarr',
+        'lidarr' => 'Lidarr',
         'sabnzbd' => 'SABnzbd',
         'qbittorrent' => 'qBittorrent',
         'nzbget' => 'NZBGet',
