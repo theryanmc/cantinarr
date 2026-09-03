@@ -1523,12 +1523,15 @@ func scopeReadToolInput(issue *Issue, toolName string, input json.RawMessage) (j
 		}
 	case "get_media_file_details":
 		// Same unreachable-when-scrubbed shape as get_book_timeline: the tool
-		// requires tmdb_id, which the scrub deleted.
+		// requires tmdb_id (or, for music, album_id), which the scrub deleted.
 		if issue.TmdbID > 0 {
 			params["tmdb_id"] = issue.TmdbID
 		}
 		if issue.SeasonNumber > 0 {
 			params["season_number"] = issue.SeasonNumber
+		}
+		if issue.MediaType == "music" && issue.BookID > 0 {
+			params["album_id"] = issue.BookID
 		}
 	}
 	return json.Marshal(params)

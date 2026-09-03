@@ -141,12 +141,16 @@ func TestArrToolSchemasAdmitMusic(t *testing.T) {
 	if values := enumOf(t, "get_service_config", "service"); !has(values, "lidarr") {
 		t.Fatalf("get_service_config service enum = %v, want lidarr", values)
 	}
+	if values := enumOf(t, "get_media_file_details", "media_type"); !has(values, "music") {
+		t.Fatalf("get_media_file_details media_type enum = %v, want music", values)
+	}
 	for name, ids := range map[string][]string{
-		"get_library":     {"artist_id", "album_id"},
-		"trigger_search":  {"artist_id", "album_id"},
-		"search_releases": {"album_id"},
-		"grab_release":    {"album_id"},
-		"rescan_media":    {"artist_id"},
+		"get_library":            {"artist_id", "album_id"},
+		"trigger_search":         {"artist_id", "album_id"},
+		"search_releases":        {"album_id"},
+		"grab_release":           {"album_id"},
+		"rescan_media":           {"artist_id"},
+		"get_media_file_details": {"album_id"},
 	} {
 		properties, _ := findToolDefinition(name).InputSchema["properties"].(map[string]interface{})
 		for _, id := range ids {

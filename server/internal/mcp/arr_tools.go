@@ -392,7 +392,7 @@ var arrToolDefinitions = []Tool{
 	{
 		Name:        "get_media_file_details",
 		Permission:  auth.PermissionArrRead,
-		Description: "Inspect the file(s) the library actually holds for one movie or one TV season: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk. Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
+		Description: "Inspect the file(s) the library actually holds for one movie, one TV season, or one album: resolution, video codec and dynamic range, audio codec/channels/languages, embedded subtitles, runtime, size, quality label, scene name, and import date — the arr's own analysis of what is on disk (for music: Lidarr's codec, bit depth, sample rate, channels, and bitrate per track file). Use this for any \"wrong audio\", \"no subtitles\", \"bad quality\", or \"upscaled\" report: it is the difference between judging a release NAME and judging the file. A file the arr has not analyzed yet says so explicitly (that is blindness, not absence). Admin only",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
@@ -402,19 +402,26 @@ var arrToolDefinitions = []Tool{
 				},
 				"media_type": map[string]interface{}{
 					"type":        "string",
-					"enum":        []string{"movie", "tv"},
-					"description": "Book files carry no media-property analysis in Chaptarr",
+					"enum":        []string{"movie", "tv", "music"},
+					"description": "Movie, TV, or music; book files carry no media-property analysis in Chaptarr",
 				},
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
-					"description": "The title's TMDB id, from get_library",
+					"description": "Movie/TV: the title's TMDB id, from get_library (required for movie and tv)",
 				},
 				"season_number": map[string]interface{}{
 					"type":        "integer",
 					"description": "TV: which season's files to inspect",
 				},
+				"album_id": map[string]interface{}{
+					"type":        "integer",
+					"description": "Music: the Lidarr album id whose track files to inspect, from get_library (required for music; music has no tmdb_id)",
+				},
 			},
-			"required": []string{"media_type", "tmdb_id"},
+			// tmdb_id is required for movie/tv and album_id for music; that is
+			// enforced server-side rather than with a root oneOf, which the
+			// Anthropic converter would have to strip anyway (#497).
+			"required": []string{"media_type"},
 		},
 	},
 	{

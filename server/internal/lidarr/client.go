@@ -278,6 +278,26 @@ type TrackFile struct {
 	Path      string     `json:"path"`
 	Size      int64      `json:"size"`
 	DateAdded *time.Time `json:"dateAdded,omitempty"`
+	Quality   struct {
+		Quality struct {
+			Name string `json:"name"`
+		} `json:"quality"`
+	} `json:"quality"`
+	// MediaInfo is Lidarr's own analysis of the audio on disk, the way the
+	// movie/TV clients carry ffprobe truth. Pointer-typed: a file Lidarr has
+	// not analyzed carries none, and that is blindness rather than a bad copy.
+	MediaInfo *TrackMediaInfo `json:"mediaInfo"`
+}
+
+// TrackMediaInfo mirrors Lidarr's MediaInfoResource: the numbers arrive
+// pre-formatted as text ("320 kbps", "16bit", "44.1kHz"), channels as a
+// number, and the codec as its display name (FLAC, MP3, AAC).
+type TrackMediaInfo struct {
+	AudioChannels   float64 `json:"audioChannels"`
+	AudioBitRate    string  `json:"audioBitRate"`
+	AudioCodec      string  `json:"audioCodec"`
+	AudioBits       string  `json:"audioBits"`
+	AudioSampleRate string  `json:"audioSampleRate"`
 }
 
 // HealthCheck is one entry from Lidarr's system health report: a config-level
