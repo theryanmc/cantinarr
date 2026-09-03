@@ -109,7 +109,7 @@ The shared design foundation also owns typography, spacing, shape, and motion to
 
 ### AI assistant
 - **Multi-provider chat** with incremental SSE streaming on native and web, visible tool activity, and a poster carousel for results. Every user can bring a personal Anthropic, OpenAI, Gemini, or xAI Grok API key, or link a subscription account with a browser device code -- OpenAI (OAuth) via ChatGPT or xAI Grok (OAuth) via SuperGrok / X Premium+. Admins can configure the same choices as an included server profile and grant it per user. Personal overrides fail closed instead of silently spending shared quota.
-- **Server-side tools** -- the assistant searches (movies, TV, and books), checks availability, and requests on your behalf; book results ride the same carousel with external covers and open the book detail page. Admins can triage queues conversationally.
+- **Server-side tools** -- the assistant searches (movies, TV, books, and music), checks availability, and requests on your behalf; book results ride the same carousel with external covers and open the book detail page. Admins can triage queues conversationally.
 - **Configuration receipts** -- explicit admin requests can update supported connected-app settings in one turn, without copying a confirmation command back into chat. Supported profile and custom-format writes return a trusted review receipt; quality-profile update receipts also lead to a one-time guarded restore when the live state still matches. Assistant prose never creates controls.
 - **Persistent session** -- the focused `/assistant` workspace keeps one conversation alive across navigation (30-minute idle expiry).
 

@@ -49,7 +49,7 @@ Operating manual for AI agents and human contributors. `CLAUDE.md` imports this 
 ## Architecture conventions
 
 - **The live DB schema is code, not SQL files.** It lives in `server/internal/db/db.go` (`initSQL` plus the in-code migration/`ALTER` list). Schema changes go there.
-- **Never trust a stored copy of *arr state.** Admins edit Radarr/Sonarr/Chaptarr directly, so any snapshot drifts. Availability and library state are computed live from the arrs; if you must cache, you must also have a freshness story (webhook invalidation, short TTL, or refetch-on-view).
+- **Never trust a stored copy of *arr state.** Admins edit Radarr/Sonarr/Chaptarr/Lidarr directly, so any snapshot drifts. Availability and library state are computed live from the arrs; if you must cache, you must also have a freshness story (webhook invalidation, short TTL, or refetch-on-view).
 - **Media types vs service types.** `movie`/`tv`/`book`/`music` describe media; `radarr`/`sonarr`/`chaptarr`/`lidarr` describe services. Store and compare media types — don't substitute one for the other.
 - **Never silently dedupe or merge distinct records in search results.** Surface each record and let the user decide (e.g. two library entries for the same title are two results).
 - **Instance URLs resolve only from the server; clients must never dereference arr-origin URLs.** Cluster-internal names (`http://radarr:7878`) are a supported production configuration, so anything handed to a client must be client-reachable: use `images[].remoteUrl` (external CDN) for artwork, resolve arr-relative paths through `/api/instances/{id}/…`, and never surface an arr-origin absolute URL from a proxied body. Server-side, keep hosts out of error strings that can reach non-admins.
