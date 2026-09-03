@@ -462,6 +462,40 @@ void main() {
     ]);
   });
 
+  testWidgets('Lidarr create saves a media path mapping', (tester) async {
+    // Per-track downloads ride the same mappings form as the other arrs, so
+    // a Lidarr instance offers it whenever the server reports media roots.
+    final adapter = _FakeAdapter(mediaRoots: const ['/media']);
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+
+    await tester.tap(find.text('Radarr'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Lidarr').last);
+    await tester.pumpAndSettle();
+    await _fillForm(tester, 'Music');
+
+    final add = find.widgetWithText(OutlinedButton, 'Add path');
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Lidarr path'), '/music');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cantinarr path'), '/media/music');
+
+    final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+
+    final post = adapter.requests.singleWhere(
+        (request) => request.method == 'POST' && request.path == '/api/instances');
+    expect(post.body['service_type'], 'lidarr');
+    expect(post.body['media_path_mappings'], [
+      {'arr_path': '/music', 'cantinarr_path': '/media/music'},
+    ]);
+  });
+
   testWidgets('an incomplete media mapping blocks instance creation',
       (tester) async {
     final adapter = _FakeAdapter();
@@ -1041,8 +1075,6 @@ void main() {
     expect(
         find.widgetWithText(SwitchListTile, 'Default Instance'), findsNothing);
     expect(find.text('Assigned Users'), findsOneWidget);
-    // Media downloads are deliberately not offered for music this wave.
-    expect(find.textContaining('path mapping'), findsNothing);
 
     await _fillForm(tester, 'Music');
     await tester.tap(find.widgetWithText(CheckboxListTile, 'alice'));
