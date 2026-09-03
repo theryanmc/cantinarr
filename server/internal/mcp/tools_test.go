@@ -102,6 +102,75 @@ func TestArrToolsOfferOptionalInstanceID(t *testing.T) {
 	}
 }
 
+// The schema is the contract a model reads. Every queue/library tool whose
+// implementation carries a music arm has to SAY so in its media_type enum, and
+// the ids that scope a music call have to be declared where their book
+// siblings are — the music module first shipped with the implementations in
+// place and the enums still stopping at "book", which left every album fix
+// unreachable from any MCP client.
+func TestArrToolSchemasAdmitMusic(t *testing.T) {
+	enumOf := func(t *testing.T, name, property string) []string {
+		t.Helper()
+		tool := findToolDefinition(name)
+		if tool == nil {
+			t.Fatalf("%s definition not found", name)
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]interface{})
+		field, _ := properties[property].(map[string]interface{})
+		values, _ := field["enum"].([]string)
+		return values
+	}
+	has := func(values []string, want string) bool {
+		for _, v := range values {
+			if v == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, name := range []string{
+		"get_queue", "get_calendar", "get_library", "get_history", "get_arr_health",
+		"trigger_search", "search_releases", "grab_release", "remove_queue_item",
+		"diagnose_queue", "get_manual_import_candidates", "execute_manual_import",
+		"remediate_queue_item", "rescan_media",
+	} {
+		if values := enumOf(t, name, "media_type"); !has(values, "music") {
+			t.Fatalf("%s media_type enum = %v, want music", name, values)
+		}
+	}
+	if values := enumOf(t, "get_service_config", "service"); !has(values, "lidarr") {
+		t.Fatalf("get_service_config service enum = %v, want lidarr", values)
+	}
+	for name, ids := range map[string][]string{
+		"get_library":     {"artist_id", "album_id"},
+		"trigger_search":  {"artist_id", "album_id"},
+		"search_releases": {"album_id"},
+		"grab_release":    {"album_id"},
+		"rescan_media":    {"artist_id"},
+	} {
+		properties, _ := findToolDefinition(name).InputSchema["properties"].(map[string]interface{})
+		for _, id := range ids {
+			if _, ok := properties[id]; !ok {
+				t.Fatalf("%s schema is missing %s", name, id)
+			}
+		}
+	}
+	branches, _ := findToolDefinition("grab_release").InputSchema["oneOf"].([]interface{})
+	musicBranch := false
+	for _, branch := range branches {
+		b, _ := branch.(map[string]interface{})
+		props, _ := b["properties"].(map[string]interface{})
+		mt, _ := props["media_type"].(map[string]interface{})
+		required, _ := b["required"].([]string)
+		if mt["const"] == "music" && len(required) == 1 && required[0] == "album_id" {
+			musicBranch = true
+		}
+	}
+	if !musicBranch {
+		t.Fatalf("grab_release oneOf has no music branch requiring album_id: %#v", branches)
+	}
+}
+
 func TestDisplayMediaMismatch(t *testing.T) {
 	if got := displayMediaMismatch("Toy Story 5", "2026", "Toy Story 5", "2026"); got != "" {
 		t.Fatalf("matching item rejected: %s", got)
