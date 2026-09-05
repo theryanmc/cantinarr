@@ -44,6 +44,8 @@ Discover and request movies, TV shows, books, and music. Get push notifications.
 
 Single sign-on is available on web, iOS and Android with an external OpenID Connect provider. Configure it in **Settings > Single sign-on**; optional account creation, exact group restrictions and SSO-only policy preserve local administrator recovery. See [OIDC setup](docs/oidc-setup.md).
 
+Plex sign-in is available in the app and MCP authorization page. Administrators enable it in **Settings > Plex sign-in**, review existing account mappings, and can separately allow signup for accepted shares or verified server owners. Both switches start off; OIDC-only policy still applies. See [Plex sign-in setup](docs/plex-setup.md).
+
 ## Why Cantinarr?
 
 - **Zero-config requesting** -- Your users never see API keys, TVDB IDs, or quality profiles. They browse, they tap, it works.

@@ -115,6 +115,9 @@ type Service struct {
 	policyMu                sync.Mutex
 	oidcCipher              *secrets.Cipher
 	oidcFlows               *oidcFlowStore
+	plexFlows               *plexFlowStore
+	plexDirectory           PlexDirectory
+	plexBaseURL             string
 	db                      *sql.DB
 	jwtSecret               []byte
 	webauthnSessions        *SessionStore
@@ -144,6 +147,8 @@ func NewService(db *sql.DB, jwtSecret string, webauthnConfig ...WebAuthnConfig) 
 	}
 	return &Service{
 		oidcFlows:               newOIDCFlowStore(),
+		plexFlows:               newPlexFlowStore(),
+		plexBaseURL:             "https://plex.tv",
 		db:                      db,
 		jwtSecret:               []byte(jwtSecret),
 		webauthnSessions:        NewSessionStore(),
@@ -580,7 +585,41 @@ func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*
 			return nil, fmt.Errorf("load connect user: %w", err)
 		}
 	}
-	userID := user.ID
+	return issueConnectToken(s.db, createdBy, user.ID, serverURL)
+}
+
+// CreateImportUser requires a new account. An import's remote username never
+// authorizes access to a local namesake, including one created concurrently.
+func (s *Service) CreateImportUser(createdBy int64, name, serverURL string) (int64, *CreateConnectTokenResponse, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, nil, ErrAuthUnavailable
+	}
+	defer tx.Rollback()
+	row, err := tx.Exec("INSERT INTO users(username,password_hash,role) VALUES (?,'','user') ON CONFLICT(username) DO NOTHING", name)
+	if err != nil {
+		return 0, nil, ErrAuthUnavailable
+	}
+	if n, err := row.RowsAffected(); err != nil || n != 1 {
+		return 0, nil, ErrUserExists
+	}
+	id, err := row.LastInsertId()
+	if err != nil {
+		return 0, nil, ErrAuthUnavailable
+	}
+	response, err := issueConnectToken(tx, createdBy, id, serverURL)
+	if err != nil {
+		return 0, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, nil, ErrAuthUnavailable
+	}
+	return id, response, nil
+}
+
+func issueConnectToken(q interface {
+	Exec(string, ...any) (sql.Result, error)
+}, createdBy, userID int64, serverURL string) (*CreateConnectTokenResponse, error) {
 
 	// Generate 32-byte random token (64 hex chars)
 	tokenBytes := make([]byte, 32)
@@ -595,12 +634,12 @@ func (s *Service) CreateConnectToken(createdBy int64, name, serverURL string) (*
 	// is for: an admin who re-invites because the old link went to the wrong
 	// chat has to actually kill it, not add a second working key that lives
 	// out its full seven days. Redeemed rows stay for the audit trail.
-	if _, err := s.db.Exec(
+	if _, err := q.Exec(
 		"DELETE FROM connect_tokens WHERE user_id = ? AND redeemed_at IS NULL", userID,
 	); err != nil {
 		return nil, fmt.Errorf("supersede previous connect tokens: %w", err)
 	}
-	_, err = s.db.Exec(
+	_, err := q.Exec(
 		"INSERT INTO connect_tokens (token, user_id, created_by, expires_at) VALUES (?, ?, ?, ?)",
 		token, userID, createdBy, expiresAt,
 	)
@@ -995,7 +1034,12 @@ func (s *Service) DeleteUser(actorID, userID int64) error {
 		return fmt.Errorf("delete user: %w", err)
 	}
 
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	s.plexFlows.clear()
+	s.clearPlexConsents()
+	return nil
 }
 
 func (s *Service) userSummaryByID(userID int64) (*UserSummary, error) {
@@ -1160,7 +1204,7 @@ func (s *Service) authoritativeSession(ctx context.Context, userID int64, device
 	)
 	err := s.db.QueryRowContext(ctx, `
 		SELECT u.role, u.ai_shared_enabled, d.revoked_at,
-			(u.role = 'admin' OR d.auth_method = 'oidc' OR COALESCE((SELECT value FROM settings WHERE key = 'oidc_sso_only'), 'false') = 'false')
+			(u.role = 'admin' OR d.auth_method = 'oidc' OR COALESCE((SELECT value FROM settings WHERE key = 'oidc_sso_only'), 'false') = 'false') AND (d.auth_method != 'plex' OR (COALESCE((SELECT value FROM settings WHERE key='plex_auth_enabled'),'false')='true' AND EXISTS(SELECT 1 FROM plex_identities p WHERE p.user_id=u.id AND p.plex_account_id=d.plex_account_id)))
 		FROM users u
 		JOIN devices d ON d.user_id = u.id
 		WHERE u.id = ? AND d.id = ?

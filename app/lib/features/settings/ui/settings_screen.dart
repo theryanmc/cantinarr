@@ -172,9 +172,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.link,
               title: 'Linked sign-in',
-              subtitle: user?.ssoLinked == true
-                  ? 'Single sign-on identity linked'
-                  : 'No single sign-on identity linked',
+              subtitle: 'Manage single sign-on and Plex identities',
               onTap: () => context.push('/settings/sso-account'),
             ),
             if (user?.canUsePassword == true)
@@ -285,6 +283,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 subtitle: 'Manage accounts, roles, and invites',
                 onTap: () => context.push('/settings/users'),
               ),
+              _SettingsTile(
+                  icon: Icons.play_arrow,
+                  title: 'Plex sign-in',
+                  subtitle:
+                      'Sign-in, automatic signup and existing account review',
+                  onTap: () => context.push('/settings/plex-auth')),
               _SettingsTile(
                 icon: Icons.login,
                 title: 'Single sign-on',

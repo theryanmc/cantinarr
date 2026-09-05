@@ -176,6 +176,14 @@ CREATE TABLE IF NOT EXISTS oidc_identities (
     UNIQUE (user_id, issuer)
 );
 
+CREATE TABLE IF NOT EXISTS plex_identities (
+    plex_account_id INTEGER PRIMARY KEY CHECK (plex_account_id > 0),
+    user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS push_tokens (
     id TEXT PRIMARY KEY,
     device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -870,6 +878,8 @@ func Open(dbPath string) (*sql.DB, error) {
 		{alter: "ALTER TABLE devices ADD COLUMN hardware_id TEXT NOT NULL DEFAULT ''"},
 		{alter: "ALTER TABLE devices ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
 		{alter: "ALTER TABLE devices ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
+		{alter: "ALTER TABLE devices ADD COLUMN plex_account_id INTEGER NOT NULL DEFAULT 0"},
+		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN plex_account_id INTEGER NOT NULL DEFAULT 0"},
 		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'"},
 		{alter: "ALTER TABLE oauth_authorization_codes ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''"},
 		// AI remediation: admins are notified of new issues by default (on),

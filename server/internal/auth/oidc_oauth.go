@@ -39,32 +39,7 @@ func (h *OAuthHandler) BeginOIDC(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 func (h *OAuthHandler) authorizeOIDC(r *http.Request, client *OAuthClient) (string, error) {
-	s := h.service
-	s.policyMu.Lock()
-	defer s.policyMu.Unlock()
-	f := s.oidcFlows
-	f.mu.Lock()
-	f.prune()
-	key := hashToken(r.Form.Get("oidc_consent"))
-	consent, ok := f.consents[key]
-	if !ok || oidcOAuthValues(r.Form).Encode() != oidcOAuthValues(consent.OAuth).Encode() {
-		f.mu.Unlock()
-		return "", ErrOIDCFlow
-	}
-	delete(f.consents, key)
-	f.mu.Unlock()
-	c, err := s.oidcConfiguration()
-	if err != nil {
-		return "", err
-	}
-	if !c.Enabled || c.fingerprint != consent.Fingerprint {
-		return "", ErrOIDCFlow
-	}
-	var linked bool
-	if err = s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM oidc_identities WHERE user_id=? AND issuer=?)", consent.UserID, consent.Issuer).Scan(&linked); err != nil || !linked {
-		return "", ErrOIDCFlow
-	}
-	return s.createOAuthAuthorizationCode(client, consent.UserID, r.Form.Get("redirect_uri"), r.Form.Get("code_challenge"), h.requestedMCPResource(r), normalizeOAuthScope(r.Form.Get("scope")), "oidc", consent.Issuer)
+	return h.authorizeExternal(r, client, "oidc")
 }
 func (h *OAuthHandler) oidcTemplateSettings() (string, string, string) {
 	c, err := h.service.oidcConfiguration()

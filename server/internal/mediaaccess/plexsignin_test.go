@@ -66,6 +66,14 @@ func newFakePlexTV(t *testing.T) (*fakePlexTV, *httptest.Server) {
 		}
 		json.NewEncoder(w).Encode(body)
 	})
+	mux.HandleFunc("/api/v2/resources", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.Header.Get("X-Plex-Token") != ownerToken {
+			w.WriteHeader(401)
+			return
+		}
+		json.NewEncoder(w).Encode([]map[string]any{{"name": "Den Plex", "clientIdentifier": "m1", "provides": "server", "owned": true}})
+	})
 	mux.HandleFunc("/api/v2/user", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		acct := accounts[r.Header.Get("X-Plex-Token")]

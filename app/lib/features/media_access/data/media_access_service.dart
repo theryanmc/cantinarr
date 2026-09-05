@@ -37,12 +37,13 @@ class MediaServerAccountStatus {
 }
 
 /// One requested account's outcome from an import: [created] says a
-/// Cantinarr user was made for it (an existing user of the same name is
-/// reused and gets no new link), [linked] says the account is now that
+/// Cantinarr user was made for it (Jellyfin/Emby can reuse a namesake;
+/// Plex requires an explicit link for existing users), [linked] says the account is now that
 /// user's, [link] is the connect link to hand out, and [error] is the
 /// server's code when a step was refused (`not_found`, `already_linked`,
 /// `user_failed`, `user_has_account`, `link_failed`).
 class MediaServerImportResult {
+  final String plexIdentityError;
   final String remoteUserId;
   final String remoteUsername;
   final int? userId;
@@ -54,6 +55,7 @@ class MediaServerImportResult {
   final String error;
 
   const MediaServerImportResult({
+    this.plexIdentityError = '',
     required this.remoteUserId,
     required this.remoteUsername,
     this.userId,
@@ -67,6 +69,7 @@ class MediaServerImportResult {
 
   factory MediaServerImportResult.fromJson(Map<String, dynamic> json) =>
       MediaServerImportResult(
+        plexIdentityError: json['plex_identity_error'] as String? ?? '',
         remoteUserId: json['remote_user_id']?.toString() ?? '',
         remoteUsername: json['remote_username'] as String? ?? '',
         userId: (json['user_id'] as num?)?.toInt(),
@@ -235,12 +238,14 @@ class PlexSignInStart {
 /// retries it), or empty (nobody has granted this user Plex yet, and the
 /// admins were told).
 class PlexSignInState {
+  final String identityError;
   final bool linked;
   final String username;
   final String email;
   final String inviteState;
 
   const PlexSignInState({
+    this.identityError = '',
     required this.linked,
     this.username = '',
     this.email = '',
@@ -249,6 +254,7 @@ class PlexSignInState {
 
   factory PlexSignInState.fromJson(Map<String, dynamic> json) =>
       PlexSignInState(
+        identityError: json['identity_error'] as String? ?? '',
         linked: json['linked'] as bool? ?? false,
         username: json['username'] as String? ?? '',
         email: json['email'] as String? ?? '',
@@ -260,6 +266,7 @@ class PlexSignInState {
 /// on which server. Rows are an action log; the media server stays the live
 /// truth, so [disabled] is what the backend last reconciled.
 class MediaServerAccountRow {
+  final String plexIdentityError;
   final int userId;
   final String instanceId;
   final String instanceName;
@@ -271,6 +278,7 @@ class MediaServerAccountRow {
   final String? createdAt;
 
   const MediaServerAccountRow({
+    this.plexIdentityError = '',
     required this.userId,
     required this.instanceId,
     required this.instanceName,
@@ -284,6 +292,7 @@ class MediaServerAccountRow {
 
   factory MediaServerAccountRow.fromJson(Map<String, dynamic> json) =>
       MediaServerAccountRow(
+        plexIdentityError: json['plex_identity_error'] as String? ?? '',
         userId: (json['user_id'] as num?)?.toInt() ?? 0,
         instanceId: json['instance_id'] as String? ?? '',
         instanceName: json['instance_name'] as String? ?? '',

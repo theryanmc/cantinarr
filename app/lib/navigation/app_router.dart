@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/auth/ui/oidc_return_screen.dart';
+import '../features/auth/ui/plex_continue_screen.dart';
+import '../features/auth/data/plex_auth_service.dart';
+import '../features/settings/ui/plex_auth_settings_screen.dart';
 import '../features/settings/ui/oidc_settings_screen.dart';
 import '../features/settings/ui/oidc_account_screen.dart';
 import '../features/ai_assistant/ui/ai_chat_screen.dart';
@@ -127,6 +130,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   final authRefresh = ValueNotifier<int>(0);
   ref.onDispose(authRefresh.dispose);
   ref.listen(authProvider, (_, __) => authRefresh.value++);
+  ref.listen(plexPendingProvider, (_, __) => authRefresh.value++);
 
   // Keep an in-memory return target while authentication (or the first-login
   // passkey offer) temporarily sends the user to /login. This deliberately
@@ -142,6 +146,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isAuthenticated = auth?.isAuthenticated ?? false;
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
+      if (state.uri.path == '/plex/continue') return null;
+      if (ref.read(plexPendingProvider).valueOrNull != null) {
+        return '/plex/continue';
+      }
       if (state.uri.path == '/oidc/return' || state.uri.path == '/oidc/start') {
         return null;
       }
@@ -204,6 +212,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
 
+      GoRoute(
+          path: '/plex/continue',
+          builder: (_, state) => PlexContinueScreen(uri: state.uri)),
       GoRoute(
         path: '/oidc/return',
         builder: (_, state) => OIDCReturnScreen(uri: state.uri),
@@ -758,6 +769,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
+              path: '/settings/plex-auth',
+              builder: (_, state) => const PlexAuthSettingsScreen()),
+          GoRoute(
             path: '/settings/oidc',
             builder: (_, state) => OIDCSettingsScreen(key: ValueKey(state.uri)),
           ),
@@ -907,6 +921,7 @@ bool _isAdminOnlyRoute(String path) {
     '/settings/profile-approvals',
     '/settings/users',
     '/settings/oidc',
+    '/settings/plex-auth',
     '/settings/ai-remediation',
     '/settings/agent-approval-rules',
     '/settings/request-settings',

@@ -1,5 +1,6 @@
 /// Server status returned by GET /api/auth/status.
 class ServerStatus {
+  final bool plexAvailable;
   final bool ssoAvailable;
   final bool ssoOnly;
   final String ssoProvider;
@@ -11,6 +12,7 @@ class ServerStatus {
 
   const ServerStatus({
     required this.needsSetup,
+    this.plexAvailable = false,
     this.ssoAvailable = false,
     this.ssoOnly = false,
     this.ssoProvider = 'Single sign-on',
@@ -22,6 +24,7 @@ class ServerStatus {
 
   factory ServerStatus.fromJson(Map<String, dynamic> json) => ServerStatus(
         needsSetup: json['needs_setup'] as bool? ?? true,
+        plexAvailable: json['plex_available'] as bool? ?? false,
         ssoAvailable: json['sso_available'] as bool? ?? false,
         ssoOnly: json['sso_only'] as bool? ?? false,
         ssoProvider: json['sso_provider'] as String? ?? 'Single sign-on',

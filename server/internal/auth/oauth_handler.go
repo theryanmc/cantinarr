@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,7 +115,9 @@ func (h *OAuthHandler) Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var code string
-	if r.Form.Get("oidc_consent") != "" {
+	if r.Form.Get("plex_consent") != "" {
+		code, err = h.authorizeExternal(r, client, "plex")
+	} else if r.Form.Get("oidc_consent") != "" {
 		code, err = h.authorizeOIDC(r, client)
 	} else {
 
@@ -356,11 +359,19 @@ func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Reques
 		message = oauthErrorText(err)
 	}
 	label, origin, note := h.oidcTemplateSettings()
+	plexLabel := ""
+	if c, err := h.service.plexConfiguration(); err == nil && c.Enabled {
+		plexLabel = "Continue with Plex"
+		if c.ssoOnly != "false" {
+			plexLabel = "Continue with Plex (administrator recovery)"
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_ = authorizeTemplate.Execute(w, map[string]string{
-		"SSOLabel": label, "SSOOrigin": origin, "SSONote": note,
+		"SSOLabel": label, "SSOOrigin": origin, "SSONote": note, "PlexLabel": plexLabel,
 		"Message":             message,
 		"ResponseType":        r.Form.Get("response_type"),
 		"ClientID":            r.Form.Get("client_id"),
@@ -373,6 +384,9 @@ func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Reques
 		"PasskeySetupURL":     h.passkeySetupURL(r),
 	})
 }
+
+//go:embed plex_pkce.js
+var plexPKCEScript string
 
 var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype html>
 <html lang="en">
@@ -412,6 +426,14 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       {{if .SSOLabel}}<button id="ssoButton" type="button">Continue with {{.SSOLabel}}</button>{{end}}
       {{if .SSONote}}<p>{{.SSONote}}</p>{{end}}
       <input type="hidden" name="oidc_consent" id="oidcConsent">
+      <input type="hidden" name="plex_consent" id="plexConsent">
+      {{if .PlexLabel}}<button id="plexButton" type="button" class="secondary">{{.PlexLabel}}</button>
+      <div id="plexControls" hidden>
+        <p>Approve Cantinarr in the Plex browser, then return here.</p>
+        <button id="plexReopen" type="button" class="secondary">Reopen Plex</button>
+        <button id="plexCheck" type="button" class="secondary">Check now</button>
+        <button id="plexCancel" type="button" class="secondary">Cancel Plex sign-in</button>
+      </div>{{end}}
       <button id="passkeyButton" type="button" class="secondary">Use passkey</button>
       <a class="button secondary" href="{{.PasskeySetupURL}}">Create a passkey</a>
       <div id="passkeyStatus" class="status"></div>
@@ -423,7 +445,7 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       <button type="submit">Authorize</button>
     </form>
   </main>
-  <script>
+  <script>` + plexPKCEScript + `
     const form = document.querySelector('form');
     const passkeyButton = document.getElementById('passkeyButton');
     const passkeyStatus = document.getElementById('passkeyStatus');
@@ -510,6 +532,63 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
         setStatus('Signed in as '+result.username+'. Select Authorize to grant this MCP client access.');
       } catch(error) {setStatus(error.message);}
     })();
+
+    const plexButton=document.getElementById('plexButton'),plexKey='cantinarr_plex_mcp';
+    let plexPending=null,plexTimer=null,plexChecking=false,plexBeginning=false,plexGeneration=0;
+    function plexOAuth() {const oauth={};for(const key of oauthFields)oauth[key]=[form.elements[key].value];return oauth;}
+    function sameOAuth(a,b) {return oauthFields.every(key=>JSON.stringify(a[key])===JSON.stringify(b[key]));}
+    function plexURL(value) {const u=new URL(value);if(u.origin!=='https://app.plex.tv'||u.pathname!=='/auth'||u.username||u.password)throw new Error('Unexpected Plex address.');return u.href;}
+    function plexControls() {document.getElementById('plexControls').hidden=!plexPending;plexButton.textContent=plexPending?'Retry Plex sign-in':{{.PlexLabel}};}
+    function clearPlex() {plexPending=null;sessionStorage.removeItem(plexKey);clearInterval(plexTimer);if(plexButton)plexControls();}
+    async function cancelPlex() {plexGeneration++;const p=plexPending;clearPlex();if(p)try{await ssoJSON('/api/auth/plex/cancel',{flow:p.flow,verifier:p.verifier});}catch(_){} }
+    async function checkPlex() {
+      if(!plexPending||plexChecking)return;
+      const p=plexPending;
+      if(Date.now()>=Date.parse(p.expires_at)){clearPlex();setStatus('Plex sign-in expired. Please try again.');return;}
+      plexChecking=true;
+      try {
+        const proof={flow:p.flow,verifier:p.verifier};
+        const checked=await ssoJSON('/api/auth/plex/check',proof);
+        if(!plexPending||plexPending.flow!==p.flow||checked.status==='pending')return;
+        const result=await ssoJSON('/api/auth/plex/exchange',{...proof,code:checked.code});
+        if(!plexPending||plexPending.flow!==p.flow)return;
+        if(!result.consent)throw new Error('Please start Plex sign-in again.');
+        clearPlex();
+        document.getElementById('plexConsent').value=result.consent;
+        for(const id of ['username','password']){const field=document.getElementById(id);field.required=false;field.disabled=true;}
+        if(ssoButton)ssoButton.disabled=true;plexButton.disabled=true;passkeyButton.disabled=true;
+        setStatus('Signed in as '+result.username+'. Select Authorize to grant this MCP client access.');
+      }catch(error){clearInterval(plexTimer);setStatus(error.message);}
+      finally{plexChecking=false;}
+    }
+    if(plexButton){
+      plexButton.addEventListener('click',async()=>{
+        if(plexBeginning)return;plexBeginning=true;plexButton.disabled=true;
+        const popup=window.open('about:blank','_blank');if(popup)popup.opener=null;
+        try{
+          await cancelPlex();
+          const generation=plexGeneration;
+          const oauth=plexOAuth(),verifier=bufferToB64url(crypto.getRandomValues(new Uint8Array(32)));
+          const challenge=await plexChallenge(verifier);
+          const begun=await ssoJSON('/api/auth/plex/mcp/begin',{client:'mcp',challenge,oauth});
+          const url=plexURL(begun.url);
+          if(generation!==plexGeneration){if(popup)popup.close();await ssoJSON('/api/auth/plex/cancel',{flow:begun.flow,verifier});return;}
+          plexPending={...begun,url,verifier,oauth};sessionStorage.setItem(plexKey,JSON.stringify(plexPending));plexControls();
+          if(popup)popup.location.replace(url);else setStatus('The browser did not open. Select Reopen Plex.');
+          plexTimer=setInterval(checkPlex,3000);
+        }catch(error){if(popup)popup.close();setStatus(error.message);}
+        finally{plexBeginning=false;plexButton.disabled=false;}
+      });
+      document.getElementById('plexReopen').addEventListener('click',()=>{if(plexPending){const popup=window.open(plexURL(plexPending.url),'_blank','noopener');setStatus('Approve Plex in the browser, then select Check now.');}});
+      document.getElementById('plexCheck').addEventListener('click',checkPlex);
+      document.getElementById('plexCancel').addEventListener('click',async()=>{await cancelPlex();setStatus('Plex sign-in cancelled.');});
+      try{
+        const saved=JSON.parse(sessionStorage.getItem(plexKey));
+        if(saved&&Date.now()<Date.parse(saved.expires_at)&&sameOAuth(saved.oauth,plexOAuth())){
+          plexURL(saved.url);plexPending=saved;plexControls();plexTimer=setInterval(checkPlex,3000);checkPlex();
+        }else sessionStorage.removeItem(plexKey);
+      }catch(_){sessionStorage.removeItem(plexKey);}
+    }
 
     passkeyButton.addEventListener('click', async () => {
       if (!window.PublicKeyCredential || !navigator.credentials) {

@@ -191,6 +191,7 @@ func main() {
 	// An import creates the Cantinarr users it names through the auth
 	// service, the same find-or-create the connect-link route uses.
 	mediaAccessService.SetUserCreator(authService)
+	mediaAccessService.SetPlexAuth(authService)
 	mediaAccessHandler := mediaaccess.NewHandler(mediaAccessService, logger)
 	mediaAccessHandler.SetWatchContentPolicy(contentPolicy, func() contentpolicy.RawGetter {
 		if client := creds.TMDB(); client != nil {

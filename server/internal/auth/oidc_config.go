@@ -305,10 +305,10 @@ func (s *Service) saveOIDCConfig(next OIDCConfig, actor *Claims) (OIDCConfig, er
 		if count == 0 {
 			return next, errors.New("an administrator must have a local password before requiring single sign-on")
 		}
-		if _, err = tx.Exec("UPDATE devices SET revoked_at=? WHERE auth_method='local' AND revoked_at IS NULL AND user_id IN (SELECT id FROM users WHERE role != 'admin')", time.Now()); err != nil {
+		if _, err = tx.Exec("UPDATE devices SET revoked_at=? WHERE auth_method IN ('local','plex') AND revoked_at IS NULL AND user_id IN (SELECT id FROM users WHERE role != 'admin')", time.Now()); err != nil {
 			return next, ErrAuthUnavailable
 		}
-		if _, err = tx.Exec("DELETE FROM oauth_authorization_codes WHERE auth_method='local' AND user_id IN (SELECT id FROM users WHERE role != 'admin')"); err != nil {
+		if _, err = tx.Exec("DELETE FROM oauth_authorization_codes WHERE auth_method IN ('local','plex') AND user_id IN (SELECT id FROM users WHERE role != 'admin')"); err != nil {
 			return next, ErrAuthUnavailable
 		}
 	}
@@ -323,6 +323,9 @@ func (s *Service) saveOIDCConfig(next OIDCConfig, actor *Claims) (OIDCConfig, er
 		return next, ErrAuthUnavailable
 	}
 	s.oidcFlows.clear()
+	if c.SSOOnly {
+		s.plexFlows.clear()
+	}
 	saved, err := s.oidcConfiguration()
 	return saved.OIDCConfig, err
 }

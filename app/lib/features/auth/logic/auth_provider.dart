@@ -13,6 +13,7 @@ import '../data/auth_service.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
 import '../data/oidc_service.dart';
+import '../data/plex_auth_service.dart';
 
 /// The authentication state exposed to the rest of the app.
 class AuthState {
@@ -562,15 +563,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final current = state.valueOrNull ?? const AuthState();
     try {
       final result = await ref.read(oidcServiceProvider).finish(uri);
-      if (result.purpose == 'login') {
-        final response = AuthResponse.fromJson(result.data);
-        final config =
-            await _authService.fetchConfig(result.server, response.accessToken);
-        await _endPreviousSession(current.connection);
-        await _adoptSession(result.server, response, config);
-      } else if (result.purpose == 'link') {
-        await refreshUser();
-      }
+      await _completeExternalSignIn(result, current);
       return result.purpose;
     } catch (e) {
       state = AsyncData((state.valueOrNull ?? current)
@@ -578,6 +571,90 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       rethrow;
     } finally {
       _finishingSSO = false;
+    }
+  }
+
+  Future<void> _completeExternalSignIn(OIDCResult result, AuthState current,
+      {bool Function()? beforeAdopt}) async {
+    if (result.purpose == 'login') {
+      final response = AuthResponse.fromJson(result.data);
+      final config =
+          await _authService.fetchConfig(result.server, response.accessToken);
+      if (beforeAdopt != null && !beforeAdopt()) {
+        throw StateError('Plex sign-in cancelled.');
+      }
+      await _endPreviousSession(current.connection, revoke: false);
+      // Keep the previous credentials usable until the replacement is stored.
+      // A partial secure-storage write must not strand the existing connection.
+      const keys = [
+        StorageKeys.serverUrl,
+        StorageKeys.jwt,
+        StorageKeys.refreshToken,
+        StorageKeys.refreshTokenBackup,
+        StorageKeys.deviceId,
+        StorageKeys.sessionUser,
+        StorageKeys.sessionConnection,
+      ];
+      final previous = <String, String?>{};
+      for (final key in keys) {
+        previous[key] = await _storage.read(key: key);
+      }
+      try {
+        await _adoptSession(result.server, response, config);
+      } catch (_) {
+        for (final entry in previous.entries) {
+          try {
+            if (entry.value == null) {
+              await _storage.delete(key: entry.key);
+            } else {
+              await _storage.write(key: entry.key, value: entry.value!);
+            }
+          } catch (_) {}
+        }
+        rethrow;
+      }
+      await _revokePreviousSession(current.connection);
+    } else if (result.purpose == 'link') {
+      await refreshUser();
+    }
+  }
+
+  Future<PlexPending> startPlex(String server,
+      {String purpose = 'login'}) async {
+    final normalized = _normalizeUrl(server);
+    final current = state.valueOrNull ?? const AuthState();
+    if (purpose == 'link' &&
+        (current.connection == null ||
+            _normalizeUrl(current.connection!.serverUrl) != normalized)) {
+      throw StateError('Sign in to this server before linking Plex.');
+    }
+    final service = ref.read(plexAuthServiceProvider);
+    final generation = service.epoch;
+    final identity = await ref.read(deviceIdentityProvider).resolve();
+    if (generation != service.epoch) throw StateError('Plex sign-in cancelled.');
+    final pending = await service.start(normalized,
+        purpose: purpose,
+        accessToken: current.connection?.accessToken,
+        deviceName: identity.displayName,
+        hardwareId: identity.hardwareId);
+    ref.invalidate(plexPendingProvider);
+    return pending;
+  }
+
+  Future<String?> checkPlex() async {
+    final current = state.valueOrNull ?? const AuthState();
+    final service = ref.read(plexAuthServiceProvider);
+    final generation = service.epoch;
+    final result = await service.check();
+    if (result == null) return null;
+    try {
+      await _completeExternalSignIn(result, current,
+          beforeAdopt: () => service.claimCompletion(generation));
+      await service.completed();
+      ref.invalidate(plexPendingProvider);
+      return result.purpose;
+    } finally {
+      service.releaseCompletion();
     }
   }
 
@@ -693,7 +770,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     return ServerSwitchResult.switched;
   }
 
-  Future<void> _endPreviousSession(BackendConnection? oldConn) async {
+  Future<void> _endPreviousSession(BackendConnection? oldConn,
+      {bool revoke = true}) async {
     // The new server accepted us. End the old session while its access token
     // and the stored device_id are still in place (same order as logout()).
     if (oldConn != null) {
@@ -705,13 +783,18 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       } catch (e) {
         debugPrint('Switch server: push unregister skipped: $e');
       }
-      try {
-        await _authService
-            .logout(oldConn.serverUrl, oldConn.accessToken)
-            .timeout(const Duration(seconds: 5));
-      } catch (e) {
-        debugPrint('Switch server: old-session revoke skipped: $e');
-      }
+      if (revoke) await _revokePreviousSession(oldConn);
+    }
+  }
+
+  Future<void> _revokePreviousSession(BackendConnection? oldConn) async {
+    if (oldConn == null) return;
+    try {
+      await _authService
+          .logout(oldConn.serverUrl, oldConn.accessToken)
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('Switch server: old-session revoke skipped: $e');
     }
   }
 

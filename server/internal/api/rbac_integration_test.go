@@ -89,6 +89,9 @@ func TestRouterRBACMatrixWithAdminAndRequesterTokens(t *testing.T) {
 		{http.MethodGet, "/api/tautulli/missing/activity"},
 		{http.MethodGet, "/api/watch-history/missing/activity"},
 		{http.MethodGet, "/api/admin/media-servers/accounts"},
+		{http.MethodGet, "/api/admin/plex-auth"},
+		{http.MethodGet, "/api/admin/plex-auth/candidates"},
+		{http.MethodGet, "/api/admin/users/1/plex"},
 	}
 	for _, route := range adminRoutes {
 		recorder := serveRBACRequest(harness.router, route.method, route.path, harness.adminToken)

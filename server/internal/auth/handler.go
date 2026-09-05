@@ -401,6 +401,10 @@ func (h *Handler) AuthStatus(w http.ResponseWriter, r *http.Request) {
 		WebAuthnAvailable: isSecureContext(r),
 		NativePasskeys:    h.service.nativePasskeyStatusFromRequest(r),
 	}
+	plex, plexErr := h.service.plexConfiguration()
+	if plexErr == nil {
+		resp.PlexAvailable = plex.Enabled
+	}
 	c, err := h.service.oidcConfiguration()
 	if err != nil {
 		resp.SSOError = err.Error()

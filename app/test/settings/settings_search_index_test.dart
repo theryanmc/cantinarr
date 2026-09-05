@@ -38,6 +38,7 @@ const _routableSettingsPaths = {
   '/settings/passkeys',
   '/settings/password',
   '/settings/oidc',
+  '/settings/plex-auth',
   '/settings/sso-account',
   '/settings/instance/new',
   '/setup',

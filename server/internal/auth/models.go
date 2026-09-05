@@ -175,6 +175,7 @@ type SetPlexEmailRequest struct {
 }
 
 type AuthStatusResponse struct {
+	PlexAvailable     bool                        `json:"plex_available,omitempty"`
 	SSOAvailable      bool                        `json:"sso_available,omitempty"`
 	SSOProvider       string                      `json:"sso_provider,omitempty"`
 	SSOOnly           bool                        `json:"sso_only,omitempty"`

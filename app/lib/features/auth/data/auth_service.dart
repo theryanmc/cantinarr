@@ -17,6 +17,13 @@ class SSORequired implements Exception {
 }
 
 class AuthService {
+  Future<Map<String, dynamic>> externalSignInRequest(String server, String path,
+          {String method = 'GET',
+          String? accessToken,
+          Map<String, dynamic>? data}) =>
+      oidcRequest(server, path,
+          method: method, accessToken: accessToken, data: data);
+
   Future<Map<String, dynamic>> oidcRequest(String server, String path,
       {String method = 'GET', String? accessToken, Map<String, dynamic>? data}) async {
     final dio = _createDio(server);
