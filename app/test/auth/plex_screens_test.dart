@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/data/plex_auth_service.dart';
 import 'package:cantinarr/features/auth/data/server_status.dart';
@@ -5,6 +6,7 @@ import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/auth/ui/auth_screen.dart';
 import 'package:cantinarr/features/auth/ui/plex_continue_screen.dart';
 import 'package:cantinarr/features/settings/ui/plex_auth_settings_screen.dart';
+import 'package:cantinarr/navigation/app_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -73,6 +75,44 @@ class PlexSettingsFake extends AuthService {
 }
 
 void main() {
+  testWidgets(
+      'router ignores the stale attempt during a delayed native storage refresh',
+      (tester) async {
+    final service =
+        PlexAuthService(PlexAuthFake(), MemoryStorage(), isWeb: false);
+    final pending = await service.start('https://original.example');
+    final refreshed = Completer<PlexPending?>();
+    var reads = 0;
+    final container = ProviderContainer(overrides: [
+      authProvider.overrideWith(() => ScreenAuth(signedIn: true)),
+      authServiceProvider.overrideWithValue(PlexSettingsFake()),
+      plexAuthServiceProvider.overrideWithValue(service),
+      plexPendingProvider.overrideWith((ref) async {
+        if (++reads == 1) return pending;
+        return refreshed.future;
+      }),
+    ]);
+    addTearDown(container.dispose);
+    final router = container.read(appRouterProvider);
+    addTearDown(router.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: container, child: MaterialApp.router(routerConfig: router)));
+    await tester.pumpAndSettle();
+    expect(
+        router.routerDelegate.currentConfiguration.uri.path, '/plex/continue');
+    await service.completed();
+    container.invalidate(plexPendingProvider);
+    expect(container.read(plexPendingProvider).isLoading, isTrue);
+    expect(container.read(plexPendingProvider).valueOrNull, isNotNull);
+    router.go('/settings/plex-auth');
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path,
+        '/settings/plex-auth');
+    expect(find.byType(PlexContinueScreen), findsNothing);
+    refreshed.complete(null);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   for (final only in [false, true]) {
     testWidgets('Plex login button respects recovery label ($only)',
         (tester) async {

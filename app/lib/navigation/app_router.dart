@@ -147,7 +147,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
       if (state.uri.path == '/plex/continue') return null;
-      if (ref.read(plexPendingProvider).valueOrNull != null) {
+      // Refresh keeps the previous value while native secure storage is read.
+      // After completion/cancellation, that stale attempt must not redirect
+      // the navigation back onto the approval screen.
+      final pendingPlex = ref.read(plexPendingProvider);
+      if (!pendingPlex.isLoading && pendingPlex.valueOrNull != null) {
         return '/plex/continue';
       }
       if (state.uri.path == '/oidc/return' || state.uri.path == '/oidc/start') {
