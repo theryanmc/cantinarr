@@ -89,6 +89,7 @@ func NewRouter(
 	r.With(oauthLimiter.Middleware).Post("/oauth/passkey/login/finish", oauthHandler.FinishOAuthPasskeyLogin)
 	r.With(oauthLimiter.Middleware).Post("/oauth/token", oauthHandler.Token)
 	r.With(oauthLimiter.Middleware).Post("/api/auth/oidc/mcp/begin", oauthHandler.BeginOIDC)
+	r.With(oauthLimiter.Middleware).Post("/api/auth/plex/mcp/begin", oauthHandler.BeginPlex)
 	r.Get("/passkeys/setup", oauthHandler.PasskeySetup)
 	r.Get("/passkeys/create", oauthHandler.PasskeyCreate)
 
@@ -125,6 +126,7 @@ func NewRouter(
 
 		// Rate limiter for public auth endpoints: 10 requests per minute per IP
 		authLimiter := auth.NewRateLimiter(10, 1*time.Minute)
+		plexPollLimiter := auth.NewRateLimiter(120, time.Minute)
 		// Keep authenticated ChatGPT/xAI device-flow churn from consuming the
 		// public password/passkey budget for everyone behind the same household
 		// proxy. Both OAuth providers share this begin-login budget.
@@ -133,6 +135,10 @@ func NewRouter(
 		// Auth routes (public)
 		r.Route("/auth", func(r chi.Router) {
 			r.Get("/status", authHandler.AuthStatus)
+			r.With(authLimiter.Middleware).Post("/plex/begin", authHandler.PlexBegin)
+			r.With(plexPollLimiter.Middleware).Post("/plex/check", authHandler.PlexCheck)
+			r.With(plexPollLimiter.Middleware).Post("/plex/cancel", authHandler.PlexCancel)
+			r.With(authLimiter.Middleware).Post("/plex/exchange", authHandler.PlexExchange)
 			r.With(authLimiter.Middleware).Post("/oidc/begin", authHandler.OIDCBegin)
 			r.With(authLimiter.Middleware).Get("/oidc/start", authHandler.OIDCStart)
 			r.Get("/oidc/callback", authHandler.OIDCCallback)
@@ -152,6 +158,9 @@ func NewRouter(
 			r.Group(func(r chi.Router) {
 				r.Use(authService.AuthMiddleware)
 				r.Get("/me", authHandler.Me)
+				r.Get("/plex/identities", authHandler.PlexIdentities)
+				r.With(authLimiter.Middleware).Post("/plex/link", authHandler.PlexLinkBegin)
+				r.Delete("/plex/identities", authHandler.PlexUnlink)
 				r.Get("/oidc/identities", authHandler.OIDCIdentities)
 				r.Post("/oidc/link", authHandler.OIDCLinkBegin)
 				r.Delete("/oidc/identities", authHandler.OIDCUnlink)
@@ -181,6 +190,12 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/devices", authHandler.HandleListDevices)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/devices/{deviceID}", authHandler.HandleRevokeDevice)
 
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex-auth", authHandler.PlexConfig)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/plex-auth", authHandler.PlexConfigSave)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/plex-auth/candidates", authHandler.PlexCandidates)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/plex-auth/confirm", authHandler.PlexConfirm)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/users/{userID}/plex", authHandler.PlexIdentities)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/plex", authHandler.PlexUnlink)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Get("/oidc", authHandler.OIDCConfig)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/oidc", authHandler.OIDCConfigSave)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/oidc/validate", authHandler.OIDCValidate)

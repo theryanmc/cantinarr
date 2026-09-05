@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
 	"github.com/windoze95/cantinarr-server/internal/plex"
@@ -105,6 +106,7 @@ const (
 
 // Service owns the user_media_server_accounts table and every remote action.
 type Service struct {
+	plexAuth  *auth.Service
 	db        *sql.DB
 	store     *instance.Store
 	providers ProviderFactory
@@ -198,6 +200,7 @@ type CreatedAccount struct {
 // Account is an admin-facing row: which Cantinarr user is which remote
 // account on which server.
 type Account struct {
+	PlexIdentityError  string    `json:"plex_identity_error,omitempty"`
 	UserID             int64     `json:"user_id"`
 	InstanceID         string    `json:"instance_id"`
 	InstanceName       string    `json:"instance_name"`
@@ -947,6 +950,11 @@ func (s *Service) LinkAccount(ctx context.Context, userID int64, instanceID, rem
 	}
 	for _, a := range accounts {
 		if a.UserID == userID && a.InstanceID == instanceID {
+			if inst.ServiceType == "plex" && s.plexAuth != nil {
+				if err := s.plexAuth.ConfirmPlexMediaLink(ctx, userID); err != nil {
+					a.PlexIdentityError = err.Error()
+				}
+			}
 			return a, nil
 		}
 	}

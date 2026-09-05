@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
@@ -744,6 +745,23 @@ class _LoginViewState extends ConsumerState<_LoginView> {
             ),
             const SizedBox(height: 16),
           ],
+        ],
+        if (widget.serverStatus?.plexAvailable == true) ...[
+          SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: isLoading
+                    ? null
+                    : () => context.go(Uri(
+                            path: '/plex/continue',
+                            queryParameters: {'server': widget.serverUrl})
+                        .toString()),
+                icon: const Icon(Icons.play_arrow),
+                label: Text(widget.serverStatus?.ssoOnly == true
+                    ? 'Continue with Plex (administrator recovery)'
+                    : 'Continue with Plex'),
+              )),
+          const SizedBox(height: 16),
         ],
         if (widget.serverStatus?.ssoError case final message?) ...[
           Text(message, textAlign: TextAlign.center),

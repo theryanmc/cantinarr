@@ -36,7 +36,8 @@ class MediaServerImportSheet extends ConsumerStatefulWidget {
   final ServiceInstance server;
 
   /// Cantinarr usernames that already exist, to their ids: an account of the
-  /// same name is attached to that user rather than a new one.
+  /// same name is attached to that user for Jellyfin/Emby. Plex namesakes need
+  /// the administrator to select the intended user through Link account.
   final Map<String, int> existingUsers;
 
   /// Remote account ids already linked, to the Cantinarr username holding
@@ -87,12 +88,18 @@ class _MediaServerImportSheetState
   }
 
   bool _pickable(RemoteMediaServerUser user) =>
-      !widget.linkedTo.containsKey(user.id);
+      !widget.linkedTo.containsKey(user.id) &&
+      !(widget.server.serviceType == 'plex' &&
+          widget.existingUsers.containsKey(user.name));
 
   /// What importing this account would do, said before it happens.
   String? _subtitle(RemoteMediaServerUser user) {
     final holder = widget.linkedTo[user.id];
     if (holder != null) return 'Already linked to $holder';
+    if (widget.server.serviceType == 'plex' &&
+        widget.existingUsers.containsKey(user.name)) {
+      return 'Username already exists. Select the intended user with Link account.';
+    }
     final parts = <String>[
       if (user.isAdministrator) 'Administrator',
       if (user.isDisabled) 'Turned off on the server',
@@ -148,11 +155,16 @@ class _MediaServerImportSheetState
 
   /// One row's outcome in the admin's words.
   String _outcome(MediaServerImportResult r) {
+    if (r.plexIdentityError.isNotEmpty) {
+      return 'Media account linked. Plex sign-in needs review: ${r.plexIdentityError}';
+    }
     switch (r.error) {
       case '':
         return r.created
             ? 'New user ${r.username}, linked'
             : 'Existing user ${r.username}, linked';
+      case 'username_conflict':
+        return 'That username already exists. Choose its user explicitly with Link account.';
       case 'already_linked':
         return 'Already linked to another user';
       case 'not_found':

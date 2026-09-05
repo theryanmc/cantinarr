@@ -15,7 +15,6 @@ import (
 	"unicode"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
 
@@ -55,6 +54,8 @@ type oidcHandoff struct {
 	Error     error
 }
 type oidcConsent struct {
+	Method      string
+	PlexID      int64
 	UserID      int64
 	Issuer      string
 	OAuth       url.Values
@@ -245,7 +246,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		handoff.Error = err
 	}
-	code, err := randomURLToken(32)
+	code, key, expires, err := newCompletionTicket()
 	if err != nil {
 		oidcHTTPError(w, ErrAuthUnavailable)
 		return
@@ -257,7 +258,8 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		oidcHTTPError(w, ErrOIDCUnavailable)
 		return
 	}
-	f.handoffs[hashToken(code)] = handoff
+	handoff.Expires = expires
+	f.handoffs[key] = handoff
 	f.mu.Unlock()
 	values := url.Values{"code": {code}, "flow": {state}}
 	base := strings.TrimSuffix(a.Config.CallbackURL, "/api/auth/oidc/callback")
@@ -374,7 +376,7 @@ func (s *Service) exchangeOIDC(code, verifier, flow string) (any, error) {
 	f.mu.Lock()
 	f.prune()
 	hand, ok := f.handoffs[hashToken(code)]
-	if !ok || hand.Attempt.State != flow || !verifyPKCES256(verifier, hand.Attempt.Request.Challenge) {
+	if !ok || !validCompletionProof(verifier, flow, hand.Attempt.State, hand.Attempt.Request.Challenge, hand.Expires) {
 		f.mu.Unlock()
 		return nil, ErrOIDCFlow
 	}
@@ -423,18 +425,7 @@ func (s *Service) exchangeOIDC(code, verifier, flow string) (any, error) {
 		return map[string]string{"status": "linked"}, nil
 	}
 	if a.Purpose == "mcp" {
-		ticket, err := randomURLToken(32)
-		if err != nil {
-			return nil, ErrAuthUnavailable
-		}
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.prune()
-		if f.full() {
-			return nil, ErrOIDCUnavailable
-		}
-		f.consents[hashToken(ticket)] = oidcConsent{UserID: session.User.ID, Issuer: a.Config.Issuer, OAuth: a.Request.OAuth, Expires: time.Now().Add(oidcHandoffTTL), Fingerprint: a.Config.fingerprint}
-		return map[string]string{"status": "authenticated", "consent": ticket, "username": session.User.Username}, nil
+		return s.createExternalConsent(session.User, "oidc", a.Config.Issuer, 0, a.Config.fingerprint, a.Request.OAuth)
 	}
 	return session, nil
 }
@@ -558,26 +549,9 @@ func (s *Service) commitOIDCIdentity(a oidcAttempt, p oidcPrincipal) (*TokenResp
 	}
 	response := &TokenResponse{User: userWithPermissions(user)}
 	if a.Purpose == "login" {
-		device := uuid.NewString()
-		name := a.Request.DeviceName
-		if name == "" {
-			name = "Single sign-on"
-		}
-		// Never upgrade a local device: its old refresh tokens stay local.
-		if _, err = tx.Exec("INSERT INTO devices(id,user_id,device_name,hardware_id,auth_method,oidc_issuer) VALUES (?,?,?,?,'oidc',?)", device, user.ID, name, a.Request.HardwareID, a.Config.Issuer); err != nil {
-			return nil, ErrAuthUnavailable
-		}
-		response.DeviceID = device
-		response.AccessToken, err = s.signAccessToken(user, device)
+		response, err = s.issueExternalSession(tx, user, a.Request.DeviceName, a.Request.HardwareID, "oidc", a.Config.Issuer, 0)
 		if err != nil {
 			return nil, err
-		}
-		response.RefreshToken, err = newOpaqueRefreshToken()
-		if err != nil {
-			return nil, ErrAuthUnavailable
-		}
-		if _, err = tx.Exec("INSERT INTO refresh_tokens(token_hash,device_id,user_id,expires_at) VALUES (?,?,?,?)", hashToken(response.RefreshToken), device, user.ID, refreshNeverExpires); err != nil {
-			return nil, ErrAuthUnavailable
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -702,7 +676,7 @@ func oidcActorInTransaction(tx *sql.Tx, actor *Claims, admin bool) error {
 	}
 	var role string
 	var permitted bool
-	err := tx.QueryRow(`SELECT u.role,(u.role='admin' OR d.auth_method='oidc' OR COALESCE((SELECT value FROM settings WHERE key='oidc_sso_only'),'false')='false')
+	err := tx.QueryRow(`SELECT u.role,(u.role='admin' OR d.auth_method='oidc' OR COALESCE((SELECT value FROM settings WHERE key='oidc_sso_only'),'false')='false') AND (d.auth_method!='plex' OR (COALESCE((SELECT value FROM settings WHERE key='plex_auth_enabled'),'false')='true' AND EXISTS(SELECT 1 FROM plex_identities p WHERE p.user_id=u.id AND p.plex_account_id=d.plex_account_id)))
  FROM users u JOIN devices d ON d.user_id=u.id WHERE u.id=? AND d.id=? AND d.revoked_at IS NULL`, actor.UserID, actor.DeviceID).Scan(&role, &permitted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrInvalidCredentials

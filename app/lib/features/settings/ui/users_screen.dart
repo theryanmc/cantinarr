@@ -522,7 +522,7 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     );
     if (remote == null || !mounted) return;
     try {
-      await ref.read(mediaAccessServiceProvider).link(
+      final linked = await ref.read(mediaAccessServiceProvider).link(
             userId: user.id,
             instanceId: server.id,
             remoteUserId: remote.id,
@@ -531,7 +531,8 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-            'Linked ${remote.name} on ${server.name} to ${user.username}'),
+            'Linked ${remote.name} on ${server.name} to ${user.username}'
+            '${linked.plexIdentityError.isEmpty ? '' : '. Plex sign-in was not linked: ${linked.plexIdentityError}'}'),
       ));
     } catch (e) {
       if (!mounted) return;

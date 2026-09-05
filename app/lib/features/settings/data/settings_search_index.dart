@@ -283,6 +283,15 @@ const List<SettingsSearchEntry> _rootEntries = [
     gate: gateAdmin,
   ),
   SettingsSearchEntry(
+      id: 'screen.plex-auth',
+      title: 'Plex sign-in',
+      icon: Icons.play_arrow,
+      route: '/settings/plex-auth',
+      screenTitle: 'Settings',
+      section: 'Admin',
+      keywords: ['plex', 'login', 'signup', 'identity', 'mapping'],
+      gate: gateAdmin),
+  SettingsSearchEntry(
       id: 'screen.oidc',
       title: 'Single sign-on',
       icon: Icons.login,

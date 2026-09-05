@@ -49,7 +49,7 @@ In SSO-only mode, **every invitation requires both the link and successful SSO**
 
 Before saving **Require single sign-on**, complete **Test sign-in** with the current configuration and ensure at least one administrator has a usable local password. A provider, secret, scope, group, signup, proxy or external-address change requires another successful test. Turn off the requirement before changing those settings, save and test, then enable it again.
 
-Saving SSO-only mode revokes regular users' local device sessions and pending local MCP grants. Password, passkey, invitation, refresh, MCP token exchange and authoritative session checks enforce the policy. Local administrator password/passkey sign-in remains available for recovery; the sign-in screen keeps those controls visible. Cantinarr refuses to demote or delete the last administrator with a usable local password while the policy is active.
+Saving SSO-only mode revokes regular users' local and Plex device sessions, pending Plex attempts, and local/Plex MCP grants. Password, passkey, Plex, invitation, refresh, MCP token exchange and authoritative session checks enforce the policy. Local administrator password/passkey sign-in remains available for recovery; the sign-in screen keeps those controls visible. Cantinarr refuses to demote or delete the last administrator with a usable local password while the policy is active.
 
 If the provider is unavailable, use an administrator's local password, repair and retest the configuration, or disable SSO. Disabling SSO restores local sign-in policy but never revives revoked sessions. The user's existing per-account password/passkey switches still apply.
 
@@ -70,3 +70,7 @@ The MCP authorization page also offers the provider. After SSO it names the sign
 No deployment environment variables or version compatibility floors change. Older clients continue using their existing methods unless an administrator deliberately requires SSO. The desktop scaffolding is outside the supported OIDC client set.
 
 Protocol references: [OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html) and [OAuth for Native Apps](https://www.rfc-editor.org/rfc/rfc8252.html). Automated tests use a local IdP for discovery, authorization, token exchange, JWKS and UserInfo. Real-provider interoperability and physical-device returns belong to the [manual authentication cases](testing/catalog/auth-users-security.md).
+
+## Plex sign-in alongside OIDC
+
+[Plex sign-in](plex-setup.md) uses its own numeric identities and separate off-by-default settings. **Require single sign-on** still means OIDC for regular users: enabling it revokes their local and Plex sessions, pending Plex attempts and MCP grants. A Plex approval cannot redeem an OIDC-required invitation or create a regular account under that policy. Administrators retain recovery access, with Plex labeled as an administrator recovery option. Linking or unlinking Plex leaves OIDC identity links and library access unchanged.

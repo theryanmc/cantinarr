@@ -225,8 +225,10 @@ void main() {
     expect(container.read(authProvider).valueOrNull!.user!.username, 'user-b');
     expect(calls.indexOf('oidc.finish'),
         lessThan(calls.indexOf('push.unregister')));
+    // External sign-in keeps the old session alive until the new credentials
+    // and snapshot are safely stored.
     expect(calls.indexOf('auth.logout $serverA a-access'),
-        lessThan(calls.indexWhere((c) => c.startsWith('storage.write'))));
+        greaterThan(calls.lastIndexWhere((c) => c.startsWith('storage.write'))));
   });
 
   test('failure to launch the SSO browser preserves existing credentials',

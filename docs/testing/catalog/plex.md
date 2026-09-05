@@ -37,6 +37,12 @@ These are real Plex end-to-end tests. "Invite sent" is not proven by Cantinarr's
 - [ ] `PLEX-097` · P0 · UI/LIVE — On a real claimed server, open an available movie and a partially available show as the linked owner and as an accepted share recipient. Verify **Watch on Plex** opens the matching item in hosted Plex Web from web and a native app, with no token in the URL; repeat with a custom sign-in address and confirm exact links still open the item in hosted Plex Web.
 - [ ] `PLEX-098` · P0 · UI/LIVE — Restrict an accepted recipient to one library at Plex, then open titles visible only to the owner, a title with ambiguous editions, and a title not yet scanned by Plex. Verify each offers **Open Plex**, opening the configured sign-in address without claiming the title is there. Confirm a uniquely matched title in the recipient's library still offers **Watch on Plex**, and revoking the share at Plex removes that exact link on the next detail-page read.
 
+## Plex sign-in to Cantinarr
+
+- [ ] `PLEX-099` · P0 · UI/LIVE — Enable Plex sign-in, explicitly review an existing user's mapping against Plex, and approve **Continue with Plex** as that account from web, iOS and Android. Verify the intended Cantinarr account opens with its existing roles, kids policy, requests and grants, and Plex Authorized Devices has no surviving temporary Cantinarr device/token. Repeat a denied sign-in and check cleanup too.
+- [ ] `PLEX-100` · P0 · UI/LIVE — Using separate test accounts, verify automatic signup with an accepted share and as the verified server owner. A pending invitation and a friend without a server share must fail. Confirm signup sends no invite or share-scope change. Remove the accepted share at Plex: its established Cantinarr sign-in must still work until an administrator unlinks that identity.
+- [ ] `PLEX-101` · P1 · UI/LIVE — In web, iOS and Android, block browser launch, reopen Plex, cancel approval, refresh/restart while approval is pending, and finish from the initiating app/tab. Confirm recovery retains the original server and linking/login purpose; cancellation preserves an existing connection. Repeat through the MCP authorization page and verify it still requires the original client's explicit Authorize consent.
+
 ### Plex vector subresults
 
 Do not check `PLEX-070` until every applicable vector below passes. Each row is external plex.tv truth; record evidence/defect per row so a partial pass is visible.

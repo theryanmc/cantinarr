@@ -110,15 +110,19 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     if (!mounted || state == null) return;
     final who = state.username.isNotEmpty ? state.username : state.email;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(switch (state.inviteState) {
-        'sent' => 'Signed in as $who. Invite sent. Check your email.',
-        'adopted' => 'Signed in as $who. Your access is set up.',
-        'failed' => "Signed in as $who, but the invite couldn't be sent yet. "
-            'It will be retried.',
-        'claimed' => 'Signed in as $who, but that Plex account is already '
-            'linked to another Cantinarr user here. Ask your admin.',
-        _ => 'Signed in as $who. Your admin has been notified.',
-      }),
+      content: Text((switch (state.inviteState) {
+            'sent' => 'Signed in as $who. Invite sent. Check your email.',
+            'adopted' => 'Signed in as $who. Your access is set up.',
+            'failed' =>
+              "Signed in as $who, but the invite couldn't be sent yet. "
+                  'It will be retried.',
+            'claimed' => 'Signed in as $who, but that Plex account is already '
+                'linked to another Cantinarr user here. Ask your admin.',
+            _ => 'Signed in as $who. Your admin has been notified.',
+          }) +
+          (state.identityError.isEmpty
+              ? ''
+              : ' Plex sign-in was not linked: ${state.identityError}')),
     ));
     // The profile's email changed; the ask card reads it from there, and a
     // grant that auto-approve added shows up in the config.

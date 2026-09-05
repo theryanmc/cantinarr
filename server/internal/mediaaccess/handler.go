@@ -256,7 +256,7 @@ func (h *Handler) PlexSignInBegin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	start, err := h.svc.PlexSignInBegin(r.Context(), claims.UserID)
+	start, err := h.svc.PlexSignInBegin(r.Context(), claims.UserID, claims)
 	if err != nil {
 		h.logger.Warn("mediaaccess: plex sign-in begin", "err", err, "user_id", claims.UserID)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "could not reach plex.tv"})
