@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -224,6 +225,7 @@ Future<void> _pumpEdit(
   InstanceEditScreen screen = const InstanceEditScreen(),
   Size viewSize = const Size(800, 1800),
   double textScaleFactor = 1,
+  bool directLink = false,
 }) async {
   // Tall viewport so the whole (lazily built) form list is materialized.
   tester.view.physicalSize = viewSize;
@@ -232,12 +234,22 @@ Future<void> _pumpEdit(
 
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
     ..httpClientAdapter = adapter;
-  // A dummy root route so the screen's context.pop(true) has somewhere to go.
+  // Exercise both pushed editors and direct links with no previous page.
   final router = GoRouter(
-    initialLocation: '/',
+    initialLocation: directLink ? '/edit' : '/',
     routes: [
       GoRoute(path: '/', builder: (_, __) => const Scaffold(body: SizedBox())),
-      GoRoute(path: '/edit', builder: (_, __) => screen),
+      GoRoute(
+        path: '/settings',
+        builder: (_, __) => const Scaffold(body: Text('Settings home')),
+      ),
+      GoRoute(
+        path: '/edit',
+        builder: (_, __) => screen,
+        onExit: (context, state) => ProviderScope.containerOf(context)
+            .read(unsavedChangesProvider)
+            .confirmExit(context, state),
+      ),
     ],
   );
   await tester.pumpWidget(
@@ -259,7 +271,7 @@ Future<void> _pumpEdit(
     ),
   );
   await tester.pumpAndSettle();
-  router.push('/edit');
+  if (!directLink) router.push('/edit');
   await tester.pumpAndSettle();
 }
 
@@ -271,6 +283,36 @@ Future<void> _fillForm(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets('saving a directly opened editor returns to Settings without a warning',
+      (tester) async {
+    await _pumpEdit(tester,
+        adapter: _FakeAdapter(), users: const [], directLink: true);
+    await _fillForm(tester, 'Movies');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Add Instance'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Settings home'), findsOneWidget);
+    expect(find.text('Discard unsaved changes?'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'loaded instances and automatic defaults are clean; reverted edits are clean again',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+    bool dirty() => tester
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    expect(dirty(), isFalse);
+    final name = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == 'Name');
+    await tester.enterText(name, 'My library');
+    expect(dirty(), isTrue);
+    await tester.enterText(name, '');
+    expect(dirty(), isFalse);
+  });
+
   testWidgets(
       'backend down at mount shows a friendly error and no unhandled error '
       'leaks', (tester) async {

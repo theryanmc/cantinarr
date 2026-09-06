@@ -11,6 +11,7 @@ import '../../../core/network/api_error_message.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
@@ -59,6 +60,57 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
 }
 
 class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
+  final _detailsDraft = SettingsDraft();
+  final _mediaDraft = SettingsDraft();
+  final _mappingsDraft = SettingsDraft();
+  final _defaultDraft = SettingsDraft();
+  int? _savedPlexPinId;
+
+  Map<String, Object?> get _detailValues => {
+        'type': _serviceType,
+        'name': _nameController.text,
+        'url': _urlController.text,
+        'apiKey': _apiKeyController.text,
+        'username': _usernameController.text,
+        'password': _passwordController.text,
+        'qbitAuth': _qbitAuth.name,
+      };
+  Object get _mediaValues => [
+        _publicAddressController.text,
+        _selectedLibraryIds.toList()..sort(),
+        _plexMachineId,
+        _plexAutoApprove,
+      ];
+  Object get _mappingValues => [
+        for (final mapping in _mediaPathMappings)
+          [mapping.arrPath.text, mapping.cantinarrPath.text],
+      ];
+  bool get _hasUnsavedChanges =>
+      (_detailsDraft.hasChanges(_detailValues) ||
+          _defaultDraft.hasChanges(_isDefault) ||
+          _mediaDraft.hasChanges(_mediaValues) ||
+          _mappingsDraft.hasChanges(_mappingValues) ||
+          !_sameSelection(_assignedUserIds, _savedAssignedUserIds) ||
+          (_plexPinId != _savedPlexPinId && _plexAccount.isNotEmpty));
+
+  void _markInstanceSaved() {
+    _detailsDraft.markSaved(_detailValues);
+    _defaultDraft.markSaved(_isDefault);
+    _mediaDraft.markSaved(_mediaValues);
+    _mappingsDraft.markSaved(_mappingValues);
+    _savedPlexPinId = _plexPinId;
+  }
+
+  void _finishEditing() {
+    _markInstanceSaved();
+    _savedAssignedUserIds = Set.of(_assignedUserIds);
+    if (context.canPop()) {
+      context.pop(true);
+    } else {
+      context.go('/settings');
+    }
+  }
+
   late final TextEditingController _nameController;
   late final TextEditingController _urlController;
   late final TextEditingController _apiKeyController;
@@ -298,6 +350,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _publicAddressController.text = 'https://app.plex.tv';
     }
     _isDefault = widget.initialIsDefault;
+    _markInstanceSaved();
     if (widget.isEditing) _loadDetails();
     _loadMediaRoots();
     _loadArrRootFolders();
@@ -442,6 +495,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   void _applyAutoDefault() {
     if (widget.isEditing || !_instancesLoaded || _grantOnly) return;
     _isDefault = !_instances.any((i) => i.serviceType == _serviceType);
+    _defaultDraft.markSaved(_isDefault);
   }
 
   /// Fetches the per-user pins and access grants for the selected service
@@ -526,10 +580,21 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           _usernameController.text = details['username'] as String? ?? '';
         }
         _isDefault = details['is_default'] as bool? ?? _isDefault;
+        _defaultDraft.markSaved(_isDefault);
         _storedQbitAuth = details['has_api_key'] == true
             ? _QbitAuth.apiKey
             : _QbitAuth.password;
         _qbitAuth = _storedQbitAuth;
+        // Loading must not count a value typed during the request as saved.
+        _detailsDraft.markSaved({
+          ..._detailValues,
+          'name': details['name'] as String? ?? widget.initialName ?? '',
+          'url': details['url'] as String? ?? widget.initialUrl ?? '',
+          'username':
+              details['username'] as String? ?? widget.initialUsername ?? '',
+          'apiKey': widget.initialApiKey ?? '',
+          'password': '',
+        });
         if (_isMediaServer) {
           final raw = details['media_server_config'];
           final config = raw is Map
@@ -547,6 +612,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           // Hydration is not an edit: only a touch after this sends the
           // config back, so an untouched section keeps the server's copy.
           _mediaServerConfigDirty = false;
+          _mediaDraft.markSaved([
+            config.publicAddress,
+            config.libraryIds.toList()..sort(),
+            _isPlex ? config.machineIdentifier : '',
+            _isPlex && config.autoApprove,
+          ]);
         }
         if (details.containsKey('media_path_mappings')) {
           final rawMappings = details['media_path_mappings'] as List? ?? [];
@@ -591,6 +662,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             onChanged: _markMediaMappingsDirty,
           )));
     _mediaMappingsDirty = false;
+    _mappingsDraft.markSaved(_mappingValues);
   }
 
   void _markMediaMappingsDirty() {
@@ -1187,6 +1259,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           mediaServerConfig: mediaServerConfig,
           plexLinkPin: plexLinkPin,
         );
+        _markInstanceSaved();
         if (applyAssignments) {
           try {
             await service.updateInstanceGrantUsers(
@@ -1209,7 +1282,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Instance updated')),
           );
-          context.pop(true); // Return true to signal refresh needed
+          _finishEditing();
         }
         return;
       }
@@ -1268,7 +1341,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       ? 'Instance created — instant updates configured'
                       : 'Instance created')),
         );
-        context.pop(true); // Return true to signal refresh needed
+        _finishEditing();
       }
     } catch (e) {
       if (!mounted) return;
@@ -1365,7 +1438,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Instance deleted')),
         );
-        context.pop(true);
+        _finishEditing();
       }
     } catch (e) {
       if (mounted) {
@@ -2364,7 +2437,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _hasUnsavedChanges,
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.isEditing ? 'Edit Instance' : 'Add Instance'),

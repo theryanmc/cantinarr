@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 
 String oidcError(Object error) {
@@ -19,6 +20,13 @@ class OIDCSettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        for (final key in ['enabled', 'auto_create', 'use_proxy', 'sso_only'])
+          _config?[key],
+        for (final field in _fields.values) field.text,
+        _config?['client_secret'],
+      ];
   Map<String, dynamic>? _config;
   String? _error;
   bool _busy = false;
@@ -70,6 +78,7 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
       }
       setState(() {
         _config = config;
+        _draft.markSaved(_draftValues);
         _error = null;
       });
     } catch (e) {
@@ -99,7 +108,10 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
       final saved = await _request(method: 'PUT', data: config);
       if (!mounted) return false;
       _fields['client_secret']!.clear();
-      setState(() => _config = saved);
+      setState(() {
+        _config = saved;
+        _draft.markSaved(_draftValues);
+      });
       return true;
     } catch (e) {
       if (mounted) setState(() => _error = oidcError(e));
@@ -161,7 +173,13 @@ class _OIDCSettingsScreenState extends ConsumerState<OIDCSettingsScreen> {
             _busy ? null : (value) => setState(() => _config![key] = value),
       );
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _draft.hasChanges(_draftValues),
+        isSaving: _busy,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Single sign-on')),
         body: Align(
             alignment: Alignment.topCenter,

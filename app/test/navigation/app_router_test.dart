@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/widgets/app_ambient_background.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
@@ -28,6 +29,26 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('settings edits block sidebar navigation but not session expiry',
+      (tester) async {
+    final (:router, :container) = await _pumpRouter(tester, _adminState,
+        surfaceSize: const Size(1200, 900));
+    router.go('/settings/password');
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'unsaved-password');
+    router.go('/dashboard/movies');
+    await tester.pumpAndSettle();
+    expect(find.text('Discard unsaved changes?'), findsOneWidget);
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SetPasswordScreen), findsOneWidget);
+    (container.read(authProvider.notifier) as _FakeAuthNotifier)
+        .push(const AuthState());
+    await tester.pumpAndSettle();
+    expect(router.routerDelegate.currentConfiguration.uri.path, '/login');
+    expect(find.text('Discard unsaved changes?'), findsNothing);
+  });
+
   test('router instance stays stable across auth state changes', () {
     final container = ProviderContainer(
       overrides: [
@@ -609,6 +630,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
     overrides: [
       authProvider.overrideWith(() => _FakeAuthNotifier(authState)),
       backendClientProvider.overrideWithValue(_fakeDio()),
+      webSocketClientProvider.overrideWith((ref) => _QuietWebSocket()),
     ],
   );
   addTearDown(container.dispose);
@@ -676,4 +698,11 @@ class _JsonAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class _QuietWebSocket extends WebSocketClient {
+  _QuietWebSocket()
+      : super(getServerUrl: () => null, getAccessToken: () => null);
+  @override
+  void ensureConnected() {}
 }

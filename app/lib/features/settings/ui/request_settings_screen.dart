@@ -4,6 +4,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../data/request_settings_service.dart';
 import '../settings_anchors.dart';
 import '../../request/data/request_service.dart';
@@ -23,6 +24,7 @@ class RequestSettingsScreen extends ConsumerStatefulWidget {
 class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
   late final RequestSettingsService _service;
 
+  final _draft = SettingsDraft();
   AdminRequestSettings? _admin;
   GlobalRequestSettings? _edited;
   bool _isLoading = true;
@@ -56,6 +58,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
       setState(() {
         _admin = admin;
         _edited = admin.settings;
+        _draft.markSaved(_edited!.toJson());
         _isLoading = false;
       });
     } catch (e) {
@@ -77,6 +80,7 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
       setState(() {
         _admin = admin;
         _edited = admin.settings;
+        _draft.markSaved(_edited!.toJson());
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -92,7 +96,16 @@ class _RequestSettingsScreenState extends ConsumerState<RequestSettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _edited != null &&
+            _admin != null &&
+            _draft.hasChanges(_edited!.toJson()),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Request Defaults')),
       body: CenteredContent(
