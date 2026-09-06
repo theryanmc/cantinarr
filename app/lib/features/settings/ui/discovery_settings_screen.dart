@@ -297,8 +297,9 @@ class _DiscoverySettingsScreenState
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
             'These settings shape the headline row on the Movies and TV tabs, '
-            'and the recommendation rows throughout the app. Search is never '
-            'filtered.',
+            'and movie and TV recommendation rows. Search is never filtered. '
+            'Music discovery uses ListenBrainz and MusicBrainz automatically; '
+            'these source and English-only settings do not apply to music.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),

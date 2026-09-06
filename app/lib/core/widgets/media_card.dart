@@ -17,7 +17,8 @@ class MediaCard extends StatelessWidget {
   /// poster when its cards never carry a [subtitle] line (e.g. movie rows).
   static const double plainRowExtraHeight = 54;
 
-  final int id;
+  final Object id;
+  final double artworkAspectRatio;
   final String title;
   final String? posterPath;
   final String? statusLabel;
@@ -59,6 +60,7 @@ class MediaCard extends StatelessWidget {
     this.rating,
     this.posterHeaders,
     this.placeholderIcon = Icons.movie_outlined,
+    this.artworkAspectRatio = 2 / 3,
   });
 
   @override
@@ -92,6 +94,7 @@ class MediaCard extends StatelessWidget {
         rating: rating,
         posterHeaders: posterHeaders,
         placeholderIcon: placeholderIcon,
+        artworkAspectRatio: artworkAspectRatio,
       ),
     );
   }
@@ -110,6 +113,7 @@ class _InteractiveMediaCard extends StatefulWidget {
   final double? rating;
   final Map<String, String>? posterHeaders;
   final IconData placeholderIcon;
+  final double artworkAspectRatio;
 
   const _InteractiveMediaCard({
     required this.onTap,
@@ -124,6 +128,7 @@ class _InteractiveMediaCard extends StatefulWidget {
     required this.rating,
     required this.posterHeaders,
     required this.placeholderIcon,
+    required this.artworkAspectRatio,
   });
 
   @override
@@ -187,7 +192,7 @@ class _InteractiveMediaCardState extends State<_InteractiveMediaCard> {
                     ],
                   ),
                   child: AspectRatio(
-                    aspectRatio: 2 / 3,
+                    aspectRatio: widget.artworkAspectRatio,
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(
                         AppTheme.radiusLarge - 1,

@@ -428,6 +428,24 @@ DELETE /api/admin/agent-approval-rules/{id}          # admin: remove a rule; his
 ```
 
 ### Discover & media (user)
+
+Music endpoints require `media:discover` and an authorized Lidarr instance, including for admins' selected instances and for artwork. Requesters (including kids accounts) have no global Lidarr fallback. `instance_id` is optional at the API: omitted IDs resolve the caller's granted default, with a configured-instance fallback only for admins. Access is checked before the metadata cache and again before the response.
+
+| Music endpoint | Response and filters |
+|---|---|
+| `GET /api/discover/music/popular` | `period=this_week` (default), `this_month`, or `this_year`; `page` defaults to 1 |
+| `GET /api/discover/music/new-releases` | Past 30 calendar days, newest first, no future dates; `page` defaults to 1 |
+| `GET /api/discover/music/genre` | Supported `genre` slug required; `page` defaults to 1 |
+| `GET /api/genres/music` | `{genres:[{id,name,tag}]}` with supported genre labels and MusicBrainz mappings |
+| `GET /api/media/music/{mbid}` | Album/EP metadata addressed by MusicBrainz release-group ID |
+| `GET /api/discover/music/artwork/{mbid}` | Authenticated Cover Art Archive raster image; `404` when absent |
+
+Every endpoint accepts `instance_id`. Music feeds return `{results, page, next_page?, source, scope, empty_message?}`. `next_page` follows provider position and exhaustion, not displayed item count: charts and genre searches request 20 provider entries, so filtering can leave a short or empty page with more results. The app suppresses repeated MBIDs across pages while preserving distinct IDs with identical titles. Results and album details use a separate string identity model: `{foreign_id, title, artist, release_date?, release_type, artwork?, disambiguation?}`. `foreign_id` is always a **release-group** ID. Artwork is a server-relative path; append the authorized `instance_id` and use the session bearer token.
+
+[ListenBrainz charts](https://listenbrainz.readthedocs.io/en/latest/users/api/statistics.html) supply popularity. [Fresh releases](https://listenbrainz.readthedocs.io/en/latest/users/api/misc.html) are fetched as one date window, filtered to albums/EPs with exact dates, deduplicated, sorted, then paginated locally (no undocumented offset). [MusicBrainz search](https://musicbrainz.org/doc/MusicBrainz_API/Search) supplies genre tag matching and batched chart type enrichment; an incomplete enrichment fails the page instead of silently thinning it. All provider traffic uses `httpx.External()`, a contactable User-Agent, bounded deadlines/retries, shared concurrent fills, and a bounded metadata/artwork cache. MusicBrainz and ListenBrainz each have one-second request spacing. TTLs are one hour for feeds, six hours for genre searches, and 24 hours for album metadata/artwork. Availability/request state is not part of that cache. Cover redirects are limited to HTTPS Cover Art Archive and Internet Archive hosts; arbitrary caller URLs and non-raster responses are refused.
+
+Run `go test ./internal/musicdiscovery -run TestLiveProviders -music-live -v` for the opt-in live provider check. Ordinary tests use local fixtures. TMDB/Trakt source and English-only preferences below apply only to movies and TV.
+
 ```
 GET /api/discover/trending | /discover/movies/popular | /discover/tv/popular
 GET /api/discover/movies/featured | /discover/tv/featured  # the configured headline row; ?page=N continues the same feed
@@ -913,6 +931,7 @@ server/
 │   ├── db/stallwatch.go      # watches the single connection; logs a wedged pool + its holder
 │   ├── deluge/               # Deluge JSON-RPC client
 │   ├── discover/             # TMDB/Trakt discovery + media detail proxy handlers
+│   ├── musicdiscovery/       # ListenBrainz/MusicBrainz album discovery, metadata and artwork
 │   ├── downloads/            # Unified download-client queue API across all six clients
 │   ├── emby/                 # Emby client: same surface as jellyfin, create-then-password, Guid library ids
 │   ├── grokoauth/            # xAI Grok device-flow OAuth: encrypted tokens + rotating refresh

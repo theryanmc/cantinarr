@@ -1,0 +1,77 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/network/backend_client.dart';
+import '../../../core/widgets/cached_image.dart';
+import '../../auth/logic/auth_provider.dart';
+import '../logic/music_browse_query.dart';
+import 'music_models.dart';
+
+const musicUpdateMessage =
+    'Music discovery requires a server update. You can still browse your library and search.';
+
+class MusicDiscoveryUnsupported implements Exception {
+  const MusicDiscoveryUnsupported();
+}
+
+class MusicDiscoveryService {
+  final Dio dio;
+  MusicDiscoveryService(this.dio);
+
+  Future<Map<String, dynamic>> _get(
+      String path, Map<String, dynamic> params) async {
+    try {
+      final response = await dio.get(path, queryParameters: params);
+      if (response.data is String &&
+          (response.data as String).trimLeft().startsWith('<')) {
+        throw const MusicDiscoveryUnsupported();
+      }
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) {
+        throw const MusicDiscoveryUnsupported();
+      }
+      rethrow;
+    }
+  }
+
+  Future<MusicPage> feed(MusicBrowseQuery query, int page) async =>
+      MusicPage.fromJson(await _get('/api/discover/music/${query.feed}',
+          {...query.parameters, 'page': page}));
+
+  Future<List<MusicGenre>> genres(String instanceId) async {
+    final data = await _get('/api/genres/music', {'instance_id': instanceId});
+    return (data['genres'] as List)
+        .map((g) => MusicGenre.fromJson(g as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<MusicAlbum> album(String mbid, String instanceId) async =>
+      MusicAlbum.fromJson(await _get(
+          '/api/media/music/${Uri.encodeComponent(mbid)}',
+          {'instance_id': instanceId}));
+}
+
+final musicDiscoveryServiceProvider = Provider<MusicDiscoveryService>(
+    (ref) => MusicDiscoveryService(ref.watch(backendClientProvider)));
+
+final musicGenresProvider =
+    FutureProvider.autoDispose.family<List<MusicGenre>, String>(
+  (ref, id) => ref.watch(musicDiscoveryServiceProvider).genres(id),
+);
+
+/// The path is constructed here from identity, never taken as an arbitrary
+/// image URL. Covers always use the authenticated Cantinarr relay on web/native.
+ImageSource? musicArtworkSource(
+    WidgetRef ref, MusicAlbum album, String instanceId) {
+  if (album.artwork == null || album.artwork!.isEmpty) return null;
+  final connection = ref.watch(authProvider).valueOrNull?.connection;
+  if (connection == null) return null;
+  final base = connection.serverUrl.replaceFirst(RegExp(r'/$'), '');
+  final path =
+      '/api/discover/music/artwork/${Uri.encodeComponent(album.foreignId)}';
+  final query = Uri(queryParameters: {'instance_id': instanceId}).query;
+  return (
+    url: '$base$path?$query',
+    headers: {'Authorization': 'Bearer ${connection.accessToken}'},
+  );
+}

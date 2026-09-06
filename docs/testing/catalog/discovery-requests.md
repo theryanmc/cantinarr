@@ -1,6 +1,6 @@
 # Discovery and requests
 
-Release-day journeys against real TMDB/Trakt and real arr instances. Search behavior, availability computation, request policy, and approval contracts are proven by the hermetic suites.
+Release-day journeys against real TMDB/Trakt, ListenBrainz/MusicBrainz, and real arr instances. Search behavior, availability computation, request policy, and approval contracts are proven by the hermetic suites.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -25,6 +25,8 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `DISC-024` · P2 · LIVE — With the Books discovery tab searching normally, make the author lookup fail on its own (block `/api/v1/author/lookup` at the proxy, or point the instance at a Chaptarr build without it) while `book/lookup` still answers. Verify the book rows still render, the overlay says "Authors could not be searched.", and none of the three book failure messages appear — an author section that could not be read must never render as one that matched nobody.
 - [ ] `DISC-025` · P2 · LIVE — With a library holding two distinct author records whose names differ only by punctuation or spacing (e.g. `Ursula K. Le Guin` and `Ursula K Le Guin`), search that name. Verify both rows render, neither is openable, and both say two authors share the name — no record is silently chosen. If your library has no such pair this case is not runnable; note that rather than passing it.
 - [ ] `DISC-026` · P2 · LIVE — On a large library, confirm the first Books-tab search of a session is not noticeably slowed by the author-resolution fetch (`GET /author`, one unpaginated response per instance, held until the library changes). If it is, that fetch is the thing to make cheaper — Chaptarr's `library/search` is the indexed alternative, but it returns no `foreignAuthorId`, so using it needs a server-side numeric-id resolution path.
+
+- [ ] `DISC-033` · P1 · UI/LIVE — On Flutter web with a test Lidarr instance and a granted requester, open Music and verify Popular Albums, New Releases, Browse by genre, Recently Added, and Artists in order. Check This week/month/year against ListenBrainz, dates within the past 30 days, albums/EPs only, square Cover Art Archive images (and an album placeholder when missing), and genre matching order. Open See all, scroll multiple pages, open an album, and go back: the period/genre/instance and scroll position remain. Open the same album URL without navigation extras or a title hint. Request it, verify the exact release-group ID reaches the selected test Lidarr with only that album monitored, and verify a second request is prevented. Exercise approval and an unmatched album saved for review. Keep test Lidarr free of public indexers/download clients for a metadata-only request test; record any remaining import/download journey separately.
 
 ## Request and approval journeys
 
