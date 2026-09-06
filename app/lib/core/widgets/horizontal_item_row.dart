@@ -12,6 +12,8 @@ class HorizontalItemRow<T> extends StatefulWidget {
   final double height;
   final double itemSpacing;
   final double artworkAspectRatio;
+  final double paginationExtent;
+  final double? cacheExtent;
 
   const HorizontalItemRow({
     super.key,
@@ -22,6 +24,8 @@ class HorizontalItemRow<T> extends StatefulWidget {
     this.height = 218,
     this.itemSpacing = 14,
     this.artworkAspectRatio = 2 / 3,
+    this.paginationExtent = 520,
+    this.cacheExtent,
   });
 
   @override
@@ -83,7 +87,7 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
     if (widget.onItemAppear != null &&
         !widget.isLoading &&
         widget.items.isNotEmpty &&
-        position.extentAfter < 520 &&
+        position.extentAfter < widget.paginationExtent &&
         _lastPrefetchedLength != widget.items.length) {
       _lastPrefetchedLength = widget.items.length;
       widget.onItemAppear!(widget.items.last);
@@ -129,6 +133,7 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
         children: [
           ListView.separated(
             controller: _controller,
+            cacheExtent: widget.cacheExtent,
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(
               parent: AlwaysScrollableScrollPhysics(),

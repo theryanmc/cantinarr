@@ -20,10 +20,10 @@ func NewHandler(store *instance.Store) *Handler {
 	return &Handler{store: store, service: NewService()}
 }
 
-// authorize is shared by every music endpoint, including genres and covers.
+// authorizeMetadata is shared by every music endpoint, including genres and covers.
 // Lidarr is grant-only for every requester, including kids accounts. Admins
-// may select any configured Lidarr; there is no requester global fallback.
-func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
+// may browse without an instance or select any configured Lidarr; there is no requester global fallback.
+func (h *Handler) authorizeMetadata(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		fail(w, 401, "unauthorized")
@@ -32,6 +32,9 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, id string) (
 	if !auth.HasPermission(claims.Role, auth.PermissionMediaDiscover) {
 		fail(w, 403, "discovery is not available to you")
 		return "", false
+	}
+	if claims.Role == auth.RoleAdmin && id == "" {
+		return "", true
 	}
 	if h.store == nil {
 		fail(w, 403, "music is not available to you")
@@ -44,16 +47,6 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, id string) (
 		if err != nil {
 			fail(w, 503, "could not check music access")
 			return "", false
-		}
-		if id == "" && admin {
-			inst, err := h.store.GetDefault("lidarr")
-			if err != nil {
-				fail(w, 503, "could not check music access")
-				return "", false
-			}
-			if inst != nil {
-				id = inst.ID
-			}
 		}
 	}
 	if id == "" {
@@ -88,7 +81,7 @@ func fail(w http.ResponseWriter, code int, message string) {
 
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body []byte, err error) {
 	// Check the grant again after waiting on a provider or shared cache fill.
-	if _, ok := h.authorize(w, r, id); !ok {
+	if _, ok := h.authorizeMetadata(w, r, id); !ok {
 		return
 	}
 	if err != nil {
@@ -101,7 +94,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body 
 }
 
 func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -143,7 +136,7 @@ func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Genres(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -152,7 +145,7 @@ func (h *Handler) Genres(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Album(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -166,7 +159,7 @@ func (h *Handler) Album(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Artwork(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -176,7 +169,7 @@ func (h *Handler) Artwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := h.service.Artwork(r.Context(), mbid)
-	if _, ok := h.authorize(w, r, id); !ok {
+	if _, ok := h.authorizeMetadata(w, r, id); !ok {
 		return
 	}
 	if err != nil {

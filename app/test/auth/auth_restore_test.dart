@@ -77,7 +77,46 @@ void main() {
   }
 
   group('with a cached snapshot (optimistic restore)', () {
-    test('opens authenticated + reconnecting, then upgrades to fresh on '
+    test('admin catalog capability survives restore and follows config refresh',
+        () async {
+      final storage = snapshotStorage();
+      final snapshot = jsonDecode(storage[StorageKeys.sessionConnection]!)
+          as Map<String, dynamic>;
+      snapshot['admin_catalog_browsing'] = true;
+      storage[StorageKeys.sessionConnection] = jsonEncode(snapshot);
+      final fake = _FakeAuthService(refreshResult: freshResp, config: config);
+      final container = makeContainer(storage, fake);
+      final optimistic = await container.read(authProvider.future);
+      expect(optimistic.connection!.adminCatalogBrowsing, isTrue);
+      await _pumpUntil(
+          () => !container.read(authProvider).valueOrNull!.isReconnecting);
+      expect(
+          container
+              .read(authProvider)
+              .valueOrNull!
+              .connection!
+              .adminCatalogBrowsing,
+          isFalse,
+          reason: 'an older server must clear the cached capability');
+      fake.config = const ServerConfig(
+          serverName: 'Home',
+          services: AvailableServices(),
+          adminCatalogBrowsing: true);
+      await container.read(authProvider.notifier).refreshConfig();
+      expect(
+          container
+              .read(authProvider)
+              .valueOrNull!
+              .connection!
+              .adminCatalogBrowsing,
+          isTrue);
+      final saved = jsonDecode(storage[StorageKeys.sessionConnection]!)
+          as Map<String, dynamic>;
+      expect(saved['admin_catalog_browsing'], isTrue);
+      expect((saved['services'] as Map)['chaptarr'], isFalse);
+    });
+    test(
+        'opens authenticated + reconnecting, then upgrades to fresh on '
         'successful validation', () async {
       final storage = snapshotStorage();
       final container = makeContainer(
@@ -105,7 +144,8 @@ void main() {
       expect(storage[StorageKeys.refreshToken], 'new-refresh');
     });
 
-    test('keeps the session (reconnecting) and retains tokens on a transport '
+    test(
+        'keeps the session (reconnecting) and retains tokens on a transport '
         'failure', () async {
       final storage = snapshotStorage();
       final fake = _FakeAuthService(refreshError: connectionError);
@@ -117,7 +157,8 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 30));
 
       final s = container.read(authProvider).valueOrNull!;
-      expect(s.isAuthenticated, isTrue, reason: 'must not log out while offline');
+      expect(s.isAuthenticated, isTrue,
+          reason: 'must not log out while offline');
       expect(s.isReconnecting, isTrue);
       expect(storage[StorageKeys.refreshToken], 'old-refresh',
           reason: 'tokens must survive a transport failure');
@@ -136,7 +177,8 @@ void main() {
         return s != null && !s.isAuthenticated;
       });
 
-      expect(container.read(authProvider).valueOrNull!.isAuthenticated, isFalse);
+      expect(
+          container.read(authProvider).valueOrNull!.isAuthenticated, isFalse);
       expect(storage[StorageKeys.refreshToken], isNull);
       expect(storage[StorageKeys.jwt], isNull);
       expect(storage[StorageKeys.sessionUser], isNull,
@@ -157,14 +199,15 @@ void main() {
       expect(state.isReconnecting, isFalse);
       expect(storage[StorageKeys.jwt], 'new-access');
       expect(storage[StorageKeys.sessionUser], isNotNull,
-          reason: 'a snapshot should be written so the next launch is seamless');
+          reason:
+              'a snapshot should be written so the next launch is seamless');
     });
 
     test('stays unauthenticated but RETAINS tokens on a transport failure',
         () async {
       final storage = tokensOnlyStorage();
-      final container =
-          makeContainer(storage, _FakeAuthService(refreshError: connectionError));
+      final container = makeContainer(
+          storage, _FakeAuthService(refreshError: connectionError));
 
       final state = await container.read(authProvider.future);
       expect(state.isAuthenticated, isFalse);
@@ -182,7 +225,8 @@ void main() {
       expect(storage[StorageKeys.refreshToken], isNull);
     });
 
-    test('enters the app degraded (not login) when config fails after a '
+    test(
+        'enters the app degraded (not login) when config fails after a '
         'successful refresh', () async {
       final storage = tokensOnlyStorage();
       final container = makeContainer(
@@ -225,8 +269,8 @@ void main() {
       );
 
       await container.read(authProvider.future);
-      await _pumpUntil(() =>
-          storage[StorageKeys.jwt] == 'new-access'); // refresh persisted
+      await _pumpUntil(
+          () => storage[StorageKeys.jwt] == 'new-access'); // refresh persisted
       await Future<void>.delayed(const Duration(milliseconds: 30));
 
       final s = container.read(authProvider).valueOrNull!;
@@ -240,7 +284,8 @@ void main() {
   });
 
   group('unreadable secure storage (locked keychain at launch)', () {
-    test('never treats a blocked read as logged out, and restores once '
+    test(
+        'never treats a blocked read as logged out, and restores once '
         'storage is readable again', () async {
       final storage = snapshotStorage();
       // First read throws (prewarmed launch while locked); later reads work.
@@ -357,12 +402,13 @@ class _FakeAuthService extends AuthService {
 
   final AuthResponse? refreshResult;
   final Object? refreshError;
-  final ServerConfig? config;
+  ServerConfig? config;
   final Object? configError;
   int refreshCalls = 0;
 
   @override
-  Future<AuthResponse> refreshToken(String serverUrl, String refreshToken) async {
+  Future<AuthResponse> refreshToken(
+      String serverUrl, String refreshToken) async {
     refreshCalls++;
     final error = refreshError;
     if (error != null) throw error;

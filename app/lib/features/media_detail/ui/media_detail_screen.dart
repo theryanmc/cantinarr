@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/network/backend_client.dart';
@@ -124,6 +126,26 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// one library for this media type (multi-grant users, or admins).
   String? _selectedLibraryId;
 
+  String get _serviceType => widget.mediaType == MediaType.movie ? 'radarr' : 'sonarr';
+  bool get _needsSetup {
+    final access = ref.read(discoveryAccessProvider);
+    return access.isAdmin && access.activeId(_serviceType) == null;
+  }
+
+  void _checkStatus() {
+    if (!_needsSetup) _requestNotifier.checkStatus();
+  }
+
+  void _loadRequestState() {
+    if (_needsSetup) return;
+    _checkStatus();
+    if (widget.mediaType == MediaType.tv) {
+      _requestNotifier.fetchOptions().then((opts) {
+        if (mounted && opts != null) setState(() => _requestOptions = opts);
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -150,13 +172,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       _resolveWatchLinks();
     });
     _requestNotifier.addListener(_onRequestStateChanged);
-    _requestNotifier.checkStatus();
+    _loadRequestState();
     _loadMyOpenReport();
-    if (widget.mediaType == MediaType.tv) {
-      _requestNotifier.fetchOptions().then((opts) {
-        if (mounted && opts != null) setState(() => _requestOptions = opts);
-      });
-    }
   }
 
   @override
@@ -174,7 +191,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   /// Whether the user may pick specific seasons. Defaults to true (the
   /// server's out-of-the-box global setting) until the options load.
-  bool get _canChooseSeasons => _requestOptions?.canChooseSeason ?? true;
+  bool get _canChooseSeasons => !_needsSetup && (_requestOptions?.canChooseSeason ?? true);
 
   /// The libraries this user may aim requests at for this media type, from
   /// the per-user filtered connection (granted set for requesters, every
@@ -208,7 +225,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     if (_selectedLibraryId == libraryId) return;
     setState(() => _selectedLibraryId = libraryId);
     _requestNotifier.instanceId = libraryId;
-    _requestNotifier.checkStatus();
+    _checkStatus();
     _resolveArrLink();
   }
 
@@ -217,6 +234,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     // Reporting binds to the currently active arr, so an instance switch must
     // rebuild the affordance and capture the new concrete instance id.
     ref.watch(instanceProvider);
+    ref.watch(discoveryAccessProvider);
+    ref.listen(discoveryAccessProvider.select((access) => access.activeId(_serviceType)), (previous, next) {
+      if (previous == null && next != null) _loadRequestState();
+      if (next == null && _needsSetup) _requestNotifier.state = const RequestState();
+    });
     // Live-update the request button when an approval decision for THIS title
     // arrives over the socket (complements the global toast).
     ref.listen(requestDecisionEventsProvider, (_, next) {
@@ -225,7 +247,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       final tmdb = (event.data['tmdb_id'] as num?)?.toInt();
       if (tmdb == widget.id &&
           event.data['media_type'] == widget.mediaType.name) {
-        _requestNotifier.checkStatus();
+        _checkStatus();
       }
     });
     // A request just added the title to the arr (main or per-season request
@@ -342,7 +364,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                               // Secondary actions land async (request status,
                               // admin arr-link resolution), so the dock height
                               // morphs instead of snapping when one appears.
-                              child: AnimatedSize(
+                              child: _needsSetup
+                                  ? CatalogSetupButton(serviceType: _serviceType)
+                                  : AnimatedSize(
                                 duration: const Duration(milliseconds: 220),
                                 curve: Curves.easeOutCubic,
                                 alignment: Alignment.topCenter,
@@ -772,6 +796,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// quality), present the picker first; otherwise submit immediately to keep
   /// the one-tap experience.
   Future<void> _onRequest() async {
+    if (_needsSetup) return;
     final s = _detailNotifier.state;
 
     final options = await _requestNotifier.fetchOptions();

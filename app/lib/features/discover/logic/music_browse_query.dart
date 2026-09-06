@@ -23,13 +23,13 @@ const musicGenreNames = {
 @immutable
 class MusicBrowseQuery {
   final String feed;
-  final String instanceId;
+  final String? instanceId;
   final String period;
   final String? genre;
 
   const MusicBrowseQuery({
     required this.feed,
-    required this.instanceId,
+    this.instanceId,
     this.period = 'this_week',
     this.genre,
   });
@@ -42,7 +42,9 @@ class MusicBrowseQuery {
         !const ['popular', 'new-releases', 'genre'].contains(parts[2])) {
       return null;
     }
-    final instanceId = uri.queryParameters['instance_id']?.trim() ?? '';
+    final rawInstance = uri.queryParameters['instance_id']?.trim();
+    if (rawInstance != null && rawInstance.isEmpty) return null;
+    final instanceId = rawInstance;
     final period = uri.queryParameters['period'] ?? 'this_week';
     final genre = uri.queryParameters['genre'];
     if (!musicPeriods.containsKey(period) ||
@@ -51,7 +53,7 @@ class MusicBrowseQuery {
       return null;
     }
     // A hand-written cold link may omit the instance; the screen resolves the
-    // user's active granted instance before making any read.
+    // user's active instance, or lets an admin browse without a library.
     return MusicBrowseQuery(
       feed: parts[2],
       instanceId: instanceId,
@@ -61,7 +63,7 @@ class MusicBrowseQuery {
   }
 
   Map<String, String> get parameters => {
-        if (instanceId.isNotEmpty) 'instance_id': instanceId,
+        if (instanceId != null) 'instance_id': instanceId!,
         if (feed == 'popular') 'period': period,
         if (genre != null) 'genre': genre!,
       };
@@ -79,7 +81,7 @@ class MusicBrowseQuery {
         'new-releases' => 'Past 30 days · ListenBrainz',
         _ => 'Albums and EPs · MusicBrainz matching order',
       };
-  MusicBrowseQuery withInstance(String id) => MusicBrowseQuery(
+  MusicBrowseQuery withInstance(String? id) => MusicBrowseQuery(
         feed: feed,
         instanceId: id,
         period: period,

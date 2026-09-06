@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
-import '../../auth/logic/auth_provider.dart';
+import 'discovery_access.dart';
+import 'discovery_page_buffer.dart';
 import '../../request/data/request_service.dart';
 import '../data/music_discovery_service.dart';
 import '../data/music_models.dart';
@@ -17,6 +20,7 @@ class MusicFeedState {
   final bool unsupported;
   final bool refreshFailed;
   final String emptyMessage;
+  final List<MusicAlbum> upcoming;
   const MusicFeedState({
     this.items = const [],
     this.nextPage = 1,
@@ -25,14 +29,25 @@ class MusicFeedState {
     this.unsupported = false,
     this.refreshFailed = false,
     this.emptyMessage = '',
+    this.upcoming = const [],
   });
 }
 
 class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
   final MusicDiscoveryService service;
   final MusicBrowseQuery query;
-  MusicFeedNotifier(this.service, this.query) : super(const MusicFeedState()) {
-    Future.microtask(loadMore);
+  final bool allowed;
+  bool _prefetchEnabled = false;
+  int _generation = 0;
+  late final _ahead =
+      DiscoveryPageBuffer<MusicPage>((page) => service.feed(query, page));
+  MusicFeedNotifier(this.service, this.query, {this.allowed = true})
+      : super(allowed
+            ? const MusicFeedState()
+            : const MusicFeedState(
+                nextPage: null,
+                error: 'Music is not available for this account.')) {
+    if (allowed) Future.microtask(loadMore);
   }
 
   Future<void> loadMore() => _load(refresh: false);
@@ -40,10 +55,53 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
   Future<void> retry() =>
       _load(refresh: state.refreshFailed || state.unsupported);
 
-  Future<void> _load({required bool refresh}) async {
-    if (!mounted || state.loading || (!refresh && state.nextPage == null)) {
+  void enablePrefetch() {
+    if (_prefetchEnabled || !mounted || !allowed) return;
+    _prefetchEnabled = true;
+    unawaited(_prefetchNext());
+  }
+
+  Future<void> _prefetchNext() async {
+    if (!_prefetchEnabled ||
+        state.loading ||
+        state.error != null ||
+        state.nextPage == null) {
       return;
     }
+    final generation = _generation;
+    final failure = await _ahead.prefetch(state.nextPage);
+    if (!mounted || generation != _generation || state.loading) return;
+    if (failure is DioException &&
+        {401, 403}.contains(failure.response?.statusCode)) {
+      _ahead.clear();
+      state = const MusicFeedState(
+          nextPage: null,
+          error: 'Music is no longer available for this account or library.');
+      return;
+    }
+    state = MusicFeedState(
+      items: state.items,
+      nextPage: state.nextPage,
+      emptyMessage: state.emptyMessage,
+      upcoming: _ahead.value?.results ?? const [],
+    );
+  }
+
+  @override
+  void dispose() {
+    _ahead.clear();
+    super.dispose();
+  }
+
+  Future<void> _load({required bool refresh}) async {
+    if (!mounted ||
+        !allowed ||
+        state.loading ||
+        (!refresh && state.nextPage == null)) {
+      return;
+    }
+    _generation++;
+    if (refresh) _ahead.clear();
     final before = state;
     var next = refresh ? 1 : before.nextPage;
     state = MusicFeedState(
@@ -59,7 +117,7 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
       // Singles and repeated MBIDs can consume an entire provider page.
       // Follow its cursor, with a bound; offer Load more if the stretch lasts.
       for (var attempts = 0; attempts < 3 && next != null; attempts++) {
-        final page = await service.feed(query, next);
+        final page = await _ahead.take(next);
         if (!mounted) return;
         if (page.page != next) {
           throw const FormatException('Unexpected music page');
@@ -75,6 +133,7 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
         nextPage: next,
         emptyMessage: message,
       );
+      unawaited(_prefetchNext());
     } catch (error) {
       if (!mounted) return;
       final forbidden =
@@ -98,8 +157,11 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
 
 final musicFeedProvider = StateNotifierProvider.autoDispose
     .family<MusicFeedNotifier, MusicFeedState, MusicBrowseQuery>((ref, query) {
-  ref.watch(authProvider.select((auth) => auth.valueOrNull?.user?.id));
-  return MusicFeedNotifier(ref.watch(musicDiscoveryServiceProvider), query);
+  ref.watch(catalogDiscoveryScopeProvider);
+  return MusicFeedNotifier(ref.watch(musicDiscoveryServiceProvider), query,
+      allowed: ref
+          .watch(discoveryAccessProvider)
+          .canBrowse('lidarr', query.instanceId));
 });
 
 /// Each lazily built visible card reads authoritative status for its exact
@@ -107,6 +169,10 @@ final musicFeedProvider = StateNotifierProvider.autoDispose
 final musicCardStatusProvider = FutureProvider.autoDispose
     .family<MusicRequestStatusDetail, ({String id, String instanceId})>(
         (ref, key) {
+  ref.watch(catalogDiscoveryScopeProvider);
+  if (!ref.watch(discoveryAccessProvider).canBrowse('lidarr', key.instanceId)) {
+    throw StateError('Music is not available for this account.');
+  }
   ref.watch(libraryRefreshTickProvider);
   ref.watch(libraryChangedEventsProvider);
   return RequestService(backendDio: ref.watch(backendClientProvider))

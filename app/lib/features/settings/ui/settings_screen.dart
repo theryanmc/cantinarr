@@ -219,7 +219,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const _SettingsTile(
                 icon: Icons.info_outline,
                 title: 'No instances configured',
-                subtitle: 'Add a Radarr or Sonarr instance to get started',
+                subtitle: 'Connect a service to enable requests and library tools',
               ),
             ...instances.map((inst) => _SettingsTile(
                   icon: _serviceIcon(inst.serviceType),

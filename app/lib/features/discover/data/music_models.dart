@@ -40,9 +40,12 @@ class MusicAlbum {
       .where((part) => part.isNotEmpty)
       .join(' · ');
 
-  String detailLocation(String instanceId) => Uri(
+  String detailLocation(String? instanceId) => Uri(
         path: '/detail/album/$foreignId',
-        queryParameters: {'instance_id': instanceId, 'title': title},
+        queryParameters: {
+          if (instanceId != null) 'instance_id': instanceId,
+          'title': title
+        },
       ).toString();
 }
 

@@ -1,0 +1,493 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:cantinarr/core/models/backend_connection.dart';
+import 'package:cantinarr/core/models/user_profile.dart';
+import 'package:cantinarr/core/network/backend_client.dart';
+import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/widgets/cached_image.dart';
+import 'package:cantinarr/core/widgets/search_bar.dart';
+import 'package:cantinarr/features/auth/data/auth_service.dart';
+import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_books_tab.dart';
+import 'package:cantinarr/features/dashboard/ui/dashboard_music_tab.dart';
+import 'package:cantinarr/features/dashboard/ui/library_artists_row.dart';
+import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
+import 'package:cantinarr/features/discover/logic/discovery_access.dart';
+import 'package:cantinarr/features/discover/ui/book_browse_screen.dart';
+import 'package:cantinarr/features/discover/ui/book_discovery_row.dart';
+import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
+import 'package:cantinarr/navigation/app_router.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+const _albumId = 'c9e8c1f7-36f2-4e32-8fc3-ab36b6a49061';
+const _types = ['radarr', 'sonarr', 'chaptarr', 'lidarr'];
+ServiceInstance _instance(String type) =>
+    ServiceInstance(id: type, name: type, serviceType: type, isDefault: true);
+AuthState _auth({
+  String role = 'admin',
+  bool capability = true,
+  bool child = false,
+  List<String> types = const [],
+  int userId = 1,
+  List<String> permissions = const ['media:discover', 'media:request'],
+}) =>
+    AuthState(
+      connection: BackendConnection(
+          serverUrl: 'http://localhost',
+          accessToken: 'test-access',
+          refreshToken: 'test-refresh',
+          adminCatalogBrowsing: capability,
+          services: AvailableServices(
+              radarr: types.contains('radarr'),
+              sonarr: types.contains('sonarr'),
+              chaptarr: types.contains('chaptarr'),
+              lidarr: types.contains('lidarr')),
+          instances: types.map(_instance).toList()),
+      user: UserProfile(
+          id: userId,
+          username: 'tester',
+          role: role,
+          child: child,
+          permissions: permissions),
+    );
+
+class _Auth extends AuthNotifier {
+  final AuthState initial;
+  final _Backend backend;
+  _Auth(this.initial, this.backend);
+  @override
+  Future<AuthState> build() async => initial;
+  void replace(AuthState next) => state = AsyncData(next);
+  @override
+  Future<void> refreshConfig() async {
+    replace(_auth(types: backend.types));
+  }
+
+  @override
+  Future<List<UserSummary>> listUsers() async => [];
+}
+
+void main() {
+  test('capability defaults off independently of configured services', () {
+    expect(ServerConfig.fromJson({}).adminCatalogBrowsing, isFalse);
+    final config = ServerConfig.fromJson({'admin_catalog_browsing': true});
+    expect(config.adminCatalogBrowsing, isTrue);
+    expect(config.services.chaptarr, isFalse);
+    expect(config.services.lidarr, isFalse);
+  });
+
+  for (final types in [
+    <String>[],
+    ..._types.map((t) => [t]),
+    _types
+  ]) {
+    testWidgets('admin navigation with ${types.join(',')} configured',
+        (t) async {
+      final h = await _pump(t, state: _auth(types: types));
+      final nav =
+          t.widget<BottomNavigationBar>(find.byType(BottomNavigationBar));
+      expect(nav.items.map((i) => i.label),
+          ['Movies', 'TV Shows', 'Releases', 'Books', 'Music']);
+      await t.tap(find.text('Books').last);
+      await t.pumpAndSettle();
+      expect(find.byType(DashboardBooksTab), findsOneWidget);
+      expect(find.text('Popular on Open Library'), findsOneWidget);
+      expect(find.byType(RecentlyAddedBooksRow),
+          types.contains('chaptarr') ? findsOneWidget : findsNothing);
+      await t.tap(find.text('Music').last);
+      await t.pumpAndSettle();
+      expect(find.byType(DashboardMusicTab), findsOneWidget);
+      expect(find.text('Popular Albums'), findsOneWidget);
+      expect(find.byType(LibraryArtistsRow),
+          types.contains('lidarr') ? findsOneWidget : findsNothing);
+      if (types.isEmpty) {
+        expect(h.backend.libraryReads, isEmpty);
+        expect(find.byType(CantinarrSearchBar), findsNothing);
+        expect(find.text('Connect Lidarr to request music'), findsOneWidget);
+        expect(
+            h.backend.catalogReads
+                .every((r) => !r.queryParameters.containsKey('instance_id')),
+            isTrue);
+      }
+    });
+  }
+
+  testWidgets('a music-only requester selects the Music branch', (t) async {
+    final h = await _pump(t, state: _auth(role: 'user', types: ['lidarr']));
+    expect(
+        t
+            .widget<BottomNavigationBar>(find.byType(BottomNavigationBar))
+            .items
+            .map((i) => i.label),
+        ['Movies', 'TV Shows', 'Releases', 'Music']);
+    await t.tap(find.text('Music').last);
+    await t.pumpAndSettle();
+    expect(h.router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/music');
+    expect(find.byType(DashboardMusicTab), findsOneWidget);
+    expect(find.byType(CantinarrSearchBar), findsOneWidget);
+  });
+
+  testWidgets(
+      'genre links and back position survive connecting the first instance',
+      (t) async {
+    final h = await _pump(t, location: '/dashboard/books');
+    await t.tap(find.widgetWithText(ActionChip, 'Fantasy'));
+    await t.pumpAndSettle();
+    expect(
+        Uri.parse(t
+                .widget<BookBrowseScreen>(find.byType(BookBrowseScreen))
+                .query
+                .location)
+            .queryParameters,
+        {'genre': 'fantasy'});
+    final scroll = t.widget<CustomScrollView>(find.descendant(
+        of: find.byType(BookBrowseScreen),
+        matching: find.byType(CustomScrollView)));
+    scroll.controller!.jumpTo(1500);
+    await t.pumpAndSettle();
+    final offset = scroll.controller!.offset;
+    await t.tap(find.byType(BookDiscoveryCard).hitTestable().first);
+    await t.pumpAndSettle();
+    expect(find.text('Connect Chaptarr to request books'), findsOneWidget);
+    expect(h.backend.libraryReads, isEmpty);
+    expect(
+        h.backend.catalogReads
+            .every((r) => !r.queryParameters.containsKey('instance_id')),
+        isTrue);
+    await _connect(t, 'chaptarr', 'Connect Chaptarr to request books');
+    h.router.pop();
+    await t.pumpAndSettle();
+    expect(scroll.controller!.offset, offset);
+    expect(
+        t.widget<BookBrowseScreen>(find.byType(BookBrowseScreen)).query.genre,
+        'fantasy');
+  });
+
+  testWidgets('cold book connects Chaptarr and requests only missing audio',
+      (t) async {
+    final h = await _pump(t, location: '/detail/book/ol:OL1W');
+    expect(find.text('Book 1'), findsOneWidget);
+    expect(h.backend.libraryReads, isEmpty);
+    final cover = t.widget<CachedImage>(find.byType(CachedImage).first);
+    expect(cover.url, isNull);
+    expect(cover.headers, isNull);
+    await _connect(t, 'chaptarr', 'Connect Chaptarr to request books');
+    expect(h.router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/book/ol:OL1W');
+    expect(find.text('Book 1'), findsOneWidget);
+    expect(find.text('Available'), findsOneWidget);
+    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
+    await t.pumpAndSettle();
+    expect(h.backend.requests.single, containsPair('foreign_id', 'gr:1'));
+    expect(h.backend.requests.single, containsPair('book_format', 'audiobook'));
+    expect(h.backend.requests.single, containsPair('instance_id', 'chaptarr'));
+    expect(find.text('Request'), findsNothing);
+  });
+
+  testWidgets('cold album keeps artwork and title through Lidarr setup',
+      (t) async {
+    final h = await _pump(t, location: '/detail/album/$_albumId');
+    expect(find.text('Catalog Album'), findsOneWidget);
+    expect(h.backend.libraryReads, isEmpty);
+    final cover = t.widget<CachedImage>(find.byType(CachedImage).first);
+    expect(Uri.parse(cover.url!).path, '/api/discover/music/artwork/$_albumId');
+    expect(Uri.parse(cover.url!).queryParameters, isEmpty);
+    expect(cover.headers, {'Authorization': 'Bearer test-access'});
+    await _connect(t, 'lidarr', 'Connect Lidarr to request music');
+    expect(find.text('Catalog Album'), findsOneWidget);
+    expect(h.router.routerDelegate.currentConfiguration.uri.path,
+        '/detail/album/$_albumId');
+    expect(find.text('Request'), findsOneWidget);
+    await t.tap(find.text('Request'));
+    await t.pumpAndSettle();
+    expect(h.backend.requests.single, containsPair('foreign_id', _albumId));
+    expect(h.backend.requests.single, containsPair('instance_id', 'lidarr'));
+  });
+
+  for (final (type, route, label) in [
+    ('radarr', 'movie', 'Connect Radarr to request movies'),
+    ('sonarr', 'tv', 'Connect Sonarr to request TV shows'),
+  ]) {
+    testWidgets('$route details offer the matching setup before requests',
+        (t) async {
+      final h = await _pump(t, location: '/detail/$route/1');
+      expect(find.text('Catalog Title'), findsOneWidget);
+      expect(h.backend.libraryReads, isEmpty);
+      await _connect(t, type, label);
+      expect(find.text(label), findsNothing);
+      expect(find.text('Catalog Title'), findsOneWidget);
+      expect(h.backend.libraryReads, isNotEmpty);
+    });
+  }
+
+  testWidgets('older server retains tabs with an update notice and setup',
+      (t) async {
+    final h = await _pump(t,
+        state: _auth(capability: false), location: '/dashboard/books');
+    expect(find.text(adminCatalogUpdateMessage), findsOneWidget);
+    expect(find.text('Connect Chaptarr to request books'), findsOneWidget);
+    h.router.go('/dashboard/music');
+    await t.pumpAndSettle();
+    expect(find.text(adminCatalogUpdateMessage), findsOneWidget);
+    expect(h.backend.catalogReads, isEmpty);
+    expect(h.backend.libraryReads, isEmpty);
+  });
+
+  testWidgets('role and permission changes clear visible catalogs', (t) async {
+    final h = await _pump(t, location: '/dashboard/books');
+    expect(find.text('Book 1'), findsWidgets);
+    h.auth.replace(_auth(role: 'user', child: true));
+    await t.pumpAndSettle();
+    expect(find.text('Book 1'), findsNothing);
+    expect(find.text('Books'), findsNothing);
+    final before = h.backend.catalogReads.length;
+    h.router.go('/detail/book/ol:OL1W');
+    await t.pumpAndSettle();
+    expect(h.backend.catalogReads.length, before);
+    h.auth.replace(_auth(role: 'user', types: ['lidarr']));
+    h.router.go('/dashboard/music');
+    await t.pumpAndSettle();
+    expect(find.text('Catalog Album'), findsWidgets);
+    h.auth.replace(_auth(role: 'user', types: ['lidarr'], permissions: []));
+    await t.pumpAndSettle();
+    expect(find.text('Catalog Album'), findsNothing);
+  });
+
+  testWidgets('explicit unknown and wrong-type IDs never use admin fallback',
+      (t) async {
+    final h = await _pump(t,
+        state: _auth(types: ['radarr']),
+        location: '/detail/book/ol:OL1W?instance_id=radarr');
+    expect(find.text('Book 1'), findsNothing);
+    h.router
+        .go('/detail/album/$_albumId?instance_id=deleted&title=Catalog+Album');
+    await t.pumpAndSettle();
+    expect(find.text('Catalog Album'), findsNothing);
+    expect(h.backend.catalogReads, isEmpty,
+        reason: h.backend.catalogReads.map((r) => r.uri).join(', '));
+    expect(
+        h.backend.libraryReads
+            .where((r) => r.path != '/api/instances/radarr/api/v3/movie'),
+        isEmpty,
+        reason:
+            'the existing movie library may load; no book/music library may load');
+  });
+}
+
+Future<void> _connect(WidgetTester t, String type, String label) async {
+  await t.ensureVisible(find.text(label));
+  await t.tap(find.text(label));
+  await t.pumpAndSettle();
+  expect(
+      t
+          .widget<InstanceEditScreen>(find.byType(InstanceEditScreen))
+          .initialServiceType,
+      type);
+  Finder field(String label) => find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.labelText == label);
+  await t.enterText(field('Name'), 'Test $type');
+  await t.enterText(field('URL'), 'http://$type:1234');
+  await t.enterText(field('API Key'), 'test-key');
+  t.testTextInput.hide();
+  await t.pumpAndSettle();
+  final save = find.widgetWithText(ElevatedButton, 'Add Instance');
+  await t.scrollUntilVisible(save, 300,
+      scrollable: find
+          .descendant(
+              of: find.byType(InstanceEditScreen),
+              matching: find.byType(Scrollable))
+          .first);
+  await t.pumpAndSettle();
+  await t.tap(save);
+  await t.pumpAndSettle();
+  expect(find.byType(InstanceEditScreen), findsNothing,
+      reason:
+          t.widgetList<Text>(find.byType(Text)).map((w) => w.data).join(' | '));
+}
+
+Future<
+        ({
+          ProviderContainer container,
+          GoRouter router,
+          _Backend backend,
+          _Auth auth
+        })>
+    _pump(WidgetTester t,
+        {AuthState? state, String location = '/dashboard/movies'}) async {
+  t.view.physicalSize = const Size(390, 900);
+  t.view.devicePixelRatio = 1;
+  addTearDown(() {
+    t.view.resetPhysicalSize();
+    t.view.resetDevicePixelRatio();
+  });
+  final backend = _Backend();
+  final auth = _Auth(state ?? _auth(), backend);
+  final c = ProviderContainer(overrides: [
+    authProvider.overrideWith(() => auth),
+    backendClientProvider.overrideWithValue(
+        Dio(BaseOptions(baseUrl: 'http://localhost'))
+          ..httpClientAdapter = backend),
+    libraryChangedEventsProvider.overrideWith((_) => const Stream.empty()),
+  ]);
+  await c.read(authProvider.future);
+  await c.pump();
+  final router = c.read(appRouterProvider)..go(location);
+  await t.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: _OwnedContainer(
+          container: c, child: MaterialApp.router(routerConfig: router))));
+  await t.pumpAndSettle();
+  return (container: c, router: router, backend: backend, auth: auth);
+}
+
+class _OwnedContainer extends StatefulWidget {
+  final ProviderContainer container;
+  final Widget child;
+  const _OwnedContainer({required this.container, required this.child});
+  @override
+  State<_OwnedContainer> createState() => _OwnedContainerState();
+}
+
+class _OwnedContainerState extends State<_OwnedContainer> {
+  @override
+  void dispose() {
+    widget.container.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+class _Backend implements HttpClientAdapter {
+  final reads = <RequestOptions>[];
+  final requests = <Map<String, dynamic>>[];
+  final types = <String>[];
+  Iterable<RequestOptions> get catalogReads => reads.where((r) =>
+      r.path.startsWith('/api/discover/books/') ||
+      r.path.startsWith('/api/discover/music/') ||
+      r.path.startsWith('/api/media/book/') ||
+      r.path.startsWith('/api/media/music/') ||
+      r.path == '/api/genres/book' ||
+      r.path == '/api/genres/music');
+  Iterable<RequestOptions> get libraryReads => reads.where((r) =>
+      r.path.startsWith('/api/requests/') ||
+      r.path.endsWith('/request-target') ||
+      RegExp(r'/api/instances/[^/]+/api/').hasMatch(r.path));
+  Map<String, dynamic> book(int n) => {
+        'foreign_id': 'ol:OL${n}W',
+        'title': 'Book $n',
+        'authors': ['An Author'],
+        'year': 2001
+      };
+  final album = {
+    'foreign_id': _albumId,
+    'title': 'Catalog Album',
+    'artist': 'Catalog Artist',
+    'artwork': '/artwork/$_albumId'
+  };
+  @override
+  Future<ResponseBody> fetch(
+      RequestOptions o, Stream<Uint8List>? stream, Future<void>? cancel) async {
+    reads.add(o);
+    Object data = <String, dynamic>{};
+    if (o.path == '/api/instances') {
+      if (o.method == 'POST') {
+        final type = (o.data as Map)['service_type'] as String;
+        types.add(type);
+        data = _instance(type).toJson();
+      } else {
+        data = types.map((t) => _instance(t).toJson()).toList();
+      }
+    } else if (o.path.startsWith('/api/discover/books/')) {
+      final p = o.queryParameters['page'] as int;
+      data = {
+        'page': p,
+        'total_results': 40,
+        if (p == 1) 'next_page': 2,
+        'results': [for (var n = (p - 1) * 20 + 1; n <= p * 20; n++) book(n)]
+      };
+    } else if (o.path == '/api/genres/book') {
+      data = {
+        'genres': [
+          {'id': 'fantasy', 'name': 'Fantasy'}
+        ]
+      };
+    } else if (o.path.endsWith('/request-target')) {
+      data = {
+        'candidates': [
+          {'foreign_id': 'gr:1', 'title': 'Book 1', 'author': 'An Author'}
+        ]
+      };
+    } else if (o.path.startsWith('/api/media/book/')) {
+      data = book(int.parse(RegExp(r'OL(\d+)W').firstMatch(o.path)!.group(1)!));
+    } else if (o.path.startsWith('/api/discover/music/')) {
+      data = {
+        'page': o.queryParameters['page'],
+        'results': [album]
+      };
+    } else if (o.path == '/api/genres/music') {
+      data = {
+        'genres': [
+          {'id': 'rock', 'name': 'Rock', 'tag': 'rock'}
+        ]
+      };
+    } else if (o.path.startsWith('/api/media/music/')) {
+      data = album;
+    } else if (o.path == '/api/requests/book-status') {
+      data = {
+        'status_known': true,
+        'status': 'available',
+        'book_formats': {
+          'ebook': 'available',
+          'audiobook': requests.isEmpty ? 'unavailable' : 'requested'
+        }
+      };
+    } else if (o.path == '/api/requests' && o.method == 'POST') {
+      requests.add(Map<String, dynamic>.from(o.data as Map));
+      data = {'status': 'requested'};
+    } else if (o.path.startsWith('/api/requests/') &&
+        o.path.endsWith('status')) {
+      data = {
+        'status_known': true,
+        'status': requests.isEmpty ? 'unavailable' : 'requested'
+      };
+    } else if (o.path == '/api/requests/options') {
+      data = {'can_choose_season': false, 'can_choose_quality': false};
+    } else if (o.path.startsWith('/api/requests/book-')) {
+      data = {'titles': [], 'books': [], 'authors': [], 'series': []};
+    } else if (o.path.startsWith('/api/requests/music-')) {
+      data = {'albums': [], 'items': [], 'artists': []};
+    } else if (o.path.startsWith('/api/media/movie/') ||
+        o.path.startsWith('/api/media/tv/')) {
+      data = {
+        'id': 1,
+        'title': 'Catalog Title',
+        'name': 'Catalog Title',
+        'overview': 'A test description',
+        'genres': [],
+        'seasons': []
+      };
+    } else if (o.path.contains('/api/v') ||
+        o.path == '/api/requests' ||
+        o.path.contains('/library') ||
+        o.path == '/api/users') {
+      data = [];
+    } else if (o.path.startsWith('/api/discover') ||
+        o.path.startsWith('/api/trakt')) {
+      data = {'results': [], 'page': 1, 'total_pages': 1};
+    }
+    return ResponseBody.fromString(jsonEncode(data), 200, headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType]
+    });
+  }
+
+  @override
+  void close({bool force = false}) {}
+}

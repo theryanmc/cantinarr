@@ -224,6 +224,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         allowReporting: meta['allow_reporting'] as bool? ?? false,
         plexAccessRequestable:
             meta['plex_access_requestable'] as bool? ?? false,
+        adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
       );
       return AuthState(
           connection: connection, user: user, isReconnecting: true);
@@ -299,6 +300,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           issuesEnabled: config.issuesEnabled,
           allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+          adminCatalogBrowsing: config.adminCatalogBrowsing,
         );
         await _persistSession(connection, authResp.user);
       } catch (e) {
@@ -380,6 +382,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
       );
       await _persistSession(connection, authResp.user);
       _registerForPush();
@@ -517,6 +520,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
       );
 
       await _persistSession(connection, authResp.user);
@@ -701,6 +705,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
       );
 
       final offerPasskey =
@@ -839,6 +844,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+      adminCatalogBrowsing: config.adminCatalogBrowsing,
     );
 
     await _persistSession(connection, authResp.user);
@@ -881,6 +887,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+      adminCatalogBrowsing: config.adminCatalogBrowsing,
     );
     final user = current.user;
     if (user != null) await _persistSession(updatedConn, user);
@@ -1102,6 +1109,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
       );
 
       await _persistSession(connection, authResp.user);
@@ -1271,6 +1279,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'instances': conn.instances.map((i) => i.toJson()).toList(),
         'issues_enabled': conn.issuesEnabled,
         'allow_reporting': conn.allowReporting,
+        'admin_catalog_browsing': conn.adminCatalogBrowsing,
       }),
     );
   }

@@ -39,8 +39,12 @@ void main() {
     const q = BookBrowseQuery(
         feed: 'genre', instanceId: 'books & more', genre: 'biography-memoir');
     expect(BookBrowseQuery.tryParse(Uri.parse(q.location)), q);
+    expect(BookBrowseQuery.tryParse(Uri.parse('/browse/books/popular')),
+        const BookBrowseQuery());
     expect(
-        BookBrowseQuery.tryParse(Uri.parse('/browse/books/popular')), isNull);
+        BookBrowseQuery.tryParse(
+            Uri.parse('/browse/books/popular?instance_id=')),
+        isNull);
     expect(
         BookBrowseQuery.tryParse(
             Uri.parse('/browse/books/new-releases?instance_id=books')),

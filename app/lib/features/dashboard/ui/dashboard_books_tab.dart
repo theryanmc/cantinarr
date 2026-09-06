@@ -83,15 +83,19 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         });
       },
     );
-    return const SingleChildScrollView(
+    final hasLibrary =
+        ref.watch(instanceProvider).activeChaptarrInstance != null;
+    return SingleChildScrollView(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          PopularBooksRow(),
-          BookGenresRow(),
-          RecentlyAddedBooksRow(),
-          LibraryAuthorsRow(),
-          LibrarySeriesRow(),
+          const PopularBooksRow(),
+          const BookGenresRow(),
+          if (hasLibrary) ...const [
+            RecentlyAddedBooksRow(),
+            LibraryAuthorsRow(),
+            LibrarySeriesRow(),
+          ],
         ],
       ),
     );

@@ -28,10 +28,11 @@ class DiscoveryBook {
       coverId != null && coverId! > 0 && coverId! <= 9007199254740991
           ? 'https://covers.openlibrary.org/b/id/$coverId-M.jpg?default=false'
           : null;
-  String detailLocation(String instanceId) => Uri(
-          path: '/detail/book/$foreignId',
-          queryParameters: {'instance_id': instanceId, 'source': 'openlibrary'})
-      .toString();
+  String detailLocation(String? instanceId) =>
+      Uri(path: '/detail/book/$foreignId', queryParameters: {
+        if (instanceId != null) 'instance_id': instanceId,
+        'source': 'openlibrary'
+      }).toString();
 
   factory DiscoveryBook.fromJson(Map<String, dynamic> json) {
     final id = json['foreign_id'] as String? ?? '';
@@ -84,11 +85,13 @@ class BookDiscoveryService {
   final Dio _dio;
   BookDiscoveryService(this._dio);
 
-  Future<Map<String, dynamic>> _get(String path, String instanceId,
+  Future<Map<String, dynamic>> _get(String path, String? instanceId,
       [Map<String, dynamic> params = const {}]) async {
     try {
-      final response = await _dio
-          .get(path, queryParameters: {'instance_id': instanceId, ...params});
+      final response = await _dio.get(path, queryParameters: {
+        if (instanceId != null) 'instance_id': instanceId,
+        ...params
+      });
       if (response.data is! Map<String, dynamic>) {
         throw const FormatException('Invalid book discovery response');
       }
@@ -107,7 +110,7 @@ class BookDiscoveryService {
     }
   }
 
-  Future<BookDiscoveryPage> feed(String feed, String instanceId,
+  Future<BookDiscoveryPage> feed(String feed, String? instanceId,
       {String? genre, int page = 1}) async {
     final json = await _get('/api/discover/books/$feed', instanceId,
         {'page': page, if (genre != null) 'genre': genre});
@@ -126,14 +129,14 @@ class BookDiscoveryService {
             'No books found on this page of Open Library.');
   }
 
-  Future<List<BookGenre>> genres(String instanceId) async {
+  Future<List<BookGenre>> genres(String? instanceId) async {
     final json = await _get('/api/genres/book', instanceId);
     return (json['genres'] as List)
         .map((g) => BookGenre(g['id'] as String, g['name'] as String))
         .toList();
   }
 
-  Future<DiscoveryBook> book(String foreignId, String instanceId) async {
+  Future<DiscoveryBook> book(String foreignId, String? instanceId) async {
     if (!DiscoveryBook.validId(foreignId)) {
       throw const FormatException('Invalid book ID');
     }

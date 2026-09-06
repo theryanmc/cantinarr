@@ -842,6 +842,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// True when a Plex server exists at all, so a user without the
 			// grant can still ask for access from the guide.
 			"plex_access_requestable": plexRequestable,
+			"admin_catalog_browsing":  true,
 		})
 	}
 }
