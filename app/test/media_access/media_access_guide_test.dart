@@ -7,6 +7,7 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/safe_http_log_interceptor.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/media_access/logic/media_app_launcher.dart';
 import 'package:cantinarr/features/media_access/ui/media_access_guide.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -198,6 +199,7 @@ Future<_JsonAdapter> _pumpGuide(
   List<ServiceInstance> instances = const [_jellyfin],
   bool plexAccessRequestable = false,
   List<String>? logs,
+  MediaAppLauncher? launcher,
 }) async {
   tester.view.physicalSize = const Size(800, 1600);
   tester.view.devicePixelRatio = 1.0;
@@ -212,6 +214,8 @@ Future<_JsonAdapter> _pumpGuide(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        if (launcher != null)
+          mediaAppLauncherProvider.overrideWithValue(launcher),
         authProvider.overrideWith(() => _lastAuth = _FakeAuthNotifier(
             user: user,
             instances: instances,
@@ -321,6 +325,71 @@ void main() {
     expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Create my account'),
         findsNothing);
+  });
+
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    for (final server in [_plex, _jellyfin, _emby]) {
+      testWidgets('$platform guide opens the ${server.serviceType} app home',
+          (tester) async {
+        final external = <Uri>[];
+        final android = <({String serviceType, Uri? uri})>[];
+        final data = switch (server.serviceType) {
+          'plex' => _plexServer(account: _share(pending: false)),
+          'emby' => _embyServer(account: _account()),
+          _ => _server(account: _account()),
+        };
+        await _pumpGuide(tester,
+            instances: [server],
+            handlers: {'GET /api/media-servers': (_, __) => _Reply(200, [data])},
+            launcher: MediaAppLauncher(
+              platform: platform,
+              launchExternal: (uri) async {
+                external.add(uri);
+                return true;
+              },
+              launchAndroid: (serviceType, uri) async {
+                android.add((serviceType: serviceType, uri: uri));
+                return true;
+              },
+            ));
+        final button = find.widgetWithText(TextButton, 'Open');
+        await tester.ensureVisible(button);
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+        if (platform == TargetPlatform.iOS) {
+          final scheme = server.serviceType == 'jellyfin'
+              ? 'org.jellyfin.expo'
+              : server.serviceType;
+          expect(external.single.toString(), '$scheme://');
+        } else {
+          expect(android.single, (serviceType: server.serviceType, uri: null));
+          expect(external, isEmpty);
+        }
+        expect(find.textContaining("Couldn't open"), findsNothing);
+      });
+    }
+  }
+
+  testWidgets('guide falls back to the public address before reporting failure',
+      (tester) async {
+    final launched = <Uri>[];
+    await _pumpGuide(tester,
+        handlers: {
+          'GET /api/media-servers': (_, __) =>
+              _Reply(200, [_server(account: _account())]),
+        },
+        launcher: MediaAppLauncher(
+          platform: TargetPlatform.iOS,
+          launchExternal: (uri) async {
+            launched.add(uri);
+            return false;
+          },
+        ));
+    await tester.tap(find.widgetWithText(TextButton, 'Open'));
+    await tester.pumpAndSettle();
+    expect(launched.map((uri) => uri.toString()),
+        ['org.jellyfin.expo://', 'https://jf.example.com']);
+    expect(find.text("Couldn't open Home Jellyfin."), findsOneWidget);
   });
 
   testWidgets('an Emby server speaks Emby and never calls its app free',

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/media_access_service.dart';
+import '../logic/media_app_launcher.dart';
 import 'media_server_email_sheet.dart';
 import 'media_server_password_sheet.dart';
 import 'media_server_sign_in_sheet.dart';
@@ -257,10 +257,15 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     );
   }
 
-  Future<void> _open(String address) async {
-    final uri = Uri.tryParse(address);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  Future<void> _open(MediaServerAccess server) async {
+    final opened = await ref.read(mediaAppLauncherProvider).open(
+          serviceType: server.serviceType,
+          webUrl: server.publicAddress,
+        );
+    if (opened || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text("Couldn't open ${server.name}."),
+    ));
   }
 
   @override
@@ -608,7 +613,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                   label: const Text('Copy address'),
                 ),
                 TextButton.icon(
-                  onPressed: () => _open(server.publicAddress),
+                  onPressed: () => _open(server),
                   icon: const Icon(Icons.open_in_new, size: 16),
                   label: const Text('Open'),
                 ),
@@ -925,7 +930,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                   label: const Text('Copy address'),
                 ),
                 TextButton.icon(
-                  onPressed: () => _open(server.publicAddress),
+                  onPressed: () => _open(server),
                   icon: const Icon(Icons.open_in_new, size: 16),
                   label: const Text('Open'),
                 ),
