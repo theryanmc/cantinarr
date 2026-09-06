@@ -89,6 +89,7 @@ import '../features/monitoring/ui/monitoring_history_screen.dart';
 import '../features/monitoring/ui/monitoring_module_shell.dart';
 import '../features/monitoring/ui/monitoring_stats_screen.dart';
 import '../core/widgets/app_ambient_background.dart';
+import '../core/widgets/unsaved_changes_guard.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -131,6 +132,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(authRefresh.dispose);
   ref.listen(authProvider, (_, __) => authRefresh.value++);
   ref.listen(plexPendingProvider, (_, __) => authRefresh.value++);
+
+  Future<bool> confirmSettingsExit(
+      BuildContext context, GoRouterState state) async {
+    final auth = ref.read(authProvider).valueOrNull;
+    // An expired session or revoked role must still reach its safe destination.
+    if (auth?.isAuthenticated != true ||
+        (_isAdminOnlyRoute(state.uri.path) && auth?.user?.isAdmin != true)) {
+      return true;
+    }
+    return ref.read(unsavedChangesProvider).confirmExit(context, state);
+  }
 
   // Keep an in-memory return target while authentication (or the first-login
   // passkey offer) temporarily sends the user to /login. This deliberately
@@ -613,21 +625,25 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: SettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiAccessScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/chatgpt',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: CodexConnectionScreen()),
           ),
           GoRoute(
             path: '/settings/credentials/chatgpt',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: CodexConnectionScreen(
                 scope: CodexOAuthScope.adminShared,
@@ -636,11 +652,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/grok',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: GrokConnectionScreen()),
           ),
           GoRoute(
             path: '/settings/credentials/grok',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: GrokConnectionScreen(
                 scope: GrokOAuthScope.adminShared,
@@ -649,32 +667,36 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/credentials',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: CredentialsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/ai-tools',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiToolsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/change-history',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: ConfigChangeHistoryScreen(),
             ),
           ),
           GoRoute(
             path: '/settings/profile-approvals',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
               child: ProfileProposalsScreen(),
             ),
           ),
           GoRoute(
             path: '/settings/change-history/:id',
-            redirect: (_, state) =>
-                _positiveIntParameter(state, 'id') == null
-                    ? '/settings/change-history'
-                    : null,
+            onExit: confirmSettingsExit,
+            redirect: (_, state) => _positiveIntParameter(state, 'id') == null
+                ? '/settings/change-history'
+                : null,
             builder: (context, state) {
               final id = _positiveIntParameter(state, 'id');
               if (id == null) {
@@ -691,11 +713,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/users',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: UsersScreen()),
           ),
           GoRoute(
             path: '/settings/users/:userId/request-settings',
+            onExit: confirmSettingsExit,
             redirect: (_, state) =>
                 _positiveIntParameter(state, 'userId') == null
                     ? '/settings/users'
@@ -712,6 +736,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final username = state.extra as String? ?? '';
               return AppAmbientBackground(
                 child: UserRequestSettingsScreen(
+                  key: ValueKey(state.uri.path),
                   userId: userId,
                   username: username,
                   targetIsAdmin: state.uri.queryParameters['admin'] == '1',
@@ -751,48 +776,59 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/ai-remediation',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: AiRemediationSettingsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/agent-approval-rules',
-            builder: (_, __) => const AppAmbientBackground(
-                child: AgentApprovalRulesScreen()),
+            onExit: confirmSettingsExit,
+            builder: (_, __) =>
+                const AppAmbientBackground(child: AgentApprovalRulesScreen()),
           ),
           GoRoute(
             path: '/settings/request-settings',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: RequestSettingsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/discovery',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: DiscoverySettingsScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
               path: '/settings/plex-auth',
+              onExit: confirmSettingsExit,
               builder: (_, state) => const PlexAuthSettingsScreen()),
           GoRoute(
             path: '/settings/oidc',
-            builder: (_, state) => OIDCSettingsScreen(key: ValueKey(state.uri)),
+            onExit: confirmSettingsExit,
+            builder: (_, state) =>
+                OIDCSettingsScreen(key: ValueKey(state.uri.path)),
           ),
           GoRoute(
             path: '/settings/sso-account',
+            onExit: confirmSettingsExit,
             builder: (_, state) => OIDCAccountScreen(key: ValueKey(state.uri)),
           ),
           GoRoute(
             path: '/settings/users/:userId/sso',
-            redirect: (_, state) => _positiveIntParameter(state, 'userId') == null
-                ? '/settings/users'
-                : null,
-            builder: (_, state) =>
-                OIDCAccountScreen(userId: _positiveIntParameter(state, 'userId')),
+            onExit: confirmSettingsExit,
+            redirect: (_, state) =>
+                _positiveIntParameter(state, 'userId') == null
+                    ? '/settings/users'
+                    : null,
+            builder: (_, state) => OIDCAccountScreen(
+                userId: _positiveIntParameter(state, 'userId')),
           ),
           GoRoute(
             path: '/settings/devices',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: DevicesScreen()),
           ),
@@ -800,32 +836,38 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // address opens a new Plex instance so shared links keep working.
           GoRoute(
             path: '/settings/plex',
+            onExit: confirmSettingsExit,
             builder: (_, __) => const AppAmbientBackground(
                 child: InstanceEditScreen(initialServiceType: 'plex')),
           ),
           GoRoute(
             path: '/settings/notifications',
+            onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
                 child: NotificationPreferencesScreen(
                     highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/passkeys',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: PasskeyManagementScreen()),
           ),
           GoRoute(
             path: '/settings/passkeys/new',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: PasskeyCreateScreen()),
           ),
           GoRoute(
             path: '/settings/password',
+            onExit: confirmSettingsExit,
             builder: (_, __) =>
                 const AppAmbientBackground(child: SetPasswordScreen()),
           ),
           GoRoute(
             path: '/settings/instance/new',
+            onExit: confirmSettingsExit,
             builder: (context, state) {
               // The setup checklist names the service type (or, for the
               // download-client category, a selection prompt) when it sends
@@ -834,6 +876,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               final extra = state.extra as Map<String, dynamic>?;
               return AppAmbientBackground(
                 child: InstanceEditScreen(
+                  key: ValueKey(state.uri.path),
                   initialServiceType: extra?['service_type'] as String?,
                   serviceTypePrompt: extra?['service_type_prompt'] as String?,
                 ),
@@ -842,10 +885,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/settings/instance/:id',
+            onExit: confirmSettingsExit,
             builder: (context, state) {
               final extra = state.extra as Map<String, dynamic>?;
               return AppAmbientBackground(
                 child: InstanceEditScreen(
+                  key: ValueKey(state.uri.path),
                   instanceId: state.pathParameters['id'],
                   initialServiceType: extra?['service_type'] as String?,
                   initialName: extra?['name'] as String?,

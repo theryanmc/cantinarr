@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +30,26 @@ class CredentialsScreen extends ConsumerStatefulWidget {
 
 class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
   late final CredentialsService _service;
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _selectedProvider,
+        _selectedModel,
+        _healthCheckEnabled,
+        if (_selectedModel == _customModelValue) _customModelController.text,
+        if (_showOpenAiReasoningEffort) _openaiReasoningEffort,
+        if (_localProviderSelected) ...[
+          _localBaseUrlController.text,
+          _localReasoningEffort,
+          if (_showLocalProxyOptIn) _localUseProxy,
+        ],
+      ];
+  bool get _hasPendingKeys => [
+        _anthropicController,
+        _openAIController,
+        _geminiController,
+        _grokController,
+        _localKeyController,
+      ].any((controller) => controller.text.isNotEmpty);
   CredentialsStatus? _status;
   bool _isLoading = true;
   String? _error;
@@ -64,7 +85,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     });
   }
 
-  Future<void> _loadStatus() async {
+  Future<void> _loadStatus({bool preserveDraft = false}) async {
+    final keepDraft = preserveDraft && _draft.hasChanges(_draftValues);
     setState(() {
       _isLoading = true;
       _error = null;
@@ -73,7 +95,10 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       final status = await _service.getStatus();
       setState(() {
         _status = status;
-        _syncAISelection(status);
+        if (!keepDraft) {
+          _syncAISelection(status);
+          _draft.markSaved(_draftValues);
+        }
         _isLoading = false;
       });
     } catch (e) {
@@ -177,6 +202,8 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
       _openAIController.clear();
       _geminiController.clear();
       _grokController.clear();
+      _localKeyController.clear();
+      _draft.markSaved(_draftValues);
       await _loadStatus();
       // Provider selection and scoped OAuth availability are separate live
       // server facts. Refresh both so the underlying Settings screen and the
@@ -236,7 +263,7 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
 
     try {
       await _service.delete(key);
-      await _loadStatus();
+      await _loadStatus(preserveDraft: true);
       ref.invalidate(aiSettingsProvider);
       ref.read(authProvider.notifier).refreshConfig();
       if (mounted) {
@@ -358,12 +385,18 @@ class _CredentialsScreenState extends ConsumerState<CredentialsScreen> {
     ref.invalidate(adminCodexConnectionStatusProvider);
     ref.invalidate(adminGrokConnectionStatusProvider);
     ref.invalidate(aiSettingsProvider);
-    await _loadStatus();
+    await _loadStatus(preserveDraft: true);
     await ref.read(authProvider.notifier).refreshConfig();
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _hasPendingKeys || _draft.hasChanges(_draftValues),
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Providers & Credentials')),
       body: CenteredContent(

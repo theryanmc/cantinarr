@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
+import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
@@ -271,6 +272,23 @@ Future<void> _fillForm(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets(
+      'loaded instances and automatic defaults are clean; reverted edits are clean again',
+      (tester) async {
+    final adapter = _FakeAdapter();
+    await _pumpEdit(tester, adapter: adapter, users: const []);
+    bool dirty() => tester
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    expect(dirty(), isFalse);
+    final name = find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.labelText == 'Name');
+    await tester.enterText(name, 'My library');
+    expect(dirty(), isTrue);
+    await tester.enterText(name, '');
+    expect(dirty(), isFalse);
+  });
+
   testWidgets(
       'backend down at mount shows a friendly error and no unhandled error '
       'leaks', (tester) async {

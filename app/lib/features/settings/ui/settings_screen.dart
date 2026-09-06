@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -667,68 +668,73 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('External Address'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'The address other people use to reach this server, like a '
-                'reverse proxy domain or a public IP. Invite links and '
-                'passkey links are built from it. Leave blank to build links '
-                'from the address your own app connects with, which usually '
-                'only works on your network.',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  labelText: 'External address',
-                  hintText: 'https://cantinarr.example.com',
-                  prefixIcon: Icon(Icons.public),
+        builder: (context, setDialogState) => UnsavedChangesGuard(
+          isDialog: true,
+          hasChanges: () => controller.text != current,
+          isSaving: saving,
+          child: AlertDialog(
+            title: const Text('External Address'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'The address other people use to reach this server, like a '
+                  'reverse proxy domain or a public IP. Invite links and '
+                  'passkey links are built from it. Leave blank to build links '
+                  'from the address your own app connects with, which usually '
+                  'only works on your network.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                textInputAction: TextInputAction.done,
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: 'External address',
+                    hintText: 'https://cantinarr.example.com',
+                    prefixIcon: Icon(Icons.public),
+                  ),
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  textInputAction: TextInputAction.done,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).maybePop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setDialogState(() => saving = true);
+                        try {
+                          await ref
+                              .read(externalAddressProvider.notifier)
+                              .set(controller.text.trim());
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                        } catch (e) {
+                          setDialogState(() => saving = false);
+                          if (dialogContext.mounted) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text('Failed to save: $e')),
+                            );
+                          }
+                        }
+                      },
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      setDialogState(() => saving = true);
-                      try {
-                        await ref
-                            .read(externalAddressProvider.notifier)
-                            .set(controller.text.trim());
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      } catch (e) {
-                        setDialogState(() => saving = false);
-                        if (dialogContext.mounted) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text('Failed to save: $e')),
-                          );
-                        }
-                      }
-                    },
-              child: saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
-            ),
-          ],
         ),
       ),
     );
@@ -751,70 +757,75 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     showDialog(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Update Portal'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Optional. When set, an in-app prompt to update the server '
-                'links here so you can apply the update in your own container '
-                'manager (e.g. an Unraid Docker page or Portainer). The link '
-                'opens on your '
-                'devices, so use an address they can reach — a cluster-internal '
-                'name only the server resolves won\'t work from a phone. Leave '
-                'blank to clear.',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  labelText: 'Portal URL',
-                  hintText: 'http://tower.local/Docker',
-                  prefixIcon: Icon(Icons.open_in_new),
+        builder: (context, setDialogState) => UnsavedChangesGuard(
+          isDialog: true,
+          hasChanges: () => controller.text != current,
+          isSaving: saving,
+          child: AlertDialog(
+            title: const Text('Update Portal'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Optional. When set, an in-app prompt to update the server '
+                  'links here so you can apply the update in your own container '
+                  'manager (e.g. an Unraid Docker page or Portainer). The link '
+                  'opens on your '
+                  'devices, so use an address they can reach — a cluster-internal '
+                  'name only the server resolves won\'t work from a phone. Leave '
+                  'blank to clear.',
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                textInputAction: TextInputAction.done,
+                const SizedBox(height: 12),
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    labelText: 'Portal URL',
+                    hintText: 'http://tower.local/Docker',
+                    prefixIcon: Icon(Icons.open_in_new),
+                  ),
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  textInputAction: TextInputAction.done,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).maybePop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: saving
+                    ? null
+                    : () async {
+                        setDialogState(() => saving = true);
+                        try {
+                          await ref
+                              .read(updateStatusProvider.notifier)
+                              .setManagementUrl(controller.text.trim());
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop();
+                          }
+                        } catch (e) {
+                          setDialogState(() => saving = false);
+                          if (dialogContext.mounted) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text('Failed to save: $e')),
+                            );
+                          }
+                        }
+                      },
+                child: saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      setDialogState(() => saving = true);
-                      try {
-                        await ref
-                            .read(updateStatusProvider.notifier)
-                            .setManagementUrl(controller.text.trim());
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      } catch (e) {
-                        setDialogState(() => saving = false);
-                        if (dialogContext.mounted) {
-                          ScaffoldMessenger.of(dialogContext).showSnackBar(
-                            SnackBar(content: Text('Failed to save: $e')),
-                          );
-                        }
-                      }
-                    },
-              child: saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
-            ),
-          ],
         ),
       ),
     );
@@ -915,6 +926,18 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
   @override
   Widget build(BuildContext context) {
     final busy = _saving || _testing;
+    return UnsavedChangesGuard(
+      isDialog: true,
+      hasChanges: () =>
+          _addressController.text != widget.current.url ||
+          _usernameController.text != widget.current.username ||
+          _passwordController.text.isNotEmpty,
+      isSaving: _saving,
+      child: _buildDialog(context, busy),
+    );
+  }
+
+  Widget _buildDialog(BuildContext context, bool busy) {
     return AlertDialog(
       title: const Text('Outbound Proxy'),
       content: SingleChildScrollView(
@@ -996,7 +1019,7 @@ class _OutboundProxyDialogState extends ConsumerState<_OutboundProxyDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => Navigator.of(context).maybePop(),
           child: const Text('Cancel'),
         ),
         // Nothing to test without an address; the server would only say so.

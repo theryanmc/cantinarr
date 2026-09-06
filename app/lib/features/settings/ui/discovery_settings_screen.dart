@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/layout/adaptive.dart';
@@ -30,6 +31,13 @@ class _DiscoverySettingsScreenState
   late final DiscoverySettingsService _service;
   late final CredentialsService _credentialsService;
 
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _edited?.source,
+        _edited?.englishOnly,
+        _tmdbController.text,
+        _traktIdController.text,
+      ];
   DiscoverySettings? _edited;
   CredentialsStatus? _credentials;
   bool _isLoading = true;
@@ -79,6 +87,7 @@ class _DiscoverySettingsScreenState
       setState(() {
         _edited = results[0] as DiscoverySettings;
         _credentials = results[1] as CredentialsStatus;
+        _draft.markSaved(_draftValues);
         _isLoading = false;
       });
     } catch (e) {
@@ -113,10 +122,13 @@ class _DiscoverySettingsScreenState
       }
       final saved = await _service.update(edited);
       if (!mounted) return;
+      _edited = saved;
+      _draft.markSaved(_draftValues);
       final refreshed = creds.isEmpty ? null : await _reloadAfterCreds();
       if (!mounted) return;
       setState(() {
         _edited = refreshed ?? saved;
+        _draft.markSaved(_draftValues);
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -187,7 +199,13 @@ class _DiscoverySettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _draft.hasChanges(_draftValues),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Discover')),
       body: CenteredContent(

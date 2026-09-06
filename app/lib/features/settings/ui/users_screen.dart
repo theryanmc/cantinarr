@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -183,38 +184,42 @@ class _UsersScreenState extends ConsumerState<UsersScreen> {
     final nameController = TextEditingController();
     final name = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Invite a new user'),
-        content: TextField(
-          controller: nameController,
-          autofocus: true,
-          decoration: const InputDecoration(
-            labelText: 'Name',
-            hintText: 'e.g. Mom, Dad, Roommate',
-            prefixIcon: Icon(Icons.person_outline),
-          ),
-          textCapitalization: TextCapitalization.words,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (value) {
-            final trimmed = value.trim();
-            if (trimmed.isEmpty) return;
-            Navigator.of(dialogContext).pop(trimmed);
-          },
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final trimmed = nameController.text.trim();
+      builder: (dialogContext) => UnsavedChangesGuard(
+        isDialog: true,
+        hasChanges: () => nameController.text.isNotEmpty,
+        child: AlertDialog(
+          title: const Text('Invite a new user'),
+          content: TextField(
+            controller: nameController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              hintText: 'e.g. Mom, Dad, Roommate',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+            textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (value) {
+              final trimmed = value.trim();
               if (trimmed.isEmpty) return;
               Navigator.of(dialogContext).pop(trimmed);
             },
-            child: const Text('Create invite'),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).maybePop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final trimmed = nameController.text.trim();
+                if (trimmed.isEmpty) return;
+                Navigator.of(dialogContext).pop(trimmed);
+              },
+              child: const Text('Create invite'),
+            ),
+          ],
+        ),
       ),
     );
     if (name == null || name.isEmpty || !mounted) return;
@@ -849,6 +854,7 @@ class _UserTile extends StatelessWidget {
 
   final UserSummary user;
   final bool isSelf;
+
   /// Every media server the admin's config lists, and this user's linked
   /// account on each (by instance id; absent = no account linked).
   final List<ServiceInstance> mediaServers;

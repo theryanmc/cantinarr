@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,6 +29,12 @@ class AiRemediationSettingsScreen extends ConsumerStatefulWidget {
 
 class _AiRemediationSettingsScreenState
     extends ConsumerState<AiRemediationSettingsScreen> {
+  final _draft = SettingsDraft();
+  Object get _draftValues => [
+        _edited?.toJson(),
+        _modelSelection,
+        if (_modelSelection == _customModel) _customModelController.text,
+      ];
   RemediationSettings? _edited;
   bool _isLoading = true;
   String? _error;
@@ -76,6 +83,7 @@ class _AiRemediationSettingsScreenState
         _edited = settings;
         _credentials = credentials;
         _syncModelSelection(settings, credentials);
+        _draft.markSaved(_draftValues);
         _isLoading = false;
       });
     } catch (e) {
@@ -119,6 +127,7 @@ class _AiRemediationSettingsScreenState
       setState(() {
         _edited = saved;
         _syncModelSelection(saved, credentials);
+        _draft.markSaved(_draftValues);
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -162,7 +171,13 @@ class _AiRemediationSettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _draft.hasChanges(_draftValues),
+        isSaving: _saving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('AI Remediation')),
       body: CenteredContent(

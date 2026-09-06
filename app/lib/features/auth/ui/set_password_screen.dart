@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -61,6 +62,8 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Password saved')),
       );
+      _passwordController.clear();
+      _confirmController.clear();
       context.pop(true);
     } catch (e) {
       if (!mounted) return;
@@ -87,7 +90,15 @@ class _SetPasswordScreenState extends ConsumerState<SetPasswordScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _passwordController.text.isNotEmpty ||
+            _confirmController.text.isNotEmpty,
+        isSaving: _isSaving,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     final user = ref.watch(authProvider).valueOrNull?.user;
     final isChange = user?.hasPassword == true;
     final account = user?.username ?? 'your account';

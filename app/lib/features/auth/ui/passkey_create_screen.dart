@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -85,6 +86,7 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Passkey created')),
       );
+      _nameController.text = 'Passkey';
       context.pop(true);
     } catch (e) {
       if (!mounted) return;
@@ -120,7 +122,13 @@ class _PasskeyCreateScreenState extends ConsumerState<PasskeyCreateScreen> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () => _nameController.text != 'Passkey',
+        isSaving: _isCreating,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) {
     final checkingAvailability = _passkeyAvailable == null;
     final available = _passkeyAvailable ?? false;
 

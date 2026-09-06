@@ -1,3 +1,4 @@
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,6 +14,8 @@ class PlexAuthSettingsScreen extends ConsumerStatefulWidget {
 
 class _PlexAuthSettingsScreenState
     extends ConsumerState<PlexAuthSettingsScreen> {
+  final _draft = SettingsDraft();
+  Object get _draftValues => [_config?['enabled'], _config?['auto_create']];
   Map<String, dynamic>? _config;
   List<Map<String, dynamic>>? _candidates;
   final _selected = <int>{};
@@ -39,6 +42,7 @@ class _PlexAuthSettingsScreenState
       if (!mounted) return;
       setState(() {
         _config = config;
+        _draft.markSaved(_draftValues);
         _error = null;
       });
     } catch (e) {
@@ -54,7 +58,10 @@ class _PlexAuthSettingsScreenState
     try {
       final config = await _request(method: 'PUT', data: _config);
       if (mounted) {
-        setState(() => _config = config);
+        setState(() {
+          _config = config;
+          _draft.markSaved(_draftValues);
+        });
         ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Plex sign-in settings saved.')));
       }
@@ -108,7 +115,14 @@ class _PlexAuthSettingsScreenState
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => UnsavedChangesGuard(
+        hasChanges: () =>
+            _draft.hasChanges(_draftValues) || _selected.isNotEmpty,
+        isSaving: _busy,
+        child: _buildPage(context),
+      );
+
+  Widget _buildPage(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('Plex sign-in')),
         body: Align(
             alignment: Alignment.topCenter,
