@@ -27,6 +27,7 @@ import '../../discover/logic/browse_query.dart';
 import '../../issues/logic/issues_provider.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_access/data/media_access_service.dart';
+import '../../media_access/logic/media_app_launcher.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../person/ui/person_detail_sheet.dart';
@@ -1036,18 +1037,16 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     return sameType > 1 ? link.name : mediaServerTypeLabel(link.serviceType);
   }
 
-  /// Opens the title's page on the media server, in the browser or the
-  /// server's app when it claims the address.
+  /// Prefers the installed media app on mobile, retaining the server's web
+  /// link when no app can open. Only a confirmed match carries a title hint.
   Future<void> _openWatchLink(WatchLink link, {bool fallback = false}) async {
-    final uri = Uri.tryParse(fallback ? link.fallbackUrl : link.url);
-    var opened = false;
-    if (uri != null) {
-      try {
-        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } catch (_) {
-        opened = false;
-      }
-    }
+    final opened = await ref.read(mediaAppLauncherProvider).open(
+          serviceType: link.serviceType,
+          webUrl: fallback ? link.fallbackUrl : link.url,
+          mediaType: !fallback && link.state == WatchLinkState.found
+              ? widget.mediaType
+              : null,
+        );
     if (opened || !mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text("Couldn't open ${_watchLabel(link)}."),
