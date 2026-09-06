@@ -7,6 +7,15 @@ import '../../../core/widgets/app_panel.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
 import '../logic/auth_provider.dart';
+import '../logic/saved_servers_provider.dart';
+import 'saved_server_picker.dart';
+
+/// Overridable so native widget tests can exercise hosted-web selection too.
+final authPageOriginProvider = Provider<String?>((ref) {
+  if (!kIsWeb) return null;
+  final origin = Uri.base.origin;
+  return origin.isEmpty || origin == 'null' ? null : origin;
+});
 
 /// Unified auth screen: checks server status, shows setup wizard or login.
 class AuthScreen extends ConsumerStatefulWidget {
@@ -23,28 +32,40 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   _AuthView _view = _AuthView.serverUrl;
   ServerStatus? _serverStatus;
   bool _isCheckingServer = false;
+  bool _isLoadingHistory = true;
+  int _selectionEpoch = 0;
   String? _serverError;
 
   @override
   void initState() {
     super.initState();
-    // On web, auto-detect the server URL from the current page origin
-    if (kIsWeb) {
-      _checkCurrentOrigin();
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _selectInitialServer());
   }
 
-  void _checkCurrentOrigin() {
-    // On web builds served from the Cantinarr server, auto-detect
-    // We use a post-frame callback so the widget is fully built
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // The server URL is the origin where the web app was loaded from
-      final origin = Uri.base.origin;
-      if (origin.isNotEmpty && origin != 'null') {
-        _serverUrlController.text = origin;
-        _checkServer();
-      }
-    });
+  Future<void> _selectInitialServer() async {
+    if (!mounted) return;
+    final epoch = _selectionEpoch;
+    // Restore/migrate first. A remembered shortcut must never replace a
+    // restored session or an explicit sign-in already in progress.
+    await ref.read(authProvider.future);
+    if (!mounted || epoch != _selectionEpoch) return;
+    List<SavedServer> servers;
+    try {
+      servers = await ref.read(savedServersProvider.future);
+    } catch (_) {
+      servers = const [];
+    }
+    if (!mounted || epoch != _selectionEpoch) return;
+    setState(() => _isLoadingHistory = false);
+    final auth = ref.read(authProvider).valueOrNull;
+    if (auth?.isAuthenticated == true || auth?.isLoading == true) return;
+    final url = servers.isNotEmpty
+        ? servers.first.url
+        : ref.read(authPageOriginProvider);
+    if (url != null) {
+      _serverUrlController.text = url;
+      await _checkServer();
+    }
   }
 
   @override
@@ -57,8 +78,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   Future<void> _checkServer() async {
     final serverUrl = _serverUrlController.text.trim();
     if (serverUrl.isEmpty) return;
+    final epoch = ++_selectionEpoch;
 
     setState(() {
+      _isLoadingHistory = false;
       _isCheckingServer = true;
       _serverError = null;
     });
@@ -66,6 +89,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     try {
       final result =
           await ref.read(authProvider.notifier).checkServer(serverUrl);
+      if (!_canFinishCheck(epoch)) return;
       // Reflect the URL that actually answered (scheme included) back into
       // the field — the setup/login views read it from here, so they reuse
       // exactly the scheme the probe settled on.
@@ -76,11 +100,69 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         _view = result.status.needsSetup ? _AuthView.setup : _AuthView.login;
       });
     } catch (e) {
+      if (!_canFinishCheck(epoch)) return;
       setState(() {
         _isCheckingServer = false;
         _serverError = _parseConnectionError(e);
       });
     }
+  }
+
+  bool _canFinishCheck(int epoch) =>
+      mounted && epoch == _selectionEpoch && _view == _AuthView.serverUrl;
+
+  void _cancelPendingSelection() {
+    _selectionEpoch++;
+    _isLoadingHistory = false;
+    _isCheckingServer = false;
+  }
+
+  void _addressChanged(String _) {
+    setState(() {
+      _cancelPendingSelection();
+      _serverError = null;
+    });
+  }
+
+  void _selectSavedServer(SavedServer server) {
+    _serverUrlController.text = server.url;
+    _checkServer();
+  }
+
+  Future<void> _forgetServer(SavedServer server) async {
+    setState(_cancelPendingSelection);
+    final epoch = _selectionEpoch;
+    final previous = ref.read(savedServersProvider).valueOrNull ?? const [];
+    final history = ref.read(savedServersProvider.notifier);
+    try {
+      await history.forget(server.url);
+      if (!mounted) return;
+      if (epoch == _selectionEpoch && _serverUrlController.text == server.url) {
+        _backToServerUrl();
+        _serverUrlController.clear();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Forgot ${server.label}'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            try {
+              await history.undoForget(server, previous);
+            } catch (_) {
+              if (mounted) _showHistoryError();
+            }
+          },
+        ),
+      ));
+    } catch (_) {
+      if (mounted) _showHistoryError();
+    }
+  }
+
+  void _showHistoryError() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Could not save server shortcuts. Please try again.'),
+    ));
   }
 
   String _parseConnectionError(Object e) {
@@ -93,20 +175,32 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   void _showConnectLink() {
-    setState(() => _view = _AuthView.connectLink);
+    setState(() {
+      _cancelPendingSelection();
+      _view = _AuthView.connectLink;
+    });
   }
 
   void _backToServerUrl() {
     setState(() {
+      _cancelPendingSelection();
       _view = _AuthView.serverUrl;
       _serverStatus = null;
       _serverError = null;
     });
+    ref.read(authProvider.notifier).clearError();
   }
 
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
+    ref.listen(authProvider, (_, next) {
+      final auth = next.valueOrNull;
+      if (auth?.isLoading == true || auth?.isAuthenticated == true) {
+        setState(_cancelPendingSelection);
+      }
+    });
+    final savedServers = ref.watch(savedServersProvider);
     final auth = authState.valueOrNull;
     final showPasskeyOffer =
         auth?.pendingPasskeyOffer == true && auth?.isAuthenticated == true;
@@ -166,7 +260,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      showPasskeyOffer ? 'Secure your account' : _subtitle,
+                      showPasskeyOffer
+                          ? 'Secure your account'
+                          : _view == _AuthView.serverUrl &&
+                                  savedServers.valueOrNull?.isNotEmpty == true
+                              ? 'Choose a server'
+                              : _subtitle,
                       style: const TextStyle(
                         color: AppTheme.textSecondary,
                         fontSize: 15,
@@ -183,8 +282,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       switch (_view) {
                         _AuthView.serverUrl => _ServerUrlView(
                             controller: _serverUrlController,
-                            isLoading: _isCheckingServer,
+                            isLoading: _isCheckingServer || _isLoadingHistory,
                             error: _serverError,
+                            servers: savedServers.valueOrNull ?? const [],
+                            historyUnavailable: savedServers.hasError,
+                            onAddressChanged: _addressChanged,
+                            onSelectServer: _selectSavedServer,
+                            onForgetServer: _forgetServer,
+                            onChangeServer: _backToServerUrl,
                             onCheck: _checkServer,
                             onConnectLink: _showConnectLink,
                           ),
@@ -194,7 +299,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                             onBack: _backToServerUrl,
                           ),
                         _AuthView.login => _LoginView(
+                            key: ValueKey(_serverUrlController.text.trim()),
                             serverUrl: _serverUrlController.text.trim(),
+                            serverName: savedServers.valueOrNull
+                                ?.where((s) =>
+                                    s.url == _serverUrlController.text.trim())
+                                .firstOrNull
+                                ?.name,
                             serverStatus: _serverStatus,
                             onBack: _backToServerUrl,
                             onConnectLink: _showConnectLink,
@@ -380,6 +491,12 @@ class _ServerUrlView extends StatelessWidget {
   final TextEditingController controller;
   final bool isLoading;
   final String? error;
+  final List<SavedServer> servers;
+  final bool historyUnavailable;
+  final ValueChanged<String> onAddressChanged;
+  final ValueChanged<SavedServer> onSelectServer;
+  final ValueChanged<SavedServer> onForgetServer;
+  final VoidCallback onChangeServer;
   final VoidCallback onCheck;
   final VoidCallback onConnectLink;
 
@@ -387,6 +504,12 @@ class _ServerUrlView extends StatelessWidget {
     required this.controller,
     required this.isLoading,
     this.error,
+    required this.servers,
+    required this.historyUnavailable,
+    required this.onAddressChanged,
+    required this.onSelectServer,
+    required this.onForgetServer,
+    required this.onChangeServer,
     required this.onCheck,
     required this.onConnectLink,
   });
@@ -396,6 +519,20 @@ class _ServerUrlView extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (servers.isNotEmpty)
+          SavedServerPicker(
+            servers: servers,
+            selectedUrl: controller.text,
+            onSelect: onSelectServer,
+            onForget: onForgetServer,
+          ),
+        if (historyUnavailable) ...[
+          const Text(
+            'Saved servers are unavailable. Enter an address to continue.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+        ],
         TextField(
           controller: controller,
           decoration: const InputDecoration(
@@ -406,6 +543,7 @@ class _ServerUrlView extends StatelessWidget {
           keyboardType: TextInputType.url,
           textInputAction: TextInputAction.done,
           autocorrect: false,
+          onChanged: onAddressChanged,
           onSubmitted: (_) => onCheck(),
         ),
         if (error != null) ...[
@@ -431,9 +569,14 @@ class _ServerUrlView extends StatelessWidget {
                       color: AppTheme.background,
                     ),
                   )
-                : const Text('Continue'),
+                : Text(error == null ? 'Continue' : 'Retry'),
           ),
         ),
+        if (error != null)
+          TextButton(
+            onPressed: onChangeServer,
+            child: const Text('Change server'),
+          ),
         const SizedBox(height: 24),
         TextButton(
           onPressed: onConnectLink,
@@ -630,12 +773,15 @@ class _SetupViewState extends ConsumerState<_SetupView> {
 
 class _LoginView extends ConsumerStatefulWidget {
   final String serverUrl;
+  final String? serverName;
   final ServerStatus? serverStatus;
   final VoidCallback onBack;
   final VoidCallback onConnectLink;
 
   const _LoginView({
+    super.key,
     required this.serverUrl,
+    this.serverName,
     this.serverStatus,
     required this.onBack,
     required this.onConnectLink,
@@ -696,29 +842,9 @@ class _LoginViewState extends ConsumerState<_LoginView> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Server indicator
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceVariant,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.dns_outlined,
-                  size: 16, color: AppTheme.textSecondary),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  widget.serverUrl,
-                  style: const TextStyle(
-                      color: AppTheme.textSecondary, fontSize: 13),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
+        ServerBadge(
+          server: SavedServer(url: widget.serverUrl, name: widget.serverName),
+          onChange: isLoading ? null : widget.onBack,
         ),
         const SizedBox(height: 24),
 
@@ -868,15 +994,6 @@ class _LoginViewState extends ConsumerState<_LoginView> {
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            TextButton(
-              onPressed: widget.onBack,
-              child: const Text(
-                'Back',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-            ),
-            const Text('  |  ',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
             TextButton(
               onPressed: widget.onConnectLink,
               child: const Text(

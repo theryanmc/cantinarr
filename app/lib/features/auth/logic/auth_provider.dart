@@ -12,6 +12,8 @@ import '../../notifications/push_service.dart';
 import '../data/auth_service.dart';
 import '../data/passkey_service.dart';
 import '../data/server_status.dart';
+import '../data/server_url.dart';
+import 'saved_servers_provider.dart';
 import '../data/oidc_service.dart';
 import '../data/plex_auth_service.dart';
 
@@ -119,6 +121,15 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
     _restoreBlocked = false;
     _stopRestoreRetry();
+
+    // Migrate while the old session address is still readable, including when
+    // its refresh token will be rejected below. Never mistake a locked store
+    // for an empty installation or re-add an explicitly forgotten shortcut.
+    await _migrateSavedServer(
+      serverUrl != null && accessToken != null && refreshToken != null
+          ? serverUrl
+          : null,
+    );
 
     if (serverUrl == null || accessToken == null || refreshToken == null) {
       return const AuthState();
@@ -441,7 +452,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final schemeProbe = serverUrl.trim().toLowerCase();
     final hasScheme = schemeProbe.startsWith('http://') ||
         schemeProbe.startsWith('https://');
-    final normalizedUrl = _normalizeUrl(serverUrl);
+    final normalizedUrl = normalizeServerUrl(serverUrl);
     try {
       final status = await _authService.getServerStatus(normalizedUrl);
       return (serverUrl: normalizedUrl, status: status);
@@ -480,7 +491,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.setup(normalizedUrl, username,
           password, identity.displayName, identity.hardwareId);
@@ -514,6 +525,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: await _shouldOfferPasskey(normalizedUrl),
       ));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseSetupError(e)));
@@ -534,10 +546,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       String? externalOrigin}) async {
     final current = state.valueOrNull ?? const AuthState();
     try {
-      final normalized = _normalizeUrl(server);
+      final normalized = normalizeServerUrl(server);
       if (purpose != 'login' &&
           (current.connection == null ||
-              _normalizeUrl(current.connection!.serverUrl) != normalized)) {
+              normalizeServerUrl(current.connection!.serverUrl) != normalized)) {
         throw StateError('Sign in to this server before linking or testing single sign-on.');
       }
       final identity = await ref.read(deviceIdentityProvider).resolve();
@@ -621,11 +633,11 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
   Future<PlexPending> startPlex(String server,
       {String purpose = 'login'}) async {
-    final normalized = _normalizeUrl(server);
+    final normalized = normalizeServerUrl(server);
     final current = state.valueOrNull ?? const AuthState();
     if (purpose == 'link' &&
         (current.connection == null ||
-            _normalizeUrl(current.connection!.serverUrl) != normalized)) {
+            normalizeServerUrl(current.connection!.serverUrl) != normalized)) {
       throw StateError('Sign in to this server before linking Plex.');
     }
     final service = ref.read(plexAuthServiceProvider);
@@ -663,7 +675,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.login(normalizedUrl, username,
           password, identity.displayName, identity.hardwareId);
@@ -700,6 +712,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         user: authResp.user,
         pendingPasskeyOffer: offerPasskey,
       ));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parseError(e)));
@@ -712,7 +725,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = AsyncData(previous.copyWith(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       final authResp = await _authService.redeemConnectToken(
           normalizedUrl, token, identity.displayName, identity.hardwareId);
@@ -746,7 +759,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     final AuthResponse authResp;
     final ServerConfig config;
     try {
-      normalizedUrl = _normalizeUrl(serverUrl);
+      normalizedUrl = normalizeServerUrl(serverUrl);
       final identity = await ref.read(deviceIdentityProvider).resolve();
       authResp = await _authService.redeemConnectToken(
           normalizedUrl, token, identity.displayName, identity.hardwareId);
@@ -830,6 +843,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
     await _persistSession(connection, authResp.user);
     state = AsyncData(AuthState(connection: connection, user: authResp.user));
+    await _rememberServer(connection);
     _registerForPush();
   }
 
@@ -1048,7 +1062,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     state = const AsyncData(AuthState(isLoading: true));
 
     try {
-      final normalizedUrl = _normalizeUrl(serverUrl);
+      final normalizedUrl = normalizeServerUrl(serverUrl);
 
       // Step 1: Begin login on server
       final beginResp = await _authService.beginPasskeyLogin(normalizedUrl);
@@ -1092,6 +1106,7 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
 
       await _persistSession(connection, authResp.user);
       state = AsyncData(AuthState(connection: connection, user: authResp.user));
+      await _rememberServer(connection);
       _registerForPush();
     } catch (e) {
       state = AsyncData(AuthState(error: _parsePasskeyLoginError(e)));
@@ -1270,20 +1285,39 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     }
   }
 
-  String _normalizeUrl(String url) {
-    var normalized = url.trim();
-    final schemeProbe = normalized.toLowerCase();
-    if (schemeProbe.startsWith('http://')) {
-      normalized = 'http://${normalized.substring('http://'.length)}';
-    } else if (schemeProbe.startsWith('https://')) {
-      normalized = 'https://${normalized.substring('https://'.length)}';
-    } else {
-      normalized = 'https://$normalized';
+  Future<void> _migrateSavedServer(String? serverUrl) async {
+    try {
+      String? name;
+      if (serverUrl != null) {
+        try {
+          final raw = await _storage.read(key: StorageKeys.sessionConnection);
+          final meta = raw == null ? null : jsonDecode(raw);
+          if (meta is Map && meta['server_name'] is String) {
+            name = meta['server_name'] as String;
+          }
+        } catch (_) {
+          // The stored address remains useful without the optional name.
+        }
+      }
+      await ref.read(savedServersProvider.notifier).migrateLegacySession(
+          serverUrl == null
+              ? null
+              : SavedServer.fromAddress(serverUrl, name: name));
+    } catch (_) {
+      // Preferences are optional; a failure must never end a valid session.
+      debugPrint('Saved server migration deferred: preferences unavailable.');
     }
-    while (normalized.endsWith('/')) {
-      normalized = normalized.substring(0, normalized.length - 1);
+  }
+
+  Future<void> _rememberServer(BackendConnection connection) async {
+    final server = SavedServer.fromAddress(connection.serverUrl,
+        name: connection.serverName);
+    if (server == null) return;
+    try {
+      await ref.read(savedServersProvider.notifier).remember(server);
+    } catch (_) {
+      debugPrint('Could not remember server: preferences unavailable.');
     }
-    return normalized;
   }
 
   String _parseOIDCError(Object e) {

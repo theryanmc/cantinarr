@@ -6,8 +6,10 @@ import 'package:cantinarr/core/storage/secure_storage.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/data/plex_auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/auth/logic/saved_servers_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'oidc_service_test.dart' show MemoryStorage;
 import 'plex_auth_service_test.dart' show PlexAuthFake;
 
@@ -56,6 +58,7 @@ class HeldDeviceIdentity extends DeviceIdentityService {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   test('cancellation during device lookup never starts a new attempt',
       () async {
     final storage = MemoryStorage(), auth = AdoptionAuth();
@@ -133,6 +136,11 @@ void main() {
           expect(storage.values[StorageKeys.deviceId], 'old-device');
         }
       }
+      expect((await container.read(savedServersProvider.future)).map((s) => s.url),
+          mode == 'success'
+              ? ['https://new.example', 'https://old.example']
+              : ['https://old.example'],
+          reason: 'only completed Plex sign-in may change the saved default');
     });
   }
 }
