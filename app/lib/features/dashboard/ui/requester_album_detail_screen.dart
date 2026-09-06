@@ -10,6 +10,8 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/music_discovery_service.dart';
+import '../../discover/data/music_models.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
 import '../../lidarr/data/lidarr_image.dart';
@@ -30,6 +32,7 @@ class RequesterAlbumDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
   final String? titleHint;
   final LidarrAlbum? initialAlbum;
+  final MusicAlbum? discoveryAlbum;
   final String? instanceId;
 
   /// The term the requester searched to reach this album, when they arrived
@@ -43,6 +46,7 @@ class RequesterAlbumDetailScreen extends ConsumerStatefulWidget {
     required this.foreignId,
     this.titleHint,
     this.initialAlbum,
+    this.discoveryAlbum,
     this.instanceId,
     this.searchTerm,
   });
@@ -57,6 +61,8 @@ class _RequesterAlbumDetailScreenState
     with WidgetsBindingObserver {
   late final RequestService _requestService;
   LidarrAlbum? _metadata;
+  MusicAlbum? _discoveryMetadata;
+  bool _metadataFailed = false;
   bool _metadataLoading = false;
   int _loadGeneration = 0;
   String? _instanceId;
@@ -104,6 +110,7 @@ class _RequesterAlbumDetailScreenState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.initialAlbum != widget.initialAlbum ||
+        oldWidget.discoveryAlbum != widget.discoveryAlbum ||
         oldWidget.titleHint != widget.titleHint ||
         oldWidget.instanceId != widget.instanceId) {
       _startLoads();
@@ -112,12 +119,15 @@ class _RequesterAlbumDetailScreenState
 
   void _startLoads() {
     final generation = ++_loadGeneration;
-    _instanceId =
-        widget.instanceId ?? ref.read(instanceProvider).activeLidarrInstance?.id;
+    _instanceId = widget.instanceId ??
+        ref.read(instanceProvider).activeLidarrInstance?.id;
     _metadata = widget.initialAlbum;
+    _discoveryMetadata = widget.discoveryAlbum?.foreignId == widget.foreignId
+        ? widget.discoveryAlbum
+        : null;
+    _metadataFailed = false;
     _canonicalForeignId = null;
-    _metadataLoading = widget.initialAlbum == null &&
-        (widget.titleHint?.trim().isNotEmpty ?? false);
+    _metadataLoading = _metadata == null && _discoveryMetadata == null;
     _trackFiles = const [];
     _trackByFileId = const {};
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -140,30 +150,49 @@ class _RequesterAlbumDetailScreenState
   /// foreignAlbumId match is ever accepted, so a lookalike listing can never
   /// impersonate this album.
   Future<void> _resolveMetadata(int generation) async {
-    if (_metadata != null) return;
+    if (!mounted || generation != _loadGeneration) return;
+    if (_metadata != null || _discoveryMetadata != null) return;
+    final foreignId = widget.foreignId;
+    final instanceId = _instanceId;
     final term = widget.titleHint?.trim() ?? '';
     final service = _lidarrService();
-    if (term.isEmpty || service == null) {
+    if (service == null) {
       if (mounted && generation == _loadGeneration) {
         setState(() => _metadataLoading = false);
       }
       return;
     }
     LidarrAlbum? match;
-    try {
-      final results = await service.lookupAlbum(term);
-      for (final album in results) {
-        if (album.foreignAlbumId == widget.foreignId) {
-          match = album;
-          break;
+    if (term.isNotEmpty) {
+      try {
+        final results = await service.lookupAlbum(term);
+        for (final album in results) {
+          if (album.foreignAlbumId == foreignId) {
+            match = album;
+            break;
+          }
         }
+      } catch (_) {
+        // MusicBrainz can still resolve the identity if Lidarr lookup fails.
       }
-    } catch (_) {
-      // The title hint still gives the requester a useful fallback.
+    }
+    if (!mounted || generation != _loadGeneration) return;
+    MusicAlbum? discovery;
+    var failed = false;
+    if (match == null) {
+      try {
+        discovery = await ref
+            .read(musicDiscoveryServiceProvider)
+            .album(foreignId, instanceId!);
+      } catch (_) {
+        failed = true;
+      }
     }
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
       _metadata = match;
+      _discoveryMetadata = discovery;
+      _metadataFailed = failed;
       _metadataLoading = false;
     });
   }
@@ -182,12 +211,9 @@ class _RequesterAlbumDetailScreenState
   /// (the ownership digest row is the requester-visible proof) and when the
   /// server allows reporting — the same shape as the book gate.
   bool _canReportAlbum(OwnedAlbum? owned) {
-    final allow = ref
-            .watch(authProvider)
-            .valueOrNull
-            ?.connection
-            ?.allowReporting ??
-        false;
+    final allow =
+        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
+            false;
     return allow && _instanceId != null && owned != null;
   }
 
@@ -237,9 +263,9 @@ class _RequesterAlbumDetailScreenState
       final results = await Future.wait([
         service.getTrackFiles(albumId: record.id),
         service.getTracks(albumId: record.id).then<List<LidarrTrack>>(
-          (tracks) => tracks,
-          onError: (_) => const <LidarrTrack>[],
-        ),
+              (tracks) => tracks,
+              onError: (_) => const <LidarrTrack>[],
+            ),
       ]);
       final files = (results[0] as List<LidarrTrackFile>)
           .where((file) => file.id > 0)
@@ -342,6 +368,7 @@ class _RequesterAlbumDetailScreenState
     final title = _firstText([
       _metadata?.title,
       owned?.title,
+      _discoveryMetadata?.title,
       hintedTitle,
     ]);
     if (title.isEmpty) {
@@ -355,9 +382,18 @@ class _RequesterAlbumDetailScreenState
     final artist = _firstText([
       _metadata?.artistName,
       owned?.artist,
+      _discoveryMetadata?.artist,
     ]);
-    final year = _metadata?.year ?? owned?.year ?? 0;
-    final albumType = _metadata?.albumType?.trim() ?? '';
+    final year = _metadata?.year ??
+        owned?.year ??
+        int.tryParse(
+            (_discoveryMetadata?.releaseDate ?? '').split('-').first) ??
+        0;
+    final albumType =
+        _metadata?.albumType?.trim() ?? _discoveryMetadata?.releaseType ?? '';
+    final disambiguation = _metadata?.disambiguation?.trim() ??
+        _discoveryMetadata?.disambiguation ??
+        '';
     final overview = _metadata?.overview?.trim() ?? '';
     final genres = _metadata?.genres ?? const <String>[];
     final trackCount = _metadata?.statistics?.trackCount ?? 0;
@@ -367,13 +403,17 @@ class _RequesterAlbumDetailScreenState
     LidarrImageSource? cover;
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
-      final ownedCover = rawOwnedCover.toLowerCase().startsWith('http')
-          ? ''
-          : rawOwnedCover;
+      final ownedCover =
+          rawOwnedCover.toLowerCase().startsWith('http') ? '' : rawOwnedCover;
       // Lookup covers are remote metadata-CDN URLs and load directly; a live
       // arr-origin absolute URL is never surfaced.
       final remoteCover = _metadata?.remoteCover?.trim() ?? '';
-      cover = lidarrImageSource(
+      // Keep the discovery cover through a request: Lidarr can create the
+      // album record before its local artwork has finished downloading.
+      if (_discoveryMetadata != null) {
+        cover = musicArtworkSource(ref, _discoveryMetadata!, instanceId);
+      }
+      cover ??= lidarrImageSource(
         ref,
         _firstText([ownedCover, remoteCover]),
         instanceId,
@@ -431,6 +471,11 @@ class _RequesterAlbumDetailScreenState
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
+          if (disambiguation.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(disambiguation, textAlign: TextAlign.center),
+          ],
+          if (_metadataFailed) _metadataRetry(),
           const SizedBox(height: 24),
           AlbumRequestPanel(
             foreignId: _effectiveForeignId,
@@ -511,12 +556,12 @@ class _RequesterAlbumDetailScreenState
             const Icon(Icons.album, size: 48, color: AppTheme.textSecondary),
             const SizedBox(height: 12),
             const Text(
-              'This album could not be found. It may have been removed from '
-              'the library.',
+              'Album details could not be loaded.',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.textSecondary),
             ),
             const SizedBox(height: 16),
+            if (_metadataFailed) _metadataRetry(),
             OutlinedButton(
               onPressed: () => context.go('/dashboard/music'),
               child: const Text('Browse Music'),
@@ -526,6 +571,20 @@ class _RequesterAlbumDetailScreenState
       ),
     );
   }
+
+  Widget _metadataRetry() => TextButton.icon(
+        onPressed: _metadataLoading
+            ? null
+            : () {
+                setState(() {
+                  _metadataLoading = true;
+                  _metadataFailed = false;
+                });
+                _resolveMetadata(++_loadGeneration);
+              },
+        icon: const Icon(Icons.refresh),
+        label: const Text('Retry album details'),
+      );
 }
 
 String _firstText(Iterable<String?> values) {

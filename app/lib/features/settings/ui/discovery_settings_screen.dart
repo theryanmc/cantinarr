@@ -298,7 +298,9 @@ class _DiscoverySettingsScreenState
           child: Text(
             'These settings shape the headline row on the Movies and TV tabs, '
             'and movie and TV recommendation rows. Search is never filtered. '
-            'Books use Open Library independently, with no extra account or API key.',
+            'Books use Open Library, and music uses ListenBrainz and MusicBrainz, '
+            'with no extra account or API key. These source and English-only '
+            'settings do not apply to books or music.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),

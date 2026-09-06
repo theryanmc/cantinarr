@@ -91,7 +91,7 @@ void main() {
     router.go('/detail/album/mb-gone');
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('could not be found'), findsOneWidget);
+    expect(find.textContaining('could not be loaded'), findsOneWidget);
     expect(find.text('Browse Music'), findsOneWidget);
   });
 

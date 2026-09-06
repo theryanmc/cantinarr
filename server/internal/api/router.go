@@ -21,6 +21,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
 	"github.com/windoze95/cantinarr-server/internal/mediaaccess"
 	"github.com/windoze95/cantinarr-server/internal/mediafiles"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/proxy"
 	"github.com/windoze95/cantinarr-server/internal/push"
 	"github.com/windoze95/cantinarr-server/internal/remediation"
@@ -61,6 +62,7 @@ func NewRouter(
 	contentPolicyHandler *contentpolicy.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
+	musicDiscovery := musicdiscovery.NewHandler(instanceStore)
 
 	// Middleware
 	r.Use(middleware.RequestID)
@@ -450,6 +452,10 @@ func NewRouter(
 			r.Get("/genres/book", books.Genres)
 			r.Get("/media/book/{workId}", books.Book)
 			r.Get("/media/book/{workId}/request-target", books.RequestTarget)
+			r.Get("/discover/music/{feed}", musicDiscovery.Feed)
+			r.Get("/discover/music/artwork/{mbid}", musicDiscovery.Artwork)
+			r.Get("/genres/music", musicDiscovery.Genres)
+			r.Get("/media/music/{mbid}", musicDiscovery.Album)
 			r.Get("/discover/trending", discoverHandler.Trending)
 			r.Get("/discover/movies/popular", discoverHandler.PopularMovies)
 			r.Get("/discover/tv/popular", discoverHandler.PopularTV)

@@ -11,6 +11,7 @@ class HorizontalItemRow<T> extends StatefulWidget {
   final void Function(T item)? onItemAppear;
   final double height;
   final double itemSpacing;
+  final double artworkAspectRatio;
 
   const HorizontalItemRow({
     super.key,
@@ -20,6 +21,7 @@ class HorizontalItemRow<T> extends StatefulWidget {
     this.onItemAppear,
     this.height = 218,
     this.itemSpacing = 14,
+    this.artworkAspectRatio = 2 / 3,
   });
 
   @override
@@ -115,7 +117,8 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
           padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
           itemCount: 6,
           separatorBuilder: (_, __) => SizedBox(width: widget.itemSpacing),
-          itemBuilder: (_, __) => const ShimmerCard(width: 100),
+          itemBuilder: (_, __) => ShimmerCard(
+              width: 100, artworkAspectRatio: widget.artworkAspectRatio),
         ),
       );
     }
@@ -135,7 +138,8 @@ class _HorizontalItemRowState<T> extends State<HorizontalItemRow<T>> {
             separatorBuilder: (_, __) => SizedBox(width: widget.itemSpacing),
             itemBuilder: (context, index) {
               if (index >= widget.items.length) {
-                return const ShimmerCard(width: 100);
+                return ShimmerCard(
+                    width: 100, artworkAspectRatio: widget.artworkAspectRatio);
               }
               return widget.itemBuilder(widget.items[index]);
             },

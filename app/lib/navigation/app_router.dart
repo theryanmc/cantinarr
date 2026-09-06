@@ -50,6 +50,9 @@ import '../features/dashboard/ui/requester_author_detail_screen.dart';
 import '../features/dashboard/ui/requester_book_detail_screen.dart';
 import '../features/dashboard/ui/requester_series_detail_screen.dart';
 import '../features/discover/data/tmdb_models.dart';
+import '../features/discover/data/music_models.dart';
+import '../features/discover/logic/music_browse_query.dart';
+import '../features/discover/ui/music_browse_screen.dart';
 import '../features/discover/logic/browse_query.dart';
 import '../features/discover/ui/browse_grid_screen.dart';
 import '../features/downloads/ui/downloads_history_screen.dart';
@@ -128,6 +131,9 @@ CustomTransitionPage<void> _fadeSurfacePage({
 /// Outer ShellRoute provides the drawer + search bar.
 /// Inner StatefulShellRoutes provide per-module bottom nav.
 final appRouterProvider = Provider<GoRouter>((ref) {
+  // A pushed browse/detail page keeps the previous page alive for Back, while
+  // its complete filter/instance URL must still be copyable and reloadable.
+  GoRouter.optionURLReflectsImperativeAPIs = true;
   // Re-run redirects when auth state changes WITHOUT rebuilding the router.
   // Watching authProvider here would create a brand-new GoRouter on every auth
   // change (token refresh, profile reload, etc.), which resets navigation to
@@ -614,12 +620,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: '/browse/:type/:feed',
-            redirect: (_, state) => BrowseQuery.tryParse(state.uri) == null
-                ? (state.pathParameters['type'] == 'tv'
-                    ? '/dashboard/tv'
-                    : '/dashboard/movies')
-                : null,
+            redirect: (_, state) => state.pathParameters['type'] == 'music'
+                ? (MusicBrowseQuery.tryParse(state.uri) == null
+                    ? '/dashboard/music'
+                    : null)
+                : BrowseQuery.tryParse(state.uri) == null
+                    ? (state.pathParameters['type'] == 'tv'
+                        ? '/dashboard/tv'
+                        : '/dashboard/movies')
+                    : null,
             builder: (_, state) {
+              if (state.pathParameters['type'] == 'music') {
+                return AppAmbientBackground(
+                  child: MusicBrowseScreen(
+                      query: MusicBrowseQuery.tryParse(state.uri)!),
+                );
+              }
               final query = BrowseQuery.tryParse(state.uri);
               if (query == null) {
                 return const AppAmbientBackground(
@@ -1065,6 +1081,8 @@ Widget _mediaDetailChild(GoRouterState state) {
       instanceId: state.uri.queryParameters['instance_id'],
       initialAlbum:
           state.extra is LidarrAlbum ? state.extra! as LidarrAlbum : null,
+      discoveryAlbum:
+          state.extra is MusicAlbum ? state.extra! as MusicAlbum : null,
     );
   }
   if (type == 'book') {

@@ -1,6 +1,6 @@
 # Discovery and requests
 
-Release-day journeys against real TMDB/Trakt and real arr instances. Search behavior, availability computation, request policy, and approval contracts are proven by the hermetic suites.
+Release-day journeys against real TMDB/Trakt, ListenBrainz/MusicBrainz, and real arr instances. Search behavior, availability computation, request policy, and approval contracts are proven by the hermetic suites.
 
 Use the [run template](../run-template.md) to record executions of these cases.
 
@@ -26,10 +26,12 @@ Use the [run template](../run-template.md) to record executions of these cases.
 - [ ] `DISC-025` · P2 · LIVE — With a library holding two distinct author records whose names differ only by punctuation or spacing (e.g. `Ursula K. Le Guin` and `Ursula K Le Guin`), search that name. Verify both rows render, neither is openable, and both say two authors share the name — no record is silently chosen. If your library has no such pair this case is not runnable; note that rather than passing it.
 - [ ] `DISC-026` · P2 · LIVE — On a large library, confirm the first Books-tab search of a session is not noticeably slowed by the author-resolution fetch (`GET /author`, one unpaginated response per instance, held until the library changes). If it is, that fetch is the thing to make cheaper — Chaptarr's `library/search` is the indexed alternative, but it returns no `foreignAuthorId`, so using it needs a server-side numeric-id resolution path.
 
+- [ ] `DISC-033` · P1 · UI/LIVE — On Flutter web with a test Lidarr instance and a granted requester, open Music and verify Popular Albums, New Releases, Browse by genre, Recently Added, and Artists in order. Check This week/month/year against ListenBrainz, dates within the past 30 days, albums/EPs only, square Cover Art Archive images (and an album placeholder when missing), and genre matching order. Open See all, scroll multiple pages, open an album, and go back: the period/genre/instance and scroll position remain. Open the same album URL without navigation extras or a title hint. Request it, verify the exact release-group ID reaches the selected test Lidarr with only that album monitored, and verify a second request is prevented. Exercise approval and an unmatched album saved for review. Keep test Lidarr free of public indexers/download clients for a metadata-only request test; record any remaining import/download journey separately.
+
+- [ ] `DISC-034` · P1 · UI/LIVE — With real Open Library and a disposable Chaptarr, browse Popular Books and a genre across two pages; verify English edition titles/covers, provider order and artwork in Flutter web. Open a cold work link, request an eBook directly and an audiobook through approval, verify canonical aliases, a missing sibling format on an owned eBook, duplicate prevention and author-import waiting against Chaptarr's actual records. An unresolved work offers title-and-author search; an upstream outage offers retry and preserves visible metadata. Revoke a test user's grant with warm caches and confirm discovery and pinned instance links reveal no titles.
+
 ## Request and approval journeys
 
 - [ ] `REQ-001` · P0 · UI/LIVE — Request a new movie with no approval required; verify the correct user's Radarr instance receives the exact TMDB ID, configured root/profile, monitored flag, and search action once.
 - [ ] `REQ-006` · P0 · UI/LIVE — Select a noncontiguous set of real seasons; verify Specials are absent from requester UI and only selected real seasons are stored, monitored, and searched in sorted/deduplicated order.
 - [ ] `REQ-021` · P0 · LIVE — Approve each pending media type without override; verify it executes the stored request once, records approver/time, leaves the queue, updates requester history/state, and sends configured decision push.
-
-- [ ] `DISC-033` · P1 · UI/LIVE — With real Open Library and a disposable Chaptarr, browse Popular Books and a genre across two pages; verify English edition titles/covers, provider order and artwork in Flutter web. Open a cold work link, request an eBook directly and an audiobook through approval, verify canonical aliases, a missing sibling format on an owned eBook, duplicate prevention and author-import waiting against Chaptarr's actual records. An unresolved work offers title-and-author search; an upstream outage offers retry and preserves visible metadata. Revoke a test user's grant with warm caches and confirm discovery and pinned instance links reveal no titles.
