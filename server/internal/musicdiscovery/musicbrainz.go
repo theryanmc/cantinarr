@@ -107,6 +107,9 @@ func (s *Service) Album(ctx context.Context, id string) ([]byte, error) {
 		if err := s.mb.get(ctx, "/release-group/"+id+"?inc=artists&fmt=json", &rg); err != nil {
 			return nil, err
 		}
+		if rg.ID != id {
+			return nil, errors.New("MusicBrainz returned a different album identity")
+		}
 		album, err := rg.album()
 		if err != nil {
 			return nil, err

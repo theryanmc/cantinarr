@@ -200,6 +200,24 @@ func TestMusicPaginationDoesNotInheritTMDBPageLimit(t *testing.T) {
 	}
 }
 
+func TestColdAlbumRejectsMismatchedIdentityWithoutCaching(t *testing.T) {
+	var hits atomic.Int32
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		id := bID
+		if hits.Add(1) > 1 {
+			id = aID
+		}
+		jsonResponse(w, groups(id)[0])
+	})
+	if _, err := s.Album(context.Background(), aID); err == nil {
+		t.Fatal("cold link accepted another release group's metadata")
+	}
+	body, err := s.Album(context.Background(), aID)
+	if err != nil || !strings.Contains(string(body), aID) || hits.Load() != 2 {
+		t.Fatalf("failed metadata was cached: %s %v", body, err)
+	}
+}
+
 func TestMalformedAndUnavailableProvidersNeverBecomeEmptyFeeds(t *testing.T) {
 	for _, body := range []string{"{}", "null", "{", `{"payload":{"release_groups":[]}}`, `{"payload":{"release_groups":[],"offset":0,"total_release_group_count":10}}`} {
 		t.Run(body, func(t *testing.T) {
