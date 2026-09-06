@@ -447,6 +447,10 @@ Every endpoint accepts `instance_id`. Music feeds return `{results, page, next_p
 Run `go test ./internal/musicdiscovery -run TestLiveProviders -music-live -v` for the opt-in live provider check. Ordinary tests use local fixtures. TMDB/Trakt source and English-only preferences below apply only to movies and TV.
 
 ```
+GET /api/discover/books/{feed}                    # popular|genre; ?page=1..50&genre=<id>&instance_id=<authorized Chaptarr>; 20-item pages
+GET /api/genres/book                              # supported labels and subject mappings; ?instance_id=
+GET /api/media/book/{workId}                      # Open Library work metadata; OL…W or ol:OL…W; ?instance_id=
+GET /api/media/book/{workId}/request-target       # read-only Chaptarr ID resolution; canonical candidates, no availability snapshot; ?instance_id=
 GET /api/discover/trending | /discover/movies/popular | /discover/tv/popular
 GET /api/discover/movies/featured | /discover/tv/featured  # the configured headline row; ?page=N continues the same feed
 GET /api/discover/movies/top-rated | upcoming | now-playing
@@ -470,6 +474,10 @@ TMDB and Trakt are proxied server-side -- client devices never hold those keys. 
 With `english_only` on, discover queries (the browse feeds and both Coming Soon rows) carry `with_original_language=en` upstream, so every page arrives full with an exact page count. A browse query that names a language of its own (`with_original_language=ko`) is an explicit ask, like a search term: it is forwarded as given and that page is never English-filtered. The list feeds (popular, top rated, now playing, on the air, trending, recommendations, similar) have no such parameter and are filtered after the fact, so their pages can arrive thinner while `total_pages` still describes the upstream feed; a client keeps paging and drops what it has already shown.
 
 Trakt's artwork CDN (`media.trakt.tv` today; `walter*.trakt.tv` before July 2026 -- Trakt migrates these hosts) is public but sends no CORS headers, so a browser-rendered client cannot fetch it directly the way it can TMDB's CDN. `/api/trakt/images/{host}/*` relays any `*.trakt.tv` host (strictly validated, `images/…` paths only, no query passthrough) so the web app loads Trakt posters same-origin and a CDN migration on Trakt's side cannot blank them again; native clients keep hitting the CDN directly.
+
+Book discovery uses a separate string `foreign_id` (`ol:OL…W`) model with title, authors, optional year, description and validated cover ID. Provider offsets/totals determine pagination; work-ID duplicates are suppressed without merging distinct works. Open Library `sort=readinglog` with positive reading-list counts supplies popularity; genres query quoted subjects (Biography & Memoir uses OR). `lang=en` selects English edition presentation without filtering works. Covers are device-direct `https://covers.openlibrary.org/b/id/{cover_id}-M.jpg?default=false` URLs with no Cantinarr credentials.
+
+All four book discovery endpoints require discovery permission and an authorized Chaptarr instance before and after provider/cache work; books remain grant-only for requesters, including kids. Bounded shared metadata caches hold popularity for one hour, genre feeds for six hours, and details for 24 hours. A contactable Cantinarr User-Agent, `httpx.External()`, one metadata start per second, bounded retries/timeouts and coalescing protect Open Library. Chaptarr lookups use provider-prefixed IDs, coalesce simultaneous reads and run at most four at once, without retaining a server mapping cache. The app retains visible mappings at most 60 seconds and refreshes on request/library events; existing book-status reads own per-format truth. Errors never masquerade as empty results. No credentials, database changes, deployment variables or compatibility-floor increase are required.
 
 ### AI chat (user)
 ```
@@ -921,6 +929,7 @@ server/
 │   ├── arr/                  # Import Doctor, pre-air season detector, safe settings HTTP/validation boundaries
 │   ├── auth/                 # JWT, connect links, users/devices, WebAuthn, external OIDC/Plex sign-in, OAuth AS, RBAC
 │   ├── cache/                # Small TTL cache used by request-side digests
+│   ├── bookdiscovery/        # Open Library feeds/details and instance-scoped Chaptarr ID resolution
 │   ├── chaptarr/             # Chaptarr (Readarr v1) client for the books module
 │   ├── lidarr/               # Lidarr (v1) client for the music module
 │   ├── codexapp/             # Scoped personal/shared Codex auth, chat, usage + lifecycle

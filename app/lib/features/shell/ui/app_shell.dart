@@ -34,6 +34,7 @@ import '../../settings/logic/plex_invites_provider.dart';
 import '../../settings/logic/setup_status_provider.dart';
 import '../../sonarr/data/sonarr_api_service.dart';
 import '../../sonarr/logic/sonarr_series_provider.dart';
+import '../../discover/logic/book_discovery_provider.dart';
 import '../logic/shell_book_search_provider.dart';
 import '../logic/shell_music_search_provider.dart';
 import '../logic/shell_search_provider.dart';
@@ -550,6 +551,19 @@ class _AppShellState extends ConsumerState<AppShell>
     final searchState = ref.watch(shellSearchProvider);
     final searchNotifier = ref.read(shellSearchProvider.notifier);
     final bookSearchState = ref.watch(shellBookSearchProvider);
+    final bookSeed = ref.watch(bookDiscoverySearchSeedProvider);
+    if (_isBooksTab(widget.currentPath) && bookSeed != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || ref.read(bookDiscoverySearchSeedProvider) != bookSeed) {
+          return;
+        }
+        ref.read(bookDiscoverySearchSeedProvider.notifier).state = null;
+        ref
+            .read(instanceProvider.notifier)
+            .setActiveChaptarrInstance(bookSeed.instanceId);
+        _searchAuthorBooks(bookSeed.query);
+      });
+    }
     final bookSearchNotifier = ref.read(shellBookSearchProvider.notifier);
     final musicSearchState = ref.watch(shellMusicSearchProvider);
     final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);

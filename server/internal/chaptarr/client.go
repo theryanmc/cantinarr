@@ -315,17 +315,18 @@ func (r RootFolder) IsAccessible() bool {
 // constraints on columns the typed struct would drop (notably links and images),
 // so a lossy re-encode fails the add with a SQLite constraint error.
 type LookupResult struct {
-	Title           string            `json:"title"`
-	TitleSlug       string            `json:"titleSlug,omitempty"`
-	AuthorName      string            `json:"authorName"`
-	ForeignAuthorID string            `json:"foreignAuthorId"`
-	ForeignBookID   string            `json:"foreignBookId"`
-	Overview        string            `json:"overview"`
-	Year            int               `json:"year"`
-	Images          []Image           `json:"images"`
-	Author          *Author           `json:"author,omitempty"`
-	RemoteCover     string            `json:"remoteCover,omitempty"`
-	Editions        []json.RawMessage `json:"editions,omitempty"`
+	Title             string            `json:"title"`
+	TitleSlug         string            `json:"titleSlug,omitempty"`
+	AuthorName        string            `json:"authorName"`
+	ForeignAuthorID   string            `json:"foreignAuthorId"`
+	ForeignBookID     string            `json:"foreignBookId"`
+	OpenLibraryWorkID string            `json:"openLibraryWorkId,omitempty"`
+	Overview          string            `json:"overview"`
+	Year              int               `json:"year"`
+	Images            []Image           `json:"images"`
+	Author            *Author           `json:"author,omitempty"`
+	RemoteCover       string            `json:"remoteCover,omitempty"`
+	Editions          []json.RawMessage `json:"editions,omitempty"`
 }
 
 // AddAuthorRequest mirrors Sonarr's AddSeriesRequest shape for adding an author
@@ -652,15 +653,31 @@ func (c *Client) LookupAuthor(term string) ([]LookupResult, error) {
 
 // LookupBook searches Chaptarr's metadata for books matching term.
 func (c *Client) LookupBook(term string) ([]LookupResult, error) {
-	resp, err := c.doRequest("GET", "/api/v1/book/lookup?term="+url.QueryEscape(term))
+	return c.LookupBookContext(context.Background(), term)
+}
+
+// LookupBookContext bounds discovery lookups, including time spent waiting
+// for a catalog. A failed or malformed read must never look like no match.
+func (c *Client) LookupBookContext(ctx context.Context, term string) ([]LookupResult, error) {
+	resp, err := c.doRequestContext(ctx, "GET", "/api/v1/book/lookup?term="+url.QueryEscape(term))
 	if err != nil {
 		return nil, fmt.Errorf("chaptarr book lookup: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("chaptarr book lookup returned status %d", resp.StatusCode)
+	}
 	var results []LookupResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
+	if err != nil || len(data) > 4<<20 {
+		return nil, fmt.Errorf("read chaptarr book lookup")
+	}
+	if err := json.Unmarshal(data, &results); err != nil {
 		return nil, fmt.Errorf("decode chaptarr book lookup: %w", err)
+	}
+	if results == nil {
+		return nil, fmt.Errorf("invalid chaptarr book lookup response")
 	}
 	return results, nil
 }

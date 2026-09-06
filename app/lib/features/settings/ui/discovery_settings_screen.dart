@@ -298,8 +298,9 @@ class _DiscoverySettingsScreenState
           child: Text(
             'These settings shape the headline row on the Movies and TV tabs, '
             'and movie and TV recommendation rows. Search is never filtered. '
-            'Music discovery uses ListenBrainz and MusicBrainz automatically; '
-            'these source and English-only settings do not apply to music.',
+            'Books use Open Library, and music uses ListenBrainz and MusicBrainz, '
+            'with no extra account or API key. These source and English-only '
+            'settings do not apply to books or music.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -321,7 +322,7 @@ class _DiscoverySettingsScreenState
             ),
             subtitle: const Text(
               'Hides titles whose original language is not English from the '
-              'discovery and recommendation rows. Search still finds everything.',
+              'movie and TV discovery and recommendation rows. Search still finds everything.',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),

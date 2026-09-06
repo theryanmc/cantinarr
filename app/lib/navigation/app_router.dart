@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
+import '../features/discover/data/book_discovery_service.dart';
+import '../features/discover/logic/book_discovery_provider.dart';
+import '../features/discover/ui/book_browse_screen.dart';
 import '../features/auth/ui/oidc_return_screen.dart';
 import '../features/auth/ui/plex_continue_screen.dart';
 import '../features/auth/data/plex_auth_service.dart';
@@ -205,6 +209,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (isAuthenticated &&
           !hasChaptarrGrant &&
           (_isWithinRoute(state.uri.path, '/dashboard/books') ||
+              _isWithinRoute(state.uri.path, '/browse/books') ||
               _isWithinRoute(state.uri.path, '/detail/book') ||
               _isWithinRoute(state.uri.path, '/detail/author') ||
               _isWithinRoute(state.uri.path, '/detail/series'))) {
@@ -603,6 +608,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           // row and the Browse page. Everything it needs is in the URL, so
           // web deep links and pushes are the same thing.
           GoRoute(
+            path: '/browse/books/:feed',
+            builder: (_, state) {
+              final query = BookBrowseQuery.tryParse(state.uri);
+              return AppAmbientBackground(
+                  child: query == null
+                      ? const _InvalidRouteScreen(
+                          message: 'This book browse link is invalid.')
+                      : BookBrowseScreen(query: query));
+            },
+          ),
+          GoRoute(
             path: '/browse/:type/:feed',
             redirect: (_, state) => state.pathParameters['type'] == 'music'
                 ? (MusicBrowseQuery.tryParse(state.uri) == null
@@ -807,8 +823,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
             path: '/settings/request-settings',
             onExit: confirmSettingsExit,
             builder: (_, state) => AppAmbientBackground(
-                child: RequestSettingsScreen(
-                    highlightId: _highlightParam(state))),
+                child:
+                    RequestSettingsScreen(highlightId: _highlightParam(state))),
           ),
           GoRoute(
             path: '/settings/discovery',
@@ -1078,12 +1094,17 @@ Widget _mediaDetailChild(GoRouterState state) {
     }
     return RequesterBookDetailScreen(
       foreignId: foreignId,
+      discoveryBook:
+          state.extra is DiscoveryBook ? state.extra! as DiscoveryBook : null,
+      discovery: state.uri.queryParameters['source'] == 'openlibrary' ||
+          (DiscoveryBook.validId(foreignId) &&
+              state.extra is! ChaptarrBook &&
+              !state.uri.queryParameters.containsKey('title')),
       titleHint: state.uri.queryParameters['title'],
       searchTerm: state.uri.queryParameters['q'],
       instanceId: state.uri.queryParameters['instance_id'],
-      initialBook: state.extra is ChaptarrBook
-          ? state.extra! as ChaptarrBook
-          : null,
+      initialBook:
+          state.extra is ChaptarrBook ? state.extra! as ChaptarrBook : null,
     );
   }
   final id = _positiveIntParameter(state, 'id');
