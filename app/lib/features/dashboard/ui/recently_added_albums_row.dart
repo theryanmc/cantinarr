@@ -66,7 +66,8 @@ class RecentlyAddedAlbumsRow extends ConsumerWidget {
           HorizontalItemRow<RecentAlbum>(
             items: albums,
             isLoading: recent.isLoading,
-            height: cardWidth * 1.5 + 68,
+            height: cardWidth + MediaCard.subtitleRowExtraHeight,
+            artworkAspectRatio: 1,
             itemBuilder: (album) {
               final cover = lidarrImageSource(ref, album.cover, instanceId);
               final canOpen = album.foreignAlbumId.trim().isNotEmpty;
@@ -89,6 +90,7 @@ class RecentlyAddedAlbumsRow extends ConsumerWidget {
                 posterPath: cover?.url,
                 posterHeaders: cover?.headers,
                 placeholderIcon: Icons.album,
+                artworkAspectRatio: 1,
                 subtitle: album.artist.isEmpty ? null : album.artist,
                 statusLabel: label,
                 statusColor: color,

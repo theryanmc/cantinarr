@@ -2,7 +2,7 @@
 
 Music works like books, minus the part that makes books complicated:
 
-- **Lidarr has no global default instance.** The per-user pin *is* the access grant, so a user who hasn't been pinned to a Lidarr instance doesn't see the Music tab at all — exactly the Chaptarr rule.
+- **Lidarr has no global default instance.** A per-user pin or an explicit access grant authorizes the instance, so a user without either doesn't see the Music tab at all — exactly the Chaptarr rule.
 - **One album is one record.** There is no eBook/Audiobook-style format split, so a request is a single tap and a single status.
 - **A single can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to play" notification reliable.
 
@@ -26,9 +26,9 @@ Lidarr speaks the Servarr `/api/v1` API. Enter just the base URL; Cantinarr appe
 
 ## 3. Grant access per user
 
-This is the step people miss, and it works exactly like books. Unlike Radarr and Sonarr, Lidarr has no global default — pinning a user to a Lidarr instance is how you grant that user access to music.
+This is the step people miss, and it works exactly like books. Unlike Radarr and Sonarr, Lidarr has no global default — pinning a user or granting an instance gives that user access to music.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Un-pinning revokes access. Admins see Lidarr without a pin; everyone else needs one, and until they have it `services.lidarr` stays `false` and the Music tab stays hidden.
+Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Lidarr without a grant; everyone else needs one, and until they have it `services.lidarr` stays `false` and the Music tab stays hidden.
 
 Running more than one Lidarr instance is fine — pin different households or different libraries to different instances.
 
@@ -60,7 +60,7 @@ An instance offers downloads only once explicit mappings are saved for it. With 
 
 ## 7. Verify
 
-- The Music tab appears for a pinned non-admin user, opening on **Recently Added** and **Artists** rows once the library holds something.
+- The Music tab appears for a granted non-admin user, opening on **Popular Albums → New Releases → Browse by genre → Recently Added → Artists**. Library rows appear once the library holds something.
 - Searching an album or artist returns results, and requesting an album reads **Requested** until it downloads.
 - A grab that completes in Lidarr flips the album to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, an owned album's detail offers its tracks as working downloads from a device.
@@ -70,3 +70,17 @@ An instance offers downloads only once explicit mappings are saved for it. With 
 Adding an album Lidarr doesn't already track means finding its metadata record again. Cantinarr fetches it by id first — Lidarr answers a `lidarr:<id>` term with that exact record — and falls back to replaying the requester's own search term (stored on pending rows so approval later uses it too), then the title forms. Only an exact id match is ever accepted: MusicBrainz merges release-groups, and when the provider declares the requested id an alias of a record the library already tracks, the request completes that record instead of creating a twin.
 
 When no term finds it, the request is **saved as pending** rather than failed, and the requester is told so. Resolve it from the admin side: add the artist (or the album) in Lidarr directly, then approve the pending request — approval replays the add. Denying it is the other valid answer. Either way the request stays visible instead of disappearing.
+
+## Discover albums without a search term
+
+Discovery works as soon as the account has access to a Lidarr instance. No ListenBrainz or MusicBrainz account, API key, or deployment setting is needed. This is also an explicit grant for a kids account: music has no age ratings.
+
+- **Popular Albums** follows ListenBrainz's release-group chart order after keeping albums and EPs. Choose **This week**, **This month**, or **This year**.
+- **New Releases** shows albums and EPs from today and the preceding 29 calendar days, newest first. Future releases and dates without a known day are excluded.
+- **Browse by genre** offers Pop, Rock, Hip-Hop, R&B, Electronic, Jazz, Classical, Metal, Country, Folk, Blues, and Reggae. MusicBrainz orders these by its tag matching, not popularity.
+
+**See all** opens a paginated grid. The period, genre, and selected Lidarr instance travel in the link; opening an album and going back keeps your place. Covers come from Cover Art Archive through Cantinarr, with an album icon when no cover is available. Repeated appearances of one MusicBrainz ID are shown once; distinct IDs with the same title remain separate.
+
+External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including saving unmatched albums for admin review.
+
+Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. On an older Cantinarr server, library browsing and search remain usable and discovery asks for a server update.
