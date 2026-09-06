@@ -58,10 +58,20 @@ An instance offers downloads only once explicit mappings are saved for it.
 
 ## 6. Verify
 
-- The Books tab appears for a pinned non-admin user, opening on **Recently Added**.
+- The Books tab appears for a pinned non-admin user, opening on **Popular Books**, then **Browse by genre**, Recently Added, Authors and Series.
 - Searching a title returns results, and requesting an eBook or Audiobook row reads **Requested** until it downloads.
 - A grab that completes in Chaptarr flips the row to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, a completed book offers a working download from a device.
+
+## Discover books
+
+Popular Books and twelve genres use [Open Library search](https://openlibrary.org/dev/docs/api/search), with no extra account, API key or setting. Popularity is the provider's overall reading-list ranking, labelled **Popular on Open Library**. Genre pages keep provider relevance order; Biography & Memoir searches either subject. There is no time-period selector or separate audiobook chart.
+
+Books prefer English edition titles and covers, falling back to the work when none exists. This does not change the work's identity or hide books in other languages. Movie/TV discovery source and English-only settings do not affect books. Covers load on the device from fixed `covers.openlibrary.org` URLs, so devices need internet access to that host.
+
+See all and genre pages load 20 books at a time and retain the selected instance and genre when you return from details. An eBook's availability says nothing about its audiobook. Opening a book resolves its Open Library ID through the selected Chaptarr catalog; only verified IDs or provider-declared canonical mappings can reach the usual format-specific request controls. Multiple distinct canonical matches offer a choice. No verified match offers **Search books** with the title and author filled in; a failed provider read offers **Retry**. Existing approvals, duplicate checks and **Waiting for library** behavior apply to requests from discovery too.
+
+Discovery requires both discovery permission and a Chaptarr grant (also for kids accounts). External metadata is shared, but access is checked before and after cache/provider work. Targets and availability belong to the selected instance. Visible targets refresh within 60 seconds and after request/library events. If an older Cantinarr server lacks discovery endpoints, the app shows an update notice and keeps library browsing and search.
 
 ## Requests that land in the approval queue instead
 

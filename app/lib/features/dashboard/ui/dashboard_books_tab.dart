@@ -5,6 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../shell/logic/library_author_index.dart';
+import '../../discover/ui/book_discovery_row.dart';
 import '../data/book_library_service.dart';
 import '../data/book_authors_service.dart';
 import '../data/book_series_service.dart';
@@ -13,8 +14,8 @@ import 'library_authors_row.dart';
 import 'library_series_row.dart';
 import 'recently_added_books_row.dart';
 
-/// Dashboard Books tab: the browse rows only (Recently Added, Authors,
-/// Series). Chaptarr book/author search now lives in the shell toolbar
+/// Dashboard Books tab: Popular Books, genres, Recently Added, Authors,
+/// and Series. Chaptarr book/author search now lives in the shell toolbar
 /// (`shellBookSearchProvider` / `BookSearchResultsView`, see
 /// `app/lib/features/shell/logic/shell_book_search_provider.dart` and
 /// `app/lib/features/discover/ui/book_search_results_view.dart`) — the shell
@@ -86,6 +87,8 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          PopularBooksRow(),
+          BookGenresRow(),
           RecentlyAddedBooksRow(),
           LibraryAuthorsRow(),
           LibrarySeriesRow(),

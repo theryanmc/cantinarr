@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/windoze95/cantinarr-server/internal/ai"
 	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/config"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/credentials"
@@ -444,6 +445,11 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
+			books := bookdiscovery.NewHandler(instanceStore)
+			r.Get("/discover/books/{feed}", books.Feed)
+			r.Get("/genres/book", books.Genres)
+			r.Get("/media/book/{workId}", books.Book)
+			r.Get("/media/book/{workId}/request-target", books.RequestTarget)
 			r.Get("/discover/trending", discoverHandler.Trending)
 			r.Get("/discover/movies/popular", discoverHandler.PopularMovies)
 			r.Get("/discover/tv/popular", discoverHandler.PopularTV)

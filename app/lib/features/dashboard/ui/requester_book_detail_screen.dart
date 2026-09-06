@@ -12,6 +12,9 @@ import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/book_discovery_service.dart';
+import '../../discover/logic/book_discovery_provider.dart';
+import '../../discover/ui/book_discovery_row.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
@@ -40,6 +43,8 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
   final String? titleHint;
   final ChaptarrBook? initialBook;
   final String? instanceId;
+  final DiscoveryBook? discoveryBook;
+  final bool discovery;
 
   /// The term the requester searched to reach this book, when they arrived from
   /// search. Requesting an untracked book makes the server find this exact
@@ -53,6 +58,8 @@ class RequesterBookDetailScreen extends ConsumerStatefulWidget {
     this.initialBook,
     this.instanceId,
     this.searchTerm,
+    this.discoveryBook,
+    this.discovery = false,
   });
 
   @override
@@ -71,6 +78,13 @@ class _RequesterBookDetailScreenState
   int _loadGeneration = 0;
   int _recordsLoadGeneration = 0;
   String? _instanceId;
+  bool get _isDiscovery => widget.discovery || widget.discoveryBook != null;
+  DiscoveryBook? _discoveryBook;
+  Object? _discoveryError;
+  AsyncValue<List<BookRequestTarget>> _targets = const AsyncLoading();
+  BookRequestTarget? _discoveryTarget;
+  String? _boundDiscoveryTargetId;
+  String? _chosenTargetId;
 
   /// The foreignBookId the library files this book under, when the server
   /// reported it differs from [widget.foreignId] (Chaptarr re-keys created
@@ -106,7 +120,9 @@ class _RequesterBookDetailScreenState
     if (oldWidget.foreignId != widget.foreignId ||
         oldWidget.initialBook != widget.initialBook ||
         oldWidget.titleHint != widget.titleHint ||
-        oldWidget.instanceId != widget.instanceId) {
+        oldWidget.instanceId != widget.instanceId ||
+        oldWidget.discovery != widget.discovery ||
+        oldWidget.discoveryBook != widget.discoveryBook) {
       _startLoads();
     }
   }
@@ -120,10 +136,18 @@ class _RequesterBookDetailScreenState
     _chaptarrRecords = const [];
     _filesByBook = const {};
     _canonicalForeignId = null;
+    _discoveryBook = widget.discoveryBook?.foreignId == widget.foreignId
+        ? widget.discoveryBook
+        : null;
+    _discoveryTarget = null;
+    _boundDiscoveryTargetId = null;
+    _chosenTargetId = null;
+    _discoveryError = null;
     // The id fetch runs whenever no record rode along, so the page waits on
     // it rather than flashing "not found" at a book only that fetch can name.
     _metadataLoading = widget.initialBook == null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_isDiscovery) return;
       _resolveMetadata(generation);
       _resolveChaptarrRecords(generation);
     });
@@ -219,6 +243,7 @@ class _RequesterBookDetailScreenState
   /// digest intentionally lack trustworthy numeric library/file ids, so only
   /// this live list may back admin navigation or requester downloads.
   Future<void> _resolveChaptarrRecords(int generation) async {
+    if (_isDiscovery && _discoveryTarget == null) return;
     final auth = ref.read(authProvider).valueOrNull;
     final isAdmin = auth?.user?.isAdmin ?? false;
     final downloadsEnabled =
@@ -244,9 +269,8 @@ class _RequesterBookDetailScreenState
           }
         }));
         for (var i = 0; i < matches.length; i++) {
-          filesByBook[matches[i].id] = results[i]
-              .where((file) => file.id > 0)
-              .toList(growable: false);
+          filesByBook[matches[i].id] =
+              results[i].where((file) => file.id > 0).toList(growable: false);
         }
       }
       if (!mounted ||
@@ -313,12 +337,9 @@ class _RequesterBookDetailScreenState
   /// server allows reporting — mirroring the movie/TV gate, which also derives
   /// from requester-visible library truth.
   bool _canReportBook(OwnedTitle? owned) {
-    final allow = ref
-            .watch(authProvider)
-            .valueOrNull
-            ?.connection
-            ?.allowReporting ??
-        false;
+    final allow =
+        ref.watch(authProvider).valueOrNull?.connection?.allowReporting ??
+            false;
     if (!allow || _instanceId == null) return false;
     if (_chaptarrRecords.any((record) => record.id > 0)) return true;
     return _reportableFormats(owned).isNotEmpty;
@@ -397,6 +418,65 @@ class _RequesterBookDetailScreenState
 
   @override
   Widget build(BuildContext context) {
+    if (_isDiscovery) {
+      ref.listen(bookDiscoveryScopeProvider, (previous, next) {
+        if (previous != next) setState(_startLoads);
+      });
+      final id = _instanceId;
+      final user = ref.watch(authProvider).valueOrNull?.user;
+      if (id == null ||
+          !(user?.hasPermission('media:discover') ?? false) ||
+          !ref
+              .watch(instanceProvider)
+              .chaptarrInstances
+              .any((i) => i.id == id)) {
+        return Scaffold(
+            appBar: AppBar(title: const Text('Book details')),
+            body: const Center(
+                child: Text('Books are not available for this account.')));
+      }
+      final key = (foreignId: widget.foreignId, instanceId: id);
+      final metadata = ref.watch(bookDiscoveryDetailProvider(key));
+      _discoveryBook = metadata.valueOrNull ?? _discoveryBook;
+      _discoveryError = metadata.error;
+      _metadataLoading = metadata.isLoading && _discoveryBook == null;
+      _targets = ref.watch(bookRequestTargetsProvider(key));
+      final candidates = _targets.hasError || _targets.isLoading
+          ? <BookRequestTarget>[]
+          : _targets.valueOrNull ?? <BookRequestTarget>[];
+      _discoveryTarget = null;
+      if (candidates.length == 1) {
+        _discoveryTarget = candidates.single;
+      } else {
+        for (final candidate in candidates) {
+          if (candidate.foreignId == _chosenTargetId) {
+            _discoveryTarget = candidate;
+          }
+        }
+      }
+      final canonical = _discoveryTarget?.foreignId;
+      if (_boundDiscoveryTargetId != canonical) {
+        _boundDiscoveryTargetId = canonical;
+        _canonicalForeignId = canonical;
+        _chaptarrRecords = const [];
+        _filesByBook = const {};
+        _recordsLoadGeneration++;
+        if (canonical != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _resolveChaptarrRecords(_loadGeneration);
+          });
+        }
+      }
+      if ((_discoveryError is BookDiscoveryException &&
+              (_discoveryError as BookDiscoveryException).accessDenied) ||
+          (_targets.error is BookDiscoveryException &&
+              (_targets.error as BookDiscoveryException).accessDenied)) {
+        return Scaffold(
+            appBar: AppBar(title: const Text('Book details')),
+            body: const Center(
+                child: Text('Books are not available for this account.')));
+      }
+    }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshBookTruth();
     });
@@ -422,6 +502,58 @@ class _RequesterBookDetailScreenState
       // their own rows instead of blanking the whole page behind one digest.
       body: _resolved(digest.valueOrNull ?? const []),
     );
+  }
+
+  void _retryDiscoveryMetadata() {
+    final id = _instanceId;
+    if (id != null) {
+      ref.invalidate(bookDiscoveryDetailProvider(
+          (foreignId: widget.foreignId, instanceId: id)));
+    }
+  }
+
+  Widget _discoveryRequestControls() {
+    final id = _instanceId!;
+    final key = (foreignId: widget.foreignId, instanceId: id);
+    if (_targets.hasError) {
+      return BookDiscoveryError(
+          const BookDiscoveryException(
+              'Could not check this book in your library catalog. Please retry.'),
+          onRetry: () => ref.invalidate(bookRequestTargetsProvider(key)));
+    }
+    if (_targets.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final candidates = _targets.valueOrNull ?? <BookRequestTarget>[];
+    if (candidates.isNotEmpty) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Choose a matching library title'),
+        for (final candidate in candidates)
+          Material(
+              color: Colors.transparent,
+              child: ListTile(
+                  title: Text(candidate.title),
+                  subtitle: Text(candidate.author),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      setState(() => _chosenTargetId = candidate.foreignId))),
+      ]);
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text(
+          'This Open Library book could not be matched to your library catalog. Try searching its title and author.'),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+          icon: const Icon(Icons.search),
+          label: const Text('Search books'),
+          onPressed: () {
+            final book = _discoveryBook;
+            if (book == null) return;
+            ref.read(bookDiscoverySearchSeedProvider.notifier).state =
+                (query: book.searchTerm, instanceId: id);
+            context.go('/dashboard/books');
+          }),
+    ]);
   }
 
   /// Library titles this page's book may duplicate: fuzzy title/author matches
@@ -471,12 +603,17 @@ class _RequesterBookDetailScreenState
     final live = _chaptarrRecords.isEmpty ? null : _chaptarrRecords.first;
     final hintedTitle = widget.titleHint?.trim() ?? '';
     final title = _firstText([
+      _discoveryBook?.title,
       _metadata?.title,
       live?.title,
       owned?.title,
       hintedTitle,
     ]);
     if (title.isEmpty) {
+      if (_isDiscovery && _discoveryError != null) {
+        return BookDiscoveryError(_discoveryError!,
+            onRetry: _retryDiscoveryMetadata);
+      }
       return _metadataLoading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent),
@@ -485,6 +622,7 @@ class _RequesterBookDetailScreenState
     }
 
     final author = _firstText([
+      _discoveryBook?.author,
       _metadata?.author?.authorName,
       live?.author?.authorName,
       owned?.author,
@@ -516,8 +654,9 @@ class _RequesterBookDetailScreenState
       _metadata?.seriesTitle,
     ]);
     final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
-    final year = releaseDate?.year ?? owned?.year ?? 0;
+    final year = _discoveryBook?.year ?? releaseDate?.year ?? owned?.year ?? 0;
     final overview = _firstText([
+      _discoveryBook?.description,
       _metadata?.displayOverview,
       live?.displayOverview,
     ]);
@@ -532,9 +671,11 @@ class _RequesterBookDetailScreenState
     // library record fills in only when the lookup named no outside page.
     final metadataLinks =
         _metadata == null ? const <TitleLink>[] : bookLinks(_metadata!);
-    final links = metadataLinks.isNotEmpty
-        ? metadataLinks
-        : (live == null ? const <TitleLink>[] : bookLinks(live));
+    final links = _discoveryBook != null
+        ? [TitleLink('Open Library', _discoveryBook!.openLibraryUrl)]
+        : metadataLinks.isNotEmpty
+            ? metadataLinks
+            : (live == null ? const <TitleLink>[] : bookLinks(live));
     final ownership = owned?.ownership;
     // Only a page that could not bind to its own library record needs the
     // pointer; a bound page's format panel already tells the whole truth.
@@ -553,9 +694,8 @@ class _RequesterBookDetailScreenState
     ChaptarrImageSource? cover;
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
-      final ownedCover = rawOwnedCover.toLowerCase().startsWith('http')
-          ? ''
-          : rawOwnedCover;
+      final ownedCover =
+          rawOwnedCover.toLowerCase().startsWith('http') ? '' : rawOwnedCover;
       final remoteCover = _firstText([
         _metadata?.remoteCoverUrl,
         live?.remoteCoverUrl,
@@ -563,9 +703,8 @@ class _RequesterBookDetailScreenState
       // Live Chaptarr book covers are safe only when relative and routed back
       // through Cantinarr. An absolute arr-origin URL is never surfaced.
       final liveCover = live?.coverUrl ?? '';
-      final safeLiveCover = liveCover.toLowerCase().startsWith('http')
-          ? ''
-          : liveCover;
+      final safeLiveCover =
+          liveCover.toLowerCase().startsWith('http') ? '' : liveCover;
       cover = chaptarrImageSource(
         ref,
         _firstText([ownedCover, remoteCover, safeLiveCover]),
@@ -584,8 +723,8 @@ class _RequesterBookDetailScreenState
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
               child: CachedImage(
-                url: cover?.url,
-                headers: cover?.headers,
+                url: _isDiscovery ? _discoveryBook?.coverUrl : cover?.url,
+                headers: _isDiscovery ? null : cover?.headers,
                 width: 132,
                 height: 198,
                 icon: Icons.menu_book,
@@ -671,6 +810,9 @@ class _RequesterBookDetailScreenState
             ),
           ],
           const SizedBox(height: 24),
+          if (_isDiscovery && _discoveryError != null)
+            BookDiscoveryError(_discoveryError!,
+                onRetry: _retryDiscoveryMetadata),
           if (lookalikes.isNotEmpty) ...[
             _LookalikeNotice(
               candidates: lookalikes,
@@ -678,40 +820,42 @@ class _RequesterBookDetailScreenState
             ),
             const SizedBox(height: 14),
           ],
-          BookFormatPanel(
-            foreignId: _effectiveForeignId,
-            title: title,
-            instanceId: instanceId,
-            searchTerm: widget.searchTerm,
-            service: _requestService,
-            ownership: ownership,
-            ownershipStatusKnown: owned?.statusKnown ?? true,
-            refreshTick: requestRefreshTick,
-            onCanonicalForeignId: _onCanonicalForeignId,
-            ebookDownload: !downloadsEnabled ||
-                    instanceId == null ||
-                    ebookFiles.isEmpty
-                ? null
-                : MediaDownloadChoiceButton(
-                    instanceId: instanceId,
-                    choices: ebookFiles,
-                    label: 'Download eBook',
-                    sheetTitle: 'Download eBook',
-                    iconOnly: true,
-                  ),
-            audiobookDownload: !downloadsEnabled ||
-                    instanceId == null ||
-                    audiobookFiles.isEmpty
-                ? null
-                : MediaDownloadChoiceButton(
-                    instanceId: instanceId,
-                    choices: audiobookFiles,
-                    label: 'Download audiobook',
-                    sheetTitle: 'Download audiobook',
-                    iconOnly: true,
-                  ),
-            onRequestCompleted: _onRequestCompleted,
-          ),
+          if (_isDiscovery && _discoveryTarget == null)
+            _discoveryRequestControls()
+          else
+            BookFormatPanel(
+              foreignId: _effectiveForeignId,
+              title: _discoveryTarget?.title ?? title,
+              instanceId: instanceId,
+              searchTerm: _discoveryTarget?.foreignId ?? widget.searchTerm,
+              service: _requestService,
+              ownership: ownership,
+              ownershipStatusKnown: owned?.statusKnown ?? true,
+              refreshTick: requestRefreshTick,
+              onCanonicalForeignId: _onCanonicalForeignId,
+              ebookDownload:
+                  !downloadsEnabled || instanceId == null || ebookFiles.isEmpty
+                      ? null
+                      : MediaDownloadChoiceButton(
+                          instanceId: instanceId,
+                          choices: ebookFiles,
+                          label: 'Download eBook',
+                          sheetTitle: 'Download eBook',
+                          iconOnly: true,
+                        ),
+              audiobookDownload: !downloadsEnabled ||
+                      instanceId == null ||
+                      audiobookFiles.isEmpty
+                  ? null
+                  : MediaDownloadChoiceButton(
+                      instanceId: instanceId,
+                      choices: audiobookFiles,
+                      label: 'Download audiobook',
+                      sheetTitle: 'Download audiobook',
+                      iconOnly: true,
+                    ),
+              onRequestCompleted: _onRequestCompleted,
+            ),
           if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the
@@ -877,8 +1021,7 @@ class _LookalikeNotice extends StatelessWidget {
           const Divider(height: 1, color: AppTheme.border),
           for (final candidate in candidates)
             ListTile(
-              key: ValueKey(
-                  'book-lookalike:${candidate.foreignBookId.trim()}'),
+              key: ValueKey('book-lookalike:${candidate.foreignBookId.trim()}'),
               dense: true,
               title: Text(
                 candidate.title,

@@ -297,8 +297,8 @@ class _DiscoverySettingsScreenState
           padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Text(
             'These settings shape the headline row on the Movies and TV tabs, '
-            'and the recommendation rows throughout the app. Search is never '
-            'filtered.',
+            'and movie and TV recommendation rows. Search is never filtered. '
+            'Books use Open Library independently, with no extra account or API key.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),
@@ -320,7 +320,7 @@ class _DiscoverySettingsScreenState
             ),
             subtitle: const Text(
               'Hides titles whose original language is not English from the '
-              'discovery and recommendation rows. Search still finds everything.',
+              'movie and TV discovery and recommendation rows. Search still finds everything.',
               style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
             ),
           ),
