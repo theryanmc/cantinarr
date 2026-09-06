@@ -9,6 +9,7 @@ import 'package:cantinarr/features/settings/ui/oidc_account_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const connection = BackendConnection(
     serverUrl: 'https://media.example.com',
@@ -81,6 +82,7 @@ class ScreenService extends AuthService {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets('login offers provider and retains administrator recovery',
       (tester) async {
     final auth = ScreenAuth();

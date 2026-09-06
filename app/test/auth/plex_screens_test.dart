@@ -10,6 +10,7 @@ import 'package:cantinarr/navigation/app_router.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'oidc_screens_test.dart' show ScreenAuth;
 import 'oidc_service_test.dart' show MemoryStorage;
 import 'plex_auth_service_test.dart' show PlexAuthFake;
@@ -75,6 +76,7 @@ class PlexSettingsFake extends AuthService {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets(
       'router ignores the stale attempt during a delayed native storage refresh',
       (tester) async {
