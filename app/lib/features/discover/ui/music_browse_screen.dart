@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../core/providers/instance_provider.dart';
+import '../logic/discovery_access.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/widgets/media_card.dart';
 import '../logic/music_browse_query.dart';
@@ -19,6 +19,7 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
     with WidgetsBindingObserver {
   final _scroll = ScrollController();
   MusicBrowseQuery? _query;
+  double? _setupReturnOffset;
 
   @override
   void initState() {
@@ -63,23 +64,47 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
     }
   }
 
+  void _restoreAfterSetup(MusicFeedState state, MusicFeedNotifier notifier) {
+    if (_setupReturnOffset == null || state.loading || state.error != null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients || _setupReturnOffset == null) return;
+      final offset = _setupReturnOffset!;
+      if (_scroll.position.maxScrollExtent < offset && state.nextPage != null) {
+        notifier.loadMore();
+        return;
+      }
+      _setupReturnOffset = null;
+      _scroll.jumpTo(offset.clamp(0, _scroll.position.maxScrollExtent));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final instances = ref.watch(instanceProvider);
-    final id = widget.query.instanceId.isEmpty
-        ? instances.activeLidarrInstance?.id
-        : widget.query.instanceId;
-    if (id == null ||
-        !instances.lidarrInstances.any((instance) => instance.id == id)) {
+    final access = ref.watch(discoveryAccessProvider);
+    final id = widget.query.instanceId ?? access.activeId('lidarr');
+    if (_query != null &&
+        _query!.instanceId == null &&
+        id != null &&
+        _scroll.hasClients) {
+      _setupReturnOffset = _scroll.offset;
+    }
+    _query = null;
+    if (!access.canBrowse('lidarr', id)) {
+      _setupReturnOffset = null;
       return Scaffold(
           appBar: AppBar(title: Text(widget.query.title)),
-          body: const Center(
-              child: Text('This music library is not available to you.')));
+          body: Center(
+              child: Text(access.needsUpdate(id)
+                  ? adminCatalogUpdateMessage
+                  : 'This music library is not available to you.')));
     }
     final query = widget.query.withInstance(id);
     _query = query;
     final state = ref.watch(musicFeedProvider(query));
     final notifier = ref.read(musicFeedProvider(query).notifier);
+    _restoreAfterSetup(state, notifier);
     return Scaffold(
       appBar: AppBar(title: Text(query.title), actions: [
         IconButton(
@@ -98,7 +123,7 @@ class _MusicBrowseScreenState extends ConsumerState<MusicBrowseScreen>
           await notifier.refresh();
         },
         child: CustomScrollView(
-          key: PageStorageKey(query.location),
+          key: PageStorageKey(widget.query.location),
           controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [

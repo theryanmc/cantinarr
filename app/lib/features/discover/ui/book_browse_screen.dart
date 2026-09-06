@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/book_discovery_service.dart';
 import '../logic/book_discovery_provider.dart';
+import '../logic/discovery_access.dart';
 import 'book_discovery_row.dart';
 
 class BookBrowseScreen extends ConsumerStatefulWidget {
@@ -14,6 +15,8 @@ class BookBrowseScreen extends ConsumerStatefulWidget {
 
 class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
   final _scroll = ScrollController();
+  BookBrowseQuery? _query;
+  double? _setupReturnOffset;
   @override
   void initState() {
     super.initState();
@@ -28,16 +31,54 @@ class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
 
   void _more() {
     if (!_scroll.hasClients || _scroll.position.extentAfter > 400) return;
-    final feed = ref.read(bookFeedProvider(widget.query));
+    if (_query == null) return;
+    final feed = ref.read(bookFeedProvider(_query!));
     if (feed.error == null) feed.load();
+  }
+
+  void _restoreAfterSetup(BookFeedNotifier feed) {
+    if (_setupReturnOffset == null || feed.loading || feed.error != null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients || _setupReturnOffset == null) return;
+      final offset = _setupReturnOffset!;
+      if (_scroll.position.maxScrollExtent < offset && feed.nextPage != null) {
+        feed.load();
+        return;
+      }
+      _setupReturnOffset = null;
+      _scroll.jumpTo(offset.clamp(0, _scroll.position.maxScrollExtent));
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final feed = ref.watch(bookFeedProvider(widget.query));
+    final access = ref.watch(discoveryAccessProvider);
+    final id = widget.query.instanceId ?? access.activeId('chaptarr');
+    if (_query != null &&
+        _query!.instanceId == null &&
+        id != null &&
+        _scroll.hasClients) {
+      _setupReturnOffset = _scroll.offset;
+    }
+    _query = null;
+    if (!access.canBrowse('chaptarr', id)) {
+      _setupReturnOffset = null;
+      return Scaffold(
+          appBar: AppBar(title: const Text('Books')),
+          body: Center(
+              child: Text(access.needsUpdate(id)
+                  ? adminCatalogUpdateMessage
+                  : 'Books are not available for this account.')));
+    }
+    final query = BookBrowseQuery(
+        feed: widget.query.feed, genre: widget.query.genre, instanceId: id);
+    _query = query;
+    final feed = ref.watch(bookFeedProvider(query));
+    _restoreAfterSetup(feed);
     final genres =
-        ref.watch(bookGenresProvider(widget.query.instanceId)).valueOrNull ??
-            <BookGenre>[];
+        ref.watch(bookGenresProvider(id)).valueOrNull ?? <BookGenre>[];
     var title =
         widget.query.feed == 'popular' ? 'Popular Books' : 'Books by genre';
     for (final g in genres) {
@@ -79,7 +120,7 @@ class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
                           return BookDiscoveryCard(
                               key: ValueKey(book.foreignId),
                               book: book,
-                              instanceId: widget.query.instanceId,
+                              instanceId: id,
                               width: width);
                         }, childCount: feed.items.length),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(

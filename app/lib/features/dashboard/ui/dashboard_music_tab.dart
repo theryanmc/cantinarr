@@ -5,6 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../discover/logic/music_browse_query.dart';
+import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/music_discovery_row.dart';
 import '../data/music_artists_service.dart';
 import '../data/music_library_service.dart';
@@ -72,13 +73,18 @@ class _DashboardMusicTabState extends ConsumerState<DashboardMusicTab>
         });
       },
     );
-    final instanceId = ref.watch(instanceProvider).activeLidarrInstance?.id;
+    final access = ref.watch(discoveryAccessProvider);
+    final instanceId = access.activeId('lidarr');
     return SingleChildScrollView(
       key: const PageStorageKey('dashboard-music'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (instanceId != null) ...[
+          if (access.needsUpdate(instanceId))
+            const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(adminCatalogUpdateMessage)),
+          if (access.canBrowse('lidarr', instanceId)) ...[
             MusicDiscoveryRow(
               query: MusicBrowseQuery(
                   feed: 'popular', instanceId: instanceId, period: _period),
@@ -89,8 +95,10 @@ class _DashboardMusicTabState extends ConsumerState<DashboardMusicTab>
                     feed: 'new-releases', instanceId: instanceId)),
             MusicGenreStrip(instanceId: instanceId),
           ],
-          const RecentlyAddedAlbumsRow(),
-          const LibraryArtistsRow(),
+          if (instanceId != null) ...const [
+            RecentlyAddedAlbumsRow(),
+            LibraryArtistsRow(),
+          ],
         ],
       ),
     );

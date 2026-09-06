@@ -54,7 +54,7 @@ class FakeMusicService extends MusicDiscoveryService {
   }
 
   @override
-  Future<List<MusicGenre>> genres(String id) async {
+  Future<List<MusicGenre>> genres(String? id) async {
     if (unsupported) throw const MusicDiscoveryUnsupported();
     return [
       for (final entry in musicGenreNames.entries)
@@ -63,7 +63,7 @@ class FakeMusicService extends MusicDiscoveryService {
   }
 
   @override
-  Future<MusicAlbum> album(String id, String instanceId) async => MusicAlbum(
+  Future<MusicAlbum> album(String id, String? instanceId) async => MusicAlbum(
         foreignId: id,
         title: 'Cold album',
         artist: 'Cold artist',
@@ -94,7 +94,11 @@ const musicAuth = AuthState(
           id: 'music-2', serviceType: 'lidarr', name: 'Second music'),
     ],
   ),
-  user: UserProfile(id: 1, username: 'listener', role: 'user'),
+  user: UserProfile(
+      id: 1,
+      username: 'listener',
+      role: 'user',
+      permissions: ['media:discover', 'media:request']),
 );
 
 class FakeAuth extends AuthNotifier {

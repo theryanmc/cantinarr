@@ -2,15 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/horizontal_item_row.dart';
 import '../../../core/widgets/media_card.dart';
 import '../../../core/widgets/section_header.dart';
-import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart';
 import '../data/book_discovery_service.dart';
 import '../logic/book_discovery_provider.dart';
+import '../logic/discovery_access.dart';
 
 class BookDiscoveryError extends StatelessWidget {
   final Object error;
@@ -32,7 +31,7 @@ class BookDiscoveryError extends StatelessWidget {
 /// Building a visible card starts its coalesced, instance-scoped ID lookup.
 class BookDiscoveryCard extends ConsumerWidget {
   final DiscoveryBook book;
-  final String instanceId;
+  final String? instanceId;
   final double width;
   const BookDiscoveryCard(
       {super.key,
@@ -42,8 +41,10 @@ class BookDiscoveryCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final value = ref.watch(discoveryBookStatusProvider(
-        (foreignId: book.foreignId, instanceId: instanceId)));
+    final value = instanceId == null
+        ? const AsyncData<BookRequestStatusDetail?>(null)
+        : ref.watch(discoveryBookStatusProvider(
+            (foreignId: book.foreignId, instanceId: instanceId!)));
     final detail = value.hasError || value.isLoading ? null : value.valueOrNull;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       MediaCard(
@@ -76,14 +77,13 @@ class PopularBooksRow extends ConsumerWidget {
   const PopularBooksRow({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final id = ref.watch(instanceProvider).activeChaptarrInstance?.id;
-    final allowed = ref
-            .watch(authProvider)
-            .valueOrNull
-            ?.user
-            ?.hasPermission('media:discover') ??
-        false;
-    if (id == null || !allowed) return const SizedBox.shrink();
+    final access = ref.watch(discoveryAccessProvider);
+    final id = access.activeId('chaptarr');
+    if (access.needsUpdate(id)) {
+      return const Padding(
+          padding: EdgeInsets.all(16), child: Text(adminCatalogUpdateMessage));
+    }
+    if (!access.canBrowse('chaptarr', id)) return const SizedBox.shrink();
     final query = BookBrowseQuery(instanceId: id);
     final feed = ref.watch(bookFeedProvider(query));
     final width = MediaQuery.sizeOf(context).width >= 900 ? 124.0 : 108.0;
@@ -128,14 +128,9 @@ class BookGenresRow extends ConsumerWidget {
   const BookGenresRow({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final id = ref.watch(instanceProvider).activeChaptarrInstance?.id;
-    final allowed = ref
-            .watch(authProvider)
-            .valueOrNull
-            ?.user
-            ?.hasPermission('media:discover') ??
-        false;
-    if (id == null || !allowed) return const SizedBox.shrink();
+    final access = ref.watch(discoveryAccessProvider);
+    final id = access.activeId('chaptarr');
+    if (!access.canBrowse('chaptarr', id)) return const SizedBox.shrink();
     final genres = ref.watch(bookGenresProvider(id));
     final denied = genres.error is BookDiscoveryException &&
         (genres.error as BookDiscoveryException).accessDenied;

@@ -586,6 +586,7 @@ class ServerConfig {
 
   /// Whether a Plex server exists that an ungranted user can ask access to.
   final bool plexAccessRequestable;
+  final bool adminCatalogBrowsing;
 
   const ServerConfig({
     required this.serverName,
@@ -596,6 +597,7 @@ class ServerConfig {
     this.issuesEnabled = false,
     this.allowReporting = false,
     this.plexAccessRequestable = false,
+    this.adminCatalogBrowsing = false,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -614,6 +616,7 @@ class ServerConfig {
       issuesEnabled: json['issues_enabled'] as bool? ?? false,
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
+      adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
     );
   }
 }

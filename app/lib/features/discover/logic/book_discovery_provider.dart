@@ -4,40 +4,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/backend_client.dart';
-import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
-import '../../auth/logic/auth_provider.dart';
 import '../../request/data/request_service.dart';
 import '../data/book_discovery_service.dart';
+import 'discovery_access.dart';
 
 /// Changes of account, server, permissions or grants rebuild every discovery
 /// provider. Refresh errors may retain metadata only inside this same scope.
-final bookDiscoveryScopeProvider = Provider<String>((ref) {
-  final auth = ref.watch(authProvider).valueOrNull;
-  final instances = ref
-      .watch(instanceProvider)
-      .chaptarrInstances
-      .map((i) => i.id)
-      .toList()
-    ..sort();
-  return '${auth?.connection?.serverUrl}|${auth?.user?.id}|${auth?.user?.role}|${auth?.user?.permissions.join(',')}|${instances.join(',')}';
-});
+final bookDiscoveryScopeProvider = catalogDiscoveryScopeProvider;
 
-bool bookDiscoveryAllowed(Ref ref, String instanceId) {
-  return (ref
-              .read(authProvider)
-              .valueOrNull
-              ?.user
-              ?.hasPermission('media:discover') ??
-          false) &&
-      ref
-          .read(instanceProvider)
-          .chaptarrInstances
-          .any((i) => i.id == instanceId);
-}
+bool bookDiscoveryAllowed(Ref ref, String? instanceId) =>
+    ref.read(discoveryAccessProvider).canBrowse('chaptarr', instanceId);
 
-void _authorize(Ref ref, String instanceId) {
+void _authorize(Ref ref, String? instanceId) {
   ref.watch(bookDiscoveryScopeProvider);
   if (!bookDiscoveryAllowed(ref, instanceId)) {
     throw const BookDiscoveryException(
@@ -49,7 +29,7 @@ void _authorize(Ref ref, String instanceId) {
 final bookDiscoveryServiceProvider =
     Provider((ref) => BookDiscoveryService(ref.watch(backendClientProvider)));
 
-typedef BookDiscoveryKey = ({String foreignId, String instanceId});
+typedef BookDiscoveryKey = ({String foreignId, String? instanceId});
 
 /// One-shot handoff into the existing shell book search.
 final bookDiscoverySearchSeedProvider =
@@ -64,13 +44,14 @@ final bookDiscoveryDetailProvider = FutureProvider.autoDispose
 });
 
 final bookGenresProvider =
-    FutureProvider.autoDispose.family<List<BookGenre>, String>((ref, id) {
+    FutureProvider.autoDispose.family<List<BookGenre>, String?>((ref, id) {
   _authorize(ref, id);
   return ref.read(bookDiscoveryServiceProvider).genres(id);
 });
 
 final bookRequestTargetsProvider = FutureProvider.autoDispose
-    .family<List<BookRequestTarget>, BookDiscoveryKey>((ref, key) {
+    .family<List<BookRequestTarget>, ({String foreignId, String instanceId})>(
+        (ref, key) {
   _authorize(ref, key.instanceId);
   ref.watch(libraryRefreshTickProvider);
   ref.watch(libraryChangedEventsProvider);
@@ -83,7 +64,8 @@ final bookRequestTargetsProvider = FutureProvider.autoDispose
 });
 
 final discoveryBookStatusProvider = FutureProvider.autoDispose
-    .family<BookRequestStatusDetail?, BookDiscoveryKey>((ref, key) async {
+    .family<BookRequestStatusDetail?, ({String foreignId, String instanceId})>(
+        (ref, key) async {
   _authorize(ref, key.instanceId);
   final candidates = await ref.watch(bookRequestTargetsProvider(key).future);
   if (candidates.length != 1) return null;
@@ -95,12 +77,11 @@ final discoveryBookStatusProvider = FutureProvider.autoDispose
 @immutable
 class BookBrowseQuery {
   final String feed;
-  final String instanceId;
+  final String? instanceId;
   final String? genre;
-  const BookBrowseQuery(
-      {this.feed = 'popular', required this.instanceId, this.genre});
+  const BookBrowseQuery({this.feed = 'popular', this.instanceId, this.genre});
   String get location => Uri(path: '/browse/books/$feed', queryParameters: {
-        'instance_id': instanceId,
+        if (instanceId != null) 'instance_id': instanceId,
         if (genre != null) 'genre': genre!,
       }).toString();
   static BookBrowseQuery? tryParse(Uri uri) {
@@ -111,8 +92,7 @@ class BookBrowseQuery {
         p[0] != 'browse' ||
         p[1] != 'books' ||
         !{'popular', 'genre'}.contains(p[2]) ||
-        id == null ||
-        id.isEmpty ||
+        (id != null && id.trim().isEmpty) ||
         (p[2] == 'genre' ? genre == null || genre.isEmpty : genre != null)) {
       return null;
     }

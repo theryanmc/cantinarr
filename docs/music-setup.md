@@ -2,7 +2,7 @@
 
 Music works like books, minus the part that makes books complicated:
 
-- **Lidarr has no global default instance.** A per-user pin or an explicit access grant authorizes the instance, so a user without either doesn't see the Music tab at all — exactly the Chaptarr rule.
+- **Lidarr has no global default instance.** A per-user pin or an explicit access grant authorizes the instance, so a requester without either doesn't see the Music tab at all — exactly the Chaptarr rule.
 - **One album is one record.** There is no eBook/Audiobook-style format split, so a request is a single tap and a single status.
 - **A single can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to play" notification reliable.
 
@@ -73,7 +73,7 @@ When no term finds it, the request is **saved as pending** rather than failed, a
 
 ## Discover albums without a search term
 
-Discovery works as soon as the account has access to a Lidarr instance. No ListenBrainz or MusicBrainz account, API key, or deployment setting is needed. This is also an explicit grant for a kids account: music has no age ratings.
+Admins can browse music feeds, genres, artwork, and cold album links before connecting Lidarr. **Connect Lidarr to request music** opens the existing instance form with Lidarr selected; saving returns to the album and enables its request controls. The toolbar offers the same setup action until library search is available. Library rows and status badges need a connected instance. For requesters, discovery works as soon as the account has access to a Lidarr instance. No ListenBrainz or MusicBrainz account, API key, or deployment setting is needed. This is also an explicit grant for a kids account: music has no age ratings.
 
 - **Popular Albums** follows ListenBrainz's release-group chart order after keeping albums and EPs. Choose **This week**, **This month**, or **This year**.
 - **New Releases** shows albums and EPs from today and the preceding 29 calendar days, newest first. Future releases and dates without a known day are excluded.
@@ -83,4 +83,4 @@ Discovery works as soon as the account has access to a Lidarr instance. No Liste
 
 External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including saving unmatched albums for admin review.
 
-Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. On an older Cantinarr server, library browsing and search remain usable and discovery asks for a server update.
+Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. On an older Cantinarr server, library browsing and search remain usable and discovery asks for a server update; admins also see an update notice when browsing before setup is unsupported.

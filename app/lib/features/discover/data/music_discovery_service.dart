@@ -4,6 +4,7 @@ import '../../../core/network/backend_client.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/music_browse_query.dart';
+import '../logic/discovery_access.dart';
 import 'music_models.dart';
 
 const musicUpdateMessage =
@@ -38,40 +39,54 @@ class MusicDiscoveryService {
       MusicPage.fromJson(await _get('/api/discover/music/${query.feed}',
           {...query.parameters, 'page': page}));
 
-  Future<List<MusicGenre>> genres(String instanceId) async {
-    final data = await _get('/api/genres/music', {'instance_id': instanceId});
+  Future<List<MusicGenre>> genres(String? instanceId) async {
+    final data = await _get('/api/genres/music',
+        {if (instanceId != null) 'instance_id': instanceId});
     return (data['genres'] as List)
         .map((g) => MusicGenre.fromJson(g as Map<String, dynamic>))
         .toList();
   }
 
-  Future<MusicAlbum> album(String mbid, String instanceId) async =>
-      MusicAlbum.fromJson(await _get(
-          '/api/media/music/${Uri.encodeComponent(mbid)}',
-          {'instance_id': instanceId}));
+  Future<MusicAlbum> album(String mbid, String? instanceId) async {
+    final album = MusicAlbum.fromJson(await _get(
+        '/api/media/music/${Uri.encodeComponent(mbid)}',
+        {if (instanceId != null) 'instance_id': instanceId}));
+    if (album.foreignId != mbid) {
+      throw const FormatException('Unexpected music album identity');
+    }
+    return album;
+  }
 }
 
 final musicDiscoveryServiceProvider = Provider<MusicDiscoveryService>(
     (ref) => MusicDiscoveryService(ref.watch(backendClientProvider)));
 
 final musicGenresProvider =
-    FutureProvider.autoDispose.family<List<MusicGenre>, String>(
-  (ref, id) => ref.watch(musicDiscoveryServiceProvider).genres(id),
+    FutureProvider.autoDispose.family<List<MusicGenre>, String?>(
+  (ref, id) {
+    ref.watch(catalogDiscoveryScopeProvider);
+    if (!ref.watch(discoveryAccessProvider).canBrowse('lidarr', id)) {
+      throw StateError('Music is not available for this account.');
+    }
+    return ref.watch(musicDiscoveryServiceProvider).genres(id);
+  },
 );
 
 /// The path is constructed here from identity, never taken as an arbitrary
 /// image URL. Covers always use the authenticated Cantinarr relay on web/native.
 ImageSource? musicArtworkSource(
-    WidgetRef ref, MusicAlbum album, String instanceId) {
+    WidgetRef ref, MusicAlbum album, String? instanceId) {
   if (album.artwork == null || album.artwork!.isEmpty) return null;
   final connection = ref.watch(authProvider).valueOrNull?.connection;
   if (connection == null) return null;
   final base = connection.serverUrl.replaceFirst(RegExp(r'/$'), '');
   final path =
       '/api/discover/music/artwork/${Uri.encodeComponent(album.foreignId)}';
-  final query = Uri(queryParameters: {'instance_id': instanceId}).query;
+  final relative = Uri(path: path, queryParameters: {
+    if (instanceId != null) 'instance_id': instanceId,
+  });
   return (
-    url: '$base$path?$query',
+    url: '$base$relative',
     headers: {'Authorization': 'Bearer ${connection.accessToken}'},
   );
 }

@@ -74,6 +74,9 @@ class BackendConnection {
   /// email their invite should go to and have their admin told.
   final bool plexAccessRequestable;
 
+  /// External book/music metadata can be browsed by admins before setup.
+  final bool adminCatalogBrowsing;
+
   const BackendConnection({
     required this.serverUrl,
     required this.accessToken,
@@ -86,6 +89,7 @@ class BackendConnection {
     this.issuesEnabled = false,
     this.allowReporting = false,
     this.plexAccessRequestable = false,
+    this.adminCatalogBrowsing = false,
   });
 
   BackendConnection copyWith({
@@ -100,6 +104,7 @@ class BackendConnection {
     bool? issuesEnabled,
     bool? allowReporting,
     bool? plexAccessRequestable,
+    bool? adminCatalogBrowsing,
   }) =>
       BackendConnection(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -108,6 +113,7 @@ class BackendConnection {
         serverName: serverName ?? this.serverName,
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
+        adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
         services: services ?? this.services,
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,

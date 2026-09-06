@@ -14,6 +14,8 @@ import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/book_discovery_service.dart';
 import '../../discover/logic/book_discovery_provider.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../../discover/ui/book_discovery_row.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
@@ -423,24 +425,22 @@ class _RequesterBookDetailScreenState
         if (previous != next) setState(_startLoads);
       });
       final id = _instanceId;
-      final user = ref.watch(authProvider).valueOrNull?.user;
-      if (id == null ||
-          !(user?.hasPermission('media:discover') ?? false) ||
-          !ref
-              .watch(instanceProvider)
-              .chaptarrInstances
-              .any((i) => i.id == id)) {
+      final access = ref.watch(discoveryAccessProvider);
+      if (!access.canBrowse('chaptarr', id)) {
         return Scaffold(
             appBar: AppBar(title: const Text('Book details')),
-            body: const Center(
-                child: Text('Books are not available for this account.')));
+            body: Center(child: Text(access.needsUpdate(id)
+                ? adminCatalogUpdateMessage
+                : 'Books are not available for this account.')));
       }
       final key = (foreignId: widget.foreignId, instanceId: id);
       final metadata = ref.watch(bookDiscoveryDetailProvider(key));
       _discoveryBook = metadata.valueOrNull ?? _discoveryBook;
       _discoveryError = metadata.error;
       _metadataLoading = metadata.isLoading && _discoveryBook == null;
-      _targets = ref.watch(bookRequestTargetsProvider(key));
+      _targets = id == null
+          ? const AsyncData(<BookRequestTarget>[])
+          : ref.watch(bookRequestTargetsProvider((foreignId: widget.foreignId, instanceId: id)));
       final candidates = _targets.hasError || _targets.isLoading
           ? <BookRequestTarget>[]
           : _targets.valueOrNull ?? <BookRequestTarget>[];
@@ -495,7 +495,8 @@ class _RequesterBookDetailScreenState
         });
       },
     );
-    final digest = ref.watch(ownedBooksForInstanceProvider(_instanceId));
+    final digest = _instanceId == null ? const AsyncData(<OwnedTitle>[])
+        : ref.watch(ownedBooksForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Book details')),
       // Metadata renders immediately; ownership and request truth resolve in
@@ -506,14 +507,13 @@ class _RequesterBookDetailScreenState
 
   void _retryDiscoveryMetadata() {
     final id = _instanceId;
-    if (id != null) {
-      ref.invalidate(bookDiscoveryDetailProvider(
-          (foreignId: widget.foreignId, instanceId: id)));
-    }
+    ref.invalidate(bookDiscoveryDetailProvider(
+        (foreignId: widget.foreignId, instanceId: id)));
   }
 
   Widget _discoveryRequestControls() {
-    final id = _instanceId!;
+    final id = _instanceId;
+    if (id == null) return const CatalogSetupButton(serviceType: 'chaptarr');
     final key = (foreignId: widget.foreignId, instanceId: id);
     if (_targets.hasError) {
       return BookDiscoveryError(

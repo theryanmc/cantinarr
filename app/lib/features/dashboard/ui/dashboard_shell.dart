@@ -2,14 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/app_module.dart';
 import '../../../core/widgets/module_scaffold.dart';
-import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/discovery_access.dart';
 
-/// Dashboard module shell: Movies | TV Shows | Releases, plus a Books tab when
-/// the user has Chaptarr access (services.chaptarr) and a Music tab with
-/// Lidarr access (services.lidarr). The grant-gated tabs are the LAST
-/// branches — Books, then Music — so showing/hiding either never shifts the
-/// other tabs' indices. Pages render as a bottom nav on mobile and sidebar
-/// items on desktop.
+/// Admins see every catalog; requesters need book/music grants. Visible tabs
+/// map onto fixed router branches, including when only Music is granted.
+/// Pages render as bottom navigation on mobile and sidebar items on desktop.
 class DashboardShell extends ConsumerWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
@@ -24,22 +21,15 @@ class DashboardShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final showBooks = ref.watch(
-      authProvider.select(
-        (a) => a.valueOrNull?.connection?.services.chaptarr ?? false,
-      ),
-    );
-    final showMusic = ref.watch(
-      authProvider.select(
-        (a) => a.valueOrNull?.connection?.services.lidarr ?? false,
-      ),
-    );
-
+    final access = ref.watch(discoveryAccessProvider);
+    final showBooks = access.showBooks;
+    final showMusic = access.showMusic;
+    final indices = [0, 1, 2, if (showBooks) 3, if (showMusic) 4];
     return ModuleScaffold(
       pages: modulePagesFor(ModuleType.dashboard,
           includeBooks: showBooks, includeMusic: showMusic),
-      currentIndex: currentIndex,
-      onTabChanged: onTabChanged,
+      currentIndex: indices.indexOf(currentIndex).clamp(0, indices.length - 1),
+      onTabChanged: (index) => onTabChanged(indices[index]),
       child: child,
     );
   }

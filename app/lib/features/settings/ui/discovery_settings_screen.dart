@@ -300,7 +300,8 @@ class _DiscoverySettingsScreenState
             'and movie and TV recommendation rows. Search is never filtered. '
             'Books use Open Library, and music uses ListenBrainz and MusicBrainz, '
             'with no extra account or API key. These source and English-only '
-            'settings do not apply to books or music.',
+            'settings do not apply to books or music. Admins can browse before '
+            'connecting a service; requests and book/music search need a connection.',
             style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
           ),
         ),

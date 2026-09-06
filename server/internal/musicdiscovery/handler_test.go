@@ -238,3 +238,41 @@ func TestArtworkRedirectBoundaryAndRasterValidation(t *testing.T) {
 		t.Fatal(fmt.Sprint("missing artwork not cached: ", hits.Load()))
 	}
 }
+
+func TestAdminCatalogAndArtworkBeforeLidarrSetup(t *testing.T) {
+	e := newAccessEnv(t)
+	for _, id := range []string{e.a, e.b} {
+		if err := e.h.store.Delete(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{"/api/discover/music/new-releases", "/api/genres/music", "/api/media/music/" + aID, "/api/discover/music/artwork/" + aID}
+	for _, allAbsent := range []bool{false, true} {
+		if allAbsent {
+			if err := e.h.store.Delete(e.wrong); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, path := range paths {
+			if w := e.get(5, "admin", path, ""); w.Code != 200 {
+				t.Fatalf("admin %s: %d %s", path, w.Code, w.Body)
+			}
+			before := e.hits.Load()
+			for _, tc := range []struct {
+				user     int64
+				role, id string
+				status   int
+			}{
+				{0, "", "", 401}, {2, "user", "", 403}, {4, "user", "", 403},
+				{5, "user", "", 403}, {5, "admin", e.a, 403}, {5, "admin", e.wrong, 403},
+			} {
+				if w := e.get(tc.user, tc.role, path, tc.id); w.Code != tc.status {
+					t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+				}
+			}
+			if e.hits.Load() != before {
+				t.Fatal("denied access reached metadata/artwork provider")
+			}
+		}
+	}
+}

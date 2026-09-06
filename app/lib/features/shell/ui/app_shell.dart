@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
@@ -569,12 +571,9 @@ class _AppShellState extends ConsumerState<AppShell>
     final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
-    final hasChaptarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
-            false;
-    final hasLidarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
-            false;
+    final discoveryAccess = ref.watch(discoveryAccessProvider);
+    final hasChaptarrService = discoveryAccess.showBooks;
+    final hasLidarrService = discoveryAccess.showMusic;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -650,13 +649,23 @@ class _AppShellState extends ConsumerState<AppShell>
     // reads the Chaptarr notifier, never the TMDB one, so the overlay and
     // scroll gates cannot be driven by a notifier that no longer receives
     // Books-tab keystrokes.
-    final searchOverlayActive = booksTab
+    final searchOverlayActive = discoveryAccess.isAdmin && ((booksTab && discoveryAccess.activeId('chaptarr') == null) ||
+            (musicTab && discoveryAccess.activeId('lidarr') == null)) ? false : booksTab
         ? bookSearchState.isSearching
         : musicTab
             ? musicSearchState.isSearching
             : searchState.isSearching;
 
-    final searchBar = Padding(
+    final setupService = discoveryAccess.isAdmin
+        ? (booksTab && discoveryAccess.activeId('chaptarr') == null
+            ? 'chaptarr'
+            : musicTab && discoveryAccess.activeId('lidarr') == null
+                ? 'lidarr'
+                : null)
+        : null;
+    final searchBar = setupService != null
+        ? Padding(padding: const EdgeInsets.all(12), child: CatalogSetupButton(serviceType: setupService))
+        : Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
       child: AnimatedBuilder(
         animation: _shimmerRotationAnim,
@@ -1171,12 +1180,9 @@ class _AppShellState extends ConsumerState<AppShell>
     // Highlight the module that owns the current route; fall back to the
     // last drawer selection for locations outside the module shells.
     final pathModule = _moduleTypeForPath(widget.currentPath);
-    final hasChaptarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.chaptarr ??
-            false;
-    final hasLidarrService =
-        ref.watch(authProvider).valueOrNull?.connection?.services.lidarr ??
-            false;
+    final discoveryAccess = ref.watch(discoveryAccessProvider);
+    final hasChaptarrService = discoveryAccess.showBooks;
+    final hasLidarrService = discoveryAccess.showMusic;
     // The backend lists a media server only for users an admin granted it,
     // so its presence alone decides whether the access guide is offered —
     // plus a Plex server the user can still ask for.

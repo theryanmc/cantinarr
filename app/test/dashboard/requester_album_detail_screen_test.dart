@@ -123,7 +123,12 @@ void main() {
       ],
     )
       ..libraryAlbums = const [
-        {'id': 9, 'title': 'Pinkerton', 'artistId': 4, 'foreignAlbumId': 'mb-1'},
+        {
+          'id': 9,
+          'title': 'Pinkerton',
+          'artistId': 4,
+          'foreignAlbumId': 'mb-1'
+        },
       ]
       ..trackFiles = const [
         {
@@ -198,7 +203,12 @@ void main() {
         },
       ],
     )..libraryAlbums = const [
-        {'id': 9, 'title': 'Pinkerton', 'artistId': 4, 'foreignAlbumId': 'mb-1'},
+        {
+          'id': 9,
+          'title': 'Pinkerton',
+          'artistId': 4,
+          'foreignAlbumId': 'mb-1'
+        },
       ];
     final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
 
@@ -293,7 +303,11 @@ const _musicDownloadsState = AuthState(
       ),
     ],
   ),
-  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+  user: UserProfile(
+      id: 1,
+      username: 'tester',
+      role: 'user',
+      permissions: ['media:discover', 'media:request']),
 );
 
 /// The reporting-enabled twin of [_musicState].
@@ -313,7 +327,11 @@ const _musicReportingState = AuthState(
       ),
     ],
   ),
-  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+  user: UserProfile(
+      id: 1,
+      username: 'tester',
+      role: 'user',
+      permissions: ['media:discover', 'media:request']),
 );
 
 const _musicState = AuthState(
@@ -331,7 +349,11 @@ const _musicState = AuthState(
       ),
     ],
   ),
-  user: UserProfile(id: 1, username: 'tester', role: 'user'),
+  user: UserProfile(
+      id: 1,
+      username: 'tester',
+      role: 'user',
+      permissions: ['media:discover', 'media:request']),
 );
 
 Future<({ProviderContainer container, GoRouter router})> _pumpRouter(

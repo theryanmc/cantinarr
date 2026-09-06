@@ -527,9 +527,12 @@ func TestConfigHandlerResponsesUseLeastPrivilegeSecretFreeShapes(t *testing.T) {
 			}
 			assertExactMapKeys(t, payload,
 				"server_name", "version", "min_app_version", "services", "instances", "issues_enabled", "allow_reporting",
-				"plex_access_requestable",
+				"plex_access_requestable", "admin_catalog_browsing",
 			)
 
+			if string(payload["admin_catalog_browsing"]) != "true" {
+				t.Fatal("missing admin catalog capability")
+			}
 			var services map[string]bool
 			if err := json.Unmarshal(payload["services"], &services); err != nil {
 				t.Fatalf("decode services: %v", err)

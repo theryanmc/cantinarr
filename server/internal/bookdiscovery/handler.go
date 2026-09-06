@@ -20,7 +20,7 @@ func NewHandler(store *instance.Store) *Handler {
 	return &Handler{store: store, service: NewService()}
 }
 
-// authorize is shared by every book endpoint, including genres and details.
+// authorize requires a real Chaptarr instance for request-target resolution.
 // Chaptarr is grant-only for every requester, including kids accounts. Admins
 // may select any configured Chaptarr; there is no requester global fallback.
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
@@ -79,6 +79,16 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request, id string) (
 	return id, true
 }
 
+// authorizeMetadata permits admins to browse external catalogs before setup.
+// An explicit instance remains validated; requester grants never fall back.
+func (h *Handler) authorizeMetadata(w http.ResponseWriter, r *http.Request, id string) (string, bool) {
+	claims := auth.GetClaims(r.Context())
+	if claims != nil && claims.Role == auth.RoleAdmin && auth.HasPermission(claims.Role, auth.PermissionMediaDiscover) && id == "" {
+		return "", true
+	}
+	return h.authorize(w, r, id)
+}
+
 func fail(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -86,9 +96,13 @@ func fail(w http.ResponseWriter, code int, message string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body []byte, err error) {
+func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body []byte, err error, metadata bool) {
+	authorize := h.authorize
+	if metadata {
+		authorize = h.authorizeMetadata
+	}
 	// Check the grant again after waiting on a provider or shared cache fill.
-	if _, ok := h.authorize(w, r, id); !ok {
+	if _, ok := authorize(w, r, id); !ok {
 		return
 	}
 	if err != nil {
@@ -105,7 +119,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body 
 }
 
 func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -135,23 +149,27 @@ func (h *Handler) Feed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	body, err := h.service.Feed(r.Context(), feed, genre, page)
-	h.serve(w, r, id, body, err)
+	h.serve(w, r, id, body, err, true)
 }
 
 func (h *Handler) Genres(w http.ResponseWriter, r *http.Request) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
 	body, err := json.Marshal(map[string]any{"genres": Genres})
-	h.serve(w, r, id, body, err)
+	h.serve(w, r, id, body, err, true)
 }
 
 func (h *Handler) Book(w http.ResponseWriter, r *http.Request)          { h.book(w, r, false) }
 func (h *Handler) RequestTarget(w http.ResponseWriter, r *http.Request) { h.book(w, r, true) }
 
 func (h *Handler) book(w http.ResponseWriter, r *http.Request, target bool) {
-	id, ok := h.authorize(w, r, r.URL.Query().Get("instance_id"))
+	authorize := h.authorizeMetadata
+	if target {
+		authorize = h.authorize
+	}
+	id, ok := authorize(w, r, r.URL.Query().Get("instance_id"))
 	if !ok {
 		return
 	}
@@ -172,5 +190,5 @@ func (h *Handler) book(w http.ResponseWriter, r *http.Request, target bool) {
 	} else {
 		body, err = h.service.Book(r.Context(), work)
 	}
-	h.serve(w, r, id, body, err)
+	h.serve(w, r, id, body, err, !target)
 }

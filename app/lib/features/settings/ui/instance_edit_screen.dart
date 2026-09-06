@@ -33,6 +33,10 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
   final String? initialUsername;
   final bool initialIsDefault;
 
+  /// A catalog setup link refreshes config after this pushed route closes,
+  /// so a router refresh cannot replace the match while it is being popped.
+  final bool refreshConfigAfterReturn;
+
   /// Opens a NEW instance form with the service-type selector unchosen,
   /// showing this prompt as its disabled placeholder until one is picked.
   /// For the setup checklist's download-client row: it names a category of
@@ -50,6 +54,7 @@ class InstanceEditScreen extends ConsumerStatefulWidget {
     this.initialApiKey,
     this.initialUsername,
     this.initialIsDefault = false,
+    this.refreshConfigAfterReturn = false,
     this.serviceTypePrompt,
   });
 
@@ -1353,6 +1358,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   }
 
   Future<void> _refreshConfigAfterSave() async {
+    if (widget.refreshConfigAfterReturn) return;
     final activeBefore = ref.read(instanceProvider);
     if (_isMediaServer) {
       // A grant can settle a waiting Plex user (the share goes out off the

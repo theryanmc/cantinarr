@@ -2,7 +2,7 @@
 
 Books differ from movies and TV in two ways worth knowing before you start:
 
-- **Chaptarr has no global default instance.** The per-user pin *is* the access grant, so a user who hasn't been pinned to a Chaptarr instance doesn't see the Books tab at all.
+- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins can browse Open Library before connecting Chaptarr; requests and library search require the connection.
 - **An ebook can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to read" notification reliable.
 
 This page is the whole path, in order.
@@ -31,7 +31,7 @@ Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `
 
 This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Un-pinning revokes access. Admins see Chaptarr without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
+Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup and configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
 
 Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
 
@@ -65,13 +65,15 @@ An instance offers downloads only once explicit mappings are saved for it.
 
 ## Discover books
 
+Admins can browse Popular Books, genres, covers, and cold work links before Chaptarr is connected. **Connect Chaptarr to request books** opens the existing instance form with Chaptarr selected; saving returns to the title and loads its verified request target and per-format status. The Books toolbar offers the same setup action until library search is available. Library rows and ownership badges require a connected instance. Requesters and kids still need an explicit grant. On an older server, admins see an update notice for browsing before setup.
+
 Popular Books and twelve genres use [Open Library search](https://openlibrary.org/dev/docs/api/search), with no extra account, API key or setting. Popularity is the provider's overall reading-list ranking, labelled **Popular on Open Library**. Genre pages keep provider relevance order; Biography & Memoir searches either subject. There is no time-period selector or separate audiobook chart.
 
 Books prefer English edition titles and covers, falling back to the work when none exists. This does not change the work's identity or hide books in other languages. Movie/TV discovery source and English-only settings do not affect books. Covers load on the device from fixed `covers.openlibrary.org` URLs, so devices need internet access to that host.
 
 See all and genre pages load 20 books at a time and retain the selected instance and genre when you return from details. An eBook's availability says nothing about its audiobook. Opening a book resolves its Open Library ID through the selected Chaptarr catalog; only verified IDs or provider-declared canonical mappings can reach the usual format-specific request controls. Multiple distinct canonical matches offer a choice. No verified match offers **Search books** with the title and author filled in; a failed provider read offers **Retry**. Existing approvals, duplicate checks and **Waiting for library** behavior apply to requests from discovery too.
 
-Discovery requires both discovery permission and a Chaptarr grant (also for kids accounts). External metadata is shared, but access is checked before and after cache/provider work. Targets and availability belong to the selected instance. Visible targets refresh within 60 seconds and after request/library events. If an older Cantinarr server lacks discovery endpoints, the app shows an update notice and keeps library browsing and search.
+Discovery requires discovery permission and, for requesters including kids accounts, a Chaptarr grant. Admins may browse external metadata without an instance. External metadata is shared, but access is checked before and after cache/provider work. Targets and availability belong to the selected instance. Visible targets refresh within 60 seconds and after request/library events. If an older Cantinarr server lacks discovery endpoints, the app shows an update notice and keeps library browsing and search.
 
 ## Requests that land in the approval queue instead
 

@@ -11,6 +11,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/music_discovery_service.dart';
+import '../../discover/logic/discovery_access.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../../discover/data/music_models.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../lidarr/data/lidarr_api_service.dart';
@@ -138,7 +140,10 @@ class _RequesterAlbumDetailScreenState
 
   LidarrApiService? _lidarrService() {
     final instanceId = _instanceId;
-    if (instanceId == null) return null;
+    if (instanceId == null ||
+        !ref.read(discoveryAccessProvider).hasInstance('lidarr', instanceId)) {
+      return null;
+    }
     return LidarrApiService(
       backendDio: ref.read(backendClientProvider),
       instanceId: instanceId,
@@ -156,14 +161,8 @@ class _RequesterAlbumDetailScreenState
     final instanceId = _instanceId;
     final term = widget.titleHint?.trim() ?? '';
     final service = _lidarrService();
-    if (service == null) {
-      if (mounted && generation == _loadGeneration) {
-        setState(() => _metadataLoading = false);
-      }
-      return;
-    }
     LidarrAlbum? match;
-    if (term.isNotEmpty) {
+    if (service != null && term.isNotEmpty) {
       try {
         final results = await service.lookupAlbum(term);
         for (final album in results) {
@@ -179,11 +178,11 @@ class _RequesterAlbumDetailScreenState
     if (!mounted || generation != _loadGeneration) return;
     MusicAlbum? discovery;
     var failed = false;
-    if (match == null) {
+    if (match == null && ref.read(discoveryAccessProvider).canBrowse('lidarr', instanceId)) {
       try {
         discovery = await ref
             .read(musicDiscoveryServiceProvider)
-            .album(foreignId, instanceId!);
+            .album(foreignId, instanceId);
       } catch (_) {
         failed = true;
       }
@@ -333,6 +332,15 @@ class _RequesterAlbumDetailScreenState
 
   @override
   Widget build(BuildContext context) {
+    final access = ref.watch(discoveryAccessProvider);
+    ref.listen(catalogDiscoveryScopeProvider, (previous, next) {
+      if (previous != next) setState(_startLoads);
+    });
+    if (!access.canBrowse('lidarr', _instanceId)) {
+      return Scaffold(appBar: AppBar(title: const Text('Album details')),
+        body: Center(child: Text(access.needsUpdate(_instanceId)
+            ? adminCatalogUpdateMessage : 'Music is not available for this account.')));
+    }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshMusicTruth();
     });
@@ -345,7 +353,8 @@ class _RequesterAlbumDetailScreenState
         });
       },
     );
-    final digest = ref.watch(ownedAlbumsForInstanceProvider(_instanceId));
+    final digest = _instanceId == null ? const AsyncData(<OwnedAlbum>[])
+        : ref.watch(ownedAlbumsForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Album details')),
       // Metadata renders immediately; ownership and request truth resolve in
@@ -400,7 +409,8 @@ class _RequesterAlbumDetailScreenState
     final instanceId = _instanceId;
 
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
-    LidarrImageSource? cover;
+    // Keep discovery artwork while the new library record downloads its cover.
+    LidarrImageSource? cover = _discoveryMetadata == null ? null : musicArtworkSource(ref, _discoveryMetadata!, instanceId);
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
       final ownedCover =
@@ -408,11 +418,6 @@ class _RequesterAlbumDetailScreenState
       // Lookup covers are remote metadata-CDN URLs and load directly; a live
       // arr-origin absolute URL is never surfaced.
       final remoteCover = _metadata?.remoteCover?.trim() ?? '';
-      // Keep the discovery cover through a request: Lidarr can create the
-      // album record before its local artwork has finished downloading.
-      if (_discoveryMetadata != null) {
-        cover = musicArtworkSource(ref, _discoveryMetadata!, instanceId);
-      }
       cover ??= lidarrImageSource(
         ref,
         _firstText([ownedCover, remoteCover]),
@@ -477,7 +482,9 @@ class _RequesterAlbumDetailScreenState
           ],
           if (_metadataFailed) _metadataRetry(),
           const SizedBox(height: 24),
-          AlbumRequestPanel(
+          if (instanceId == null)
+            const CatalogSetupButton(serviceType: 'lidarr')
+          else AlbumRequestPanel(
             foreignId: _effectiveForeignId,
             title: title,
             instanceId: instanceId,

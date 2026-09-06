@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
-import '../../auth/logic/auth_provider.dart';
+import 'discovery_access.dart';
 import '../../request/data/request_service.dart';
 import '../data/music_discovery_service.dart';
 import '../data/music_models.dart';
@@ -31,8 +31,14 @@ class MusicFeedState {
 class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
   final MusicDiscoveryService service;
   final MusicBrowseQuery query;
-  MusicFeedNotifier(this.service, this.query) : super(const MusicFeedState()) {
-    Future.microtask(loadMore);
+  final bool allowed;
+  MusicFeedNotifier(this.service, this.query, {this.allowed = true})
+      : super(allowed
+            ? const MusicFeedState()
+            : const MusicFeedState(
+                nextPage: null,
+                error: 'Music is not available for this account.')) {
+    if (allowed) Future.microtask(loadMore);
   }
 
   Future<void> loadMore() => _load(refresh: false);
@@ -41,7 +47,10 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
       _load(refresh: state.refreshFailed || state.unsupported);
 
   Future<void> _load({required bool refresh}) async {
-    if (!mounted || state.loading || (!refresh && state.nextPage == null)) {
+    if (!mounted ||
+        !allowed ||
+        state.loading ||
+        (!refresh && state.nextPage == null)) {
       return;
     }
     final before = state;
@@ -98,8 +107,11 @@ class MusicFeedNotifier extends StateNotifier<MusicFeedState> {
 
 final musicFeedProvider = StateNotifierProvider.autoDispose
     .family<MusicFeedNotifier, MusicFeedState, MusicBrowseQuery>((ref, query) {
-  ref.watch(authProvider.select((auth) => auth.valueOrNull?.user?.id));
-  return MusicFeedNotifier(ref.watch(musicDiscoveryServiceProvider), query);
+  ref.watch(catalogDiscoveryScopeProvider);
+  return MusicFeedNotifier(ref.watch(musicDiscoveryServiceProvider), query,
+      allowed: ref
+          .watch(discoveryAccessProvider)
+          .canBrowse('lidarr', query.instanceId));
 });
 
 /// Each lazily built visible card reads authoritative status for its exact
@@ -107,6 +119,10 @@ final musicFeedProvider = StateNotifierProvider.autoDispose
 final musicCardStatusProvider = FutureProvider.autoDispose
     .family<MusicRequestStatusDetail, ({String id, String instanceId})>(
         (ref, key) {
+  ref.watch(catalogDiscoveryScopeProvider);
+  if (!ref.watch(discoveryAccessProvider).canBrowse('lidarr', key.instanceId)) {
+    throw StateError('Music is not available for this account.');
+  }
   ref.watch(libraryRefreshTickProvider);
   ref.watch(libraryChangedEventsProvider);
   return RequestService(backendDio: ref.watch(backendClientProvider))

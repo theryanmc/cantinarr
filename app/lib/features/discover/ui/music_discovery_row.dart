@@ -15,7 +15,7 @@ import '../logic/music_feed_provider.dart';
 
 class MusicDiscoveryCard extends ConsumerWidget {
   final MusicAlbum album;
-  final String instanceId;
+  final String? instanceId;
   final double width;
   const MusicDiscoveryCard({
     super.key,
@@ -26,10 +26,12 @@ class MusicDiscoveryCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final status = ref
-        .watch(musicCardStatusProvider(
-            (id: album.foreignId, instanceId: instanceId)))
-        .valueOrNull;
+    final status = instanceId == null
+        ? null
+        : ref
+            .watch(musicCardStatusProvider(
+                (id: album.foreignId, instanceId: instanceId!)))
+            .valueOrNull;
     final cover = musicArtworkSource(ref, album, instanceId);
     final badge = status?.isKnown == true && status?.isRequestable == false
         ? status!.status
@@ -175,7 +177,7 @@ class MusicDiscoveryRow extends ConsumerWidget {
 }
 
 class MusicGenreStrip extends ConsumerWidget {
-  final String instanceId;
+  final String? instanceId;
   const MusicGenreStrip({super.key, required this.instanceId});
   @override
   Widget build(BuildContext context, WidgetRef ref) {

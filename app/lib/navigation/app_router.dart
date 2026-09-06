@@ -208,9 +208,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
       if (isAuthenticated &&
           !hasChaptarrGrant &&
-          (_isWithinRoute(state.uri.path, '/dashboard/books') ||
-              _isWithinRoute(state.uri.path, '/browse/books') ||
-              _isWithinRoute(state.uri.path, '/detail/book') ||
+          ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/books')) ||
+              (!isAdmin && _isWithinRoute(state.uri.path, '/browse/books')) ||
+              (_isWithinRoute(state.uri.path, '/detail/book') &&
+                  !(isAdmin && (state.uri.queryParameters['source'] == 'openlibrary' || DiscoveryBook.validId(state.pathParameters['id'] ?? '')))) ||
               _isWithinRoute(state.uri.path, '/detail/author') ||
               _isWithinRoute(state.uri.path, '/detail/series'))) {
         return '/dashboard/movies';
@@ -221,8 +222,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       final hasLidarrGrant = auth?.connection?.services.lidarr ?? false;
       if (isAuthenticated &&
           !hasLidarrGrant &&
-          (_isWithinRoute(state.uri.path, '/dashboard/music') ||
-              _isWithinRoute(state.uri.path, '/detail/album') ||
+          ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/music')) ||
+              (!isAdmin && _isWithinRoute(state.uri.path, '/browse/music')) ||
+              (!isAdmin && _isWithinRoute(state.uri.path, '/detail/album')) ||
               _isWithinRoute(state.uri.path, '/detail/artist'))) {
         return '/dashboard/movies';
       }
@@ -910,6 +912,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 child: InstanceEditScreen(
                   key: ValueKey(state.uri.path),
                   initialServiceType: extra?['service_type'] as String?,
+                  refreshConfigAfterReturn:
+                      extra?['refresh_config_after_return'] == true,
                   serviceTypePrompt: extra?['service_type_prompt'] as String?,
                 ),
               );
