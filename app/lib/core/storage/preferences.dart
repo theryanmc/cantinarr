@@ -68,10 +68,10 @@ const _profileApprovalsMenuOnlyWhenPendingKey =
     'profile_approvals_menu_only_when_pending';
 
 /// A device-local preference that hides an admin queue from the navigation
-/// menu while that queue has no active work. The default is false so existing
-/// installs keep their always-visible navigation until an admin opts in.
+/// menu while that queue has no active work. Hidden while empty by default;
+/// an explicitly saved preference still wins.
 class ConditionalMenuVisibilityNotifier extends StateNotifier<bool> {
-  ConditionalMenuVisibilityNotifier(this._key) : super(false) {
+  ConditionalMenuVisibilityNotifier(this._key) : super(true) {
     _load();
   }
 
@@ -79,7 +79,7 @@ class ConditionalMenuVisibilityNotifier extends StateNotifier<bool> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(_key) ?? false;
+    state = prefs.getBool(_key) ?? true;
   }
 
   Future<void> set(bool value) async {

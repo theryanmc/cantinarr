@@ -809,6 +809,12 @@ void main() {
 
   testWidgets('the admin queues collapse behind one Needs attention row',
       (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'approvals_menu_only_when_pending': false,
+      'issues_menu_only_when_active': false,
+      'agent_fixes_menu_only_when_awaiting_review': false,
+      'profile_approvals_menu_only_when_pending': false,
+    });
     await _pumpAdminDrawer(tester);
 
     // One row stands for all of them until asked; the queues themselves are
@@ -845,7 +851,9 @@ void main() {
 
   testWidgets('closing the drawer collapses the attention group again',
       (tester) async {
-    await _pumpAdminDrawer(tester);
+    await _pumpAdminDrawer(tester, requests: const [
+      {'id': 1, 'title': 'One'},
+    ]);
 
     await tester.tap(find.text('Needs attention'));
     await tester.pumpAndSettle();
@@ -895,15 +903,8 @@ void main() {
   });
 
   testWidgets(
-      'conditional attention entries and empty section hide after empty loads',
+      'attention entries and the empty section hide by default after loading',
       (tester) async {
-    SharedPreferences.setMockInitialValues({
-      'approvals_menu_only_when_pending': true,
-      'issues_menu_only_when_active': true,
-      'agent_fixes_menu_only_when_awaiting_review': true,
-      'profile_approvals_menu_only_when_pending': true,
-    });
-
     await _pumpAdminDrawer(tester);
 
     expect(find.text('Approvals'), findsNothing);
@@ -911,6 +912,28 @@ void main() {
     expect(find.text('Agent fixes'), findsNothing);
     expect(find.text('Profile approvals'), findsNothing);
     expect(find.text('Needs attention'), findsNothing);
+  });
+
+  for (final desktop in [false, true]) {
+    testWidgets('setup reminder loads on first ${desktop ? 'desktop' : 'mobile'} '
+        'Discover visit without opening Settings', (tester) async {
+      await _pumpAdminDrawer(tester, desktop: desktop, setupRemaining: 3);
+
+      expect(find.text('Needs attention'), findsOneWidget);
+      expect(find.text('3'), findsOneWidget);
+      await tester.tap(find.text('Needs attention'));
+      await tester.pumpAndSettle();
+      expect(find.text('Setup checklist'), findsOneWidget);
+      expect(find.text('3'), findsNWidgets(2));
+      expect(find.text('Approvals'), findsNothing);
+    });
+  }
+
+  testWidgets('muted setup reminder stays hidden after loading', (tester) async {
+    SharedPreferences.setMockInitialValues({'setup_reminder_enabled': false});
+    await _pumpAdminDrawer(tester, setupRemaining: 3);
+    expect(find.text('Needs attention'), findsNothing);
+    expect(find.text('Setup checklist'), findsNothing);
   });
 
   testWidgets('conditional attention entries fail open when queues are unknown',
@@ -1482,8 +1505,10 @@ Future<void> _pumpAdminDrawer(
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
+  bool desktop = false,
+  int setupRemaining = 0,
 }) async {
-  tester.view.physicalSize = const Size(390, 844);
+  tester.view.physicalSize = desktop ? const Size(1280, 844) : const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
     tester.view.resetPhysicalSize();
@@ -1517,6 +1542,7 @@ Future<void> _pumpAdminDrawer(
           issues: issues,
           failAttentionQueues: failAttentionQueues,
           hangAttentionQueues: hangAttentionQueues,
+          setupRemaining: setupRemaining,
         )),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -1525,8 +1551,10 @@ Future<void> _pumpAdminDrawer(
   );
   await tester.pumpAndSettle();
 
-  await tester.tap(find.byIcon(Icons.menu));
-  await tester.pumpAndSettle();
+  if (!desktop) {
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+  }
 }
 
 /// Shell over long scrollable pages: two module routes and one pushed route.
@@ -1741,6 +1769,7 @@ Dio _fakeDio({
   List<Map<String, dynamic>> issues = const [],
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
+  int setupRemaining = 0,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
@@ -1748,6 +1777,7 @@ Dio _fakeDio({
     issues: issues,
     failAttentionQueues: failAttentionQueues,
     hangAttentionQueues: hangAttentionQueues,
+    setupRemaining: setupRemaining,
   );
   return dio;
 }
@@ -1758,12 +1788,14 @@ class _JsonAdapter implements HttpClientAdapter {
     this.issues = const [],
     this.failAttentionQueues = false,
     this.hangAttentionQueues = false,
+    this.setupRemaining = 0,
   });
 
   final List<Map<String, dynamic>> requests;
   final List<Map<String, dynamic>> issues;
   final bool failAttentionQueues;
   final bool hangAttentionQueues;
+  final int setupRemaining;
 
   static bool _isAttentionQueue(String path) =>
       path == '/api/admin/requests' ||
@@ -1802,6 +1834,8 @@ class _JsonAdapter implements HttpClientAdapter {
       body = {'actions': []};
     } else if (path == '/api/admin/profile-change-proposals') {
       body = {'proposals': []};
+    } else if (path == '/api/admin/setup-status') {
+      body = {'items': [], 'configured': 0, 'total': setupRemaining};
     } else {
       body = [];
     }
