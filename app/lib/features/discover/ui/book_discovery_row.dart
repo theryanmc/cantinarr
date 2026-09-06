@@ -10,6 +10,7 @@ import '../../request/data/request_service.dart';
 import '../data/book_discovery_service.dart';
 import '../logic/book_discovery_provider.dart';
 import '../logic/discovery_access.dart';
+import 'catalog_prefetch.dart';
 
 class BookDiscoveryError extends StatelessWidget {
   final Object error;
@@ -86,41 +87,56 @@ class PopularBooksRow extends ConsumerWidget {
     if (!access.canBrowse('chaptarr', id)) return const SizedBox.shrink();
     final query = BookBrowseQuery(instanceId: id);
     final feed = ref.watch(bookFeedProvider(query));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) feed.enablePrefetch();
+    });
     final width = MediaQuery.sizeOf(context).width >= 900 ? 124.0 : 108.0;
-    return Padding(
-        padding: const EdgeInsets.only(top: 20),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: SectionHeader(
-                  title: 'Popular Books',
-                  trailing: TextButton(
-                      onPressed: () => context.push(query.location),
-                      child: const Text('See all')))),
-          const Padding(
-              padding: EdgeInsets.fromLTRB(32, 0, 16, 12),
-              child: Text('Popular on Open Library')),
-          if (feed.error != null)
-            BookDiscoveryError(feed.error!,
-                onRetry: () => feed.load(refresh: true)),
-          if (!feed.loading && feed.error == null && feed.items.isEmpty)
-            Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(feed.emptyMessage)),
-          if (feed.loading || feed.items.isNotEmpty)
-            HorizontalItemRow<DiscoveryBook>(
-                items: feed.items,
-                isLoading: feed.loading,
-                height: width * 1.5 +
-                    110 * MediaQuery.textScalerOf(context).scale(1),
-                itemBuilder: (book) => SizedBox(
-                    width: width,
-                    child: BookDiscoveryCard(
-                        key: ValueKey(book.foreignId),
-                        book: book,
-                        instanceId: id,
-                        width: width))),
-        ]));
+    return CatalogArtworkPrefetch(
+        sources: feed.upcoming
+            .take(6)
+            .where((b) => b.coverUrl != null)
+            .map((b) => (url: b.coverUrl!, headers: null))
+            .toList(),
+        child: Padding(
+            padding: const EdgeInsets.only(top: 20),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: SectionHeader(
+                      title: 'Popular Books',
+                      trailing: TextButton(
+                          onPressed: () => context.push(query.location),
+                          child: const Text('See all')))),
+              const Padding(
+                  padding: EdgeInsets.fromLTRB(32, 0, 16, 12),
+                  child: Text('Popular on Open Library')),
+              if (feed.error != null)
+                BookDiscoveryError(feed.error!, onRetry: feed.retry),
+              if (!feed.loading && feed.error == null && feed.items.isEmpty)
+                Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(feed.emptyMessage)),
+              if (feed.loading || feed.items.isNotEmpty)
+                HorizontalItemRow<DiscoveryBook>(
+                    key: PageStorageKey(query.location),
+                    items: feed.items,
+                    isLoading: feed.loading,
+                    paginationExtent: MediaQuery.sizeOf(context).width,
+                    cacheExtent: MediaQuery.sizeOf(context).width,
+                    onItemAppear: (_) {
+                      if (feed.error == null) feed.load();
+                    },
+                    height: width * 1.5 +
+                        110 * MediaQuery.textScalerOf(context).scale(1),
+                    itemBuilder: (book) => SizedBox(
+                        width: width,
+                        child: BookDiscoveryCard(
+                            key: ValueKey(book.foreignId),
+                            book: book,
+                            instanceId: id,
+                            width: width))),
+            ])));
   }
 }
 

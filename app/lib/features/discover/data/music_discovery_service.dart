@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
+import '../../../core/models/backend_connection.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../logic/music_browse_query.dart';
@@ -75,9 +76,13 @@ final musicGenresProvider =
 /// The path is constructed here from identity, never taken as an arbitrary
 /// image URL. Covers always use the authenticated Cantinarr relay on web/native.
 ImageSource? musicArtworkSource(
-    WidgetRef ref, MusicAlbum album, String? instanceId) {
+        WidgetRef ref, MusicAlbum album, String? instanceId) =>
+    musicArtworkSourceFor(
+        ref.watch(authProvider).valueOrNull?.connection, album, instanceId);
+
+ImageSource? musicArtworkSourceFor(
+    BackendConnection? connection, MusicAlbum album, String? instanceId) {
   if (album.artwork == null || album.artwork!.isEmpty) return null;
-  final connection = ref.watch(authProvider).valueOrNull?.connection;
   if (connection == null) return null;
   final base = connection.serverUrl.replaceFirst(RegExp(r'/$'), '');
   final path =

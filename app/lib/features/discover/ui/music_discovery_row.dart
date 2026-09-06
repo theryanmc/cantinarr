@@ -12,6 +12,7 @@ import '../data/music_discovery_service.dart';
 import '../data/music_models.dart';
 import '../logic/music_browse_query.dart';
 import '../logic/music_feed_provider.dart';
+import 'catalog_prefetch.dart';
 
 class MusicDiscoveryCard extends ConsumerWidget {
   final MusicAlbum album;
@@ -112,67 +113,83 @@ class MusicDiscoveryRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(musicFeedProvider(query));
     final notifier = ref.read(musicFeedProvider(query).notifier);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) notifier.enablePrefetch();
+    });
     final viewport = MediaQuery.sizeOf(context).width;
     final width = viewport >= 900
         ? 124.0
         : viewport >= 600
             ? 116.0
             : 108.0;
-    return Padding(
-      padding: const EdgeInsets.only(top: 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: viewport >= 900 ? 24 : 16),
-          child: SectionHeader(
-              title: query.title,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Refresh ${query.title}',
-                    icon: const Icon(Icons.refresh, size: 20),
-                    onPressed: state.loading
-                        ? null
-                        : () {
-                            ref
-                                .read(libraryRefreshTickProvider.notifier)
-                                .state++;
-                            notifier.refresh();
-                          },
-                  ),
-                  SeeAllButton(
-                      rowTitle: query.title,
-                      onPressed: () => context.push(query.location)),
-                ],
-              )),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: onPeriodChanged == null
-              ? Text(query.description,
-                  style: const TextStyle(color: AppTheme.textSecondary))
-              : MusicPeriodSelector(
-                  period: query.period, onChanged: onPeriodChanged!),
-        ),
-        MusicFeedNotice(state: state, retry: notifier.retry),
-        if (state.loading || state.items.isNotEmpty)
-          HorizontalItemRow<MusicAlbum>(
-            key: PageStorageKey(query.location),
-            items: state.items,
-            isLoading: state.loading,
-            artworkAspectRatio: 1,
-            height: width + MediaCard.subtitleRowExtraHeight,
-            itemBuilder: (album) => MusicDiscoveryCard(
-                album: album, instanceId: query.instanceId, width: width),
-          ),
-        if (!state.loading &&
-            state.items.isEmpty &&
-            state.nextPage != null &&
-            state.error == null)
-          TextButton(
-              onPressed: notifier.loadMore, child: const Text('Load more')),
-      ]),
-    );
+    return CatalogArtworkPrefetch(
+        sources: state.upcoming
+            .take(6)
+            .map((a) => musicArtworkSource(ref, a, query.instanceId))
+            .whereType<({String url, Map<String, String>? headers})>()
+            .toList(),
+        child: Padding(
+          padding: const EdgeInsets.only(top: 20),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Padding(
+              padding:
+                  EdgeInsets.symmetric(horizontal: viewport >= 900 ? 24 : 16),
+              child: SectionHeader(
+                  title: query.title,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Refresh ${query.title}',
+                        icon: const Icon(Icons.refresh, size: 20),
+                        onPressed: state.loading
+                            ? null
+                            : () {
+                                ref
+                                    .read(libraryRefreshTickProvider.notifier)
+                                    .state++;
+                                notifier.refresh();
+                              },
+                      ),
+                      SeeAllButton(
+                          rowTitle: query.title,
+                          onPressed: () => context.push(query.location)),
+                    ],
+                  )),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: onPeriodChanged == null
+                  ? Text(query.description,
+                      style: const TextStyle(color: AppTheme.textSecondary))
+                  : MusicPeriodSelector(
+                      period: query.period, onChanged: onPeriodChanged!),
+            ),
+            MusicFeedNotice(state: state, retry: notifier.retry),
+            if (state.loading || state.items.isNotEmpty)
+              HorizontalItemRow<MusicAlbum>(
+                key: PageStorageKey(query.location),
+                items: state.items,
+                isLoading: state.loading,
+                paginationExtent: viewport,
+                cacheExtent: viewport,
+                onItemAppear: (_) {
+                  if (state.error == null) notifier.loadMore();
+                },
+                artworkAspectRatio: 1,
+                height: width + MediaCard.subtitleRowExtraHeight,
+                itemBuilder: (album) => MusicDiscoveryCard(
+                    album: album, instanceId: query.instanceId, width: width),
+              ),
+            if (!state.loading &&
+                state.items.isEmpty &&
+                state.nextPage != null &&
+                state.error == null)
+              TextButton(
+                  onPressed: notifier.loadMore, child: const Text('Load more')),
+          ]),
+        ));
   }
 }
 

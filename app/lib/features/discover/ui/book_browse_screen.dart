@@ -5,6 +5,7 @@ import '../data/book_discovery_service.dart';
 import '../logic/book_discovery_provider.dart';
 import '../logic/discovery_access.dart';
 import 'book_discovery_row.dart';
+import 'catalog_prefetch.dart';
 
 class BookBrowseScreen extends ConsumerStatefulWidget {
   final BookBrowseQuery query;
@@ -30,7 +31,11 @@ class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
   }
 
   void _more() {
-    if (!_scroll.hasClients || _scroll.position.extentAfter > 400) return;
+    if (!_scroll.hasClients ||
+        _scroll.position.extentAfter >
+            _scroll.position.viewportDimension * 1.5) {
+      return;
+    }
     if (_query == null) return;
     final feed = ref.read(bookFeedProvider(_query!));
     if (feed.error == null) feed.load();
@@ -76,6 +81,11 @@ class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
         feed: widget.query.feed, genre: widget.query.genre, instanceId: id);
     _query = query;
     final feed = ref.watch(bookFeedProvider(query));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      feed.enablePrefetch();
+      if (feed.items.isNotEmpty) _more();
+    });
     _restoreAfterSetup(feed);
     final genres =
         ref.watch(bookGenresProvider(id)).valueOrNull ?? <BookGenre>[];
@@ -85,63 +95,73 @@ class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
       if (g.id == widget.query.genre) title = g.name;
     }
     final scale = MediaQuery.textScalerOf(context).scale(1);
-    return Scaffold(
-        appBar: AppBar(title: Text(title)),
-        body: RefreshIndicator(
-          onRefresh: () => feed.load(refresh: true),
-          child: CustomScrollView(
-            key: PageStorageKey(widget.query.location),
-            controller: _scroll,
-            slivers: [
-              const SliverToBoxAdapter(
-                  child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('Open Library'))),
-              if (feed.error != null)
-                SliverToBoxAdapter(
-                    child:
-                        BookDiscoveryError(feed.error!, onRetry: feed.retry)),
-              if (feed.items.isEmpty && !feed.loading && feed.error == null)
-                SliverToBoxAdapter(
-                    child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(feed.emptyMessage))),
-              SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverLayoutBuilder(builder: (context, constraints) {
-                    final columns =
-                        (constraints.crossAxisExtent / 146).floor().clamp(2, 8);
-                    final width =
-                        (constraints.crossAxisExtent - (columns - 1) * 14) /
-                            columns;
-                    return SliverGrid(
-                        delegate: SliverChildBuilderDelegate((context, index) {
-                          final book = feed.items[index];
-                          return BookDiscoveryCard(
-                              key: ValueKey(book.foreignId),
-                              book: book,
-                              instanceId: id,
-                              width: width);
-                        }, childCount: feed.items.length),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: columns,
-                            crossAxisSpacing: 14,
-                            mainAxisSpacing: 16,
-                            mainAxisExtent: width * 1.5 + 110 * scale));
-                  })),
-              SliverToBoxAdapter(
-                  child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Center(
-                          child: feed.loading
-                              ? const CircularProgressIndicator()
-                              : feed.nextPage != null
-                                  ? TextButton(
-                                      onPressed: () => feed.load(),
-                                      child: const Text('Load more'))
-                                  : const SizedBox.shrink()))),
-            ],
-          ),
-        ));
+    return CatalogArtworkPrefetch(
+        sources: [...feed.items.take(6), ...feed.upcoming.take(6)]
+            .where((b) => b.coverUrl != null)
+            .map((b) => (url: b.coverUrl!, headers: null))
+            .toList(),
+        child: Scaffold(
+            appBar: AppBar(title: Text(title)),
+            body: RefreshIndicator(
+              onRefresh: () => feed.load(refresh: true),
+              child: CustomScrollView(
+                key: PageStorageKey(widget.query.location),
+                controller: _scroll,
+                cacheExtent: MediaQuery.sizeOf(context).height,
+                slivers: [
+                  const SliverToBoxAdapter(
+                      child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text('Open Library'))),
+                  if (feed.error != null)
+                    SliverToBoxAdapter(
+                        child: BookDiscoveryError(feed.error!,
+                            onRetry: feed.retry)),
+                  if (feed.items.isEmpty && !feed.loading && feed.error == null)
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(feed.emptyMessage))),
+                  SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      sliver:
+                          SliverLayoutBuilder(builder: (context, constraints) {
+                        final columns = (constraints.crossAxisExtent / 146)
+                            .floor()
+                            .clamp(2, 8);
+                        final width =
+                            (constraints.crossAxisExtent - (columns - 1) * 14) /
+                                columns;
+                        return SliverGrid(
+                            delegate:
+                                SliverChildBuilderDelegate((context, index) {
+                              final book = feed.items[index];
+                              return BookDiscoveryCard(
+                                  key: ValueKey(book.foreignId),
+                                  book: book,
+                                  instanceId: id,
+                                  width: width);
+                            }, childCount: feed.items.length),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: columns,
+                                    crossAxisSpacing: 14,
+                                    mainAxisSpacing: 16,
+                                    mainAxisExtent: width * 1.5 + 110 * scale));
+                      })),
+                  SliverToBoxAdapter(
+                      child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Center(
+                              child: feed.loading
+                                  ? const CircularProgressIndicator()
+                                  : feed.nextPage != null
+                                      ? TextButton(
+                                          onPressed: () => feed.load(),
+                                          child: const Text('Load more'))
+                                      : const SizedBox.shrink()))),
+                ],
+              ),
+            )));
   }
 }

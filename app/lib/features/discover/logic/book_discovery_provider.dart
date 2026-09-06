@@ -9,6 +9,7 @@ import '../../../core/providers/realtime_provider.dart';
 import '../../request/data/request_service.dart';
 import '../data/book_discovery_service.dart';
 import 'discovery_access.dart';
+import 'discovery_page_buffer.dart';
 
 /// Changes of account, server, permissions or grants rebuild every discovery
 /// provider. Refresh errors may retain metadata only inside this same scope.
@@ -119,17 +120,47 @@ class BookFeedNotifier extends ChangeNotifier {
   String emptyMessage = '';
   bool _disposed = false;
   bool _lastLoadWasRefresh = false;
+  bool _prefetchEnabled = false;
+  int _generation = 0;
+  late final _ahead = DiscoveryPageBuffer<BookDiscoveryPage>((page) => service
+      .feed(query.feed, query.instanceId, genre: query.genre, page: page));
   BookFeedNotifier(this.service, this.query);
+
+  List<DiscoveryBook> get upcoming => _ahead.value?.results ?? const [];
+
+  /// Warmup loads only page one. A rendered row/grid opts into one page ahead.
+  void enablePrefetch() {
+    if (_prefetchEnabled || _disposed) return;
+    _prefetchEnabled = true;
+    unawaited(_prefetchNext());
+  }
+
+  Future<void> _prefetchNext() async {
+    if (!_prefetchEnabled || loading || error != null || nextPage == null) {
+      return;
+    }
+    final generation = _generation;
+    final failure = await _ahead.prefetch(nextPage);
+    if (_disposed || generation != _generation || loading) return;
+    if (failure is BookDiscoveryException && failure.accessDenied) {
+      _ahead.clear();
+      items = const [];
+      error = failure;
+    }
+    notifyListeners();
+  }
+
   Future<void> retry() => load(refresh: _lastLoadWasRefresh);
   Future<void> load({bool refresh = false}) async {
-    if (loading || (!refresh && nextPage == null)) return;
+    if (_disposed || loading || (!refresh && nextPage == null)) return;
     _lastLoadWasRefresh = refresh;
+    _generation++;
+    if (refresh) _ahead.clear();
     loading = true;
     error = null;
     notifyListeners();
     try {
-      final page = await service.feed(query.feed, query.instanceId,
-          genre: query.genre, page: refresh ? 1 : nextPage!);
+      final page = await _ahead.take(refresh ? 1 : nextPage!);
       if (_disposed) return;
       final seen = <String>{};
       items = [...(refresh ? <DiscoveryBook>[] : items), ...page.results]
@@ -145,11 +176,13 @@ class BookFeedNotifier extends ChangeNotifier {
     if (_disposed) return;
     loading = false;
     notifyListeners();
+    unawaited(_prefetchNext());
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _ahead.clear();
     super.dispose();
   }
 }

@@ -12,6 +12,17 @@ import '../theme/app_theme.dart';
 /// A resolved image request: the URL to fetch plus any headers it needs.
 typedef ImageSource = ({String url, Map<String, String>? headers});
 
+/// Prefetch uses exactly the same cache and web transport as visible artwork.
+ImageProvider cachedImageProvider(ImageSource source) =>
+    CachedNetworkImageProvider(
+      source.url,
+      headers: source.headers,
+      cacheManager: appImageCache,
+      imageRenderMethodForWeb: source.headers == null
+          ? ImageRenderMethodForWeb.HtmlImage
+          : ImageRenderMethodForWeb.HttpGet,
+    );
+
 /// True for Trakt's artwork CDNs (media.trakt.tv today, walter*.trakt.tv
 /// before July 2026 — Trakt migrates these hosts, so match the domain rather
 /// than pinning names). Unlike TMDB's CDN they send no CORS headers, so the

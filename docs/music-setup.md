@@ -75,6 +75,8 @@ When no term finds it, the request is **saved as pending** rather than failed, a
 
 Admins can browse music feeds, genres, artwork, and cold album links before connecting Lidarr. **Connect Lidarr to request music** opens the existing instance form with Lidarr selected; saving returns to the album and enables its request controls. The toolbar offers the same setup action until library search is available. Library rows and status badges need a connected instance. For requesters, discovery works as soon as the account has access to a Lidarr instance. No ListenBrainz or MusicBrainz account, API key, or deployment setting is needed. This is also an explicit grant for a kids account: music has no age ratings.
 
+The opening Popular Albums and New Releases pages start loading when you enter Discovery, before opening Music. Once a row or grid opens, it fetches one page ahead and preloads nearby covers. Warmed metadata stays separate from live Lidarr availability, and access changes clear it.
+
 - **Popular Albums** follows ListenBrainz's release-group chart order after keeping albums and EPs. Choose **This week**, **This month**, or **This year**.
 - **New Releases** shows albums and EPs from today and the preceding 29 calendar days, newest first. Future releases and dates without a known day are excluded.
 - **Browse by genre** offers Pop, Rock, Hip-Hop, R&B, Electronic, Jazz, Classical, Metal, Country, Folk, Blues, and Reggae. MusicBrainz orders these by its tag matching, not popularity.
