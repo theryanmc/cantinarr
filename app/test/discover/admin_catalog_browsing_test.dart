@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -5,6 +6,8 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
+import 'package:cantinarr/core/providers/config_sync_provider.dart';
+import 'package:cantinarr/features/discover/ui/catalog_setup_footer.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
@@ -32,6 +35,8 @@ AuthState _auth({
   String role = 'admin',
   bool capability = true,
   bool child = false,
+  List<String>? hidden = const [],
+  bool confirmed = true,
   List<String> types = const [],
   int userId = 1,
   List<String> permissions = const ['media:discover', 'media:request'],
@@ -42,6 +47,8 @@ AuthState _auth({
           accessToken: 'test-access',
           refreshToken: 'test-refresh',
           adminCatalogBrowsing: capability,
+          hiddenDiscoverTabs: hidden,
+          configConfirmed: confirmed,
           services: AvailableServices(
               radarr: types.contains('radarr'),
               sonarr: types.contains('sonarr'),
@@ -63,9 +70,27 @@ class _Auth extends AuthNotifier {
   @override
   Future<AuthState> build() async => initial;
   void replace(AuthState next) => state = AsyncData(next);
+  int configRefreshes = 0;
   @override
   Future<void> refreshConfig() async {
-    replace(_auth(types: backend.types));
+    configRefreshes++;
+    final current = state.requireValue;
+    replace(current.copyWith(
+        connection: current.connection!.copyWith(
+      instances: backend.types.map(_instance).toList(),
+      services: AvailableServices(
+          radarr: backend.types.contains('radarr'),
+          sonarr: backend.types.contains('sonarr'),
+          chaptarr: backend.types.contains('chaptarr'),
+          lidarr: backend.types.contains('lidarr')),
+      hiddenDiscoverTabs: [
+        for (final tab in discoverCatalogs)
+          if ((backend.hidden[tab.mediaType] ?? false) &&
+              !backend.types.contains(tab.serviceType))
+            tab.mediaType
+      ],
+      configConfirmed: true,
+    )));
   }
 
   @override
@@ -108,13 +133,179 @@ void main() {
       if (types.isEmpty) {
         expect(h.backend.libraryReads, isEmpty);
         expect(find.byType(CantinarrSearchBar), findsNothing);
-        expect(find.text('Connect Lidarr to request music'), findsOneWidget);
+        expect(find.text('Set up Lidarr'), findsOneWidget);
         expect(
             h.backend.catalogReads
                 .every((r) => !r.queryParameters.containsKey('instance_id')),
             isTrue);
       }
     });
+  }
+
+  for (final tab in discoverCatalogs) {
+    final path = [
+      '/dashboard/movies',
+      '/dashboard/tv',
+      '/dashboard/releases',
+      '/dashboard/books',
+      '/dashboard/music'
+    ][tab.branch];
+    testWidgets(
+        '${tab.label} footer uses the matching setup and returns on cancel/save',
+        (t) async {
+      final h = await _pump(t, location: path);
+      final label = 'Set up ${tab.serviceName}';
+      expect(find.text(label), findsOneWidget);
+      expect(find.text('Hide this tab'), findsOneWidget);
+      await t.tap(find.text(label));
+      await t.pumpAndSettle();
+      expect(
+          t
+              .widget<InstanceEditScreen>(find.byType(InstanceEditScreen))
+              .initialServiceType,
+          tab.serviceType);
+      h.router.pop();
+      await t.pumpAndSettle();
+      expect(h.auth.configRefreshes, 1);
+      expect(h.router.routerDelegate.currentConfiguration.uri.path, path);
+      expect(find.text(label), findsOneWidget);
+      await _connect(t, tab.serviceType, label);
+      expect(h.router.routerDelegate.currentConfiguration.uri.path, path);
+      expect(find.byType(CatalogSetupFooter), findsNothing);
+    });
+    testWidgets('${tab.label} footer requires confirmed absence and an admin',
+        (t) async {
+      final h = await _pump(t, state: _auth(confirmed: false), location: path);
+      expect(find.byType(CatalogSetupFooter), findsNothing);
+      h.auth.replace(_auth(types: [tab.serviceType]));
+      await t.pumpAndSettle();
+      expect(find.byType(CatalogSetupFooter), findsNothing,
+          reason:
+              'a configured service qualifies even if no library/health read succeeds');
+      h.auth.replace(_auth(role: 'user'));
+      await t.pumpAndSettle();
+      expect(find.byType(CatalogSetupFooter), findsNothing);
+    });
+  }
+
+  testWidgets(
+      'Hide shows progress, preserves the tab on failure, and retries a partial write',
+      (t) async {
+    final h = await _pump(t, location: '/dashboard/books');
+    h.backend.failHide = true;
+    h.backend.hideWait = Completer<void>();
+    await t.tap(find.text('Hide this tab'));
+    await t.pump();
+    expect(find.text('Hiding…'), findsOneWidget);
+    expect(h.router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/books');
+    h.backend.hideWait!.complete();
+    await t.pumpAndSettle();
+    expect(find.text('Could not hide this tab. Try again.'), findsOneWidget);
+    expect(find.byType(DashboardBooksTab), findsOneWidget);
+    h.backend.failHide = false;
+    await t.tap(find.text('Hide this tab'));
+    await t.pumpAndSettle();
+    expect(h.backend.hidden['book'], isTrue);
+    expect(
+        h.container
+            .read(authProvider)
+            .requireValue
+            .connection!
+            .hiddenDiscoverTabs,
+        contains('book'));
+    expect(h.router.routerDelegate.currentConfiguration.uri.path,
+        '/dashboard/movies');
+    expect(
+        h.backend.reads
+            .where((r) => r.path == '/api/admin/discovery-settings')
+            .last
+            .data,
+        {
+          'hidden_when_unconfigured': {'book': true}
+        });
+    expect(h.container.read(discoveryAccessProvider).showBooks, isFalse);
+    h.backend.types.add('chaptarr');
+    await h.auth.refreshConfig();
+    await t.pumpAndSettle();
+    expect(h.container.read(discoveryAccessProvider).showBooks, isTrue);
+  });
+
+  testWidgets('old servers keep setup and explain why Hide is disabled',
+      (t) async {
+    await _pump(t, state: _auth(hidden: null));
+    expect(find.text('Set up Radarr'), findsOneWidget);
+    expect(find.text(discoverVisibilityUpdateMessage), findsOneWidget);
+    expect(
+        t
+            .widget<OutlinedButton>(
+                find.widgetWithText(OutlinedButton, 'Hide this tab'))
+            .onPressed,
+        isNull);
+  });
+
+  for (final size in [const Size(320, 850), const Size(1200, 900)]) {
+    testWidgets(
+        'footer stays beneath scrolling content at $size with large text',
+        (t) async {
+      await _pump(t, location: '/dashboard/books', size: size, textScale: 1.8);
+      final footer = find.byType(CatalogSetupFooter);
+      final before = t.getRect(footer);
+      await t.drag(find.byType(DashboardBooksTab), const Offset(0, -250));
+      await t.pumpAndSettle();
+      expect(t.getRect(footer), before);
+      expect(t.getTopLeft(find.text('Hide this tab')).dy,
+          greaterThan(t.getBottomLeft(find.text('Set up Chaptarr')).dy));
+      if (size.width < 1000) {
+        expect(
+            before.bottom,
+            lessThanOrEqualTo(
+                t.getTopLeft(find.byType(BottomNavigationBar)).dy));
+      } else {
+        expect(find.byType(BottomNavigationBar), findsNothing);
+        expect(before.bottom, size.height);
+      }
+      expect(t.takeException(), isNull);
+    });
+  }
+
+  for (final role in ['admin', 'user']) {
+    for (final size in [const Size(390, 900), const Size(1200, 900)]) {
+      testWidgets('$role hidden routes and all-hidden navigation at $size',
+          (t) async {
+        final h = await _pump(t,
+            state: _auth(role: role, hidden: ['movie', 'tv', 'book', 'music']),
+            size: size);
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard/releases');
+        expect(find.byType(BottomNavigationBar), findsNothing);
+        expect(h.backend.catalogReads, isEmpty,
+            reason: 'hidden catalogs must not preload');
+        for (final route in [
+          '/dashboard/movies',
+          '/dashboard/tv',
+          '/dashboard/books',
+          '/dashboard/music'
+        ]) {
+          h.router.go(route);
+          await t.pumpAndSettle();
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/dashboard/releases');
+        }
+        h.auth
+            .replace(_auth(role: role, types: ['chaptarr'], hidden: ['movie']));
+        await t.pumpAndSettle();
+        expect(
+            h.container.read(discoveryAccessProvider).pages.map((p) => p.label),
+            role == 'admin'
+                ? ['TV Shows', 'Releases', 'Books', 'Music']
+                : ['TV Shows', 'Releases', 'Books']);
+        h.router.go('/dashboard/movies');
+        await t.pumpAndSettle();
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard/tv');
+      });
+    }
   }
 
   testWidgets('a music-only requester selects the Music branch', (t) async {
@@ -229,9 +420,10 @@ void main() {
   testWidgets('older server retains tabs with an update notice and setup',
       (t) async {
     final h = await _pump(t,
-        state: _auth(capability: false), location: '/dashboard/books');
+        state: _auth(capability: false, hidden: null),
+        location: '/dashboard/books');
     expect(find.text(adminCatalogUpdateMessage), findsOneWidget);
-    expect(find.text('Connect Chaptarr to request books'), findsOneWidget);
+    expect(find.text('Set up Chaptarr'), findsOneWidget);
     h.router.go('/dashboard/music');
     await t.pumpAndSettle();
     expect(find.text(adminCatalogUpdateMessage), findsOneWidget);
@@ -319,17 +511,26 @@ Future<
           _Auth auth
         })>
     _pump(WidgetTester t,
-        {AuthState? state, String location = '/dashboard/movies'}) async {
-  t.view.physicalSize = const Size(390, 900);
+        {AuthState? state,
+        String location = '/dashboard/movies',
+        Size size = const Size(390, 900),
+        double textScale = 1}) async {
+  t.view.physicalSize = size;
   t.view.devicePixelRatio = 1;
   addTearDown(() {
     t.view.resetPhysicalSize();
     t.view.resetDevicePixelRatio();
   });
   final backend = _Backend();
+  backend.types
+      .addAll(state?.connection?.instances.map((i) => i.serviceType) ?? []);
+  for (final media in state?.connection?.hiddenDiscoverTabs ?? <String>[]) {
+    backend.hidden[media] = true;
+  }
   final auth = _Auth(state ?? _auth(), backend);
   final c = ProviderContainer(overrides: [
     authProvider.overrideWith(() => auth),
+    configSyncProvider.overrideWith((_) {}),
     backendClientProvider.overrideWithValue(
         Dio(BaseOptions(baseUrl: 'http://localhost'))
           ..httpClientAdapter = backend),
@@ -341,7 +542,13 @@ Future<
   await t.pumpWidget(UncontrolledProviderScope(
       container: c,
       child: _OwnedContainer(
-          container: c, child: MaterialApp.router(routerConfig: router))));
+          container: c,
+          child: MaterialApp.router(
+              routerConfig: router,
+              builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context)
+                      .copyWith(textScaler: TextScaler.linear(textScale)),
+                  child: child!)))));
   await t.pumpAndSettle();
   return (container: c, router: router, backend: backend, auth: auth);
 }
@@ -369,6 +576,9 @@ class _Backend implements HttpClientAdapter {
   final reads = <RequestOptions>[];
   final requests = <Map<String, dynamic>>[];
   final types = <String>[];
+  final hidden = <String, bool>{};
+  bool failHide = false;
+  Completer<void>? hideWait;
   Iterable<RequestOptions> get catalogReads => reads.where((r) =>
       r.path.startsWith('/api/discover/books/') ||
       r.path.startsWith('/api/discover/music/') ||
@@ -397,7 +607,15 @@ class _Backend implements HttpClientAdapter {
       RequestOptions o, Stream<Uint8List>? stream, Future<void>? cancel) async {
     reads.add(o);
     Object data = <String, dynamic>{};
-    if (o.path == '/api/instances') {
+    if (o.path == '/api/admin/discovery-settings') {
+      if (o.method == 'PUT') {
+        if (hideWait != null) await hideWait!.future;
+        if (failHide) return ResponseBody.fromString('{}', 503);
+        hidden.addAll(
+            (o.data as Map)['hidden_when_unconfigured'].cast<String, bool>());
+      }
+      data = {'hidden_when_unconfigured': hidden};
+    } else if (o.path == '/api/instances') {
       if (o.method == 'POST') {
         final type = (o.data as Map)['service_type'] as String;
         types.add(type);

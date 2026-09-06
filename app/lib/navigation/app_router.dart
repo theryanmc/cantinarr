@@ -1,3 +1,5 @@
+import '../core/providers/instance_provider.dart';
+import '../features/discover/logic/discovery_access.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -166,6 +168,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final auth = ref.read(authProvider).valueOrNull;
       final isAuthenticated = auth?.isAuthenticated ?? false;
+      // Use the same visibility calculation with this exact auth snapshot.
+      // A derived provider may still hold its previous value when the auth
+      // listener synchronously asks GoRouter to rerun redirects.
+      final discovery =
+          DiscoveryAccess(auth?.user, auth?.connection, const InstanceState());
+      final landing = discovery.landingRoute;
       final isAuthRoute = state.matchedLocation == '/login';
       final pendingPasskey = auth?.pendingPasskeyOffer ?? false;
       if (state.uri.path == '/plex/continue') return null;
@@ -196,11 +204,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       if (isAuthenticated && isAuthRoute) {
         final destination = pendingReturnTo;
         pendingReturnTo = null;
-        return destination ?? '/dashboard/movies';
+        return destination ?? landing;
+      }
+      if (isAuthenticated &&
+          (state.uri.path == '/dashboard' ||
+              (state.uri.path.startsWith('/dashboard/') &&
+                  !discovery.pages
+                      .any((page) => page.route == state.uri.path)))) {
+        return landing;
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
-        return '/dashboard/movies';
+        return landing;
       }
       // Requester book surfaces — the Books tab and the id-addressable book
       // and author details — require the books grant and degrade the same way
@@ -211,10 +226,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/books')) ||
               (!isAdmin && _isWithinRoute(state.uri.path, '/browse/books')) ||
               (_isWithinRoute(state.uri.path, '/detail/book') &&
-                  !(isAdmin && (state.uri.queryParameters['source'] == 'openlibrary' || DiscoveryBook.validId(state.pathParameters['id'] ?? '')))) ||
+                  !(isAdmin &&
+                      (state.uri.queryParameters['source'] == 'openlibrary' ||
+                          DiscoveryBook.validId(
+                              state.pathParameters['id'] ?? '')))) ||
               _isWithinRoute(state.uri.path, '/detail/author') ||
               _isWithinRoute(state.uri.path, '/detail/series'))) {
-        return '/dashboard/movies';
+        return landing;
       }
       // Requester music surfaces — the Music tab and the id-addressable album
       // and artist details — require the music grant and degrade the same way
@@ -226,7 +244,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               (!isAdmin && _isWithinRoute(state.uri.path, '/browse/music')) ||
               (!isAdmin && _isWithinRoute(state.uri.path, '/detail/album')) ||
               _isWithinRoute(state.uri.path, '/detail/artist'))) {
-        return '/dashboard/movies';
+        return landing;
       }
       return null;
     },
@@ -275,7 +293,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/dashboard/movies',
-                    builder: (_, __) => const DashboardMoviesTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'movie', child: DashboardMoviesTab()),
                   ),
                 ],
               ),
@@ -283,7 +302,8 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                 routes: [
                   GoRoute(
                     path: '/dashboard/tv',
-                    builder: (_, __) => const DashboardTvTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'tv', child: DashboardTvTab()),
                   ),
                 ],
               ),
@@ -295,26 +315,24 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                   ),
                 ],
               ),
-              // Books (Chaptarr) — last branch so the Books tab can be shown or
-              // hidden (per the user's chaptarr grant) without shifting the
-              // Movies/TV/Releases tab indices. The DashboardShell only surfaces
-              // the Books tab when services.chaptarr is true.
+              // Fixed branch identities survive server visibility changes
+              // and the existing requester book/music grants.
               StatefulShellBranch(
                 routes: [
                   GoRoute(
                     path: '/dashboard/books',
-                    builder: (_, __) => const DashboardBooksTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'book', child: DashboardBooksTab()),
                   ),
                 ],
               ),
-              // Music (Lidarr) — after Books for the same index-stability
-              // reason: the grant-gated tabs are the trailing branches, so
-              // showing or hiding either never shifts the fixed tabs.
+              // Music follows Books in the existing tab order.
               StatefulShellBranch(
                 routes: [
                   GoRoute(
                     path: '/dashboard/music',
-                    builder: (_, __) => const DashboardMusicTab(),
+                    builder: (_, __) => const DiscoverTabContent(
+                        mediaType: 'music', child: DashboardMusicTab()),
                   ),
                 ],
               ),

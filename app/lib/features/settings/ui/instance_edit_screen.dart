@@ -332,9 +332,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     return _serviceType;
   }
 
+  late final AuthNotifier _configAuth;
+
   @override
   void initState() {
     super.initState();
+    _configAuth = ref.read(authProvider.notifier)..deferConfigRefresh();
     _nameController = TextEditingController(text: widget.initialName ?? '');
     _urlController = TextEditingController(text: widget.initialUrl ?? '');
     _apiKeyController = TextEditingController(text: widget.initialApiKey ?? '');
@@ -765,6 +768,15 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   @override
   void dispose() {
+    // Finish removing the editor before a refresh reparses the route stack.
+    final auth = _configAuth;
+    WidgetsBinding.instance.endOfFrame.then((_) async {
+      try {
+        await auth.resumeConfigRefresh();
+      } catch (_) {
+        // Reconnect/resume retries without turning a saved instance into an error.
+      }
+    });
     _nameController.dispose();
     _urlController.dispose();
     _apiKeyController.dispose();

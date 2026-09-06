@@ -77,6 +77,13 @@ class BackendConnection {
   /// External book/music metadata can be browsed by admins before setup.
   final bool adminCatalogBrowsing;
 
+  /// Null means the server predates Discover visibility preferences.
+  final List<String>? hiddenDiscoverTabs;
+
+  /// Only a successful config read can establish that a service is absent.
+  /// An offline session snapshot does not qualify for setup controls.
+  final bool configConfirmed;
+
   const BackendConnection({
     required this.serverUrl,
     required this.accessToken,
@@ -90,6 +97,8 @@ class BackendConnection {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.hiddenDiscoverTabs,
+    this.configConfirmed = false,
   });
 
   BackendConnection copyWith({
@@ -105,6 +114,9 @@ class BackendConnection {
     bool? allowReporting,
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
+    List<String>? hiddenDiscoverTabs,
+    bool clearHiddenDiscoverTabs = false,
+    bool? configConfirmed,
   }) =>
       BackendConnection(
         serverUrl: serverUrl ?? this.serverUrl,
@@ -114,6 +126,10 @@ class BackendConnection {
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
+        hiddenDiscoverTabs: clearHiddenDiscoverTabs
+            ? null
+            : hiddenDiscoverTabs ?? this.hiddenDiscoverTabs,
+        configConfirmed: configConfirmed ?? this.configConfirmed,
         services: services ?? this.services,
         instances: instances ?? this.instances,
         issuesEnabled: issuesEnabled ?? this.issuesEnabled,

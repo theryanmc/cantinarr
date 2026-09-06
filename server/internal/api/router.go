@@ -61,6 +61,14 @@ func NewRouter(
 	serverSettings *serversettings.Service,
 	contentPolicyHandler *contentpolicy.Handler,
 ) http.Handler {
+	configChanged := func() {
+		if wsHub != nil {
+			wsHub.Broadcast(ws.Event{Type: "config_changed"})
+		}
+	}
+	if instanceHandler != nil {
+		instanceHandler.SetConfigChangedObserver(configChanged)
+	}
 	r := chi.NewRouter()
 	musicDiscovery := musicdiscovery.NewHandler(instanceStore)
 
@@ -236,7 +244,7 @@ func NewRouter(
 			// Which feed backs the headline discovery rows, and whether those
 			// rows drop non-English originals.
 			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Get("/discovery-settings", discoverySettingsHandler(serverSettings, creds))
-			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds))
+			r.With(auth.RequirePermission(auth.PermissionInstancesManage)).Put("/discovery-settings", updateDiscoverySettingsHandler(serverSettings, creds, configChanged))
 
 			// Outbound proxy for the server's internet-bound traffic (TMDB, Trakt,
 			// hosted AI, plex.tv, GitHub, the push relay); LAN instances never ride
@@ -356,7 +364,7 @@ func NewRouter(
 		// Config route (authenticated)
 		r.Group(func(r chi.Router) {
 			r.Use(authService.AuthMiddleware)
-			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService))
+			r.Get("/config", configHandler(cfg, instanceStore, creds, aiHandler, remediationService, serverSettings))
 		})
 
 		// Media-server accounts (authenticated, self-scoped): a granted user
@@ -697,7 +705,7 @@ type configInstanceStore interface {
 	EffectiveDefaultInstanceID(userID int64, serviceType string) (string, error)
 }
 
-func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service) http.HandlerFunc {
+func configHandler(cfg *config.Config, store configInstanceStore, creds *credentials.Registry, aiHandler *ai.Handler, remediationService *remediation.Service, settings *serversettings.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		// Build instances list
@@ -764,33 +772,52 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 		// admins hear about it. Nothing else about the instance is revealed.
 		plexRequestable := false
 		allInstances, err := store.ListAll()
-		if err == nil {
-			for _, inst := range allInstances {
-				if inst.ServiceType == "plex" {
-					plexRequestable = true
-				}
-				if !isAdmin && !visible[inst.ServiceType][inst.ID] {
-					continue
-				}
-				// A requester's is_default always marks their effective
-				// default, including the deterministic first-instance fallback
-				// when no row carries the global flag. Admins retain the
-				// configured global flag unless their own per-user override
-				// selects a sibling.
-				isDefault := inst.IsDefault
-				if !isAdmin {
-					isDefault = visibleDefault[inst.ServiceType] == inst.ID
-				} else if pinned, ok := overrides[inst.ServiceType]; ok {
-					isDefault = pinned == inst.ID
-				}
-				instances = append(instances, instanceInfo{
-					ID:             inst.ID,
-					ServiceType:    inst.ServiceType,
-					Name:           inst.Name,
-					IsDefault:      isDefault,
-					MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
-				})
+		if err != nil {
+			http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+			return
+		}
+		hiddenTabs := []string{}
+		configured := map[string]bool{}
+		for _, inst := range allInstances {
+			configured[inst.ServiceType] = true
+		}
+		if settings != nil {
+			preferences, err := settings.Read()
+			if err != nil {
+				http.Error(w, `{"error":"temporarily unavailable, retry shortly"}`, http.StatusServiceUnavailable)
+				return
 			}
+			for _, mediaType := range []string{"movie", "tv", "book", "music"} {
+				if preferences.HiddenWhenUnconfigured[mediaType] && !configured[serversettings.DiscoverServices()[mediaType]] {
+					hiddenTabs = append(hiddenTabs, mediaType)
+				}
+			}
+		}
+		for _, inst := range allInstances {
+			if inst.ServiceType == "plex" {
+				plexRequestable = true
+			}
+			if !isAdmin && !visible[inst.ServiceType][inst.ID] {
+				continue
+			}
+			// A requester's is_default always marks their effective
+			// default, including the deterministic first-instance fallback
+			// when no row carries the global flag. Admins retain the
+			// configured global flag unless their own per-user override
+			// selects a sibling.
+			isDefault := inst.IsDefault
+			if !isAdmin {
+				isDefault = visibleDefault[inst.ServiceType] == inst.ID
+			} else if pinned, ok := overrides[inst.ServiceType]; ok {
+				isDefault = pinned == inst.ID
+			}
+			instances = append(instances, instanceInfo{
+				ID:             inst.ID,
+				ServiceType:    inst.ServiceType,
+				Name:           inst.Name,
+				IsDefault:      isDefault,
+				MediaDownloads: inst.MediaDownloadsConfigured(cfg.MediaDownloadRoots),
+			})
 		}
 
 		// Derive service availability from the per-user filtered instance list,
@@ -843,6 +870,7 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			// grant can still ask for access from the guide.
 			"plex_access_requestable": plexRequestable,
 			"admin_catalog_browsing":  true,
+			"hidden_discover_tabs":    hiddenTabs,
 		})
 	}
 }
