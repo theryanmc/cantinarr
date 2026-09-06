@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -388,32 +387,20 @@ func (h *OAuthHandler) renderAuthorizeForm(w http.ResponseWriter, r *http.Reques
 //go:embed plex_pkce.js
 var plexPKCEScript string
 
-var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype html>
+var authorizeTemplate = newAuthPageTemplate("authorize", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cantinarr MCP Authorization</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 420px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    label { display: block; margin: 16px 0 6px; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
-    button, a.button { box-sizing: border-box; display: block; width: 100%; margin-top: 20px; padding: 11px 12px; border: 0; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; text-align: center; text-decoration: none; }
-    button.secondary, a.secondary { margin-top: 12px; background: transparent; color: #bae6fd; border: 1px solid #475569; }
-    .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 4px; color: #94a3b8; font-size: 13px; }
-    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: #334155; }
-    .status { min-height: 20px; margin-top: 12px; color: #bae6fd; font-size: 14px; }
-    .error { margin-top: 14px; padding: 10px 12px; border-radius: 6px; background: #7f1d1d; color: #fee2e2; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
-    <h1>Authorize Cantinarr MCP</h1>
-    <p>Sign in with your Cantinarr account to allow this MCP client to use tools permitted for your user role.</p>
-    {{if .Message}}<div class="error">{{.Message}}</div>{{end}}
+    {{template "auth-brand"}}
+    <h1>Connect your MCP client</h1>
+    <p>Sign in to let your MCP client access Cantinarr with your account’s permissions.</p>
+    {{if .Message}}<div class="error" role="alert">{{.Message}}</div>{{end}}
     <form method="post" action="/oauth/authorize">
       <input type="hidden" name="response_type" value="{{.ResponseType}}">
       <input type="hidden" name="client_id" value="{{.ClientID}}">
@@ -436,7 +423,7 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       </div>{{end}}
       <button id="passkeyButton" type="button" class="secondary">Use passkey</button>
       <a class="button secondary" href="{{.PasskeySetupURL}}">Create a passkey</a>
-      <div id="passkeyStatus" class="status"></div>
+      <div id="passkeyStatus" class="status" role="status" aria-live="polite"></div>
       <div class="divider">or</div>
       <label for="username">Username</label>
       <input id="username" name="username" autocomplete="username" required>
@@ -445,7 +432,7 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
       <button type="submit">Authorize</button>
     </form>
   </main>
-  <script>` + plexPKCEScript + `
+  <script>`+plexPKCEScript+`
     const form = document.querySelector('form');
     const passkeyButton = document.getElementById('passkeyButton');
     const passkeyStatus = document.getElementById('passkeyStatus');
@@ -619,25 +606,19 @@ var authorizeTemplate = template.Must(template.New("authorize").Parse(`<!doctype
     });
   </script>
 </body>
-</html>`))
+</html>`)
 
-var passkeySetupTemplate = template.Must(template.New("passkey-setup").Parse(`<!doctype html>
+var passkeySetupTemplate = newAuthPageTemplate("passkey-setup", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create a Cantinarr Passkey</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 440px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    a.button { box-sizing: border-box; display: block; width: 100%; margin-top: 18px; padding: 11px 12px; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; text-align: center; text-decoration: none; }
-    a.secondary { margin-top: 12px; background: transparent; color: #bae6fd; border: 1px solid #475569; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
+    {{template "auth-brand"}}
     <h1>Create a passkey</h1>
     <p>Open Cantinarr to add a passkey to your account, then return to your MCP client and connect again.</p>
     <a class="button" href="{{.AppURL}}">Open Cantinarr App</a>
@@ -648,34 +629,25 @@ var passkeySetupTemplate = template.Must(template.New("passkey-setup").Parse(`<!
     setTimeout(() => { window.location.href = '{{.AppURL}}'; }, 250);
   </script>
 </body>
-</html>`))
+</html>`)
 
-var passkeyCreateTemplate = template.Must(template.New("passkey-create").Parse(`<!doctype html>
+var passkeyCreateTemplate = newAuthPageTemplate("passkey-create", `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create a Cantinarr Passkey</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 0; background: #0f172a; color: #e5e7eb; }
-    main { max-width: 420px; margin: 10vh auto; padding: 28px; background: #111827; border: 1px solid #374151; border-radius: 8px; }
-    h1 { font-size: 22px; margin: 0 0 8px; }
-    p { color: #cbd5e1; line-height: 1.45; }
-    label { display: block; margin: 16px 0 6px; color: #cbd5e1; }
-    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #475569; background: #020617; color: #f8fafc; }
-    button { width: 100%; margin-top: 20px; padding: 11px 12px; border: 0; border-radius: 6px; background: #38bdf8; color: #082f49; font-weight: 700; cursor: pointer; }
-    .status { min-height: 20px; margin-top: 14px; color: #bae6fd; font-size: 14px; }
-    .error { color: #fecaca; }
-  </style>
+  {{template "auth-style"}}
 </head>
 <body>
   <main>
+    {{template "auth-brand"}}
     <h1>Create a passkey</h1>
     <p>Add a passkey to your Cantinarr account, then return to your MCP client and connect again.</p>
     <label for="name">Name</label>
     <input id="name" value="Passkey" autocomplete="off">
     <button id="createButton" type="button">Create Passkey</button>
-    <div id="status" class="status"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
   </main>
   <script>
     const setupToken = '{{.Token}}';
@@ -753,7 +725,7 @@ var passkeyCreateTemplate = template.Must(template.New("passkey-create").Parse(`
     });
   </script>
 </body>
-</html>`))
+</html>`)
 
 func (h *OAuthHandler) requestedMCPResource(r *http.Request) string {
 	resource := r.Form.Get("resource")
