@@ -1,4 +1,3 @@
-import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -8,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/models/backend_connection.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../data/content_policy_service.dart';
 import '../data/request_settings_service.dart';
 import '../../auth/logic/auth_provider.dart';

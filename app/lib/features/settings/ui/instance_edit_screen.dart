@@ -1,4 +1,3 @@
-import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'dart:async';
 
 import 'package:dio/dio.dart';
@@ -12,6 +11,7 @@ import '../../../core/network/api_error_message.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/instance_provider.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../data/instance_api_service.dart';
@@ -64,7 +64,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   final _mediaDraft = SettingsDraft();
   final _mappingsDraft = SettingsDraft();
   final _defaultDraft = SettingsDraft();
-  bool _leavingAfterSave = false;
+  int? _savedPlexPinId;
 
   Map<String, Object?> get _detailValues => {
         'type': _serviceType,
@@ -86,19 +86,29 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           [mapping.arrPath.text, mapping.cantinarrPath.text],
       ];
   bool get _hasUnsavedChanges =>
-      !_leavingAfterSave &&
       (_detailsDraft.hasChanges(_detailValues) ||
           _defaultDraft.hasChanges(_isDefault) ||
           _mediaDraft.hasChanges(_mediaValues) ||
           _mappingsDraft.hasChanges(_mappingValues) ||
           !_sameSelection(_assignedUserIds, _savedAssignedUserIds) ||
-          (_plexPinId != null && _plexAccount.isNotEmpty));
+          (_plexPinId != _savedPlexPinId && _plexAccount.isNotEmpty));
 
   void _markInstanceSaved() {
     _detailsDraft.markSaved(_detailValues);
     _defaultDraft.markSaved(_isDefault);
     _mediaDraft.markSaved(_mediaValues);
     _mappingsDraft.markSaved(_mappingValues);
+    _savedPlexPinId = _plexPinId;
+  }
+
+  void _finishEditing() {
+    _markInstanceSaved();
+    _savedAssignedUserIds = Set.of(_assignedUserIds);
+    if (context.canPop()) {
+      context.pop(true);
+    } else {
+      context.go('/settings');
+    }
   }
 
   late final TextEditingController _nameController;
@@ -1272,8 +1282,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Instance updated')),
           );
-          _leavingAfterSave = true;
-          context.pop(true); // Return true to signal refresh needed
+          _finishEditing();
         }
         return;
       }
@@ -1332,8 +1341,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                       ? 'Instance created — instant updates configured'
                       : 'Instance created')),
         );
-        _leavingAfterSave = true;
-        context.pop(true); // Return true to signal refresh needed
+        _finishEditing();
       }
     } catch (e) {
       if (!mounted) return;
@@ -1430,8 +1438,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Instance deleted')),
         );
-        _leavingAfterSave = true;
-        context.pop(true);
+        _finishEditing();
       }
     } catch (e) {
       if (mounted) {

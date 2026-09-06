@@ -1,4 +1,3 @@
-import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +7,7 @@ import '../../../core/layout/adaptive.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/app_panel.dart';
 import '../../../core/widgets/settings_highlight.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../settings/settings_anchors.dart';
 import '../data/ai_provider_models.dart';

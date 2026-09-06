@@ -1,8 +1,8 @@
-import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 
 void main() {
   test('snapshots detect mutable edits and become clean when reverted', () {

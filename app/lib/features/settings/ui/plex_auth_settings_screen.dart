@@ -1,7 +1,7 @@
-import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 import 'oidc_settings_screen.dart';
 

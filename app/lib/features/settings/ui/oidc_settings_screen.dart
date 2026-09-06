@@ -1,8 +1,8 @@
-import '../../../core/widgets/unsaved_changes_guard.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
 
 String oidcError(Object error) {
