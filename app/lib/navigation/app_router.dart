@@ -211,7 +211,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               (state.uri.path.startsWith('/dashboard/') &&
                   !discovery.pages
                       .any((page) => page.route == state.uri.path)))) {
-        return landing;
+        return state.uri.path == landing ? null : landing;
       }
       final isAdmin = auth?.user?.isAdmin ?? false;
       if (isAuthenticated && !isAdmin && _isAdminOnlyRoute(state.uri.path)) {
@@ -278,6 +278,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           child: AppShell(currentPath: state.uri.path, child: child),
         ),
         routes: [
+          GoRoute(
+            path: '/dashboard',
+            builder: (_, __) => const EmptyDiscoverScreen(),
+          ),
           // Dashboard module (Movies/TV tabs)
           StatefulShellRoute.indexedStack(
             pageBuilder: (context, state, navigationShell) => _fadeSurfacePage(

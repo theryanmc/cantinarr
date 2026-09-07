@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/widgets/module_scaffold.dart';
 import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/catalog_prefetch.dart';
@@ -24,6 +25,7 @@ class DashboardShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final access = ref.watch(discoveryAccessProvider);
     final indices = access.visibleBranches;
+    if (indices.isEmpty) return const EmptyDiscoverScreen();
     final catalog =
         discoverCatalogs.where((tab) => tab.branch == currentIndex).firstOrNull;
     return CatalogWarmup(
@@ -38,6 +40,56 @@ class DashboardShell extends ConsumerWidget {
               key: ValueKey(catalog.mediaType), mediaType: catalog.mediaType),
       ]),
     ));
+  }
+}
+
+/// A stable landing when every catalog is hidden, with a way for admins to
+/// restore tabs without reopening one of the hidden routes.
+class EmptyDiscoverScreen extends ConsumerWidget {
+  const EmptyDiscoverScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isAdmin = ref.watch(discoveryAccessProvider).isAdmin;
+    final theme = Theme.of(context);
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.explore_outlined,
+                      size: 48, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(height: 16),
+                  Text('No Discover tabs to show',
+                      style: theme.textTheme.titleLarge,
+                      textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text(
+                    isAdmin
+                        ? 'Show a tab in Discover settings or connect a service to start browsing.'
+                        : 'No Discover tabs are available for your account.',
+                    textAlign: TextAlign.center,
+                  ),
+                  if (isAdmin) ...[
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: () => context.go('/settings/discovery'),
+                      child: const Text('Discover settings'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

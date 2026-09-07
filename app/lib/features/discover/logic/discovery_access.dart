@@ -61,12 +61,13 @@ class DiscoveryAccess {
       };
   bool get showBooks => isVisible('book');
   bool get showMusic => isVisible('music');
+  bool get showReleases => isVisible('movie') || isVisible('tv') || showMusic;
 
   /// One calculation for sidebar, mobile tabs, routes, and catalog warmup.
   List<int> get visibleBranches => [
         if (isVisible('movie')) 0,
         if (isVisible('tv')) 1,
-        2, // Releases always remains available.
+        if (showReleases) 2,
         if (showBooks) 3,
         if (showMusic) 4,
       ];
@@ -76,7 +77,7 @@ class DiscoveryAccess {
     return [for (final index in visibleBranches) all[index]];
   }
 
-  String get landingRoute => pages.first.route;
+  String get landingRoute => pages.firstOrNull?.route ?? '/dashboard';
 
   bool needsSetup(String serviceType) =>
       isAdmin &&

@@ -277,24 +277,40 @@ void main() {
             state: _auth(role: role, hidden: ['movie', 'tv', 'book', 'music']),
             size: size);
         expect(h.router.routerDelegate.currentConfiguration.uri.path,
-            '/dashboard/releases');
+            '/dashboard');
+        expect(find.text('No Discover tabs to show'), findsOneWidget);
+        expect(find.text('Discover settings'),
+            role == 'admin' ? findsOneWidget : findsNothing);
         expect(find.byType(BottomNavigationBar), findsNothing);
         expect(h.backend.catalogReads, isEmpty,
             reason: 'hidden catalogs must not preload');
         for (final route in [
           '/dashboard/movies',
           '/dashboard/tv',
+          '/dashboard/releases',
           '/dashboard/books',
-          '/dashboard/music'
+          '/dashboard/music',
+          '/login',
         ]) {
           h.router.go(route);
           await t.pumpAndSettle();
           expect(h.router.routerDelegate.currentConfiguration.uri.path,
-              '/dashboard/releases');
+              '/dashboard');
+        }
+        if (role == 'admin') {
+          await t.tap(find.text('Discover settings'));
+          await t.pumpAndSettle();
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/settings/discovery');
+          h.router.go('/dashboard');
+          await t.pumpAndSettle();
         }
         h.auth
             .replace(_auth(role: role, types: ['chaptarr'], hidden: ['movie']));
         await t.pumpAndSettle();
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard/tv');
+        expect(find.text('No Discover tabs to show'), findsNothing);
         expect(
             h.container.read(discoveryAccessProvider).pages.map((p) => p.label),
             role == 'admin'
@@ -304,6 +320,72 @@ void main() {
         await t.pumpAndSettle();
         expect(h.router.routerDelegate.currentConfiguration.uri.path,
             '/dashboard/tv');
+      });
+
+      testWidgets('$role Books alone does not keep Releases visible at $size',
+          (t) async {
+        final h = await _pump(t,
+            state: _auth(
+                role: role,
+                types: ['chaptarr'],
+                hidden: ['movie', 'tv', 'music']),
+            location: '/dashboard/releases',
+            size: size);
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard/books');
+        expect(
+            h.container.read(discoveryAccessProvider).pages.map((p) => p.label),
+            ['Books']);
+        expect(find.byType(DashboardBooksTab), findsOneWidget);
+        expect(find.text('Releases'), findsNothing);
+        expect(find.byType(BottomNavigationBar), findsNothing);
+        expect(h.backend.reads.where((r) => r.path.endsWith('/calendar')),
+            isEmpty);
+        expect(t.takeException(), isNull);
+      });
+    }
+
+    for (final tab
+        in discoverCatalogs.where((tab) => tab.mediaType != 'book')) {
+      testWidgets(
+          '$role empty ${tab.serviceName} schedule keeps Releases visible',
+          (t) async {
+        final h = await _pump(t,
+            state: _auth(role: role, types: [
+              tab.serviceType
+            ], hidden: [
+              for (final other in discoverCatalogs)
+                if (other.mediaType != tab.mediaType) other.mediaType,
+            ]));
+        if (tab.mediaType == 'music') {
+          expect(h.router.routerDelegate.currentConfiguration.uri.path,
+              '/dashboard/releases',
+              reason: 'Releases retains its place in the landing order');
+        }
+        h.router.go('/dashboard/releases');
+        await t.pumpAndSettle();
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard/releases');
+        expect(find.text('No upcoming releases'), findsOneWidget);
+        expect(
+            t
+                .widget<BottomNavigationBar>(find.byType(BottomNavigationBar))
+                .items
+                .map((item) => item.label),
+            tab.mediaType == 'music'
+                ? ['Releases', 'Music']
+                : [tab.label, 'Releases']);
+        expect(h.backend.reads.where((r) => r.path.endsWith('/calendar')),
+            isNotEmpty);
+
+        h.auth.replace(
+            _auth(role: role, hidden: ['movie', 'tv', 'book', 'music']));
+        await t.pumpAndSettle();
+        expect(h.router.routerDelegate.currentConfiguration.uri.path,
+            '/dashboard');
+        expect(find.text('No Discover tabs to show'), findsOneWidget);
+        expect(find.text('Releases'), findsNothing);
+        expect(t.takeException(), isNull);
       });
     }
   }
