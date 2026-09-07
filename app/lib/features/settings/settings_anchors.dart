@@ -74,6 +74,16 @@ abstract final class SettingsAnchors {
   // credentials screen; their ids keep the historic `credentials.` prefix
   // because anchor ids never rename.
   static const discoveryEnglishOnly = 'discovery.english-only';
+  static const discoveryHideMovies = 'discovery.hide-movies';
+  static const discoveryHideTV = 'discovery.hide-tv';
+  static const discoveryHideBooks = 'discovery.hide-books';
+  static const discoveryHideMusic = 'discovery.hide-music';
+  static const discoveryTabAnchors = {
+    'movie': discoveryHideMovies,
+    'tv': discoveryHideTV,
+    'book': discoveryHideBooks,
+    'music': discoveryHideMusic,
+  };
   static const credentialsTmdb = 'credentials.tmdb';
   static const credentialsTrakt = 'credentials.trakt';
 

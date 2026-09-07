@@ -127,6 +127,7 @@ type Handler struct {
 	arrCallbackURL string
 	mediaRoots     []string
 	grantObserver  GrantObserver
+	configChanged  func()
 	// sharedLibrariesObserver is told when a media server's shared-library
 	// selection changes, so existing accounts follow the new set.
 	sharedLibrariesObserver SharedLibrariesObserver
@@ -143,6 +144,16 @@ func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Han
 		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
 	return h
+}
+
+// SetConfigChangedObserver installs a payload-free configuration invalidation.
+// Wired during startup; successful writes notify every signed-in session.
+func (h *Handler) SetConfigChangedObserver(changed func()) { h.configChanged = changed }
+
+func (h *Handler) notifyConfigChanged() {
+	if h.configChanged != nil {
+		h.configChanged()
+	}
 }
 
 // SetMediaDownloadRoots supplies the deployment-owned outer filesystem
@@ -279,6 +290,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	h.notifyConfigChanged()
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(h.toResponse(&inst))
 }
@@ -354,6 +366,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+	h.notifyConfigChanged()
 
 	// The shared-library selection is access, not just a default for new
 	// accounts: when it changes, the accounts Cantinarr created here follow
@@ -470,6 +483,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+	h.notifyConfigChanged()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -543,6 +557,7 @@ func (h *Handler) UpdateUserDefaultInstances(w http.ResponseWriter, r *http.Requ
 	if defaults == nil {
 		defaults = map[string]string{}
 	}
+	h.notifyConfigChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(defaults)
 }
@@ -609,6 +624,7 @@ func (h *Handler) UpdateUserInstanceGrants(w http.ResponseWriter, r *http.Reques
 	if grants == nil {
 		grants = map[string][]string{}
 	}
+	h.notifyConfigChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(grants)
 }
@@ -651,6 +667,7 @@ func (h *Handler) GetInstanceUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"instance not found"}`, http.StatusNotFound)
 		return
 	}
+	h.notifyConfigChanged()
 	h.writeInstanceUsers(w, serviceType)
 }
 
@@ -779,6 +796,7 @@ func (h *Handler) UpdateInstanceGrantUsers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.notifyGrantObserver(affected)
+	h.notifyConfigChanged()
 	h.writeInstanceGrants(w, serviceType)
 }
 

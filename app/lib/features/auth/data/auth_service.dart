@@ -588,6 +588,9 @@ class ServerConfig {
   final bool plexAccessRequestable;
   final bool adminCatalogBrowsing;
 
+  /// Null means the server predates Discover visibility preferences.
+  final List<String>? hiddenDiscoverTabs;
+
   const ServerConfig({
     required this.serverName,
     this.serverVersion,
@@ -598,6 +601,7 @@ class ServerConfig {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.hiddenDiscoverTabs,
   });
 
   factory ServerConfig.fromJson(Map<String, dynamic> json) {
@@ -617,6 +621,8 @@ class ServerConfig {
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
+      hiddenDiscoverTabs:
+          (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );
   }
 }

@@ -72,6 +72,9 @@ class _DiscoverAdapter implements HttpClientAdapter {
         'english_only': true,
         'sources': ['tmdb_trending', 'trakt_trending', 'tmdb_popular'],
         'trakt_configured': _traktAvailable,
+        'hidden_when_unconfigured':
+            lastDiscoveryUpdate?['hidden_when_unconfigured'] ??
+                {'movie': false, 'tv': false, 'book': false, 'music': false},
       };
 
   ResponseBody _json(Map<String, dynamic> body) => ResponseBody.fromString(
@@ -131,6 +134,29 @@ Finder _sourceTile(String label) => find.ancestor(
     );
 
 void main() {
+  testWidgets('Discover tab switches participate in Save and unsaved changes',
+      (t) async {
+    final adapter = await _pumpScreen(t,
+        traktConfigured: true, highlightId: SettingsAnchors.discoveryHideBooks);
+    bool dirty() => t
+        .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
+        .hasChanges();
+    expect(dirty(), isFalse);
+    final books = find.widgetWithText(
+        SwitchListTile, "Hide Books when Chaptarr isn't connected");
+    await t.ensureVisible(books);
+    await t.tap(books);
+    await t.pumpAndSettle();
+    expect(dirty(), isTrue);
+    final save = find.byKey(const Key('discovery-save'));
+    await t.ensureVisible(save);
+    await t.tap(save);
+    await t.pumpAndSettle();
+    expect(adapter.lastDiscoveryUpdate?['hidden_when_unconfigured'],
+        {'movie': false, 'tv': false, 'book': true, 'music': false});
+    expect(dirty(), isFalse);
+  });
+
   testWidgets('only unsaved edits warn, including after a failed save',
       (tester) async {
     final adapter = await _pumpScreen(tester, traktConfigured: true);
@@ -138,10 +164,12 @@ void main() {
         .widget<UnsavedChangesGuard>(find.byType(UnsavedChangesGuard))
         .hasChanges();
     expect(dirty(), isFalse);
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
     await tester.pumpAndSettle();
     expect(dirty(), isTrue);
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
     await tester.pumpAndSettle();
     expect(dirty(), isFalse);
     await tester.tap(find.text('All-time popular (TMDB)'));
@@ -199,8 +227,15 @@ void main() {
     // admin cannot tell what the rows are showing.
     final trakt = tester.widget<ListTile>(_sourceTile('Trending now (Trakt)'));
     expect((trakt.leading as Icon).icon, Icons.radio_button_checked);
-    expect(find.byType(SwitchListTile), findsOneWidget);
-    expect(tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+    expect(
+        find.widgetWithText(
+            SwitchListTile, 'Only show English-language titles'),
+        findsOneWidget);
+    expect(
+        tester
+            .widget<SwitchListTile>(find.widgetWithText(
+                SwitchListTile, 'Only show English-language titles'))
+            .value,
         isTrue,
         reason: 'non-English titles are hidden by default');
   });
@@ -226,7 +261,8 @@ void main() {
 
     await tester.tap(find.text('All-time popular (TMDB)'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(find.widgetWithText(
+        SwitchListTile, 'Only show English-language titles'));
     await tester.pumpAndSettle();
 
     final save = find.byKey(const Key('discovery-save'));

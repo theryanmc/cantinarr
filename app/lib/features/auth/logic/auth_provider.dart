@@ -225,6 +225,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         plexAccessRequestable:
             meta['plex_access_requestable'] as bool? ?? false,
         adminCatalogBrowsing: meta['admin_catalog_browsing'] as bool? ?? false,
+        hiddenDiscoverTabs:
+            (meta['hidden_discover_tabs'] as List?)?.cast<String>(),
       );
       return AuthState(
           connection: connection, user: user, isReconnecting: true);
@@ -301,6 +303,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
           allowReporting: config.allowReporting,
           plexAccessRequestable: config.plexAccessRequestable,
           adminCatalogBrowsing: config.adminCatalogBrowsing,
+          hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+          configConfirmed: true,
         );
         await _persistSession(connection, authResp.user);
       } catch (e) {
@@ -381,8 +385,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
       await _persistSession(connection, authResp.user);
       _registerForPush();
@@ -519,8 +525,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       await _persistSession(connection, authResp.user);
@@ -704,8 +712,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       final offerPasskey =
@@ -843,8 +853,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
       instances: config.instances,
       issuesEnabled: config.issuesEnabled,
       allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+      plexAccessRequestable: config.plexAccessRequestable,
       adminCatalogBrowsing: config.adminCatalogBrowsing,
+      hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+      configConfirmed: true,
     );
 
     await _persistSession(connection, authResp.user);
@@ -870,28 +882,69 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
     await connectWithToken(server, token);
   }
 
-  /// Re-fetch /api/config and update the connection state (e.g. after
-  /// changing API credentials so service availability is reflected).
+  int _configRefreshDeferrals = 0;
+  bool _configRefreshPending = false;
+  Future<void>? _configRefreshInFlight;
+
+  /// Keep configuration events from reparsing a setup route while it is open.
+  void deferConfigRefresh() => _configRefreshDeferrals++;
+
+  Future<void> resumeConfigRefresh() async {
+    if (_configRefreshDeferrals > 0) _configRefreshDeferrals--;
+    if (_configRefreshDeferrals == 0) await refreshConfig();
+  }
+
+  /// Re-fetch config without replacing the router, tokens, or a newer session.
+  /// Coalesce concurrent events, then catch up if one arrived during the read.
   Future<void> refreshConfig() async {
-    final current = state.valueOrNull;
-    if (current?.connection == null) return;
-    final conn = current!.connection!;
-    final config =
-        await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
-    final updatedConn = conn.copyWith(
-      serverName: config.serverName,
-      serverVersion: config.serverVersion,
-      minAppVersion: config.minAppVersion,
-      services: config.services,
-      instances: config.instances,
-      issuesEnabled: config.issuesEnabled,
-      allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
-      adminCatalogBrowsing: config.adminCatalogBrowsing,
-    );
-    final user = current.user;
-    if (user != null) await _persistSession(updatedConn, user);
-    state = AsyncData(current.copyWith(connection: updatedConn));
+    _configRefreshPending = true;
+    if (_configRefreshDeferrals > 0) return;
+    if (_configRefreshInFlight != null) return _configRefreshInFlight;
+    final refresh = _drainConfigRefreshes();
+    _configRefreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      _configRefreshInFlight = null;
+    }
+  }
+
+  Future<void> _drainConfigRefreshes() async {
+    while (_configRefreshPending && _configRefreshDeferrals == 0) {
+      _configRefreshPending = false;
+      final current = state.valueOrNull;
+      final conn = current?.connection;
+      if (conn == null) return;
+      final config =
+          await _authService.fetchConfig(conn.serverUrl, conn.accessToken);
+      if (_configRefreshDeferrals > 0) {
+        _configRefreshPending = true;
+        return;
+      }
+      final latest = state.valueOrNull;
+      if (latest?.connection?.serverUrl != conn.serverUrl ||
+          latest?.user?.id != current?.user?.id) {
+        return;
+      }
+      final updatedConn = latest!.connection!.copyWith(
+        serverName: config.serverName,
+        serverVersion: config.serverVersion,
+        minAppVersion: config.minAppVersion,
+        services: config.services,
+        instances: config.instances,
+        issuesEnabled: config.issuesEnabled,
+        allowReporting: config.allowReporting,
+        plexAccessRequestable: config.plexAccessRequestable,
+        adminCatalogBrowsing: config.adminCatalogBrowsing,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        clearHiddenDiscoverTabs: config.hiddenDiscoverTabs == null,
+        configConfirmed: true,
+      );
+      // Publish synchronously so an intervening token refresh cannot be lost
+      // while storage is awaited. Persistence uses the same public snapshot.
+      state = AsyncData(latest.copyWith(connection: updatedConn));
+      if (latest.user != null) await _persistSession(updatedConn, latest.user!);
+    }
   }
 
   /// Re-fetch the current user's profile (e.g. to learn whether a password is
@@ -1108,8 +1161,10 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         instances: config.instances,
         issuesEnabled: config.issuesEnabled,
         allowReporting: config.allowReporting,
-          plexAccessRequestable: config.plexAccessRequestable,
+        plexAccessRequestable: config.plexAccessRequestable,
         adminCatalogBrowsing: config.adminCatalogBrowsing,
+        hiddenDiscoverTabs: config.hiddenDiscoverTabs,
+        configConfirmed: true,
       );
 
       await _persistSession(connection, authResp.user);
@@ -1280,6 +1335,8 @@ class AuthNotifier extends AsyncNotifier<AuthState> {
         'issues_enabled': conn.issuesEnabled,
         'allow_reporting': conn.allowReporting,
         'admin_catalog_browsing': conn.adminCatalogBrowsing,
+        if (conn.hiddenDiscoverTabs != null)
+          'hidden_discover_tabs': conn.hiddenDiscoverTabs,
       }),
     );
   }

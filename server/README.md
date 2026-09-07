@@ -274,8 +274,8 @@ Reports how the running build compares against the latest published GitHub relea
 
 ### Discovery settings (admin)
 ```
-GET    /api/admin/discovery-settings       # source + english_only, the valid sources, trakt_configured
-PUT    /api/admin/discovery-settings       # set the row source ({ source, english_only })
+GET    /api/admin/discovery-settings       # source, english_only, hidden_when_unconfigured, sources, trakt_configured
+PUT    /api/admin/discovery-settings       # atomic partial update; omitted fields/preferences survive
 ```
 Decides what backs the headline row on the Movies and TV tabs. `source` is one of `tmdb_trending` (TMDB's weekly trending feed), `trakt_trending` (Trakt trending, ranked by who is watching right now), or `tmdb_popular` (TMDB's lifetime popularity ranking). TMDB's popularity value is a lifetime score, so `tmdb_popular` fills with long-running catalogue shows and nightly talk shows -- the trending feeds are short-window and self-correcting, which is why one of them is the default. `trakt_configured` reports whether the Trakt source can be selected at all (true out of the box on builds with the built-in Trakt application); picking it while Trakt is unavailable falls back to `tmdb_trending` rather than blanking the row -- and so does a Trakt call that fails, since a third-party outage is not the admin's configuration problem and the headline row is the landing screen. Either fallback is visible in the response rather than silent: `source` always names the feed that actually answered, so the client retitles the row. An outage fallback is cached against the *chosen* source, so a sustained one costs a single upstream attempt per TTL instead of one per request, and recovery is picked up on the next miss. The server logs each fallback.
 
@@ -432,6 +432,11 @@ DELETE /api/admin/agent-approval-rules/{id}          # admin: remove a rule; his
 Catalog endpoints require `media:discover`. An admin may omit `instance_id` to browse external book/music metadata and music artwork before connecting an instance. An explicit ID always requires a real instance of the matching service. Requesters, including kids accounts, still need an authorized Chaptarr or Lidarr instance; an omitted ID resolves only their granted default. Authorization runs before provider/cache work and again before returning metadata, artwork, or an error. Request-target resolution, availability, requests, and library reads retain their instance requirements.
 
 `GET /api/config` advertises this behavior with top-level `admin_catalog_browsing: true`. It does not change `services` flags or instance grants. Clients default a missing capability to false, persist it with the session, and refresh it from config; no version-floor change is needed.
+
+`GET /api/config` also returns `hidden_discover_tabs`, an array of effective hidden media types (`movie`, `tv`, `book`, `music`). Discovery settings store `hidden_when_unconfigured` as a map of those media types to booleans in the existing `server_settings` JSON; all default false, with no schema migration. For example, `PUT /api/admin/discovery-settings` with `{"hidden_when_unconfigured":{"book":true}}` changes only the Books preference. Omitted map entries, row source, language, and unrelated server settings survive concurrent partial updates; unknown media types or invalid values return 400, and unavailable settings storage returns 503. A hide-only write does not mark the automatic row source as an admin decision.
+
+Effective visibility uses the full configured instance inventory before filtering instances by user grants: Radarr restores Movies, Sonarr TV Shows, Chaptarr Books, and Lidarr Music, regardless of health or library contents. Inventory failures return 503 rather than report missing services. A preference applies again after its service is removed. Hiding affects navigation for everyone without granting or revoking access, filtering catalog APIs, or hiding Releases. Old clients can ignore the additive config field; new clients treat its absence as an older server and disable Hide. Visibility writes and successful instance changes broadcast payload-free `config_changed` events to all sessions; clients re-read their own filtered config on these events, reconnect, and resume, deferring updates until instance setup closes.
+
 
 | Music endpoint | Response and filters |
 |---|---|
@@ -640,6 +645,8 @@ WS     /api/ws                  # WebSocket (JWT via subprotocol header)
 ```
 
 WebSocket events:
+
+- `config_changed` — payload-free invalidation after Discover visibility or instance/access changes; every session re-fetches `/api/config`.
 - `download_progress` -- `{ tmdb_id, media_type, progress, status }`
 - `request_status_changed` -- `{ tmdb_id, media_type, status }` (queue polling **and** arr webhooks; status here is `available`, `partially_available`, `requested`, or `unavailable` -- note the longer spelling vs the REST `partial`)
 - `downloads_queue` -- full download-client queue snapshot `{ instance_id, paused, speed_bps, items }`, sent on change

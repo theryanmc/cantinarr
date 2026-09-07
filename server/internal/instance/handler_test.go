@@ -937,3 +937,43 @@ func TestRutorrentCredentialShape(t *testing.T) {
 		t.Fatalf("test with credentials = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestInstanceWritesNotifyConfigurationOnlyAfterSuccess(t *testing.T) {
+	store := newTestStore(t)
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
+	}))
+	defer service.Close()
+	handler := NewHandler(store, NewRegistry(store))
+	notifications := 0
+	handler.SetConfigChangedObserver(func() { notifications++ })
+	router := chi.NewRouter()
+	router.Post("/instances", handler.Create)
+	router.Put("/instances/{instanceID}", handler.Update)
+	router.Delete("/instances/{instanceID}", handler.Delete)
+	body := `{"service_type":"radarr","name":"Movies","url":"` + service.URL + `","api_key":"test-key"}`
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/instances", strings.NewReader(body)))
+	if create.Code != 201 || notifications != 1 {
+		t.Fatalf("create=%d, notifications=%d: %s", create.Code, notifications, create.Body.String())
+	}
+	var inst instanceResponse
+	if err := json.Unmarshal(create.Body.Bytes(), &inst); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		method, body   string
+		status, events int
+	}{
+		{http.MethodPut, `{"service_type":"invalid"}`, 400, 1},
+		{http.MethodPut, body, 200, 2},
+		{http.MethodDelete, "", 204, 3},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(step.method, "/instances/"+inst.ID, strings.NewReader(step.body)))
+		if rec.Code != step.status || notifications != step.events {
+			t.Fatalf("%s: status=%d events=%d body=%s", step.method, rec.Code, notifications, rec.Body.String())
+		}
+	}
+}

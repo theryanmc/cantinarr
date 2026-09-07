@@ -11,9 +11,11 @@ package serversettings
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
@@ -105,6 +107,10 @@ type Settings struct {
 	// DefaultDiscoveryEnglishOnly, because a bool cannot carry "unset".
 	DiscoveryEnglishOnly bool `json:"discovery_english_only"`
 
+	// HiddenWhenUnconfigured is conditional navigation visibility, keyed by
+	// media type. Configured instances always restore their tab, even offline.
+	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured,omitempty"`
+
 	// SetupSkippedItems are the checklist keys an admin has skipped, so unused
 	// features stop counting as unfinished. The set is server-wide and every
 	// skip is reversible from the checklist. The handler validates known keys.
@@ -115,6 +121,8 @@ type Settings struct {
 // that carries a secret (the outbound proxy, outbound_proxy.go).
 type Service struct {
 	db *sql.DB
+	// All writers of the shared JSON blob serialize their read/modify/write.
+	mu sync.Mutex
 	// cipher encrypts the outbound proxy row at rest. Nil (tests) stores it
 	// in plaintext; the server binary always supplies one.
 	cipher *secrets.Cipher
@@ -152,9 +160,8 @@ func (s *Service) Get() Settings {
 
 // normalized fills in the read-side defaults. Both discovery fields default
 // together, keyed on the one marker for "no admin has decided" — an empty
-// stored source. SetDiscovery is the only writer of either field and always
-// writes both, so the marker cannot go stale; a future setter that writes one
-// discovery field must write the other too.
+// stored source. A row-source or language update writes both fields, so the
+// marker stays consistent. Hide-only updates leave the automatic defaults alone.
 func (s *Service) normalized(in Settings) Settings {
 	out := in
 	out.ManagementURL = strings.TrimSpace(out.ManagementURL)
@@ -177,12 +184,30 @@ func (s *Service) traktAvailable() bool {
 // to tell "never set" from "set to the value that happens to be the default"
 // can. Get normalizes on top of this; DiscoveryChosen does not.
 func (s *Service) raw() Settings {
+	out, _ := s.readRaw()
+	return out
+}
+
+func (s *Service) readRaw() (Settings, error) {
 	var out Settings
 	var v string
-	if err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", settingsKey).Scan(&v); err == nil && v != "" {
-		_ = json.Unmarshal([]byte(v), &out)
+	err := s.db.QueryRow("SELECT value FROM settings WHERE key = ?", settingsKey).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, nil
 	}
-	return out
+	if err != nil {
+		return out, err
+	}
+	if v != "" {
+		err = json.Unmarshal([]byte(v), &out)
+	}
+	return out, err
+}
+
+// Read distinguishes unavailable preferences from an untouched installation.
+func (s *Service) Read() (Settings, error) {
+	out, err := s.readRaw()
+	return s.normalized(out), err
 }
 
 // DiscoveryChosen reports whether an admin has ever saved a discovery
@@ -210,7 +235,12 @@ func discoveryDecided(in Settings) bool {
 // read side is raw on purpose: writing back a normalized blob would stamp a
 // discovery source nobody chose and falsely satisfy DiscoveryChosen.
 func (s *Service) SetManagementURL(raw string) (Settings, error) {
-	next := s.raw()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
 	next.ManagementURL = strings.TrimSpace(raw)
 	if err := validateURL("management_url", next.ManagementURL); err != nil {
 		return Settings{}, err
@@ -222,7 +252,12 @@ func (s *Service) SetManagementURL(raw string) (Settings, error) {
 // other preference untouched. Empty clears it, returning invite links to the
 // generating app's own address.
 func (s *Service) SetExternalURL(raw string) (Settings, error) {
-	next := s.raw()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
 	next.ExternalURL = normalizeExternalURL(raw)
 	if err := validateURL("external_url", next.ExternalURL); err != nil {
 		return Settings{}, err
@@ -241,12 +276,63 @@ func normalizeExternalURL(raw string) string {
 // choice — including the default the screen loaded with — records a decision,
 // and the English-only value stored alongside it becomes authoritative.
 func (s *Service) SetDiscovery(source string, englishOnly bool) (Settings, error) {
-	if err := validateDiscoverySource(source); err != nil {
+	return s.UpdateDiscovery(DiscoveryPatch{Source: &source, EnglishOnly: &englishOnly})
+}
+
+// DiscoveryPatch preserves omitted fields, including individual hide choices.
+type DiscoveryPatch struct {
+	Source                 *string         `json:"source"`
+	EnglishOnly            *bool           `json:"english_only"`
+	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured"`
+}
+
+// DiscoverServices maps media identities onto the configured service inventory.
+func DiscoverServices() map[string]string {
+	return map[string]string{"movie": "radarr", "tv": "sonarr", "book": "chaptarr", "music": "lidarr"}
+}
+
+func (p DiscoveryPatch) Validate() error {
+	if p.Source != nil {
+		if err := validateDiscoverySource(*p.Source); err != nil {
+			return err
+		}
+	}
+	for mediaType := range p.HiddenWhenUnconfigured {
+		if _, ok := DiscoverServices()[mediaType]; !ok {
+			return fmt.Errorf("hidden_when_unconfigured keys must be movie, tv, book, or music")
+		}
+	}
+	return nil
+}
+
+func (s *Service) UpdateDiscovery(p DiscoveryPatch) (Settings, error) {
+	if err := p.Validate(); err != nil {
 		return Settings{}, err
 	}
-	next := s.raw()
-	next.DiscoverySource = normalizeDiscoverySource(source, s.traktAvailable())
-	next.DiscoveryEnglishOnly = englishOnly
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
+	// A hide-only write must not freeze the automatic row-source default.
+	if p.Source != nil || p.EnglishOnly != nil {
+		normalized := s.normalized(next)
+		next.DiscoverySource = normalized.DiscoverySource
+		next.DiscoveryEnglishOnly = normalized.DiscoveryEnglishOnly
+		if p.Source != nil {
+			next.DiscoverySource = normalizeDiscoverySource(*p.Source, s.traktAvailable())
+		}
+		if p.EnglishOnly != nil {
+			next.DiscoveryEnglishOnly = *p.EnglishOnly
+		}
+	}
+	if next.HiddenWhenUnconfigured == nil {
+		next.HiddenWhenUnconfigured = map[string]bool{}
+	}
+	for mediaType, hidden := range p.HiddenWhenUnconfigured {
+		next.HiddenWhenUnconfigured[mediaType] = hidden
+	}
 	return s.save(next)
 }
 
@@ -258,7 +344,12 @@ func (s *Service) SetSetupItemSkipped(key string, skipped bool) (Settings, error
 	if key == "" {
 		return Settings{}, fmt.Errorf("setup item key is required")
 	}
-	next := s.raw()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, err := s.readRaw()
+	if err != nil {
+		return Settings{}, err
+	}
 	kept := make([]string, 0, len(next.SetupSkippedItems)+1)
 	for _, existing := range next.SetupSkippedItems {
 		if existing != key {

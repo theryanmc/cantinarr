@@ -49,6 +49,7 @@ class _DashboardTvTabState extends ConsumerState<DashboardTvTab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(tvDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });
