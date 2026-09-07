@@ -140,30 +140,34 @@ class _CatalogSearchResultsState extends ConsumerState<CatalogSearchResults> {
         ]),
       ]),
     );
-    return LayoutBuilder(builder: (context, constraints) {
-      if (constraints.maxWidth >= 900) {
-        Widget panel(String title, Widget body) => Column(children: [
-              Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(title,
-                      style: Theme.of(context).textTheme.titleMedium)),
-              Expanded(child: body)
-            ]);
-        return Row(children: [
-          Expanded(child: panel(label, publicResults)),
-          const VerticalDivider(),
-          Expanded(child: panel('Your library catalog', widget.libraryResults))
-        ]);
-      }
-      return DefaultTabController(
-          length: 2,
-          child: Column(children: [
-            TabBar(
-                tabs: [Tab(text: label), const Tab(text: 'Library catalog')]),
+    return Material(
+      type: MaterialType.transparency,
+      child: LayoutBuilder(builder: (context, constraints) {
+        if (constraints.maxWidth >= 900) {
+          Widget panel(String title, Widget body) => Column(children: [
+                Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(title,
+                        style: Theme.of(context).textTheme.titleMedium)),
+                Expanded(child: body)
+              ]);
+          return Row(children: [
+            Expanded(child: panel(label, publicResults)),
+            const VerticalDivider(),
             Expanded(
-                child: TabBarView(
-                    children: [publicResults, widget.libraryResults])),
-          ]));
-    });
+                child: panel('Your library catalog', widget.libraryResults))
+          ]);
+        }
+        return DefaultTabController(
+            length: 2,
+            child: Column(children: [
+              TabBar(
+                  tabs: [Tab(text: label), const Tab(text: 'Library catalog')]),
+              Expanded(
+                  child: TabBarView(
+                      children: [publicResults, widget.libraryResults])),
+            ]));
+      }),
+    );
   }
 }
