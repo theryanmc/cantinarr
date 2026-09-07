@@ -300,7 +300,7 @@ func (h *Handler) GetMusicStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
 		return
 	}
-	resp, err := h.service.GetUserMusicStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	resp, err := h.service.GetUserMusicStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"), r.URL.Query().Get("include_saved") != "false")
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return
@@ -318,7 +318,7 @@ func (h *Handler) GetMusicLibrary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	digest, err := h.service.GetMusicLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"))
+	digest, err := h.service.GetMusicLibraryDigestForInstance(claims.UserID, r.URL.Query().Get("instance_id"), r.Context())
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return

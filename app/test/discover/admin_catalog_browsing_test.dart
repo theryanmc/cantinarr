@@ -428,13 +428,10 @@ void main() {
     expect(find.text('Catalog Album'), findsOneWidget);
     expect(h.router.routerDelegate.currentConfiguration.uri.path,
         '/detail/album/$_albumId');
-    expect(find.text('Request album'), findsOneWidget);
-    await t.tap(find.text('Request album'));
+    expect(find.text('Request'), findsOneWidget);
+    await t.tap(find.text('Request'));
     await t.pumpAndSettle();
-    expect(
-        h.backend.requests.single,
-        containsPair(
-            'catalog_ref', {'provider': 'musicbrainz', 'id': _albumId}));
+    expect(h.backend.requests.single, containsPair('foreign_id', _albumId));
     expect(h.backend.requests.single, containsPair('instance_id', 'lidarr'));
   });
 

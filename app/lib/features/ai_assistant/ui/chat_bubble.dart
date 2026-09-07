@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../discover/data/music_discovery_service.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/app_config.dart';
 import '../../../core/theme/app_theme.dart';
@@ -406,16 +408,35 @@ class _MediaResultCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    CachedImage(
-                      url: imageUrl,
-                      fit: BoxFit.cover,
-                      icon: isBook
-                          ? Icons.menu_book
-                          : isMusic
-                              ? Icons.album
-                              : Icons.movie_outlined,
-                      iconSize: 28,
-                    ),
+                    if (isMusic &&
+                        directPoster.startsWith('/api/discover/music/artwork/'))
+                      Consumer(builder: (context, ref, child) {
+                        final source = musicArtworkSource(
+                            ref,
+                            MusicAlbum(
+                                foreignId: foreignId,
+                                title: item.title,
+                                artist: '',
+                                artwork: directPoster),
+                            item.instanceId);
+                        return CachedImage(
+                            url: source?.url,
+                            headers: source?.headers,
+                            fit: BoxFit.cover,
+                            icon: Icons.album,
+                            iconSize: 28);
+                      })
+                    else
+                      CachedImage(
+                        url: imageUrl,
+                        fit: BoxFit.cover,
+                        icon: isBook
+                            ? Icons.menu_book
+                            : isMusic
+                                ? Icons.album
+                                : Icons.movie_outlined,
+                        iconSize: 28,
+                      ),
                     // Rating badge
                     if (item.voteAverage != null && item.voteAverage! > 0)
                       Positioned(

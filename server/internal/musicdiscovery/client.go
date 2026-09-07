@@ -148,9 +148,11 @@ type cacheEntry struct {
 	expires time.Time
 }
 type pending struct {
-	done chan struct{}
-	body []byte
-	err  error
+	done    chan struct{}
+	body    []byte
+	err     error
+	callers int
+	cancel  context.CancelFunc
 }
 
 // A bounded metadata/artwork cache also coalesces identical concurrent reads.
@@ -163,6 +165,9 @@ type memo struct {
 }
 
 func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	if e, ok := m.entries[key]; ok && time.Now().Before(e.expires) {
 		m.mu.Unlock()
@@ -177,15 +182,19 @@ func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func
 			m.mu.Unlock()
 			return nil, errUnavailable
 		}
-		p = &pending{done: make(chan struct{})}
+		deadline := time.Now().Add(40 * time.Second)
+		if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+			deadline = callerDeadline
+		}
+		work, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		p = &pending{done: make(chan struct{}), cancel: cancel}
 		m.pending[key] = p
 		go func() {
-			work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
 			defer cancel()
 			body, err := load(work)
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			if err == nil {
+			if err == nil && work.Err() == nil {
 				if m.entries == nil {
 					m.entries = make(map[string]cacheEntry)
 				}
@@ -208,11 +217,25 @@ func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func
 				m.bytes += len(body)
 			}
 			p.body, p.err = body, err
-			delete(m.pending, key)
+			if m.pending[key] == p {
+				delete(m.pending, key)
+			}
 			close(p.done)
 		}()
 	}
+	p.callers++
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		p.callers--
+		if p.callers == 0 {
+			p.cancel()
+			if m.pending[key] == p {
+				delete(m.pending, key)
+			}
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

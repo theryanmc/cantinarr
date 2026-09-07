@@ -1,7 +1,6 @@
 package request
 
 import (
-	"context"
 	"fmt"
 	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
@@ -100,21 +99,11 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	if req.MediaType == "book" {
 		formats = expandBookFormat(normalizeBookFormat(req.BookFormat))
 	}
-	// A readable library can already cover some formats. An unavailable read
-	// still saves the request; delivery reconciles it after recovery.
-	liveFormats := map[string]string{}
-	if eff.RequiresApproval && provider == "" {
-		if req.MediaType == "music" {
-			client, _, _ := s.resolveLidarr(userID, instanceID)
-			if live, known, e := s.freshLiveMusicStatus(client, instanceID, foreignID); e == nil && known && live != StatusUnavailable {
-				return &CreateResponse{Success: true, Status: live, Title: req.Title, InstanceID: instanceID}, nil
-			}
-		}
+	lockKey := instanceID + "\x00" + provider + ":" + sourceID + ":" + foreignID
+	if req.MediaType == "music" {
+		lockKey = instanceID + "\x00music-intake"
 	}
-	if len(formats) == 0 {
-		return &CreateResponse{Success: true, Status: collapseBookStatuses(liveFormats, ""), BookFormats: liveFormats, Title: req.Title, InstanceID: instanceID}, nil
-	}
-	lock := s.bookLock(instanceID + "\x00" + provider + ":" + sourceID + ":" + foreignID)
+	lock := s.bookLock(lockKey)
 	lock.Lock()
 	ids, inserted, err := s.saveDelivery(userID, req, instanceID, foreignID, provider, sourceID, formats, eff.RequiresApproval)
 	lock.Unlock()
@@ -124,23 +113,12 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	if inserted && eff.RequiresApproval && s.notifier != nil {
 		s.notifier.NotifyAdmins("request_pending", map[string]interface{}{"media_type": req.MediaType, "title": req.Title, "instance_id": instanceID, "foreign_id": foreignID})
 	}
-	// Book acknowledgement is saved-state only. The durable worker performs
-	// all Chaptarr reads and mutations after the request has been saved.
-	if req.MediaType == "music" && provider == "" && !eff.RequiresApproval {
-		for _, id := range ids {
-			s.dispatchRequest(context.Background(), id)
-		}
-	}
-	s.wakeDispatch()
 	response, err := s.deliveryResponse(userID, ids, req.Title, instanceID, req.CatalogRef)
 	if err == nil {
-		if req.MediaType == "book" {
-			savedBookState(response)
-		}
-		for f, status := range liveFormats {
-			response.BookFormats[f] = status
-		}
+		savedDeliveryState(response)
 	}
+	s.wakeDispatch()
+
 	return response, err
 }
 
@@ -154,10 +132,20 @@ func (s *Service) saveDelivery(userID int64, req *CreateRequest, instanceID, for
 	defer tx.Rollback()
 	covered := map[string]int64{}
 	legacy := map[int64]struct{ format, park string }{}
-	rows, err := tx.Query(`SELECT r.id,COALESCE(r.book_format,'both'),COALESCE(r.park_reason,''),EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) FROM request_log r
-	 WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND (?!='' OR COALESCE(r.foreign_id,'')=?)
-	 AND COALESCE(r.catalog_provider,'')=? AND COALESCE(r.catalog_id,'')=? AND r.status='pending'
-	 AND (r.media_type='book' OR r.user_id=?) ORDER BY r.id`, req.MediaType, instanceID, provider, foreignID, provider, sourceID, userID)
+	query := `SELECT r.id,COALESCE(r.book_format,'both'),COALESCE(r.park_reason,''),EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) FROM request_log r
+ WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND (?!='' OR COALESCE(r.foreign_id,'')=?)
+ AND COALESCE(r.catalog_provider,'')=? AND COALESCE(r.catalog_id,'')=? AND r.status='pending'
+ AND (r.media_type='book' OR r.user_id=?) ORDER BY r.id`
+	args := []any{req.MediaType, instanceID, provider, foreignID, provider, sourceID, userID}
+	if req.MediaType == "music" {
+		where, identityArgs, e := musicIdentityWhere(tx, instanceID, foreignID, provider, sourceID)
+		if e != nil {
+			return nil, false, e
+		}
+		query = `SELECT r.id,COALESCE(r.book_format,'both'),COALESCE(r.park_reason,''),EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) FROM request_log r WHERE r.media_type='music' AND r.instance_id=? AND r.user_id=? AND r.status='pending' AND ` + where + ` ORDER BY r.id`
+		args = append([]any{instanceID, userID}, identityArgs...)
+	}
+	rows, err := tx.Query(query, args...)
 	if err != nil {
 		return nil, false, err
 	}

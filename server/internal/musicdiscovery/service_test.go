@@ -389,6 +389,8 @@ func TestReleaseReferenceResolvesProviderCanonicalGroup(t *testing.T) {
 		case "/release/" + release:
 			fmt.Fprintf(w, `{"release-group":{"id":%q}}`, alias)
 		case "/release-group/" + alias:
+			http.Redirect(w, r, "/release-group/"+canonical+"?inc=artists&fmt=json", http.StatusMovedPermanently)
+		case "/release-group/" + canonical:
 			fmt.Fprintf(w, `{"id":%q,"title":"Canonical","primary-type":"Album","artist-credit":[{"name":"Artist"}]}`, canonical)
 		default:
 			t.Errorf("unexpected resolution path %s", r.URL.Path)

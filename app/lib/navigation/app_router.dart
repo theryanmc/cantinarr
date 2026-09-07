@@ -1090,6 +1090,9 @@ Widget _mediaDetailChild(GoRouterState state) {
     }
     return RequesterArtistDetailScreen(
       foreignArtistId: foreignId,
+      initialArtist:
+          state.extra is MusicArtist ? state.extra as MusicArtist : null,
+      searchTerm: state.uri.queryParameters['q'],
       nameHint: state.uri.queryParameters['name'],
       instanceId: state.uri.queryParameters['instance_id'],
     );

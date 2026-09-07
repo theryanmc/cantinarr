@@ -400,8 +400,10 @@ class MusicRequestSubmission {
   /// today, an album parked for an admin because the library couldn't match
   /// it. Empty when the status speaks for itself.
   final String message;
+  final Map<String, dynamic>? receipt;
 
-  const MusicRequestSubmission({required this.status, this.message = ''});
+  const MusicRequestSubmission(
+      {required this.status, this.message = '', this.receipt});
 }
 
 String _musicRequestErrorMessage(DioException error) {
@@ -997,6 +999,26 @@ class RequestService {
     }
   }
 
+  Future<Map<String, dynamic>> musicDeliveryStatus(String foreignId,
+      {String? instanceId, int? requestId}) async {
+    final response = await _backendDio
+        .get('/api/requests/delivery-status', queryParameters: {
+      'media_type': 'music',
+      'foreign_id': foreignId,
+      'include_live': false,
+      if (instanceId != null) 'instance_id': instanceId,
+      if (requestId != null) 'request_id': requestId
+    });
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  Future<Map<String, dynamic>> musicDeliveryAction(
+      int requestId, String action) async {
+    final response = await _backendDio
+        .post('/api/requests/$requestId/delivery', data: {'action': action});
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   /// Check the current user's request state for an album, keyed by the
   /// MusicBrainz release-group id (music has no tmdb_id). A failed lookup is
   /// returned as unknown so callers cannot turn an outage into a duplicate
@@ -1010,6 +1032,7 @@ class RequestService {
         '/api/requests/music-status',
         queryParameters: {
           'foreign_id': foreignId,
+          'include_saved': false,
           if (instanceId != null && instanceId.isNotEmpty)
             'instance_id': instanceId,
         },
@@ -1068,6 +1091,7 @@ class RequestService {
       final rawMessage = data?['message'];
       return MusicRequestSubmission(
         status: status,
+        receipt: data,
         message: rawMessage is String ? rawMessage.trim() : '',
       );
     } on DioException catch (e) {

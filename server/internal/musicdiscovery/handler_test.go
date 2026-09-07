@@ -72,6 +72,14 @@ func newAccessEnv(t *testing.T) *accessEnv {
 		e.hits.Add(1)
 		if strings.Contains(r.URL.Path, "fresh-releases") {
 			jsonResponse(w, map[string]any{"payload": map[string]any{"releases": []freshRelease{{aID, "Album", "Artist", "2026-09-05", "Album"}}}})
+		} else if r.URL.Path == "/artist/" {
+			jsonResponse(w, map[string]any{"count": 1, "offset": 0, "artists": []map[string]string{{"id": aID, "name": "Artist"}}})
+		} else if strings.Contains(r.URL.Path, "/artist/") {
+			jsonResponse(w, map[string]string{"id": aID, "name": "Artist"})
+		} else if r.URL.Query().Get("artist") != "" {
+			jsonResponse(w, map[string]any{"release-group-count": 1, "release-group-offset": 0, "release-groups": groups(aID)})
+		} else if r.URL.Query().Get("query") != "" {
+			jsonResponse(w, map[string]any{"count": 1, "offset": 0, "release-groups": groups(aID)})
 		} else {
 			jsonResponse(w, groups(aID)[0])
 		}
@@ -81,6 +89,10 @@ func newAccessEnv(t *testing.T) *accessEnv {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte{137, 80, 78, 71, 13, 10, 26, 10})), Request: r}, nil
 	})
 	r := chi.NewRouter()
+	r.Get("/api/discover/music/search", e.h.Search)
+	r.Get("/api/discover/music/artists", e.h.Artists)
+	r.Get("/api/media/music/artists/{mbid}", e.h.Artist)
+	r.Get("/api/media/music/artists/{mbid}/albums", e.h.ArtistAlbums)
 	r.Get("/api/discover/music/{feed}", e.h.Feed)
 	r.Get("/api/discover/music/artwork/{mbid}", e.h.Artwork)
 	r.Get("/api/media/music/{mbid}", e.h.Album)
@@ -108,7 +120,7 @@ func (e *accessEnv) get(user int64, role, path, inst string) *httptest.ResponseR
 
 func TestEveryMusicEndpointChecksGrantsBeforeAndAfterWarmCache(t *testing.T) {
 	e := newAccessEnv(t)
-	paths := []string{"/api/discover/music/new-releases", "/api/media/music/" + aID, "/api/genres/music", "/api/discover/music/artwork/" + aID}
+	paths := []string{"/api/discover/music/search?query=album&include_singles=true", "/api/discover/music/artists?query=artist", "/api/media/music/artists/" + aID, "/api/media/music/artists/" + aID + "/albums", "/api/discover/music/new-releases", "/api/media/music/" + aID, "/api/genres/music", "/api/discover/music/artwork/" + aID}
 	for _, path := range paths {
 		for _, tc := range []struct {
 			user       int64
@@ -131,7 +143,7 @@ func TestEveryMusicEndpointChecksGrantsBeforeAndAfterWarmCache(t *testing.T) {
 		}
 	}
 	// Metadata was shared between authorized accounts/instances; access wasn't.
-	if e.hits.Load() != 3 {
+	if e.hits.Load() != 7 {
 		t.Fatalf("metadata/artwork cache wasn't shared: %d", e.hits.Load())
 	}
 	if err := e.h.store.SetUserGrants(1, map[string][]string{"lidarr": nil}); err != nil {
@@ -145,7 +157,7 @@ func TestEveryMusicEndpointChecksGrantsBeforeAndAfterWarmCache(t *testing.T) {
 			t.Fatalf("other user's grant lost: %s %d", path, w.Code)
 		}
 	}
-	if e.hits.Load() != 3 {
+	if e.hits.Load() != 7 {
 		t.Fatal("denied caller reached provider")
 	}
 }
@@ -246,7 +258,7 @@ func TestAdminCatalogAndArtworkBeforeLidarrSetup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	paths := []string{"/api/discover/music/new-releases", "/api/genres/music", "/api/media/music/" + aID, "/api/discover/music/artwork/" + aID}
+	paths := []string{"/api/discover/music/search?query=album&include_singles=true", "/api/discover/music/artists?query=artist", "/api/media/music/artists/" + aID, "/api/media/music/artists/" + aID + "/albums", "/api/discover/music/new-releases", "/api/genres/music", "/api/media/music/" + aID, "/api/discover/music/artwork/" + aID}
 	for _, allAbsent := range []bool{false, true} {
 		if allAbsent {
 			if err := e.h.store.Delete(e.wrong); err != nil {

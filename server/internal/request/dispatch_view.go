@@ -101,6 +101,15 @@ func (s *Service) deliveryResponse(userID int64, ids []int64, title, instanceID 
 		if err = s.db.QueryRow(`SELECT COALESCE(foreign_id,''),status,COALESCE(park_reason,''),title,requested_at,user_id,media_type FROM request_log WHERE id=?`, id).Scan(&native, &stored, &park, &savedTitle, &requestedAt, &ownerID, &mediaType); err != nil {
 			return nil, err
 		}
+		// Older native music approvals predate dispatch rows. Reading their
+		// saved intent must not depend on a live library or migrate on GET.
+		if len(states) == 0 && mediaType == "music" && (stored == StatusPending || stored == StatusDenied) {
+			state := "approval"
+			if stored == StatusDenied {
+				state = "cancelled"
+			}
+			states = append(states, DeliveryState{RequestID: id, State: state, Message: deliveryMessage(state, "")})
+		}
 		admin := s.userIsAdmin(userID)
 		if mediaType == "book" && !admin {
 			if err = s.db.QueryRow(`SELECT book_format FROM book_request_waiters WHERE request_id=? AND user_id=?`, id, userID).Scan(&subscribedFormat); err != nil && ownerID != userID {
@@ -187,9 +196,12 @@ func (s *Service) hasDispatch(id int64) bool {
 // Saved delivery is evidence of intent or acceptance, never of current files.
 // Availability is read separately from Chaptarr (or overlaid by the default
 // delivery-status read for older clients).
-func savedBookState(out *CreateResponse) {
+func savedDeliveryState(out *CreateResponse) {
 	known := false
 	out.StatusKnown = &known
+	if out.Status == StatusAvailable || out.Status == StatusDownloading {
+		out.Status = StatusRequested
+	}
 	for format, status := range out.BookFormats {
 		if status == StatusAvailable || status == StatusDownloading {
 			out.BookFormats[format] = StatusRequested
@@ -240,8 +252,8 @@ func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateRe
 	}
 	if len(includeLive) == 0 || includeLive[0] {
 		s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
-	} else if r.mediaType == "book" {
-		savedBookState(out)
+	} else {
+		savedDeliveryState(out)
 	}
 	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
 		return nil, err
@@ -268,8 +280,15 @@ func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID 
 		where = `r.catalog_provider=? AND r.catalog_id=?`
 		args = []any{mediaType, id, provider, sourceID}
 	}
+	if mediaType == "music" {
+		where, args, err = musicIdentityWhere(s.db, id, foreignID, provider, sourceID)
+		if err != nil {
+			return nil, err
+		}
+		args = append([]any{mediaType, id}, args...)
+	}
 	args = append(args, userID, userID)
-	rows, err := s.db.Query(`SELECT r.id,r.title FROM request_log r WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND `+where+` AND (r.user_id=? OR EXISTS(SELECT 1 FROM book_request_waiters bw WHERE bw.request_id=r.id AND bw.user_id=?)) AND EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) ORDER BY r.id DESC`, args...)
+	rows, err := s.db.Query(`SELECT r.id,r.title FROM request_log r WHERE r.media_type=? AND COALESCE(r.instance_id,'')=? AND `+where+` AND (r.user_id=? OR EXISTS(SELECT 1 FROM book_request_waiters bw WHERE bw.request_id=r.id AND bw.user_id=?)) AND (EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id) OR (r.media_type='music' AND r.status='pending')) ORDER BY r.id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -303,8 +322,8 @@ func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID 
 	}
 	if len(includeLive) == 0 || includeLive[0] {
 		s.overlayDeliveryTruth(userID, mediaType, foreignID, out)
-	} else if mediaType == "book" {
-		savedBookState(out)
+	} else {
+		savedDeliveryState(out)
 	}
 	if _, err = s.deliveryInstance(userID, mediaType, id); err != nil {
 		return nil, err
@@ -315,18 +334,20 @@ func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID 
 // activeDeliveryStatus overlays durable intent only while delivery is pending.
 // Once delivery completes, the existing status path recomputes live truth.
 func (s *Service) activeDeliveryStatus(userID int64, mediaType, foreignID, instanceID string) (*StatusResponse, error) {
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM request_dispatch d JOIN request_log r ON r.id=d.request_id WHERE r.media_type=? AND r.foreign_id=? AND r.status='pending' AND d.state NOT IN ('complete','cancelled') AND (r.user_id=? OR EXISTS(SELECT 1 FROM book_request_waiters bw WHERE bw.request_id=r.id AND bw.user_id=?))`, mediaType, foreignID, userID, userID).Scan(&count); err != nil {
-		return nil, err
+	if mediaType != "music" {
+		var count int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM request_dispatch d JOIN request_log r ON r.id=d.request_id WHERE r.media_type=? AND r.foreign_id=? AND r.status='pending' AND d.state NOT IN ('complete','cancelled') AND (r.user_id=? OR EXISTS(SELECT 1 FROM book_request_waiters bw WHERE bw.request_id=r.id AND bw.user_id=?))`, mediaType, foreignID, userID, userID).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			return nil, nil
+		}
 	}
-	if count == 0 {
-		return nil, nil
-	}
-
-	saved, err := s.DeliveryStatus(userID, mediaType, foreignID, instanceID, nil)
+	saved, err := s.DeliveryStatus(userID, mediaType, foreignID, instanceID, nil, mediaType != "music")
 	if err != nil {
 		return nil, err
 	}
+
 	active := false
 	for _, d := range saved.Delivery {
 		active = active || (d.State != "complete" && d.State != "cancelled")

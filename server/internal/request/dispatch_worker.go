@@ -67,6 +67,7 @@ func (s *Service) SweepDispatch(ctx context.Context) {
 		s.dispatchRequest(ctx, id)
 	}
 	s.reconcileBookApprovals(ctx)
+	s.reconcileMusicApprovals(ctx)
 }
 
 func (s *Service) dispatchRequest(ctx context.Context, id int64) {

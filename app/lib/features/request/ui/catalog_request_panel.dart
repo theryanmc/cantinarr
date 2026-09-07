@@ -27,7 +27,7 @@ final savedDeliveryProvider = FutureProvider.autoDispose
       .read(backendClientProvider)
       .get('/api/requests/delivery-status', queryParameters: {
     if (key.requestId != null) 'request_id': key.requestId,
-    if (key.mediaType == 'book') 'include_live': false,
+    'include_live': false,
     'media_type': key.mediaType,
     'instance_id': key.instanceId,
     if (key.provider.isEmpty) 'foreign_id': key.foreignId,

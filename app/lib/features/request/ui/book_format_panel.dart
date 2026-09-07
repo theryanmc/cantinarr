@@ -115,7 +115,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       final state = d['state'];
       if (state == 'complete') continue; // availability is read separately
       if ({RequestStatus.available, RequestStatus.downloading}
-          .contains(detail.statusFor(format))) continue;
+          .contains(detail.statusFor(format))) {
+        continue;
+      }
       if (state == 'cancelled') {
         formats[format] = RequestStatus.denied;
         waits.remove(format);
@@ -260,8 +262,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
           for (final d in updated) {
             final format =
                 BookRequestFormat.tryFromValue(d['format'] as String? ?? '');
-            if (format != null && d['state'] == 'cancelled')
+            if (format != null && d['state'] == 'cancelled') {
               _submitted.remove(format);
+            }
           }
         }
       });
@@ -306,8 +309,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     final selected = format == BookRequestFormat.both
         ? [BookRequestFormat.ebook, BookRequestFormat.audiobook]
         : [format];
-    if (selected.any(_inFlight.contains) || !_canRequest(_detail, format))
+    if (selected.any(_inFlight.contains) || !_canRequest(_detail, format)) {
       return;
+    }
     _savedGeneration++; // ignore reads started before this submission
     _checkGeneration++;
     setState(() => _inFlight.addAll(selected));

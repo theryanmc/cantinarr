@@ -63,7 +63,9 @@ class FakeMusicService extends MusicDiscoveryService {
   }
 
   @override
-  Future<MusicAlbum> album(String id, String? instanceId) async => MusicAlbum(
+  Future<MusicAlbum> album(String id, String? instanceId,
+          {CancelToken? cancelToken}) async =>
+      MusicAlbum(
         foreignId: id,
         title: 'Cold album',
         artist: 'Cold artist',
@@ -474,12 +476,9 @@ void main() {
       expect(
           router.routeInformationProvider.value.uri.path, '/detail/album/mb-a');
       expect(find.text('Artist A'), findsOneWidget);
-      await tester.tap(find.text('Request album'));
+      await tester.tap(find.text('Request'));
       await tester.pumpAndSettle();
-      expect(
-          backend.submissions.single,
-          containsPair(
-              'catalog_ref', {'provider': 'musicbrainz', 'id': 'mb-a'}));
+      expect(backend.submissions.single, containsPair('foreign_id', 'mb-a'));
       expect(backend.submissions.single, containsPair('media_type', 'music'));
       expect(
           backend.submissions.single, containsPair('instance_id', 'music-1'));

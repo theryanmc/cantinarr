@@ -335,8 +335,8 @@ class _AppShellState extends ConsumerState<AppShell>
   /// The Music tab's twin of [_booksAiHandoffPrefix] — the same compile-time
   /// literal rule (T-04-01: nothing interpolated; user text only appended).
   static const String _musicAiHandoffPrefix = 'Context: this question was '
-      'asked from the Music tab of Cantinarr, which searches the user\'s '
-      'music library. Treat it as a question about albums, artists and '
+      'asked from the Music tab of Cantinarr, which searches the music '
+      'catalog with live library availability. Treat it as a question about albums, artists and '
       'listening.\n\n';
 
   /// Shows the books of an author the library does not hold, by running the
@@ -347,21 +347,6 @@ class _AppShellState extends ConsumerState<AppShell>
   /// this same overlay, are the useful destination: each row is already a
   /// requestable book. Setting the field programmatically does not fire
   /// `onChanged` (see `_exitAiMode`), so the notifier is fed explicitly.
-  /// Shows the albums of an artist the library does not hold, by running the
-  /// search the user could have typed themselves — the music sibling of
-  /// [_searchAuthorBooks], for the same reason: a metadata-only artist has no
-  /// detail screen to open.
-  void _searchArtistAlbums(String artistName) {
-    final term = artistName.trim();
-    if (term.isEmpty) return;
-    _searchController.text = term;
-    _searchController.selection = TextSelection.collapsed(offset: term.length);
-    // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
-    // rather than firing off the tap that just happened.
-    _resetAskAiIdle();
-    ref.read(shellMusicSearchProvider.notifier).updateSearch(term);
-  }
-
   void _searchAuthorBooks(String authorName) {
     final term = authorName.trim();
     if (term.isEmpty) return;
@@ -532,18 +517,6 @@ class _AppShellState extends ConsumerState<AppShell>
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           ref.read(shellBookSearchProvider.notifier).rerunForInstance();
-        });
-      },
-    );
-    // The music sibling of the listener above, for the same reason: an
-    // instance switch re-runs the typed search against the new Lidarr.
-    ref.listen(
-      instanceProvider.select((state) => state.activeLidarrInstance?.id),
-      (previous, next) {
-        if (previous == next) return;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          ref.read(shellMusicSearchProvider.notifier).rerunForInstance();
         });
       },
     );
@@ -1002,7 +975,8 @@ class _AppShellState extends ConsumerState<AppShell>
                                         artistsUnavailable:
                                             musicSearchState.artistsUnavailable,
                                         onResultTap: _dismissKeyboard,
-                                        onArtistDrillDown: _searchArtistAlbums,
+                                        artistsLoading:
+                                            musicSearchState.artistsLoading,
                                       )
                                     : SearchResultsView(
                                         results: searchState.searchResults,

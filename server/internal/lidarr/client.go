@@ -28,9 +28,11 @@ import (
 var ErrCustomFormatsNotFound = errors.New("lidarr: the custom format endpoint returned 404")
 
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	ctx           context.Context
+	mutationCheck func() error
+	baseURL       string
+	apiKey        string
+	httpClient    *http.Client
 }
 
 func NewClient(baseURL, apiKey string) *Client {
@@ -43,6 +45,20 @@ func NewClient(baseURL, apiKey string) *Client {
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
+}
+
+// WithContext bounds every request made by this private client copy.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	clone := *c
+	clone.ctx = ctx
+	return &clone
+}
+
+// WithMutationGuard rechecks authority immediately before each write.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	clone.mutationCheck = check
+	return &clone
 }
 
 // Image is a cover/poster reference returned on artists and albums.
@@ -325,13 +341,22 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, c.baseURL+path, reader)
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("X-Api-Key", c.apiKey)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if method != http.MethodGet && method != http.MethodHead && c.mutationCheck != nil {
+		if err := c.mutationCheck(); err != nil {
+			return err
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -89,7 +89,7 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := NewService(database, instance.NewRegistry(store), nil, nil)
-			req := &CreateRequest{MediaType: "music", Title: "Nevermind", InstanceID: inst.ID, CatalogRef: &CatalogRef{Provider: "musicbrainz", ID: "1b022e01-4da6-387b-8658-8678046e4cef"}}
+			req := &CreateRequest{MediaType: "music", Title: "Nevermind", InstanceID: inst.ID, ForeignID: "1b022e01-4da6-387b-8658-8678046e4cef"}
 			if serviceType == "chaptarr" {
 				req = &CreateRequest{MediaType: "book", Title: "The Subtle Art of Not Giving a Fuck", BookFormat: "both", InstanceID: inst.ID, ForeignID: "gr:48297245", SearchTerm: "The Subtle Art of Not Giving a Fuck"}
 			}
@@ -123,10 +123,10 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 			outage.Store(serviceType == "lidarr")
 			started := time.Now()
 			out, err := s.CreateMediaRequest(uid, req)
-			if serviceType == "chaptarr" {
+			{
 				t.Logf("native acknowledgement: %s", time.Since(started))
 				if time.Since(started) > time.Second {
-					t.Fatal("book acknowledgement exceeded one second")
+					t.Fatal("native acknowledgement exceeded one second")
 				}
 			}
 			if err != nil || out.RequestID == 0 {
@@ -162,14 +162,19 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 				}
 				matches := 0
 				for _, album := range albums {
-					if album.ForeignAlbumID == req.CatalogRef.ID {
+					if album.ForeignAlbumID == req.ForeignID {
 						matches++
+						if !album.Monitored {
+							t.Fatal("requested release is not monitored")
+						}
+					} else if album.Monitored {
+						t.Fatalf("sibling release was monitored: %s", album.ForeignAlbumID)
 					}
 				}
 				if matches != 1 {
 					t.Fatalf("expected one exact live album, got %d", matches)
 				}
-				t.Log("saved through HTTP 503, reopened database, delivered one exact release group to live Lidarr")
+				t.Log("saved through HTTP 503, reopened database, delivered one exact release group to live Lidarr with every sibling unmonitored")
 			} else {
 				deadline := time.Now().Add(5 * time.Minute)
 				previous := ""

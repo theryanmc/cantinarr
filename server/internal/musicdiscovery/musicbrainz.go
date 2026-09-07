@@ -20,6 +20,7 @@ type releaseGroup struct {
 		Name   string `json:"name"`
 		Join   string `json:"joinphrase"`
 		Artist struct {
+			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"artist"`
 	} `json:"artist-credit"`
@@ -30,16 +31,20 @@ func (r releaseGroup) album() (Album, error) {
 		return Album{}, errors.New("invalid MusicBrainz release group")
 	}
 	var artist strings.Builder
+	artists := []Artist{}
 	for _, credit := range r.Credits {
 		name := credit.Name
 		if name == "" {
 			name = credit.Artist.Name
 		}
+		if validID(credit.Artist.ID) {
+			artists = append(artists, Artist{ForeignID: credit.Artist.ID, Name: name})
+		}
 		artist.WriteString(name)
 		artist.WriteString(credit.Join)
 	}
-	return Album{ForeignID: r.ID, Title: r.Title, Artist: artist.String(),
-		ReleaseDate: r.Date, ReleaseType: albumType(r.Type),
+	return Album{ForeignID: r.ID, Title: r.Title, Artist: artist.String(), Artists: artists,
+		ReleaseDate: r.Date, ReleaseType: releaseType(r.Type),
 		Disambiguation: r.Disambiguation, Artwork: artworkPath(r.ID)}, nil
 }
 
@@ -99,6 +104,8 @@ func (s *Service) enrich(ctx context.Context, ids []string) (map[string]Album, e
 }
 
 func (s *Service) Album(ctx context.Context, id string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, InteractiveDeadline)
+	defer cancel()
 	if !validID(id) {
 		return nil, errors.New("invalid MusicBrainz release-group ID")
 	}
@@ -119,7 +126,7 @@ func (s *Service) Album(ctx context.Context, id string) ([]byte, error) {
 			return nil, err
 		}
 		if album.ReleaseType == "" {
-			return nil, errors.New("this release is not an album or EP")
+			return nil, errors.New("this release is not an album, EP, or single")
 		}
 		return json.Marshal(album)
 	})
@@ -138,7 +145,7 @@ func (s *Service) genre(ctx context.Context, genre Genre, page int) (Page, error
 		if err != nil {
 			return result, err
 		}
-		if album.ReleaseType != "" && !seen[album.ForeignID] {
+		if albumType(album.ReleaseType) != "" && !seen[album.ForeignID] {
 			result.Results = append(result.Results, album)
 			seen[album.ForeignID] = true
 		}
@@ -149,25 +156,36 @@ func (s *Service) genre(ctx context.Context, genre Genre, page int) (Page, error
 	return result, nil
 }
 
-func (s *Service) Search(ctx context.Context, query string, page int) ([]byte, error) {
+const InteractiveDeadline = 10 * time.Second
+
+func (s *Service) Search(ctx context.Context, query string, page int, includeSingles ...bool) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, InteractiveDeadline)
+	defer cancel()
+	singles := len(includeSingles) > 0 && includeSingles[0]
 	query = strings.TrimSpace(query)
 	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
 		return nil, errors.New("invalid music search")
 	}
-	return s.cache.get(ctx, "search:"+query+":"+strconv.Itoa(page), 5*time.Minute, func(ctx context.Context) ([]byte, error) {
+	return s.cache.get(ctx, "search:"+query+":"+strconv.Itoa(page)+":"+strconv.FormatBool(singles), 5*time.Minute, func(ctx context.Context) ([]byte, error) {
 		// Quote user text so it cannot remove the album/EP constraint.
 		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(query)
-		found, err := s.search(ctx, `(releasegroup:"`+escaped+`" OR artist:"`+escaped+`") AND (primarytype:album OR primarytype:ep)`, (page-1)*pageSize, pageSize)
+		types := "primarytype:album OR primarytype:ep"
+		scope := "MusicBrainz album and EP search"
+		if singles {
+			types += " OR primarytype:single"
+			scope = "MusicBrainz album, EP, and single search"
+		}
+		found, err := s.search(ctx, `(releasegroup:"`+escaped+`" OR artist:"`+escaped+`") AND (`+types+`)`, (page-1)*pageSize, pageSize)
 		if err != nil {
 			return nil, err
 		}
-		out := Page{Page: page, Results: []Album{}, Source: "MusicBrainz", Scope: "MusicBrainz album and EP search"}
+		out := Page{Page: page, Results: []Album{}, Source: "MusicBrainz", Scope: scope}
 		for _, group := range found.Groups {
 			album, err := group.album()
 			if err != nil {
 				return nil, err
 			}
-			if album.ReleaseType != "" {
+			if albumType(album.ReleaseType) != "" || (singles && album.ReleaseType == "Single") {
 				out.Results = append(out.Results, album)
 			}
 		}
@@ -175,7 +193,7 @@ func (s *Service) Search(ctx context.Context, query string, page int) ([]byte, e
 			out.NextPage = page + 1
 		}
 		if len(out.Results) == 0 {
-			out.EmptyMessage = "No albums or EPs matched this MusicBrainz page. This does not search your library."
+			out.EmptyMessage = "No releases matched this page of " + scope + ". This does not search your library."
 		}
 		return json.Marshal(out)
 	})
@@ -205,18 +223,7 @@ func (s *Service) ResolveAlbum(ctx context.Context, id string, isRelease bool) (
 				return nil, errors.New("the release does not identify an album")
 			}
 		}
-		var group releaseGroup
-		if err := s.mb.get(ctx, "/release-group/"+groupID+"?inc=artists&fmt=json", &group); err != nil {
-			return nil, err
-		}
-		album, err := group.album()
-		if err != nil {
-			return nil, err
-		}
-		if album.ReleaseType == "" {
-			return nil, errors.New("this release is not an album or EP")
-		}
-		return json.Marshal(album)
+		return s.Album(ctx, groupID)
 	})
 	var album Album
 	if err == nil {

@@ -158,13 +158,13 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "search_music",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Search albums and EPs by title or artist. Use catalog all for independent MusicBrainz and library results. Public results carry catalog_ref; library results carry foreign_album_id. Request one album, never a discography.",
+		Description: "Search albums, EPs, and singles in one MusicBrainz catalog, enriched with selected-library records and saved requests by release-group ID. Preserve foreign_id (also foreign_album_id), instance_id, title, and search_term for display and requests. Explicit public, library, and all modes retain the legacy catalog interfaces. Request one release, never a discography.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"catalog":     map[string]interface{}{"type": "string", "enum": []string{"all", "public", "library"}, "description": "Use all to search both public and service catalogs independently. Omit for legacy library search."},
+				"catalog":     map[string]interface{}{"type": "string", "enum": []string{"unified", "all", "public", "library"}, "description": "Omit for unified album, EP, and single search. Explicit all, public, and library preserve legacy searches."},
 				"page":        map[string]interface{}{"type": "integer", "minimum": 1, "description": "Public catalog page, starting at 1."},
-				"instance_id": map[string]interface{}{"type": "string", "description": "Selected authorized Chaptarr or Lidarr instance."},
+				"instance_id": map[string]interface{}{"type": "string", "description": "Selected authorized Lidarr instance."},
 
 				"query": map[string]interface{}{
 					"type":        "string",
@@ -793,7 +793,7 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 	return &ToolResult{Text: sb.String(), StructuredData: items}, nil
 }
 
-func (s *ToolServer) searchMusic(input json.RawMessage, userID int64) (*ToolResult, error) {
+func (s *ToolServer) searchMusic(input json.RawMessage, userID int64, contexts ...context.Context) (*ToolResult, error) {
 	var params struct {
 		Query      string `json:"query"`
 		Catalog    string `json:"catalog"`
@@ -805,6 +805,28 @@ func (s *ToolServer) searchMusic(input json.RawMessage, userID int64) (*ToolResu
 	}
 	if params.Catalog == "public" || params.Catalog == "all" {
 		return s.searchCatalogs(input, userID, "music")
+	}
+	if params.Catalog == "" || params.Catalog == "unified" {
+		ctx := context.Background()
+		if len(contexts) > 0 {
+			ctx = contexts[0]
+		}
+		if params.Page == 0 {
+			params.Page = 1
+		}
+		out, err := s.request.UnifiedMusicSearch(ctx, userID, params.Query, params.InstanceID, params.Page)
+		if err != nil {
+			return nil, err
+		}
+		body, _ := json.Marshal(out)
+		items := make([]MediaResultItem, 0, len(out.Results))
+		for _, r := range out.Results {
+			items = append(items, MediaResultItem{Title: r.Title, MediaType: "music", ForeignID: r.ForeignID, InstanceID: r.InstanceID, PosterURL: r.Artwork})
+		}
+		return &ToolResult{Text: string(body), StructuredData: items}, nil
+	}
+	if params.Catalog != "library" {
+		return nil, fmt.Errorf("invalid music catalog")
 	}
 	results, err := s.request.SearchAlbumsForUserInInstance(userID, params.Query, params.InstanceID)
 	if errors.Is(err, request.ErrNoLidarrAccess) {
@@ -1199,6 +1221,13 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 			if foreignID == "" {
 				failures = append(failures, fmt.Sprintf("music %q: missing foreign_id; copy it from search_music", p.Title))
 				continue
+			}
+			if body, err := s.request.CatalogMetadata(ctx, userID, "music", p.InstanceID, &request.CatalogRef{Provider: "musicbrainz", ID: foreignID}); err == nil {
+				var album musicdiscovery.Album
+				if json.Unmarshal(body, &album) == nil {
+					items = append(items, MediaResultItem{Title: album.Title, Year: strings.Split(album.ReleaseDate, "-")[0], MediaType: "music", ForeignID: album.ForeignID, InstanceID: p.InstanceID, PosterURL: album.Artwork})
+					continue
+				}
 			}
 			match, cached := s.request.CachedAlbumByForeignIDInInstance(userID, foreignID, p.InstanceID)
 			var lookupErr error

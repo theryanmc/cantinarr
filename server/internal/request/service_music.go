@@ -106,6 +106,11 @@ func (s *Service) addToLidarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("lidarr is not configured for you")
 	}
 
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveLidarr(actorID, instanceID)
+		return err
+	})
+
 	// Preflight the live library before lookup/add. The request boundary is
 	// the idempotency boundary: a complete album is already available, a
 	// monitored record is already requested, and an unmonitored record is
@@ -141,6 +146,8 @@ func (s *Service) addToLidarr(r *resolvedRequest) (string, string, error) {
 			return "", "", fmt.Errorf("title is required to add a new album")
 		}
 		if canonicalID, ok := lookupCanonicalAlbumAlias(idFetch, r.foreignID); ok {
+			r.foreignID = canonicalID
+			r.canonicalForeignID = canonicalID
 			aliasTitle, aliasRecords := albumsForForeignID(albums, canonicalID)
 			if len(aliasRecords) > 0 {
 				existing = aliasRecords
@@ -486,9 +493,11 @@ func isNoneMetadataProfile(p lidarr.MetadataProfile) bool {
 // Stored request rows are overlaid with live library truth, and a record the
 // library re-keyed to a different foreignAlbumId is followed through its
 // persisted record id.
-func (s *Service) GetUserMusicStatusForInstance(userID int64, foreignID, requestedInstanceID string) (*StatusResponse, error) {
-	if delivery, err := s.activeDeliveryStatus(userID, "music", foreignID, requestedInstanceID); err != nil || delivery != nil {
-		return delivery, err
+func (s *Service) GetUserMusicStatusForInstance(userID int64, foreignID, requestedInstanceID string, includeSaved ...bool) (*StatusResponse, error) {
+	if len(includeSaved) == 0 || includeSaved[0] {
+		if delivery, err := s.activeDeliveryStatus(userID, "music", foreignID, requestedInstanceID); err != nil || delivery != nil {
+			return delivery, err
+		}
 	}
 
 	foreignID = strings.TrimSpace(foreignID)

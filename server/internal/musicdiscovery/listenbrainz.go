@@ -54,7 +54,7 @@ func (s *Service) popular(ctx context.Context, period string, page int) (Page, e
 		return result, err
 	}
 	for _, id := range ids {
-		if album := albums[id]; album.ReleaseType != "" {
+		if album := albums[id]; albumType(album.ReleaseType) != "" {
 			result.Results = append(result.Results, album)
 		}
 	}

@@ -266,8 +266,9 @@ class BookSearchResultsView extends ConsumerWidget {
         );
       }
 
-      if (orderedAuthors.isNotEmpty || authorsLoading || authorsUnavailable)
+      if (orderedAuthors.isNotEmpty || authorsLoading || authorsUnavailable) {
         addRow(const _SectionLabel('Authors'));
+      }
       for (final resolved in orderedAuthors) {
         addRow(
           _AuthorResultTile(
