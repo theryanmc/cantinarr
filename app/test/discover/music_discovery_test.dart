@@ -63,7 +63,9 @@ class FakeMusicService extends MusicDiscoveryService {
   }
 
   @override
-  Future<MusicAlbum> album(String id, String? instanceId) async => MusicAlbum(
+  Future<MusicAlbum> album(String id, String? instanceId,
+          {CancelToken? cancelToken}) async =>
+      MusicAlbum(
         foreignId: id,
         title: 'Cold album',
         artist: 'Cold artist',

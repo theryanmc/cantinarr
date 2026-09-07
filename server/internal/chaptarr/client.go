@@ -46,6 +46,30 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
+// WithMutationGuard returns a private client that checks current authority
+// immediately before every write, including follow-up writes after a read.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	httpClient := *c.httpClient
+	httpClient.Transport = mutationGuard{base: c.httpClient.Transport, check: check}
+	clone.httpClient = &httpClient
+	return &clone
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
+}
+
 // Image is a cover/poster reference returned on authors, books, and editions.
 type Image struct {
 	CoverType string `json:"coverType"`
@@ -155,14 +179,15 @@ type Edition struct {
 }
 
 type Book struct {
-	ID            int        `json:"id"`
-	Title         string     `json:"title"`
-	AuthorID      int        `json:"authorId"`
-	ForeignBookID string     `json:"foreignBookId"`
-	TitleSlug     string     `json:"titleSlug"`
-	Overview      string     `json:"overview"`
-	ReleaseDate   *time.Time `json:"releaseDate,omitempty"`
-	Monitored     bool       `json:"monitored"`
+	OpenLibraryWorkID string     `json:"openLibraryWorkId,omitempty"`
+	ID                int        `json:"id"`
+	Title             string     `json:"title"`
+	AuthorID          int        `json:"authorId"`
+	ForeignBookID     string     `json:"foreignBookId"`
+	TitleSlug         string     `json:"titleSlug"`
+	Overview          string     `json:"overview"`
+	ReleaseDate       *time.Time `json:"releaseDate,omitempty"`
+	Monitored         bool       `json:"monitored"`
 	// MediaType is the book-level format Chaptarr returns on library books
 	// ("ebook"/"audiobook"); this fork tracks a title's ebook and audiobook as
 	// separate records sharing a foreignBookId, distinguished by this field.
@@ -602,12 +627,12 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		// the hostname). These errors surface beyond admins — e.g. in request
 		// failures — so summarize them host-free like the status branch below.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return transporterr.Connection(fmt.Sprintf("chaptarr %s %s: ", method, requestPath), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr %s %s returned status %d", method, requestPath, resp.StatusCode), resp)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -631,7 +656,7 @@ func (c *Client) doRequestContext(ctx context.Context, method, path string) (*ht
 	if err != nil {
 		// Host-free, like doWith: transport errors embed the full request URL.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return nil, fmt.Errorf("chaptarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return nil, transporterr.Connection(fmt.Sprintf("chaptarr %s %s: ", method, requestPath), err)
 	}
 	return resp, nil
 }
@@ -666,7 +691,7 @@ func (c *Client) LookupBookContext(ctx context.Context, term string) ([]LookupRe
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chaptarr book lookup returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr book lookup returned status %d", resp.StatusCode), resp)
 	}
 	var results []LookupResult
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
@@ -761,7 +786,7 @@ func (c *Client) GetBook(id int) (*Book, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("chaptarr GET /api/v1/book/%d returned status %d", id, resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/book/%d returned status %d", id, resp.StatusCode), resp)
 	}
 
 	var book Book
@@ -838,7 +863,7 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode), resp)
 	}
 	var profiles []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
@@ -876,7 +901,7 @@ func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMess
 		return nil, ErrCustomFormatsNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr GET /api/v1/customformat returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr GET /api/v1/customformat returned status %d", resp.StatusCode), resp)
 	}
 	var formats []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {
@@ -978,7 +1003,7 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		// Host-free, like doWith: transport errors embed the full request URL.
-		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book: %s", transporterr.Summarize(err))
+		return nil, transporterr.Connection("chaptarr add book: chaptarr POST /api/v1/book: ", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -987,7 +1012,7 @@ func (c *Client) AddBook(req AddBookRequest) (*Book, error) {
 				return nil, fmt.Errorf("chaptarr add book: %w", classified)
 			}
 		}
-		return nil, fmt.Errorf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr add book: chaptarr POST /api/v1/book returned status %d", resp.StatusCode), resp)
 	}
 	var book Book
 	if err := json.NewDecoder(resp.Body).Decode(&book); err != nil {
@@ -1092,7 +1117,7 @@ func (c *Client) GetAuthorImportStatus(foreignAuthorID string) (*AuthorImportSta
 		return nil, fmt.Errorf("chaptarr author import status: %w", ErrAuthorProviderAmbiguous)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr author import status: chaptarr GET /api/v1/pendingauthorimport/author/exists returned status %d", resp.StatusCode), resp)
 	}
 	var status AuthorImportStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -1128,7 +1153,7 @@ func (c *Client) GetPendingAuthorImport(pendingID int) (*PendingAuthorImportDeta
 		return nil, nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr pending author import: chaptarr GET /api/v1/pendingauthorimport returned status %d", resp.StatusCode), resp)
 	}
 	var detail PendingAuthorImportDetail
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
@@ -1151,7 +1176,7 @@ func (c *Client) CancelPendingAuthorImport(pendingID int) error {
 		return fmt.Errorf("chaptarr cancel pending author import: %w", ErrPendingImportAPIUnavailable)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr cancel pending author import: chaptarr DELETE /api/v1/pendingauthorimport returned status %d", resp.StatusCode), resp)
 	}
 	return nil
 }
@@ -1169,7 +1194,7 @@ func (c *Client) RetryPendingAuthorImport(pendingID int) error {
 		return fmt.Errorf("chaptarr retry pending author import: %w", ErrPendingImportAPIUnavailable)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("chaptarr retry pending author import: chaptarr POST /api/v1/pendingauthorimport/retry returned status %d", resp.StatusCode), resp)
 	}
 	return nil
 }
@@ -1620,4 +1645,24 @@ func (c *Client) GetFailedDownloadPolicy() (autoRedownloadFailed bool, err error
 		return false, fmt.Errorf("chaptarr download client config: %w", err)
 	}
 	return config.AutoRedownloadFailed, nil
+}
+
+// GetAllBooksContext is a bounded, complete library read for catalog matching.
+func (c *Client) GetAllBooksContext(ctx context.Context) ([]Book, error) {
+	response, err := c.doRequestContext(ctx, http.MethodGet, "/api/v1/book")
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, transporterr.HTTP(fmt.Sprintf("chaptarr book list returned status %d", response.StatusCode), response)
+	}
+	var books []Book
+	if err = json.NewDecoder(io.LimitReader(response.Body, 32<<20)).Decode(&books); err != nil {
+		return nil, fmt.Errorf("invalid library response")
+	}
+	if books == nil {
+		return nil, fmt.Errorf("incomplete library response")
+	}
+	return books, nil
 }

@@ -19,10 +19,15 @@ class MusicDiscoveryService {
   final Dio dio;
   MusicDiscoveryService(this.dio);
 
-  Future<Map<String, dynamic>> _get(
-      String path, Map<String, dynamic> params) async {
+  Future<Map<String, dynamic>> _get(String path, Map<String, dynamic> params,
+      {CancelToken? cancelToken}) async {
     try {
-      final response = await dio.get(path, queryParameters: params);
+      final response = await dio.get(path,
+          queryParameters: params,
+          cancelToken: cancelToken,
+          options: Options(
+              sendTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 10)));
       if (response.data is String &&
           (response.data as String).trimLeft().startsWith('<')) {
         throw const MusicDiscoveryUnsupported();
@@ -40,6 +45,43 @@ class MusicDiscoveryService {
       MusicPage.fromJson(await _get('/api/discover/music/${query.feed}',
           {...query.parameters, 'page': page}));
 
+  Future<MusicPage> search(String query, String? instanceId,
+          {int page = 1,
+          bool includeSingles = false,
+          CancelToken? cancelToken}) async =>
+      MusicPage.fromJson(await _get(
+          '/api/discover/music/search',
+          {
+            'query': query,
+            'page': page,
+            if (includeSingles) 'include_singles': true,
+            if (instanceId != null) 'instance_id': instanceId
+          },
+          cancelToken: cancelToken));
+
+  Future<MusicArtistPage> searchArtists(String query, String? instanceId,
+          {int page = 1, CancelToken? cancelToken}) async =>
+      MusicArtistPage.fromJson(await _get(
+          '/api/discover/music/artists',
+          {
+            'query': query,
+            'page': page,
+            if (instanceId != null) 'instance_id': instanceId
+          },
+          cancelToken: cancelToken));
+  Future<MusicArtist> artist(String id, String? instanceId,
+          {CancelToken? cancelToken}) async =>
+      MusicArtist.fromJson(await _get(
+          '/api/media/music/artists/${Uri.encodeComponent(id)}',
+          {if (instanceId != null) 'instance_id': instanceId},
+          cancelToken: cancelToken));
+  Future<MusicPage> artistAlbums(String id, String? instanceId,
+          {int page = 1, CancelToken? cancelToken}) async =>
+      MusicPage.fromJson(await _get(
+          '/api/media/music/artists/${Uri.encodeComponent(id)}/albums',
+          {'page': page, if (instanceId != null) 'instance_id': instanceId},
+          cancelToken: cancelToken));
+
   Future<List<MusicGenre>> genres(String? instanceId) async {
     final data = await _get('/api/genres/music',
         {if (instanceId != null) 'instance_id': instanceId});
@@ -48,13 +90,13 @@ class MusicDiscoveryService {
         .toList();
   }
 
-  Future<MusicAlbum> album(String mbid, String? instanceId) async {
+  Future<MusicAlbum> album(String mbid, String? instanceId,
+      {CancelToken? cancelToken}) async {
     final album = MusicAlbum.fromJson(await _get(
         '/api/media/music/${Uri.encodeComponent(mbid)}',
-        {if (instanceId != null) 'instance_id': instanceId}));
-    if (album.foreignId != mbid) {
-      throw const FormatException('Unexpected music album identity');
-    }
+        {if (instanceId != null) 'instance_id': instanceId},
+        cancelToken: cancelToken));
+    // The server verifies exact provider redirects before returning a canonical ID.
     return album;
   }
 }

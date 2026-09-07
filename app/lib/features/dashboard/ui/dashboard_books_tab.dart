@@ -5,7 +5,7 @@ import '../../../core/providers/instance_provider.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../../../core/providers/realtime_provider.dart';
 import '../../shell/logic/library_author_index.dart';
-import '../../discover/ui/book_discovery_row.dart';
+import '../../discover/ui/catalog_setup_button.dart';
 import '../data/book_library_service.dart';
 import '../data/book_authors_service.dart';
 import '../data/book_series_service.dart';
@@ -14,7 +14,7 @@ import 'library_authors_row.dart';
 import 'library_series_row.dart';
 import 'recently_added_books_row.dart';
 
-/// Dashboard Books tab: Popular Books, genres, Recently Added, Authors,
+/// Dashboard Books tab: Recently Added, Authors,
 /// and Series. Chaptarr book/author search now lives in the shell toolbar
 /// (`shellBookSearchProvider` / `BookSearchResultsView`, see
 /// `app/lib/features/shell/logic/shell_book_search_provider.dart` and
@@ -89,8 +89,11 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const PopularBooksRow(),
-          const BookGenresRow(),
+          if (!hasLibrary)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: CatalogSetupButton(serviceType: 'chaptarr'),
+            ),
           if (hasLibrary) ...const [
             RecentlyAddedBooksRow(),
             LibraryAuthorsRow(),

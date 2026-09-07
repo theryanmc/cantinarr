@@ -302,7 +302,7 @@ class _SeriesBookTile extends ConsumerWidget {
           ? null
           : () => context.push(
                 '/detail/book/${Uri.encodeComponent(fid)}'
-                '?title=${Uri.encodeQueryComponent(title.title)}'
+                '?source=chaptarr&title=${Uri.encodeQueryComponent(title.title)}'
                 '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId!)}'}',
               ),
     );

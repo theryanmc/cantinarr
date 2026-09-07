@@ -17,13 +17,39 @@ func validID(id string) bool { return mbidPattern.MatchString(id) }
 
 // Album identity is a release GROUP, never a release, title, or numeric TMDB id.
 type Album struct {
+	ForeignID      string   `json:"foreign_id"`
+	Title          string   `json:"title"`
+	Artist         string   `json:"artist"`
+	Artists        []Artist `json:"artists,omitempty"`
+	ReleaseDate    string   `json:"release_date,omitempty"`
+	ReleaseType    string   `json:"release_type"`
+	Artwork        string   `json:"artwork,omitempty"`
+	Disambiguation string   `json:"disambiguation,omitempty"`
+}
+
+// Artist credits keep identity separate from the displayed (possibly shared) name.
+type Artist struct {
 	ForeignID      string `json:"foreign_id"`
-	Title          string `json:"title"`
-	Artist         string `json:"artist"`
-	ReleaseDate    string `json:"release_date,omitempty"`
-	ReleaseType    string `json:"release_type"`
-	Artwork        string `json:"artwork,omitempty"`
+	Name           string `json:"name"`
 	Disambiguation string `json:"disambiguation,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Country        string `json:"country,omitempty"`
+}
+
+type ArtistPage struct {
+	Results      []Artist `json:"results"`
+	Page         int      `json:"page"`
+	NextPage     int      `json:"next_page,omitempty"`
+	Source       string   `json:"source"`
+	Scope        string   `json:"scope"`
+	EmptyMessage string   `json:"empty_message,omitempty"`
+}
+
+func releaseType(s string) string {
+	if strings.EqualFold(s, "single") {
+		return "Single"
+	}
+	return albumType(s)
 }
 
 func albumType(s string) string {
@@ -71,3 +97,5 @@ func genreByID(id string) (Genre, bool) {
 	}
 	return Genre{}, false
 }
+
+func ValidID(id string) bool { return validID(id) }

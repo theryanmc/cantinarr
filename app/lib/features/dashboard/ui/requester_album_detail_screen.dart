@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -27,8 +28,8 @@ import '../data/music_library_service.dart';
 
 /// Requester-facing detail for one album, addressed by its MusicBrainz
 /// release-group id. Search navigation supplies [initialAlbum] for an
-/// immediate, metadata-rich presentation; notification/deep links resolve the
-/// same data from the title hint when possible, and the owned-albums digest
+/// immediate presentation; notification/deep links resolve the exact group
+/// through MusicBrainz, and the owned-albums digest
 /// remains the live source of ownership.
 class RequesterAlbumDetailScreen extends ConsumerStatefulWidget {
   final String foreignId;
@@ -61,12 +62,13 @@ class RequesterAlbumDetailScreen extends ConsumerStatefulWidget {
 class _RequesterAlbumDetailScreenState
     extends ConsumerState<RequesterAlbumDetailScreen>
     with WidgetsBindingObserver {
-  late final RequestService _requestService;
+  late RequestService _requestService;
   LidarrAlbum? _metadata;
   MusicAlbum? _discoveryMetadata;
   bool _metadataFailed = false;
   bool _metadataLoading = false;
   int _loadGeneration = 0;
+  CancelToken? _metadataCancel;
   String? _instanceId;
 
   /// The foreignAlbumId the library files this album under, when the server
@@ -99,6 +101,7 @@ class _RequesterAlbumDetailScreenState
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _metadataCancel?.cancel();
     super.dispose();
   }
 
@@ -120,6 +123,10 @@ class _RequesterAlbumDetailScreenState
   }
 
   void _startLoads() {
+    _requestService =
+        RequestService(backendDio: ref.read(backendClientProvider));
+    _metadataCancel?.cancel();
+    _metadataCancel = CancelToken();
     final generation = ++_loadGeneration;
     _instanceId = widget.instanceId ??
         ref.read(instanceProvider).activeLidarrInstance?.id;
@@ -150,55 +157,53 @@ class _RequesterAlbumDetailScreenState
     );
   }
 
-  /// Notification links carry only a title and foreign id. Resolve their
-  /// metadata with the same read-only lookup as Music search — only an exact
-  /// foreignAlbumId match is ever accepted, so a lookalike listing can never
-  /// impersonate this album.
+  /// Cold links resolve by exact release-group ID. Existing row metadata stays
+  /// visible while public credits and verified canonical redirects load.
   Future<void> _resolveMetadata(int generation) async {
     if (!mounted || generation != _loadGeneration) return;
-    if (_metadata != null || _discoveryMetadata != null) return;
-    final foreignId = widget.foreignId;
     final instanceId = _instanceId;
-    final term = widget.titleHint?.trim() ?? '';
-    final service = _lidarrService();
-    LidarrAlbum? match;
-    if (service != null && term.isNotEmpty) {
-      try {
-        final results = await service.lookupAlbum(term);
-        for (final album in results) {
-          if (album.foreignAlbumId == foreignId) {
-            match = album;
-            break;
-          }
-        }
-      } catch (_) {
-        // MusicBrainz can still resolve the identity if Lidarr lookup fails.
+    if (!ref.read(discoveryAccessProvider).canBrowse('lidarr', instanceId)) {
+      return;
+    }
+    try {
+      final discovery = await ref
+          .read(musicDiscoveryServiceProvider)
+          .album(widget.foreignId, instanceId, cancelToken: _metadataCancel);
+      if (!mounted || generation != _loadGeneration) return;
+      final original = _discoveryMetadata;
+      setState(() {
+        _discoveryMetadata =
+            original != null && original.foreignId == discovery.foreignId
+                ? MusicAlbum(
+                    foreignId: original.foreignId,
+                    title: original.title,
+                    artist: original.artist,
+                    artists: discovery.artists.isNotEmpty
+                        ? discovery.artists
+                        : original.artists,
+                    releaseDate: original.releaseDate,
+                    releaseType: original.releaseType,
+                    artwork: original.artwork ?? discovery.artwork,
+                    disambiguation: original.disambiguation)
+                : discovery;
+        _metadataFailed = false;
+        _metadataLoading = false;
+      });
+      if (discovery.foreignId != widget.foreignId) {
+        _onCanonicalForeignId(discovery.foreignId);
+      }
+    } catch (_) {
+      if (mounted && generation == _loadGeneration) {
+        setState(() {
+          _metadataFailed = true;
+          _metadataLoading = false;
+        });
       }
     }
-    if (!mounted || generation != _loadGeneration) return;
-    MusicAlbum? discovery;
-    var failed = false;
-    if (match == null && ref.read(discoveryAccessProvider).canBrowse('lidarr', instanceId)) {
-      try {
-        discovery = await ref
-            .read(musicDiscoveryServiceProvider)
-            .album(foreignId, instanceId);
-      } catch (_) {
-        failed = true;
-      }
-    }
-    if (!mounted || generation != _loadGeneration) return;
-    setState(() {
-      _metadata = match;
-      _discoveryMetadata = discovery;
-      _metadataFailed = failed;
-      _metadataLoading = false;
-    });
   }
 
   /// Follows the library's canonical id once the server reports one: the
-  /// digest row can then bind, and the request panel re-keys onto the id
-  /// every future read will agree on.
+  /// digest row can then bind while the saved request control stays mounted.
   void _onCanonicalForeignId(String canonical) {
     if (!mounted || canonical.isEmpty || canonical == _effectiveForeignId) {
       return;
@@ -337,9 +342,12 @@ class _RequesterAlbumDetailScreenState
       if (previous != next) setState(_startLoads);
     });
     if (!access.canBrowse('lidarr', _instanceId)) {
-      return Scaffold(appBar: AppBar(title: const Text('Album details')),
-        body: Center(child: Text(access.needsUpdate(_instanceId)
-            ? adminCatalogUpdateMessage : 'Music is not available for this account.')));
+      return Scaffold(
+          appBar: AppBar(title: const Text('Album details')),
+          body: Center(
+              child: Text(access.needsUpdate(_instanceId)
+                  ? adminCatalogUpdateMessage
+                  : 'Music is not available for this account.')));
     }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshMusicTruth();
@@ -353,7 +361,8 @@ class _RequesterAlbumDetailScreenState
         });
       },
     );
-    final digest = _instanceId == null ? const AsyncData(<OwnedAlbum>[])
+    final digest = _instanceId == null
+        ? const AsyncData(<OwnedAlbum>[])
         : ref.watch(ownedAlbumsForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Album details')),
@@ -409,8 +418,21 @@ class _RequesterAlbumDetailScreenState
     final instanceId = _instanceId;
 
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
+    final credits = _discoveryMetadata?.artists ??
+        [
+          if ((_metadata?.artist?.foreignArtistId ??
+                  owned?.foreignArtistId ??
+                  '')
+              .isNotEmpty)
+            MusicArtist(
+                foreignId: _metadata?.artist?.foreignArtistId ??
+                    owned!.foreignArtistId,
+                name: artist),
+        ];
     // Keep discovery artwork while the new library record downloads its cover.
-    LidarrImageSource? cover = _discoveryMetadata == null ? null : musicArtworkSource(ref, _discoveryMetadata!, instanceId);
+    LidarrImageSource? cover = _discoveryMetadata == null
+        ? null
+        : musicArtworkSource(ref, _discoveryMetadata!, instanceId);
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
       final ownedCover =
@@ -427,6 +449,7 @@ class _RequesterAlbumDetailScreenState
 
     return CenteredContent(
       child: ListView(
+        key: PageStorageKey('album:${widget.foreignId}:$_instanceId'),
         // Build the request panel even when large accessibility text pushes
         // it just below the viewport; it owns this album's live request state.
         cacheExtent: MediaQuery.sizeOf(context).height * 2,
@@ -456,13 +479,23 @@ class _RequesterAlbumDetailScreenState
           ),
           if (artist.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(
-              artist,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppTheme.textSecondary,
-                  ),
-            ),
+            if (credits.isNotEmpty)
+              Wrap(alignment: WrapAlignment.center, children: [
+                for (final credit in credits)
+                  TextButton(
+                      onPressed: () => context.push(
+                          credit.detailLocation(instanceId,
+                              query: widget.searchTerm),
+                          extra: credit),
+                      child: Text(credit.name))
+              ])
+            else
+              Text(artist,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyLarge
+                      ?.copyWith(color: AppTheme.textSecondary)),
           ],
           if (year > 0 || albumType.isNotEmpty || trackCount > 0) ...[
             const SizedBox(height: 6),
@@ -484,17 +517,18 @@ class _RequesterAlbumDetailScreenState
           const SizedBox(height: 24),
           if (instanceId == null)
             const CatalogSetupButton(serviceType: 'lidarr')
-          else AlbumRequestPanel(
-            foreignId: _effectiveForeignId,
-            title: title,
-            instanceId: instanceId,
-            searchTerm: widget.searchTerm,
-            service: _requestService,
-            ownership: owned,
-            refreshTick: requestRefreshTick,
-            onCanonicalForeignId: _onCanonicalForeignId,
-            onRequestCompleted: _onRequestCompleted,
-          ),
+          else
+            AlbumRequestPanel(
+              foreignId: widget.foreignId,
+              title: title,
+              instanceId: instanceId,
+              searchTerm: widget.searchTerm,
+              service: _requestService,
+              ownership: owned,
+              refreshTick: requestRefreshTick,
+              onCanonicalForeignId: _onCanonicalForeignId,
+              onRequestCompleted: _onRequestCompleted,
+            ),
           if (instanceId != null && _trackFiles.isNotEmpty) ...[
             const SizedBox(height: 14),
             MediaDownloadChoiceButton(

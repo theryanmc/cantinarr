@@ -2,6 +2,7 @@ package musicdiscovery
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,7 +14,7 @@ import (
 
 type Handler struct {
 	store   *instance.Store
-	service *Service
+	service Catalog
 }
 
 func NewHandler(store *instance.Store) *Handler {
@@ -184,4 +185,103 @@ func (h *Handler) Artwork(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Write(body)
+}
+
+func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		var err error
+		page, err = strconv.Atoi(raw)
+		if err != nil {
+			fail(w, 400, "invalid search page")
+			return
+		}
+	}
+	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
+		fail(w, 400, "enter a search query and valid page")
+		return
+	}
+	singles := false
+	if raw := r.URL.Query().Get("include_singles"); raw != "" {
+		var err error
+		singles, err = strconv.ParseBool(raw)
+		if err != nil {
+			fail(w, 400, "invalid include_singles")
+			return
+		}
+	}
+	body, err := h.service.Search(r.Context(), query, page, singles)
+	h.serve(w, r, id, body, err)
+}
+
+func NewHandlerWithService(store *instance.Store, service Catalog) *Handler {
+	if service == nil {
+		service = NewService()
+	}
+	return &Handler{store: store, service: service}
+}
+
+func (h *Handler) Artists(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	page, err := musicPage(r)
+	if err != nil {
+		fail(w, 400, "invalid music page")
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" || len(query) > 300 {
+		fail(w, 400, "enter an artist search query")
+		return
+	}
+	body, err := h.service.SearchArtists(r.Context(), query, page)
+	h.serve(w, r, id, body, err)
+}
+func musicPage(r *http.Request) (int, error) {
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		page, err := strconv.Atoi(raw)
+		if err != nil || page < 1 || page > maxPage {
+			return 0, fmt.Errorf("invalid page")
+		}
+		return page, nil
+	}
+	return 1, nil
+}
+func (h *Handler) Artist(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	mbid := strings.ToLower(chi.URLParam(r, "mbid"))
+	if !validID(mbid) {
+		fail(w, 400, "invalid MusicBrainz artist ID")
+		return
+	}
+	body, err := h.service.Artist(r.Context(), mbid)
+	h.serve(w, r, id, body, err)
+}
+func (h *Handler) ArtistAlbums(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	mbid := strings.ToLower(chi.URLParam(r, "mbid"))
+	if !validID(mbid) {
+		fail(w, 400, "invalid MusicBrainz artist ID")
+		return
+	}
+	page, err := musicPage(r)
+	if err != nil {
+		fail(w, 400, "invalid music page")
+		return
+	}
+	body, err := h.service.ArtistAlbums(r.Context(), mbid, page)
+	h.serve(w, r, id, body, err)
 }

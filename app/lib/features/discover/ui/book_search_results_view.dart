@@ -23,7 +23,7 @@ import '../../shell/logic/shell_book_search_provider.dart';
 class BookSearchResultsView extends ConsumerWidget {
   final List<ChaptarrBook> results;
 
-  /// Author matches for [query] (SEARCH-01). Rendered above the book rows:
+  /// Author matches for [query], loaded independently below the book rows:
   /// someone who typed an author's name is usually after the author, and the
   /// books by them are one tap further in.
   final List<ChaptarrAuthor> authors;
@@ -40,6 +40,7 @@ class BookSearchResultsView extends ConsumerWidget {
   /// to say so.
   final bool authorsUnavailable;
   final VoidCallback? onResultTap;
+  final bool authorsLoading;
 
   /// Re-runs the search for an author the library does not hold, so their books
   /// land in this same overlay and can be requested.
@@ -51,6 +52,7 @@ class BookSearchResultsView extends ConsumerWidget {
 
   const BookSearchResultsView({
     super.key,
+    this.authorsLoading = false,
     required this.results,
     this.authors = const [],
     required this.query,
@@ -97,57 +99,34 @@ class BookSearchResultsView extends ConsumerWidget {
     // owned/monitored books the metadata search missed.
     final digest =
         ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
-    final identity = resolveBookSearchIdentity(
-      query: query,
-      lookupResults: results,
-      digest: digest,
-    );
-    // Concrete library records not already represented by a safe one-to-one
-    // lookup mapping. Ambiguous candidates are shown separately here so the
-    // requester can choose a real record rather than targeting a fuzzy guess.
-    final injected = identity.libraryRows;
-    // Mark each lookup result with its ownership and float owned titles to
-    // the top, preserving Chaptarr's relevance order within each bucket
-    // (don't collapse versions — the user wants to see ones they don't own).
-    // Only owned results carry a cover: the owned record's cached
-    // /MediaCover, which loads with the API key. Lookup (/MediaCoverProxy)
-    // covers are broken server-side in this fork, so not-yet-owned rows
-    // stay iconic.
-    final owned = <_ResolvedBookResult>[];
-    final rest = <_ResolvedBookResult>[];
-    for (var lookupIndex = 0; lookupIndex < results.length; lookupIndex++) {
-      final book = results[lookupIndex];
-      final match = identity.matches[book];
-      final identityAmbiguous = identity.contested.containsKey(book);
-      final cover =
-          (match != null && match.cover.isNotEmpty) ? match.cover : null;
-      final libraryId = match?.foreignBookId.trim() ?? '';
-      final lookupId = book.foreignBookId?.trim() ?? '';
-      ((match?.ownership.anyOwned ?? false) ? owned : rest).add(
-        _ResolvedBookResult(
-          book: book,
-          ownership: match?.ownership,
-          identityAmbiguous: identityAmbiguous,
-          sourceIdentity: 'lookup:$lookupIndex',
-          cover: cover,
-          canonicalForeignId: libraryId.isNotEmpty ? libraryId : lookupId,
-        ),
-      );
-    }
+    final injected = digest
+        .where((owned) =>
+            (titleMatchesQuery(query, owned.title) ||
+                titleMatchesQuery(query, owned.author)) &&
+            !results.any((book) => book.foreignBookId == owned.foreignBookId))
+        .toList();
+    // Preserve native relevance and identity. Ownership only changes badges;
+    // late library results append below the returned native rows.
     final ordered = <_ResolvedBookResult>[
-      for (var libraryIndex = 0; libraryIndex < injected.length; libraryIndex++)
+      for (var i = 0; i < results.length; i++)
         _ResolvedBookResult(
-          book: _ownedTitleAsBook(injected[libraryIndex]),
-          ownership: injected[libraryIndex].ownership,
-          identityAmbiguous: false,
-          sourceIdentity: 'library:$libraryIndex',
-          cover: injected[libraryIndex].cover.isNotEmpty
-              ? injected[libraryIndex].cover
-              : null,
-          canonicalForeignId: injected[libraryIndex].foreignBookId,
+          book: results[i],
+          ownership: digest
+              .where((owned) => owned.foreignBookId == results[i].foreignBookId)
+              .firstOrNull
+              ?.ownership,
+          sourceIdentity: 'lookup:$i',
+          cover: results[i].remoteCoverUrl,
+          canonicalForeignId: results[i].foreignBookId?.trim() ?? '',
         ),
-      ...owned,
-      ...rest,
+      for (var i = 0; i < injected.length; i++)
+        _ResolvedBookResult(
+          book: _ownedTitleAsBook(injected[i]),
+          ownership: injected[i].ownership,
+          sourceIdentity: 'library:$i',
+          cover: injected[i].cover,
+          canonicalForeignId: injected[i].foreignBookId,
+        ),
     ];
 
     // Resolve each looked-up author against the library's own author records.
@@ -186,8 +165,8 @@ class BookSearchResultsView extends ConsumerWidget {
         if (resolved.record != null) resolved.record!.id,
     };
     final injectedAuthors = <_ResolvedAuthor>[
-      for (final record in index
-          .recordsWhere((name) => titleMatchesQuery(query, name)))
+      for (final record
+          in index.recordsWhere((name) => titleMatchesQuery(query, name)))
         if (!presentRecordIds.contains(record.id))
           _ResolvedAuthor(
             lookup: record,
@@ -203,7 +182,10 @@ class BookSearchResultsView extends ConsumerWidget {
       ...elsewhere,
     ];
 
-    if (ordered.isEmpty && orderedAuthors.isEmpty) {
+    if (ordered.isEmpty &&
+        orderedAuthors.isEmpty &&
+        !authorsLoading &&
+        !authorsUnavailable) {
       // A search that ran and matched nothing says so; a search that hasn't
       // run yet (empty query, still in the idle state some caller passed
       // through) renders nothing here — the overlay isn't shown for an idle
@@ -256,7 +238,6 @@ class BookSearchResultsView extends ConsumerWidget {
       // compiling fine on 3.13.2. CI tracks `channel: stable` unpinned and the
       // Dockerfile is built by self-hosters on whatever base they have cached,
       // so this stays written in plain constructs that compile on both.
-      final showSections = orderedAuthors.isNotEmpty && ordered.isNotEmpty;
       final children = <Widget>[];
       // Parallel to [children]: true for a row that is an actual search
       // result, which is what decides whether a divider separates a pair.
@@ -266,33 +247,13 @@ class BookSearchResultsView extends ConsumerWidget {
         isResult.add(result);
       }
 
-      if (showSections) addRow(const _SectionLabel('Authors'));
-      for (final resolved in orderedAuthors) {
-        addRow(
-          _AuthorResultTile(
-            resolved: resolved,
-            image: instanceId == null
-                ? null
-                : chaptarrImageSource(
-                    ref, resolved.portraitUrl, instanceId),
-            instanceId: instanceId,
-            onTap: onResultTap,
-            onDrillDown: onAuthorDrillDown,
-          ),
-          result: true,
-        );
-      }
-      if (authorsUnavailable) {
-        addRow(const _OverlayNotice('Authors could not be searched.'));
-      }
-      if (showSections) addRow(const _SectionLabel('Books'));
+      if (ordered.isNotEmpty) addRow(const _SectionLabel('Books'));
       for (final result in ordered) {
         addRow(
           _BookResultTile(
             book: result.book,
             canonicalForeignId: result.canonicalForeignId,
             ownership: result.ownership,
-            identityAmbiguous: result.identityAmbiguous,
             sourceIdentity: result.sourceIdentity,
             cover: instanceId == null
                 ? null
@@ -304,6 +265,28 @@ class BookSearchResultsView extends ConsumerWidget {
           result: true,
         );
       }
+
+      if (orderedAuthors.isNotEmpty || authorsLoading || authorsUnavailable) {
+        addRow(const _SectionLabel('Authors'));
+      }
+      for (final resolved in orderedAuthors) {
+        addRow(
+          _AuthorResultTile(
+            resolved: resolved,
+            image: instanceId == null
+                ? null
+                : chaptarrImageSource(ref, resolved.portraitUrl, instanceId),
+            instanceId: instanceId,
+            onTap: onResultTap,
+            onDrillDown: onAuthorDrillDown,
+          ),
+          result: true,
+        );
+      }
+      if (authorsUnavailable) {
+        addRow(const _OverlayNotice('Authors could not be searched.'));
+      }
+      if (authorsLoading) addRow(const _OverlayNotice('Searching authors…'));
 
       return ListView.separated(
         padding: EdgeInsets.fromLTRB(hPad, 8, hPad, 8),
@@ -437,9 +420,8 @@ class _AuthorResultTile extends StatelessWidget {
     // Openable only with a library record that carries an id to open it by —
     // the same rule the browse row applies. An id-less record stays visible;
     // dropping the row would hide a real match.
-    final canOpen = resolved.inLibrary &&
-        libraryForeignId.isNotEmpty &&
-        instanceId != null;
+    final canOpen =
+        resolved.inLibrary && libraryForeignId.isNotEmpty && instanceId != null;
     final canDrillDown =
         !resolved.inLibrary && !resolved.ambiguous && onDrillDown != null;
 
@@ -541,7 +523,6 @@ class _AuthorResultTile extends StatelessWidget {
 class _ResolvedBookResult {
   final ChaptarrBook book;
   final BookOwnership? ownership;
-  final bool identityAmbiguous;
   final String sourceIdentity;
   final String? cover;
   final String canonicalForeignId;
@@ -549,7 +530,6 @@ class _ResolvedBookResult {
   const _ResolvedBookResult({
     required this.book,
     required this.ownership,
-    required this.identityAmbiguous,
     required this.sourceIdentity,
     required this.cover,
     required this.canonicalForeignId,
@@ -560,7 +540,6 @@ class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
   final String canonicalForeignId;
   final BookOwnership? ownership;
-  final bool identityAmbiguous;
   final String sourceIdentity;
   final ChaptarrImageSource? cover;
   final String? instanceId;
@@ -577,7 +556,6 @@ class _BookResultTile extends StatelessWidget {
     required this.book,
     required this.canonicalForeignId,
     this.ownership,
-    this.identityAmbiguous = false,
     required this.sourceIdentity,
     this.cover,
     required this.instanceId,
@@ -592,25 +570,14 @@ class _BookResultTile extends StatelessWidget {
       if (book.author?.authorName.isNotEmpty ?? false) book.author!.authorName,
       if (year != null) '$year',
     ].join(' · ');
-    // Lookup metadata can use a provider-specific foreign id that differs
-    // from the actual library record. Status, navigation, and mutation all
-    // stay on the matched canonical library id while [book] preserves lookup
-    // metadata.
+    // The selected native identity stays attached to metadata and submission.
     final fid = canonicalForeignId.trim();
     final lookupId = book.foreignBookId?.trim() ?? '';
     final o = ownership;
     final chip = _ownershipChip(o);
-    // Ambiguity is about which library record this row is, not about
-    // whether the requester may read it: the row still addresses a real
-    // metadata record, and closing the tap left a just-requested book with
-    // no way to be opened at all. The row states which record to act on
-    // instead; the library rows it points at are listed above it.
     final canOpen = fid.isNotEmpty;
-    final identityGuidance = identityAmbiguous
-        ? 'May be the same as a book listed above'
-        : fid.isEmpty
-            ? 'Ask an admin to check this book’s library record'
-            : null;
+    final identityGuidance =
+        fid.isEmpty ? 'Ask an admin to check this book’s library record' : null;
     final resultKey = ValueKey('book-result:$lookupId:$fid:$sourceIdentity');
     // The shell overlay wraps this view in an opaque ColoredBox (see
     // AppShell's Positioned.fill slot), which sits between a bare ListTile
@@ -685,7 +652,7 @@ class _BookResultTile extends StatelessWidget {
                 onTap?.call();
                 context.push(
                   '/detail/book/${Uri.encodeComponent(fid)}'
-                  '?title=${Uri.encodeQueryComponent(book.title)}'
+                  '?source=chaptarr&title=${Uri.encodeQueryComponent(book.title)}'
                   // The term that surfaced this row travels with it:
                   // requesting the book makes the server find this exact
                   // record again, and this is the search already known to

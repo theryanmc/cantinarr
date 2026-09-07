@@ -59,6 +59,11 @@ enum BookWaitReason {
   /// The library's metadata service is still importing the book's author, so
   /// the add cannot be made yet. It completes on its own.
   authorImport('author_import'),
+  queued('queued'),
+  retry('retry'),
+  processing('processing'),
+  needsMatch('needs_match'),
+  attention('attention'),
 
   /// A wait this app version has no words for. Still a wait: the format stays
   /// covered and unrequestable, and the generic copy says what is knowable.
@@ -102,12 +107,28 @@ class BookFormatWait {
 
   /// The pill that replaces "Requested" — the whole point is that the requester
   /// can tell the two states apart at a glance.
-  String get label => 'Waiting for library';
+  String get label => switch (reason) {
+        BookWaitReason.queued ||
+        BookWaitReason.retry ||
+        BookWaitReason.processing =>
+          'Request saved',
+        BookWaitReason.needsMatch => 'Needs attention',
+        BookWaitReason.attention => 'Needs attention',
+        _ => 'Waiting for library',
+      };
 
   /// The persistent explanation. It says what is happening, who is doing it,
   /// and that the requester is not the one being waited on. No ETA is offered
   /// because none is knowable.
   String get explanation => switch (reason) {
+        BookWaitReason.queued ||
+        BookWaitReason.retry ||
+        BookWaitReason.processing =>
+          'Your request is saved. Delivery to the library continues in the background.',
+        BookWaitReason.needsMatch =>
+          'This saved request needs attention. Search your Chaptarr library for the book.',
+        BookWaitReason.attention =>
+          'Your request is saved and needs attention before delivery can continue.',
         BookWaitReason.authorImport =>
           'Your request is saved. The library is still adding this author. '
               'Cantinarr keeps retrying automatically — no action is needed.',
@@ -249,9 +270,7 @@ class BookRequestStatusDetail {
         server == RequestStatus.downloading ||
         server == RequestStatus.requested ||
         server == RequestStatus.partial) {
-      return server == RequestStatus.partial
-          ? RequestStatus.requested
-          : server;
+      return server == RequestStatus.partial ? RequestStatus.requested : server;
     }
     if (owned?.monitored ?? false) return RequestStatus.requested;
     if (server == RequestStatus.pending || server == RequestStatus.denied) {
@@ -308,6 +327,8 @@ class RequestSubmissionException implements Exception {
 
 class BookRequestSubmission {
   final RequestStatus? status;
+  final List<Map<String, dynamic>> delivery;
+  final int? requestId;
   final Map<BookRequestFormat, RequestStatus> formats;
   final bool isKnown;
 
@@ -324,6 +345,8 @@ class BookRequestSubmission {
 
   const BookRequestSubmission({
     required this.status,
+    this.delivery = const [],
+    this.requestId,
     this.formats = const {},
     this.isKnown = true,
     this.message = '',
@@ -337,7 +360,8 @@ class BookRequestSubmission {
       RequestStatus.downloading ||
       RequestStatus.requested ||
       RequestStatus.pending ||
-      RequestStatus.partial => true,
+      RequestStatus.partial =>
+        true,
       RequestStatus.denied || RequestStatus.unavailable || null => false,
     };
   }
@@ -376,8 +400,10 @@ class MusicRequestSubmission {
   /// today, an album parked for an admin because the library couldn't match
   /// it. Empty when the status speaks for itself.
   final String message;
+  final Map<String, dynamic>? receipt;
 
-  const MusicRequestSubmission({required this.status, this.message = ''});
+  const MusicRequestSubmission(
+      {required this.status, this.message = '', this.receipt});
 }
 
 String _musicRequestErrorMessage(DioException error) {
@@ -422,8 +448,7 @@ String _requestErrorMessage(DioException error) {
   if (lower.contains('root folder')) {
     return 'No library folder is available for this book format. Ask an admin to check the book settings.';
   }
-  if (lower.contains('quality profile') ||
-      lower.contains('metadata profile')) {
+  if (lower.contains('quality profile') || lower.contains('metadata profile')) {
     return 'Ask an admin to check the book settings.';
   }
   if (lower.contains('book not found') || lower.contains('foreign id')) {
@@ -794,9 +819,8 @@ class RequestService {
       );
       final data = resp.data as Map<String, dynamic>;
       var isKnown = data['status_known'] as bool? ?? true;
-      final BookStatusUnknownReason? unknownReason = isKnown
-          ? null
-          : BookStatusUnknownReason.formatNeedsAttention;
+      final BookStatusUnknownReason? unknownReason =
+          isKnown ? null : BookStatusUnknownReason.formatNeedsAttention;
       RequestStatus? parseStatus(Object? value) {
         for (final status in RequestStatus.values) {
           if (status.name == value?.toString()) return status;
@@ -844,10 +868,9 @@ class RequestService {
         isKnown = false;
       }
       final rawCanonical = data['canonical_foreign_id'];
-      final canonical =
-          rawCanonical is String && rawCanonical.trim().isNotEmpty
-              ? rawCanonical.trim()
-              : null;
+      final canonical = rawCanonical is String && rawCanonical.trim().isNotEmpty
+          ? rawCanonical.trim()
+          : null;
       return BookRequestStatusDetail(
         status: status ?? RequestStatus.unavailable,
         formats: formats,
@@ -858,6 +881,37 @@ class RequestService {
       );
     } catch (_) {
       return const BookRequestStatusDetail(isKnown: false);
+    }
+  }
+
+  /// Saved intent is independent of library availability and never waits on Chaptarr.
+  Future<Map<String, dynamic>?> bookDeliveryStatus(String foreignId,
+      {String? instanceId}) async {
+    try {
+      final response = await _backendDio
+          .get('/api/requests/delivery-status', queryParameters: {
+        'media_type': 'book',
+        'foreign_id': foreignId,
+        if (instanceId != null) 'instance_id': instanceId,
+        'include_live': false,
+      });
+      final data = Map<String, dynamic>.from(response.data as Map);
+      return data['success'] == true ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> bookDeliveryAction(int requestId, String action,
+      {String? format}) async {
+    try {
+      final response = await _backendDio.post(
+          '/api/requests/$requestId/delivery',
+          data: {'action': action, if (format != null) 'book_format': format});
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw RequestSubmissionException(_requestErrorMessage(e),
+          definitive: _requestErrorIsDefinitive(e));
     }
   }
 
@@ -926,6 +980,10 @@ class RequestService {
       final rawMessage = data?['message'];
       return BookRequestSubmission(
         status: status,
+        requestId: data?['request_id'] as int?,
+        delivery: ((data?['delivery'] as List?) ?? [])
+            .map((d) => Map<String, dynamic>.from(d as Map))
+            .toList(),
         formats: formats,
         isKnown: isKnown,
         message: rawMessage is String ? rawMessage.trim() : '',
@@ -941,6 +999,26 @@ class RequestService {
     }
   }
 
+  Future<Map<String, dynamic>> musicDeliveryStatus(String foreignId,
+      {String? instanceId, int? requestId}) async {
+    final response = await _backendDio
+        .get('/api/requests/delivery-status', queryParameters: {
+      'media_type': 'music',
+      'foreign_id': foreignId,
+      'include_live': false,
+      if (instanceId != null) 'instance_id': instanceId,
+      if (requestId != null) 'request_id': requestId
+    });
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  Future<Map<String, dynamic>> musicDeliveryAction(
+      int requestId, String action) async {
+    final response = await _backendDio
+        .post('/api/requests/$requestId/delivery', data: {'action': action});
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   /// Check the current user's request state for an album, keyed by the
   /// MusicBrainz release-group id (music has no tmdb_id). A failed lookup is
   /// returned as unknown so callers cannot turn an outage into a duplicate
@@ -954,6 +1032,7 @@ class RequestService {
         '/api/requests/music-status',
         queryParameters: {
           'foreign_id': foreignId,
+          'include_saved': false,
           if (instanceId != null && instanceId.isNotEmpty)
             'instance_id': instanceId,
         },
@@ -1012,6 +1091,7 @@ class RequestService {
       final rawMessage = data?['message'];
       return MusicRequestSubmission(
         status: status,
+        receipt: data,
         message: rawMessage is String ? rawMessage.trim() : '',
       );
     } on DioException catch (e) {

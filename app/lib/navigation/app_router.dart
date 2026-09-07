@@ -221,15 +221,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // and author details — require the books grant and degrade the same way
       // without it.
       final hasChaptarrGrant = auth?.connection?.services.chaptarr ?? false;
+      final retiredBookLink =
+          state.uri.queryParameters['source'] == 'openlibrary' ||
+              (state.uri.queryParameters['source'] != 'chaptarr' &&
+                  DiscoveryBook.validId(state.pathParameters['id'] ?? '') &&
+                  state.extra is! ChaptarrBook);
       if (isAuthenticated &&
           !hasChaptarrGrant &&
           ((!isAdmin && _isWithinRoute(state.uri.path, '/dashboard/books')) ||
-              (!isAdmin && _isWithinRoute(state.uri.path, '/browse/books')) ||
               (_isWithinRoute(state.uri.path, '/detail/book') &&
-                  !(isAdmin &&
-                      (state.uri.queryParameters['source'] == 'openlibrary' ||
-                          DiscoveryBook.validId(
-                              state.pathParameters['id'] ?? '')))) ||
+                  !retiredBookLink) ||
               _isWithinRoute(state.uri.path, '/detail/author') ||
               _isWithinRoute(state.uri.path, '/detail/series'))) {
         return landing;
@@ -1089,6 +1090,9 @@ Widget _mediaDetailChild(GoRouterState state) {
     }
     return RequesterArtistDetailScreen(
       foreignArtistId: foreignId,
+      initialArtist:
+          state.extra is MusicArtist ? state.extra as MusicArtist : null,
+      searchTerm: state.uri.queryParameters['q'],
       nameHint: state.uri.queryParameters['name'],
       instanceId: state.uri.queryParameters['instance_id'],
     );
@@ -1123,9 +1127,9 @@ Widget _mediaDetailChild(GoRouterState state) {
       discoveryBook:
           state.extra is DiscoveryBook ? state.extra! as DiscoveryBook : null,
       discovery: state.uri.queryParameters['source'] == 'openlibrary' ||
-          (DiscoveryBook.validId(foreignId) &&
-              state.extra is! ChaptarrBook &&
-              !state.uri.queryParameters.containsKey('title')),
+          (state.uri.queryParameters['source'] != 'chaptarr' &&
+              DiscoveryBook.validId(foreignId) &&
+              state.extra is! ChaptarrBook),
       titleHint: state.uri.queryParameters['title'],
       searchTerm: state.uri.queryParameters['q'],
       instanceId: state.uri.queryParameters['instance_id'],

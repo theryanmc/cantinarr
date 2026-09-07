@@ -17,8 +17,6 @@ import 'package:cantinarr/features/dashboard/ui/dashboard_music_tab.dart';
 import 'package:cantinarr/features/dashboard/ui/library_artists_row.dart';
 import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/discover/logic/discovery_access.dart';
-import 'package:cantinarr/features/discover/ui/book_browse_screen.dart';
-import 'package:cantinarr/features/discover/ui/book_discovery_row.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -121,7 +119,7 @@ void main() {
       await t.tap(find.text('Books').last);
       await t.pumpAndSettle();
       expect(find.byType(DashboardBooksTab), findsOneWidget);
-      expect(find.text('Popular on Open Library'), findsOneWidget);
+      expect(find.text('Popular on Open Library'), findsNothing);
       expect(find.byType(RecentlyAddedBooksRow),
           types.contains('chaptarr') ? findsOneWidget : findsNothing);
       await t.tap(find.text('Music').last);
@@ -132,7 +130,7 @@ void main() {
           types.contains('lidarr') ? findsOneWidget : findsNothing);
       if (types.isEmpty) {
         expect(h.backend.libraryReads, isEmpty);
-        expect(find.byType(CantinarrSearchBar), findsNothing);
+        expect(find.byType(CantinarrSearchBar), findsOneWidget);
         expect(find.text('Set up Lidarr'), findsOneWidget);
         expect(
             h.backend.catalogReads
@@ -406,61 +404,15 @@ void main() {
     expect(find.byType(CantinarrSearchBar), findsOneWidget);
   });
 
-  testWidgets(
-      'genre links and back position survive connecting the first instance',
+  testWidgets('old book links show retirement and offer native search',
       (t) async {
-    final h = await _pump(t, location: '/dashboard/books');
-    await t.tap(find.widgetWithText(ActionChip, 'Fantasy'));
-    await t.pumpAndSettle();
-    expect(
-        Uri.parse(t
-                .widget<BookBrowseScreen>(find.byType(BookBrowseScreen))
-                .query
-                .location)
-            .queryParameters,
-        {'genre': 'fantasy'});
-    final scroll = t.widget<CustomScrollView>(find.descendant(
-        of: find.byType(BookBrowseScreen),
-        matching: find.byType(CustomScrollView)));
-    scroll.controller!.jumpTo(1500);
-    await t.pumpAndSettle();
-    final offset = scroll.controller!.offset;
-    await t.tap(find.byType(BookDiscoveryCard).hitTestable().first);
-    await t.pumpAndSettle();
+    final h = await _pump(t, location: '/detail/book/ol:OL1W?title=Book+1');
+    expect(find.textContaining('Open Library book discovery has retired'),
+        findsOneWidget);
+    expect(find.text('Search books'), findsOneWidget);
     expect(find.text('Connect Chaptarr to request books'), findsOneWidget);
+    expect(h.backend.catalogReads, isEmpty);
     expect(h.backend.libraryReads, isEmpty);
-    expect(
-        h.backend.catalogReads
-            .every((r) => !r.queryParameters.containsKey('instance_id')),
-        isTrue);
-    await _connect(t, 'chaptarr', 'Connect Chaptarr to request books');
-    h.router.pop();
-    await t.pumpAndSettle();
-    expect(scroll.controller!.offset, offset);
-    expect(
-        t.widget<BookBrowseScreen>(find.byType(BookBrowseScreen)).query.genre,
-        'fantasy');
-  });
-
-  testWidgets('cold book connects Chaptarr and requests only missing audio',
-      (t) async {
-    final h = await _pump(t, location: '/detail/book/ol:OL1W');
-    expect(find.text('Book 1'), findsOneWidget);
-    expect(h.backend.libraryReads, isEmpty);
-    final cover = t.widget<CachedImage>(find.byType(CachedImage).first);
-    expect(cover.url, isNull);
-    expect(cover.headers, isNull);
-    await _connect(t, 'chaptarr', 'Connect Chaptarr to request books');
-    expect(h.router.routerDelegate.currentConfiguration.uri.path,
-        '/detail/book/ol:OL1W');
-    expect(find.text('Book 1'), findsOneWidget);
-    expect(find.text('Available'), findsOneWidget);
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(h.backend.requests.single, containsPair('foreign_id', 'gr:1'));
-    expect(h.backend.requests.single, containsPair('book_format', 'audiobook'));
-    expect(h.backend.requests.single, containsPair('instance_id', 'chaptarr'));
-    expect(find.text('Request'), findsNothing);
   });
 
   testWidgets('cold album keeps artwork and title through Lidarr setup',
@@ -504,7 +456,7 @@ void main() {
     final h = await _pump(t,
         state: _auth(capability: false, hidden: null),
         location: '/dashboard/books');
-    expect(find.text(adminCatalogUpdateMessage), findsOneWidget);
+    expect(find.text(adminCatalogUpdateMessage), findsNothing);
     expect(find.text('Set up Chaptarr'), findsOneWidget);
     h.router.go('/dashboard/music');
     await t.pumpAndSettle();
@@ -515,7 +467,7 @@ void main() {
 
   testWidgets('role and permission changes clear visible catalogs', (t) async {
     final h = await _pump(t, location: '/dashboard/books');
-    expect(find.text('Book 1'), findsWidgets);
+    expect(find.text('Set up Chaptarr'), findsOneWidget);
     h.auth.replace(_auth(role: 'user', child: true));
     await t.pumpAndSettle();
     expect(find.text('Book 1'), findsNothing);

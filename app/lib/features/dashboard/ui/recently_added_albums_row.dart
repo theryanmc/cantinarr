@@ -71,17 +71,19 @@ class RecentlyAddedAlbumsRow extends ConsumerWidget {
             itemBuilder: (album) {
               final cover = lidarrImageSource(ref, album.cover, instanceId);
               final canOpen = album.foreignAlbumId.trim().isNotEmpty;
-              final ownedAlbum =
-                  byForeignAlbumId[album.foreignAlbumId.trim()];
+              final ownedAlbum = byForeignAlbumId[album.foreignAlbumId.trim()];
               // Music has no format axis, so the verdict is the single
-              // downloaded/monitored pair; an unmatched or contradictory
-              // digest row renders no pill at all, never a guessed one.
+              // current file status, with the old downloaded flag used only
+              // for older servers that do not supply an explicit status.
               final (label, color) = switch (ownedAlbum) {
                 null => (null, null),
-                OwnedAlbum(downloaded: true) =>
+                OwnedAlbum(status: 'available') ||
+                OwnedAlbum(status: null, downloaded: true) =>
                   ('Available', AppTheme.available),
-                OwnedAlbum(monitored: true) =>
-                  ('Requested', AppTheme.requested),
+                OwnedAlbum(monitored: true) => (
+                    'Requested',
+                    AppTheme.requested
+                  ),
                 _ => (null, null),
               };
               return MediaCard(

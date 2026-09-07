@@ -2,7 +2,7 @@
 
 Books differ from movies and TV in two ways worth knowing before you start:
 
-- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins can browse Open Library before connecting Chaptarr; requests and library search require the connection.
+- **Chaptarr has no global default instance.** Requesters need a per-user pin or explicit instance grant to see Books. Admins see the Chaptarr setup action until a library is connected.
 - **An ebook can finish downloading between two polls.** Instant updates aren't a nicety here; they're what makes the "ready to read" notification reliable.
 
 This page is the whole path, in order.
@@ -58,25 +58,29 @@ An instance offers downloads only once explicit mappings are saved for it.
 
 ## 6. Verify
 
-- The Books tab appears for a pinned non-admin user, opening on **Popular Books**, then **Browse by genre**, Recently Added, Authors and Series.
+- The Books tab appears for a pinned non-admin user, opening on Recently Added, Authors and Series, with native search in the top bar.
 - Searching a title returns results, and requesting an eBook or Audiobook row reads **Requested** until it downloads.
 - A grab that completes in Chaptarr flips the row to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, a completed book offers a working download from a device.
 
 ## Discover books
 
-Admins can browse Popular Books, genres, covers, and cold work links before Chaptarr is connected. **Connect Chaptarr to request books** opens the existing instance form with Chaptarr selected; saving returns to the title and loads its verified request target and per-format status. The Books tab has a fixed **Set up Chaptarr** / **Hide this tab** footer until a Chaptarr instance is configured. Hiding applies to everyone and can be changed under **Settings > Modules > Discover > Discover tabs**. Configuring Chaptarr restores the tab automatically, even if it later goes offline; removing it makes the saved hide preference apply again. The footer replaces the previous toolbar setup shortcut, and setup returns to the catalog after saving or cancelling. Library rows and ownership badges require a connected instance. Requesters and kids still need an explicit grant. On an older server, admins see an update notice for unsupported browsing before setup; Hide is disabled with an update explanation when tab visibility settings are unsupported.
+Books use the selected Chaptarr instance for search and library browsing. Search results keep Chaptarr's order and each native identity. Books appear as soon as their lookup returns; author results load independently below them. Changing the query cancels the previous search, and interactive searches stop after ten seconds. Ownership updates change badges without rearranging native book results. Recently Added, Authors, and Series remain available on the Books tab.
 
-Popular Books and twelve genres use [Open Library search](https://openlibrary.org/dev/docs/api/search), with no extra account, API key or setting. Popularity is the provider's overall reading-list ranking, labelled **Popular on Open Library**. Genre pages keep provider relevance order; Biography & Memoir searches either subject. There is no time-period selector or separate audiobook chart.
+Selecting a book preserves its native ID, metadata, library, and the search term that found it. The book page has one panel for **eBook**, **Audiobook**, and **Request both**. Its controls and scroll position remain in place during polling, refresh failures, and instant updates. Already-owned or requested formats show their current state.
 
-Books prefer English edition titles and covers, falling back to the work when none exists. This does not change the work's identity or hide books in other languages. Movie/TV discovery source and English-only settings do not affect books. Covers load on the device from fixed `covers.openlibrary.org` URLs, so devices need internet access to that host.
+Unconfigured libraries show the existing **Set up Chaptarr** action. Requesters, including kids accounts, still need discovery permission and a Chaptarr grant. Setup returns to Books after saving or cancelling; tab hiding remains under **Settings > Modules > Discover > Discover tabs**.
 
-See all and genre pages load 20 books at a time and retain the selected instance and genre when you return from details. Popular Books starts loading when you enter Discovery, before opening Books. Open rows and grids fetch one page ahead as you scroll; nearby covers are prefetched too. This warms catalog metadata, while availability still comes from live Chaptarr reads. An eBook's availability says nothing about its audiobook. Opening a book resolves its Open Library ID through the selected Chaptarr catalog; only verified IDs or provider-declared canonical mappings can reach the usual format-specific request controls. Multiple distinct canonical matches offer a choice. No verified match offers **Search books** with the title and author filled in; a failed provider read offers **Retry**. Existing approvals, duplicate checks and **Waiting for library** behavior apply to requests from discovery too.
+Open Library search, Popular Books, genres, and request matching have retired. Old work and browse links show a stable message and **Search books**, prefilled when the link includes a title. Cantinarr makes no Open Library discovery or resolution calls. Chaptarr may still supply links to a book's provider pages.
 
-Discovery requires discovery permission and, for requesters including kids accounts, a Chaptarr grant. Admins may browse external metadata without an instance. External metadata is shared, but access is checked before and after cache/provider work. Targets and availability belong to the selected instance. Visible targets refresh within 60 seconds and after request/library events. If an older Cantinarr server lacks discovery endpoints, the app shows an update notice and keeps library browsing and search.
+## Saved requests and automatic recovery
 
-## Requests that land in the approval queue instead
+A format tap saves the native request and immediately acknowledges it. The durable worker wakes after saving, then checks Chaptarr and delivers in the background. **Waiting for approval** remains a separate gate. Already-owned formats are reconciled without a new library mutation or approval. Temporary failures keep the request saved, retry after one minute, double up to six hours, and honor a longer upstream `Retry-After`. The schedule survives restarts. After 50 failures, or an identity/configuration problem, the request shows **Needs attention**.
 
-Adding a book Chaptarr doesn't already track means finding its metadata record again. Cantinarr fetches it by id first — Chaptarr's lookup answers a `foreignBookId` term with that exact record — and falls back to replaying the requester's own search term (stored on pending rows so approval later uses it too), then the exact title, then the title's headline without its subtitle and trailing parentheticals. Only an exact `foreignBookId` match is ever accepted: when the metadata provider keeps two works for one title, the id fetch of one may return the other (canonical) sibling, and the fallbacks re-find the exact row the requester chose instead of substituting it.
+The format panel offers a separate retry for each failed format and **Cancel request** for remaining work. Admins can manage saved work under **Settings > Pending requests > Saved requests**. Delivery waits do not increase the approval badge. Shared requests retain each subscriber's requested formats; cancelling a subscription preserves others, and cancelling remaining work never removes delivered files.
 
-When none of them find it, the request is **saved as pending** rather than failed, and the requester is told so. Resolve it from the admin side: add the author (or the book) in Chaptarr directly, then approve the pending request — approval replays the add, and a book whose author is already tracked no longer depends on the lookup. Denying it is the other valid answer. Either way the request stays visible instead of disappearing.
+Delivery uses the originally selected native ID and instance, rechecks the requester's current access before writes, and never substitutes another title or library. Saved delivery status is independent of current files: the app reads saved state with `include_live=false` and checks availability separately against Chaptarr. The existing default status read still includes live availability for older clients.
+
+Saved history is preserved. Old Open Library requests with verified native bindings continue. Unresolved source requests stop matching and show **Needs attention**, cancellation, and a native search link. Their existing approval requirements remain intact; retry or approval cannot convert an unresolved source into a new native request.
+
+**Waiting for library** means Chaptarr accepted an author import and owns its retry loop. Cantinarr observes its pending-import API and managed webhook without repeatedly adding it. An import that lands resumes the remaining formats; a failed, cancelled, or ambiguous import needs attention. Older Chaptarr versions without that API retain their supported add-probe fallback.

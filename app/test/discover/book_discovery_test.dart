@@ -7,7 +7,6 @@ import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/network/websocket_client.dart';
 import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/providers/realtime_provider.dart';
-import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/core/widgets/search_bar.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/dashboard/ui/dashboard_books_tab.dart';
@@ -15,10 +14,8 @@ import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
 import 'package:cantinarr/features/dashboard/ui/library_series_row.dart';
 import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
-import 'package:cantinarr/features/discover/data/book_discovery_service.dart';
-import 'package:cantinarr/features/discover/logic/book_discovery_provider.dart';
-import 'package:cantinarr/features/discover/ui/book_browse_screen.dart';
-import 'package:cantinarr/features/discover/ui/book_discovery_row.dart';
+import 'package:cantinarr/features/discover/ui/book_search_results_view.dart';
+import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -26,287 +23,181 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+const nativeTitle = 'The Subtle Art of Not Giving a Fuck';
+const nativeID = 'gr:48297245';
 void main() {
-  test('validated work IDs, covers and encoded browse links', () {
-    expect(DiscoveryBook.fromJson({...book(1), 'cover_id': 42}).coverUrl,
-        'https://covers.openlibrary.org/b/id/42-M.jpg?default=false');
-    expect(
-        const DiscoveryBook(foreignId: 'ol:OL1W', title: 'Book', coverId: -1)
-            .coverUrl,
-        isNull);
-    expect(() => DiscoveryBook.fromJson({...book(1), 'foreign_id': 'ol:OL1M'}),
-        throwsFormatException);
-    const q = BookBrowseQuery(
-        feed: 'genre', instanceId: 'books & more', genre: 'biography-memoir');
-    expect(BookBrowseQuery.tryParse(Uri.parse(q.location)), q);
-    expect(BookBrowseQuery.tryParse(Uri.parse('/browse/books/popular')),
-        const BookBrowseQuery());
-    expect(
-        BookBrowseQuery.tryParse(
-            Uri.parse('/browse/books/popular?instance_id=')),
-        isNull);
-    expect(
-        BookBrowseQuery.tryParse(
-            Uri.parse('/browse/books/new-releases?instance_id=books')),
-        isNull);
-  });
-  test(
-      'pagination deduplicates work IDs only and retains data on refresh failure',
-      () async {
-    final a = Adapter();
-    final feed = BookFeedNotifier(BookDiscoveryService(dio(a)),
-        const BookBrowseQuery(instanceId: 'books'));
-    addTearDown(feed.dispose);
-    await feed.load();
-    await feed.load();
-    expect(feed.items.length, 39);
-    expect(feed.items.take(2).map((b) => b.foreignId), ['ol:OL1W', 'ol:OL2W']);
-    expect(
-        feed.items.take(2).map((b) => b.title), ['Same title', 'Same title']);
-    expect(feed.nextPage, isNull);
-    a.feedStatus = 503;
-    await feed.load(refresh: true);
-    expect(feed.items.length, 39);
-    expect(feed.error, isNotNull);
-    a.feedStatus = 200;
-    await feed.retry();
-    expect(feed.items.length, 20);
-    expect(a.pages.last, 1);
-    expect(feed.error, isNull);
-    a.feedStatus = 403;
-    await feed.load(refresh: true);
-    expect(feed.items, isEmpty);
-  });
-  test('cold metadata must match work identity', () async {
-    final a = Adapter()..wrongDetail = true;
-    await expectLater(BookDiscoveryService(dio(a)).book('ol:OL1W', 'books'),
-        throwsFormatException);
-  });
-  testWidgets('row order, genre URL and separate format labels', (t) async {
+  testWidgets('Books retains its native shelves without public traffic',
+      (t) async {
     final h = await pump(t);
-    final column = t
-        .widget<SingleChildScrollView>(find
-            .descendant(
-                of: find.byType(DashboardBooksTab),
-                matching: find.byType(SingleChildScrollView))
-            .first)
-        .child as Column;
-    expect(column.children.map((w) => w.runtimeType), [
-      PopularBooksRow,
-      BookGenresRow,
-      RecentlyAddedBooksRow,
-      LibraryAuthorsRow,
-      LibrarySeriesRow
-    ]);
-    expect(find.text('Popular on Open Library'), findsOneWidget);
-    expect(find.text('eBook: Available'), findsWidgets);
-    expect(find.text('Audiobook: Available'), findsNothing);
-    await t.tap(find.widgetWithText(ActionChip, 'Fantasy'));
-    await t.pumpAndSettle();
-    expect(h.router.routerDelegate.currentConfiguration.last.matchedLocation,
-        '/browse/books/genre');
+    final scroll = t.widget<SingleChildScrollView>(find
+        .descendant(
+            of: find.byType(DashboardBooksTab),
+            matching: find.byType(SingleChildScrollView))
+        .first);
+    expect((scroll.child as Column).children.map((w) => w.runtimeType),
+        [RecentlyAddedBooksRow, LibraryAuthorsRow, LibrarySeriesRow]);
+    expect(h.adapter.retiredReads, isEmpty);
+  });
+  for (final route in [
+    '/detail/book/ol:OL1W?title=Mark+Manson&source=openlibrary&instance_id=books',
+    '/browse/books/popular',
+    '/browse/books/genre?genre=fantasy'
+  ]) {
+    testWidgets('retired link is stable and makes no provider request: $route',
+        (t) async {
+      final h = await pump(t, location: route);
+      expect(find.textContaining('Open Library book discovery has retired'),
+          findsOneWidget);
+      h.container.read(libraryRefreshTickProvider.notifier).state++;
+      await t.pump(const Duration(seconds: 31));
+      expect(find.textContaining('Open Library book discovery has retired'),
+          findsOneWidget);
+      expect(h.adapter.retiredReads, isEmpty);
+      await t.tap(find.text('Search books'));
+      await t.pumpAndSettle();
+      expect(h.router.routerDelegate.currentConfiguration.uri.path,
+          '/dashboard/books');
+      if (route.contains('title=')) {
+        final field = find.descendant(
+            of: find.byType(CantinarrSearchBar),
+            matching: find.byType(TextField));
+        expect(t.widget<TextField>(field).controller!.text, 'Mark Manson');
+      }
+    });
+  }
+  testWidgets('books render within 300 ms while author lookup is still waiting',
+      (t) async {
+    final authors = Completer<void>();
+    final h = await pump(t, adapter: Adapter()..authorWait = authors.future);
+    final field = find.descendant(
+        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField));
+    await t.enterText(field, nativeTitle);
+    await t.pump(const Duration(milliseconds: 350));
+    await t.pump(const Duration(milliseconds: 100));
     expect(
-        t.widget<BookBrowseScreen>(find.byType(BookBrowseScreen)).query.genre,
-        'fantasy');
-    expect(find.byType(BookBrowseScreen), findsOneWidget);
-  });
-  testWidgets('independent feed errors and older-server library fallback',
-      (t) async {
-    final a = Adapter()..feedStatus = 503;
-    final h = await pump(t, adapter: a);
-    expect(find.text('Could not load books. Please retry.'), findsOneWidget);
-    expect(find.widgetWithText(ActionChip, 'Fantasy'), findsOneWidget);
-    a.feedStatus = 404;
-    unawaited(h.container
-        .read(bookFeedProvider(const BookBrowseQuery(instanceId: 'books')))
-        .load(refresh: true));
-    await t.pumpAndSettle();
-    expect(find.text(bookDiscoveryUpdateNotice), findsOneWidget);
-    expect(find.byType(RecentlyAddedBooksRow), findsOneWidget);
-  });
-  testWidgets(
-      'cold link resolves canonical target and requests only missing audio',
-      (t) async {
-    final h = await pump(t, location: '/detail/book/ol:OL1W?instance_id=books');
-    expect(find.byType(RequesterBookDetailScreen), findsOneWidget);
-    expect(find.text('Same title'), findsOneWidget);
-    expect(find.text('An Author'), findsOneWidget);
-    expect(find.text('Available'), findsOneWidget);
-    expect(find.text('Request'), findsOneWidget);
-    final img = t.widget<CachedImage>(find.byType(CachedImage).first);
-    expect(img.url, isNull);
-    expect(img.headers, isNull);
-    expect(img.icon, Icons.menu_book);
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(h.adapter.posts.single['foreign_id'], 'gr:1');
-    expect(h.adapter.posts.single['book_format'], 'audiobook');
-    expect(h.adapter.posts.single['instance_id'], 'books');
-    expect(h.adapter.statusIDs.every((id) => id == 'gr:1'), isTrue);
-  });
-  testWidgets('approval requests stay pending and prevent duplicate submission',
-      (t) async {
-    final a = Adapter()..submissionStatus = 'pending';
-    await pump(t,
-        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(find.text('Pending Approval'), findsWidgets);
-    expect(find.text('Request'), findsNothing);
-    expect(a.posts.length, 1);
-  });
-  testWidgets('author-import waiting survives status refresh', (t) async {
-    final a = Adapter()..waiting = true;
-    final h = await pump(t,
-        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(find.text('Waiting for library'), findsWidgets);
-    h.container.read(libraryRefreshTickProvider.notifier).state++;
-    await t.pump();
-    await t.pump(const Duration(milliseconds: 100));
-    await t.pumpAndSettle();
-    expect(find.text('Waiting for library'), findsWidgets);
-    expect(find.text('Request'), findsNothing);
-  });
-  testWidgets(
-      'library canonical alias does not oscillate back to discovery target',
-      (t) async {
-    final a = Adapter()..canonicalId = 'gr:canonical';
-    await pump(t,
-        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    await t.pump(const Duration(milliseconds: 100));
-    await t.pumpAndSettle();
-    expect(a.statusIDs, ['gr:1', 'gr:canonical']);
-  });
-  testWidgets('visible target mappings expire within sixty seconds', (t) async {
-    final h = await pump(t);
-    final before = h.adapter.targetReads;
-    await t.pump(const Duration(seconds: 60));
-    await t.pump(const Duration(milliseconds: 100));
-    await t.pumpAndSettle();
-    expect(h.adapter.targetReads, greaterThan(before));
-  });
-  testWidgets(
-      'metadata displays while resolving and provider failure offers retry',
-      (t) async {
-    final a = Adapter();
-    final h = await pump(t, adapter: a);
-    final wait = Completer<void>();
-    a.targetWait = wait.future;
-    h.router.push('/detail/book/ol:OL40W?instance_id=books&source=openlibrary',
-        extra: const DiscoveryBook(
-            foreignId: 'ol:OL40W', title: 'Immediate title'));
-    await t.pump();
-    await t.pump();
-    expect(find.text('Immediate title'), findsOneWidget);
-    expect(find.text('Request'), findsNothing);
-    a.targetStatus = 503;
-    wait.complete();
-    await t.pumpAndSettle();
-    expect(
-        find.text(
-            'Could not check this book in your library catalog. Please retry.'),
+        find.byKey(const ValueKey('book-result:$nativeID:$nativeID:lookup:0')),
         findsOneWidget);
-    expect(find.text('Search books'), findsNothing);
-    a.targetWait = null;
-    a.targetStatus = 200;
-    await t.tap(find.widgetWithText(TextButton, 'Retry'));
-    await t.pumpAndSettle();
-    expect(find.text('Request'), findsOneWidget);
-  });
-  testWidgets(
-      'unresolved identity fills existing book search with title and author',
-      (t) async {
-    final a = Adapter()..candidates = [];
-    final h = await pump(t,
-        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    expect(find.text('Request'), findsNothing);
-    await t.tap(find.text('Search books'));
-    await t.pumpAndSettle();
-    await t.pump(const Duration(milliseconds: 450));
-    await t.pumpAndSettle();
+    expect(find.text('Searching authors…'), findsOneWidget);
+    final view = find.byType(BookSearchResultsView);
+    final bookRow =
+        find.byKey(const ValueKey('book-result:$nativeID:$nativeID:lookup:0'));
+    final before = t.getTopLeft(bookRow);
+    authors.complete();
+    await t.pump(const Duration(milliseconds: 100));
+    expect(t.getTopLeft(bookRow).dy, closeTo(before.dy, 1));
     expect(
-        h.router.routeInformationProvider.value.uri.path, '/dashboard/books');
-    final field = t.widget<TextField>(find.descendant(
-        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField)));
-    expect(field.controller!.text, 'Same title An Author');
-    expect(a.searchTerms, contains('Same title An Author'));
+        t.getTopLeft(find.text('Mark Manson').last).dy, greaterThan(before.dy));
+    expect(view, findsOneWidget);
+    await t.tap(
+        find.byKey(const ValueKey('book-result:$nativeID:$nativeID:lookup:0')));
+    await t.pumpAndSettle();
+    final page = t.widget<RequesterBookDetailScreen>(
+        find.byType(RequesterBookDetailScreen));
+    expect(page.foreignId, nativeID);
+    expect(page.instanceId, 'books');
+    expect(page.initialBook?.author?.authorName, 'Mark Manson');
+    expect(page.searchTerm, nativeTitle);
+    expect(h.adapter.retiredReads, isEmpty);
   });
-  testWidgets(
-      'distinct candidates require a choice and use selected canonical ID',
-      (t) async {
-    final a = Adapter()
-      ..candidates = [
-        target('gr:1', 'First edition'),
-        target('hc:2', 'Second edition')
-      ];
+  for (final format in ['ebook', 'audiobook', 'both']) {
+    testWidgets(
+        'one $format tap acknowledges before delayed or failed status refresh',
+        (t) async {
+      final a = Adapter();
+      final h = await pump(t,
+          adapter: a,
+          location:
+              '/detail/book/$nativeID?title=${Uri.encodeQueryComponent(nativeTitle)}&q=Mark+Manson&instance_id=books');
+      final panel = find.byType(BookFormatPanel);
+      final state = t.state(panel);
+      final target = find.byKey(ValueKey(
+          format == 'both' ? 'book-request-both' : 'book-format-row:$format'));
+      await t.ensureVisible(target);
+      final scroll = t
+          .state<ScrollableState>(find
+              .descendant(
+                  of: find.byType(RequesterBookDetailScreen),
+                  matching: find.byType(Scrollable))
+              .first)
+          .position;
+      final offset = scroll.pixels;
+      final pending = Completer<void>();
+      a.statusWait = pending.future;
+      await t.tap(target);
+      await t.pump(const Duration(milliseconds: 100));
+      expect(a.posts, hasLength(1));
+      expect(a.posts.single, containsPair('foreign_id', nativeID));
+      expect(a.posts.single, containsPair('instance_id', 'books'));
+      expect(a.posts.single, containsPair('search_term', 'Mark Manson'));
+      expect(a.posts.single, containsPair('book_format', format));
+      expect(a.posts.single.containsKey('catalog_ref'), isFalse);
+      expect(find.text('Your request is saved.'), findsWidgets);
+      expect(t.state(panel), same(state));
+      expect(scroll.pixels, offset);
+      await t.tap(target);
+      await t.pump();
+      expect(a.posts, hasLength(1));
+      h.container.read(libraryRefreshTickProvider.notifier).state++;
+      await t.pump(const Duration(milliseconds: 100));
+      expect(t.state(panel), same(state));
+      expect(scroll.pixels, offset);
+      a.failStatus = true;
+      pending.complete();
+      await t.pumpAndSettle();
+      expect(t.state(panel), same(state));
+      expect(scroll.pixels, offset);
+      expect(
+          find.byKey(const ValueKey('book-format-row:ebook')), findsOneWidget);
+      expect(find.byKey(const ValueKey('book-format-row:audiobook')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('book-request-both')), findsOneWidget);
+      expect(a.retiredReads, isEmpty);
+      expect(a.savedReads.every((q) => q['include_live'] == false), isTrue);
+      expect(find.text('Cancel request'), findsOneWidget);
+    });
+  }
+  testWidgets('Request both keeps the owned format available', (t) async {
+    final a = Adapter()..ownedFormat = 'ebook';
     await pump(t,
-        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    expect(find.text('Choose a matching library title'), findsOneWidget);
-    expect(find.text('Request'), findsNothing);
-    await t.tap(find.text('Second edition'));
+        adapter: a,
+        location: '/detail/book/$nativeID?title=Selected&instance_id=books');
+    final button = find.byKey(const ValueKey('book-request-both'));
+    await t.ensureVisible(button);
+    await t.tap(button);
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(a.posts.single['foreign_id'], 'hc:2');
+    expect(a.posts.single['book_format'], 'both');
+    expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('book-format-row:ebook')),
+            matching: find.text('Available')),
+        findsOneWidget);
+    expect(find.text('Cancel request'), findsOneWidget);
   });
-  testWidgets('grid keeps filters and scroll when returning from detail',
+  testWidgets('a native Open Library ID stays native after a link reload',
       (t) async {
     final h = await pump(t,
-        location: '/browse/books/genre?instance_id=books&genre=fantasy');
-    final scroll = find.descendant(
-        of: find.byType(BookBrowseScreen), matching: find.byType(Scrollable));
-    await t.drag(scroll, const Offset(0, -1500));
-    await t.pumpAndSettle();
-    final offset = t.state<ScrollableState>(scroll).position.pixels;
-    h.router.push('/detail/book/ol:OL1W?instance_id=books');
-    await t.pumpAndSettle();
-    h.router.pop();
-    await t.pumpAndSettle();
-    expect(t.state<ScrollableState>(scroll).position.pixels, offset);
-    expect(h.router.routeInformationProvider.value.uri.queryParameters['genre'],
-        'fantasy');
+        location:
+            '/detail/book/ol:OL1W?source=chaptarr&title=Selected&instance_id=books');
+    expect(find.byType(BookFormatPanel), findsOneWidget);
+    expect(find.textContaining('Open Library book discovery has retired'),
+        findsNothing);
+    expect(h.adapter.retiredReads, isEmpty);
   });
-  testWidgets(
-      'library events and requests refresh statuses; grant revocation clears cards',
+  testWidgets('a retired link stays readable without a library grant',
       (t) async {
-    final events = StreamController<WsEvent>.broadcast();
-    addTearDown(events.close);
-    final h = await pump(t, events: events.stream);
-    final before = h.adapter.targetReads;
-    h.adapter.audioAvailable = true;
-    events.add(const WsEvent(
-        type: 'request_status_changed', data: {'instance_id': 'books'}));
-    await t.pump();
-    await t.pumpAndSettle();
-    await t.pump(const Duration(milliseconds: 100));
-    await t.pumpAndSettle();
-    expect(h.adapter.targetReads, greaterThan(before));
-    expect(find.text('Audiobook: Available'), findsWidgets);
-    final beforeTick = h.adapter.targetReads;
-    h.container.read(libraryRefreshTickProvider.notifier).state++;
-    await t.pump();
-    await t.pump(const Duration(milliseconds: 100));
-    await t.pumpAndSettle();
-    expect(h.adapter.targetReads, greaterThan(beforeTick));
+    final h = await pump(t);
     (h.container.read(authProvider.notifier) as TestAuth)
         .replace(auth(grant: false));
     await t.pumpAndSettle();
-    expect(find.byType(BookDiscoveryCard), findsNothing);
-    expect(find.text('Same title'), findsNothing);
+    h.router.go('/detail/book/ol:OL1W?title=Selected');
+    await t.pumpAndSettle();
+    expect(find.textContaining('Open Library book discovery has retired'),
+        findsOneWidget);
+    expect(find.text('Search books'), findsOneWidget);
+    expect(h.adapter.retiredReads, isEmpty);
   });
 }
 
-Map<String, dynamic> book(int id) => {
-      'foreign_id': 'ol:OL${id}W',
-      'title': id <= 2 ? 'Same title' : 'Book $id',
-      'authors': ['An Author'],
-      'year': 2001,
-      'description': 'A book description.'
-    };
-Map<String, dynamic> target(String id, String title) =>
-    {'foreign_id': id, 'title': title, 'author': 'An Author'};
 AuthState auth({bool grant = true}) => AuthState(
     connection: BackendConnection(
         serverUrl: 'http://localhost',
@@ -368,77 +259,88 @@ Future<({GoRouter router, ProviderContainer container, Adapter adapter})> pump(
 }
 
 class Adapter implements HttpClientAdapter {
-  int feedStatus = 200, targetStatus = 200, targetReads = 0;
-  bool wrongDetail = false, audioAvailable = false;
-  bool waiting = false;
-  String submissionStatus = 'requested';
-  String? canonicalId;
-  Map<String, dynamic> get waits => {
-        'audiobook': {
-          'reason': 'author_import',
-          'waiting_since': '2026-09-06T00:00:00Z'
-        }
-      };
-  Future<void>? targetWait;
-  List<Map<String, dynamic>> candidates = [target('gr:1', 'Catalog title')];
-  final List<Map<String, dynamic>> posts = [];
-  final List<String> statusIDs = [], searchTerms = [];
-  final List<int> pages = [];
+  final retiredReads = <String>[];
+  final posts = <Map<String, dynamic>>[];
+  final savedReads = <Map<String, dynamic>>[];
+  Future<void>? authorWait, statusWait;
+  bool failStatus = false;
+  String? ownedFormat;
+  List<Map<String, dynamic>> get delivery => posts.isEmpty
+      ? []
+      : [
+          for (final format in (posts.last['book_format'] == 'both'
+              ? ['ebook', 'audiobook']
+              : [posts.last['book_format']]))
+            {
+              'request_id': 1,
+              'format': format,
+              'state': 'queued',
+              'message': 'Your request is saved.',
+              'can_cancel': true,
+              'can_manage': true
+            }
+        ];
   @override
   Future<ResponseBody> fetch(RequestOptions o, Stream<Uint8List>? requestStream,
       Future<void>? cancelFuture) async {
     Object data = <String, dynamic>{};
     var code = 200;
-    if (o.path.startsWith('/api/discover/books/')) {
-      code = feedStatus;
-      final p = o.queryParameters['page'] as int;
-      pages.add(p);
+    if (o.path.startsWith('/api/discover/books') ||
+        o.path == '/api/genres/book' ||
+        o.path.startsWith('/api/media/book/')) {
+      retiredReads.add(o.path);
+      code = 410;
+    } else if (o.path.endsWith('/book/lookup')) {
+      data = [
+        {
+          'foreignBookId': nativeID,
+          'title': nativeTitle,
+          'author': {'authorName': 'Mark Manson', 'foreignAuthorId': 'gr:1'},
+          'overview': 'A book by Mark Manson'
+        },
+        {
+          'foreignBookId': 'gr:summary',
+          'title': 'Summary of $nativeTitle',
+          'author': {'authorName': 'Another Author'}
+        }
+      ];
+    } else if (o.path.endsWith('/author/lookup')) {
+      if (authorWait != null) await authorWait;
+      data = [
+        {'id': 0, 'authorName': 'Mark Manson', 'foreignAuthorId': 'gr:1'}
+      ];
+    } else if (o.path.endsWith('/author') || o.path.endsWith('/book')) {
+      data = [];
+    } else if (o.path == '/api/requests/delivery-status') {
+      savedReads.add(Map<String, dynamic>.from(o.queryParameters));
       data = {
-        'page': p,
-        'total_results': 40,
-        if (p == 1) 'next_page': 2,
-        'results': [
-          for (var i = 0; i < 20; i++)
-            book(p == 2 && i == 0 ? 20 : (p - 1) * 20 + i + 1)
-        ]
+        'success': true,
+        'status': 'requested',
+        'request_id': posts.isEmpty ? 0 : 1,
+        'delivery': delivery
       };
-    } else if (o.path == '/api/genres/book') {
-      data = {
-        'genres': [
-          {'id': 'fantasy', 'name': 'Fantasy'},
-          {'id': 'biography-memoir', 'name': 'Biography & Memoir'}
-        ]
-      };
-    } else if (o.path.endsWith('/request-target')) {
-      targetReads++;
-      if (targetWait != null) await targetWait;
-      code = targetStatus;
-      data = {'candidates': candidates};
-    } else if (o.path.startsWith('/api/media/book/')) {
-      final id = int.parse(RegExp(r'OL(\d+)W').firstMatch(o.path)!.group(1)!);
-      data = book(wrongDetail ? 2 : id);
     } else if (o.path == '/api/requests/book-status') {
-      statusIDs.add(o.queryParameters['foreign_id'] as String);
+      if (statusWait != null) await statusWait;
+      if (failStatus) code = 503;
       data = {
-        'status': 'available',
+        'status': 'unavailable',
         'status_known': true,
-        if (canonicalId != null) 'canonical_foreign_id': canonicalId,
-        if (waiting && posts.isNotEmpty) 'book_format_waits': waits,
         'book_formats': {
-          'ebook': 'available',
-          'audiobook': audioAvailable
-              ? 'available'
-              : posts.isNotEmpty
-                  ? submissionStatus
-                  : 'unavailable'
+          for (final f in ['ebook', 'audiobook'])
+            f: ownedFormat == f ? 'available' : 'unavailable'
         }
       };
     } else if (o.path == '/api/requests' && o.method == 'POST') {
       posts.add(Map<String, dynamic>.from(o.data as Map));
       data = {
-        'status': submissionStatus,
-        'book_formats': {'audiobook': submissionStatus},
-        if (waiting) 'book_format_waits': waits
+        'status': 'requested',
+        'request_id': 1,
+        'delivery': delivery,
+        'message': 'Your request is saved.',
+        'book_formats': {for (final d in delivery) d['format']: 'requested'},
+        'book_format_waits': {
+          for (final d in delivery) d['format']: {'reason': 'queued'}
+        }
       };
     } else if (o.path == '/api/requests/book-library') {
       data = {'titles': []};
@@ -448,12 +350,7 @@ class Adapter implements HttpClientAdapter {
       data = {'authors': []};
     } else if (o.path == '/api/requests/book-series') {
       data = {'series': []};
-    } else if (o.path.contains('/api/v1/')) {
-      if (o.path.endsWith('/lookup')) {
-        searchTerms.add(o.queryParameters['term'] as String);
-      }
-      data = [];
-    } else if (o.path == '/api/requests' || o.path.contains('/library')) {
+    } else if (o.path == '/api/requests') {
       data = [];
     } else if (o.path.startsWith('/api/discover') ||
         o.path.startsWith('/api/trakt')) {

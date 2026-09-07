@@ -16,7 +16,7 @@ Cantinarr manages an existing Lidarr instance — it doesn't deploy one. What it
 - A Lidarr API key.
 - Lidarr itself already working: a root folder, an indexer, a download client, and grabs that actually complete.
 
-Lidarr fetches artist and album metadata from its own metadata service (api.lidarr.audio) at add time, so the server running Lidarr needs outbound access to it — an add made while that service is down fails immediately with a clear error rather than sitting in a queue.
+Lidarr fetches artist and album metadata from its own metadata service (api.lidarr.audio) at add time, so the server running Lidarr needs outbound access to it — Cantinarr saves a request before delivery and retries temporary failures while that service is down.
 
 ## 2. Add the instance
 
@@ -65,11 +65,15 @@ An instance offers downloads only once explicit mappings are saved for it. With 
 - A grab that completes in Lidarr flips the album to available within seconds, not on the next poll — that's the webhook working.
 - If downloads are on, an owned album's detail offers its tracks as working downloads from a device.
 
-## Requests that land in the approval queue instead
+## Saved requests and automatic recovery
 
-Adding an album Lidarr doesn't already track means finding its metadata record again. Cantinarr fetches it by id first — Lidarr answers a `lidarr:<id>` term with that exact record — and falls back to replaying the requester's own search term (stored on pending rows so approval later uses it too), then the title forms. Only an exact id match is ever accepted: MusicBrainz merges release-groups, and when the provider declares the requested id an alias of a record the library already tracks, the request completes that record instead of creating a twin.
+Search shows one list on desktop and mobile: albums, EPs, and singles from MusicBrainz, with artists loading independently below them. Live library records and saved requests attach by exact MusicBrainz ID in the selected Lidarr instance. Matching library-only entries supplement the catalog; same-title releases and same-name artists stay separate. An artist opens a paginated discography even before Lidarr knows that artist. Search, discovery, library entries, and discographies all open the same album page. Back keeps the query, loaded pages, instance, and your place.
 
-When no term finds it, the request is **saved as pending** rather than failed, and the requester is told so. Resolve it from the admin side: add the artist (or the album) in Lidarr directly, then approve the pending request — approval replays the add. Denying it is the other valid answer. Either way the request stays visible instead of disappearing.
+A search has a ten-second deadline, including provider pacing and retries; changing the query cancels abandoned work. Album results do not wait for artist or availability reads. A provider failure leaves usable results visible and says what could not be checked. Album credits link by artist ID. New requests use the album's release-group ID; existing catalog references, including explicit release IDs resolved to release groups, remain supported. Only verified canonical aliases can change that identity.
+
+Requests are saved and acknowledged before any Lidarr or MusicBrainz call, then a durable worker handles delivery. The album page keeps one control: **Request**, **Waiting for approval**, **Requested**, **Downloading**, **Available**, or **Needs attention**. Approval is a policy decision; a provider outage leaves an approved request **Requested**, with a message explaining the delivery wait. Saved receipt refreshes never wait for live availability, and failed refreshes preserve the accepted receipt and controls. Retries start after one minute, double up to six hours, honor longer upstream `Retry-After` values, and survive restarts. Fifty failed attempts or a configuration/identity problem leaves the request saved with **Needs attention**. The album page and the admin **Saved requests** list offer retry and cancellation. Delivery waits do not appear in the approval badge. Admins can still inspect and cancel saved requests after the original instance is removed; retrying requires the original instance and current access.
+
+Every attempt uses the original authorized Lidarr instance and re-reads its current albums before changing anything. If a previous add succeeded but its response was lost, the next attempt reconciles the existing album. Only the requested album is monitored. Library changes and MusicBrainz canonical aliases remain authoritative; a completed delivery is not a stored availability claim.
 
 ## Discover albums without a search term
 
@@ -83,6 +87,6 @@ The opening Popular Albums and New Releases pages start loading when you enter D
 
 **See all** opens a paginated grid. The period, genre, and selected Lidarr instance travel in the link; opening an album and going back keeps your place. Covers come from Cover Art Archive through Cantinarr, with an album icon when no cover is available. Repeated appearances of one MusicBrainz ID are shown once; distinct IDs with the same title remain separate.
 
-External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including saving unmatched albums for admin review.
+External metadata is cached for one hour for feeds, six hours for genre searches, and 24 hours for album details and covers. A failed row offers Retry; a failed refresh keeps the previous results with a notice. Library availability still comes from the existing live music-status reads and instant updates. Requesting a discovered album follows the same direct-request or approval path as search, including durable delivery retries and saved requests that need attention.
 
-Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. On an older Cantinarr server, library browsing and search remain usable and discovery asks for a server update; admins also see an update notice when browsing before setup is unsupported.
+Cantinarr must be able to reach ListenBrainz, MusicBrainz, Cover Art Archive, and its Internet Archive artwork hosts. These calls honor the server's outbound proxy. The TMDB/Trakt source and English-only settings apply to movies and TV. Older callers retain the album/EP search default unless they send `include_singles=true`; existing native and catalog-reference request payloads remain accepted.

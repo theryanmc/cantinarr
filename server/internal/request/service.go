@@ -20,6 +20,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/lidarr"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/radarr"
 	"github.com/windoze95/cantinarr-server/internal/sonarr"
 	"github.com/windoze95/cantinarr-server/internal/tmdb"
@@ -88,7 +89,7 @@ const bookParkReasonAuthorImport = "author_import"
 // A value this build does not recognise is NOT server-owned: unknown falls back
 // to the approval queue, where a person can see and decide it. Same direction
 // the rest of the schema fails in — toward human review, never toward silence.
-var serverOwnedParkReasons = []string{bookParkReasonAuthorImport}
+var serverOwnedParkReasons = []string{bookParkReasonAuthorImport, "delivery"}
 
 // serverOwnedParkSQL renders serverOwnedParkReasons as an IN-list fragment plus
 // its bind arguments, so adding a reason to the slice updates every query at
@@ -213,10 +214,13 @@ type Notifier interface {
 }
 
 type Service struct {
-	db       *sql.DB
-	registry *instance.Registry
-	bridge   *tmdb.Bridge
-	notifier Notifier
+	MusicCatalog musicdiscovery.Catalog
+	dispatchMu   sync.Mutex
+	dispatchWake chan struct{}
+	db           *sql.DB
+	registry     *instance.Registry
+	bridge       *tmdb.Bridge
+	notifier     Notifier
 	// libraryCache holds reduced Chaptarr library digests keyed by instance id,
 	// so the owned-books digest doesn't refetch the whole library on every call.
 	libraryCache *cache.Cache
@@ -343,6 +347,8 @@ func (s *Service) hideBlockedRequests(userID int64, isAdmin bool, requests []Req
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
+		dispatchWake: make(chan struct{}, 1),
+		MusicCatalog: musicdiscovery.NewService(),
 		db:           db,
 		registry:     registry,
 		bridge:       bridge,
@@ -542,10 +548,11 @@ func (s *Service) resolveSonarr(userID int64, instanceID string) (*sonarr.Client
 }
 
 type CreateRequest struct {
-	TmdbID    int    `json:"tmdb_id"`
-	MediaType string `json:"media_type"`
-	Title     string `json:"title"`
-	TvdbID    int    `json:"tvdb_id"`
+	CatalogRef *CatalogRef `json:"catalog_ref,omitempty"`
+	TmdbID     int         `json:"tmdb_id"`
+	MediaType  string      `json:"media_type"`
+	Title      string      `json:"title"`
+	TvdbID     int         `json:"tvdb_id"`
 	// ForeignID is the arr-native metadata id for requests with no TMDB id:
 	// the Chaptarr/Readarr foreignBookId for books, the MusicBrainz
 	// release-group id for music. Required when media_type is "book" or
@@ -583,12 +590,11 @@ type CreateRequest struct {
 // where an unrecognized status word would have flipped them into an unknown
 // state and made every older app worse.
 type BookFormatWait struct {
-	// Reason is the machine-readable wait, today only bookParkReasonAuthorImport.
+	// Reason identifies native author import or a durable delivery wait.
 	// Clients must treat an unfamiliar reason as a wait they cannot name (still
 	// covered, still not requestable) rather than as no wait at all.
 	Reason string `json:"reason"`
-	// WaitingSince is when the request was accepted — the first add attempt is
-	// what parked it, so this is both "asked at" and "waiting since".
+	// WaitingSince is when the request was accepted.
 	WaitingSince time.Time `json:"waiting_since"`
 	// LastAttemptAt is when the retry loop last actually ran for this row.
 	// Absent means no attempt this process can vouch for (see
@@ -597,6 +603,10 @@ type BookFormatWait struct {
 }
 
 type CreateResponse struct {
+	StatusKnown *bool             `json:"status_known,omitempty"`
+	RequestID   int64             `json:"request_id,omitempty"`
+	CatalogRef  *CatalogRef       `json:"catalog_ref,omitempty"`
+	Delivery    []DeliveryState   `json:"delivery,omitempty"`
 	Success     bool              `json:"success"`
 	Status      string            `json:"status"`
 	Title       string            `json:"title"`
@@ -619,9 +629,12 @@ type CreateResponse struct {
 }
 
 type StatusResponse struct {
-	Status      string  `json:"status"`
-	Progress    float64 `json:"progress"`
-	StatusKnown *bool   `json:"status_known,omitempty"`
+	RequestID   int64           `json:"request_id,omitempty"`
+	CatalogRef  *CatalogRef     `json:"catalog_ref,omitempty"`
+	Delivery    []DeliveryState `json:"delivery,omitempty"`
+	Status      string          `json:"status"`
+	Progress    float64         `json:"progress"`
+	StatusKnown *bool           `json:"status_known,omitempty"`
 	// Seasons carries per-season availability for TV titles (omitted for
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
@@ -705,16 +718,19 @@ type SeasonStatus struct {
 }
 
 type RequestLog struct {
-	TmdbID      int       `json:"tmdb_id"`
-	ForeignID   string    `json:"foreign_id,omitempty"`
-	BookFormat  string    `json:"book_format,omitempty"`
-	InstanceID  string    `json:"instance_id,omitempty"`
-	MediaType   string    `json:"media_type"`
-	Title       string    `json:"title"`
-	Status      string    `json:"status"`
-	StatusKnown bool      `json:"status_known"`
-	DenyReason  string    `json:"deny_reason,omitempty"`
-	RequestedAt time.Time `json:"requested_at"`
+	RequestID   int64           `json:"request_id,omitempty"`
+	CatalogRef  *CatalogRef     `json:"catalog_ref,omitempty"`
+	Delivery    []DeliveryState `json:"delivery,omitempty"`
+	TmdbID      int             `json:"tmdb_id"`
+	ForeignID   string          `json:"foreign_id,omitempty"`
+	BookFormat  string          `json:"book_format,omitempty"`
+	InstanceID  string          `json:"instance_id,omitempty"`
+	MediaType   string          `json:"media_type"`
+	Title       string          `json:"title"`
+	Status      string          `json:"status"`
+	StatusKnown bool            `json:"status_known"`
+	DenyReason  string          `json:"deny_reason,omitempty"`
+	RequestedAt time.Time       `json:"requested_at"`
 	// BookFormatWait explains a history row reading "requested" only because the
 	// server owns it and is retrying it. History rows are already one format
 	// each, so this is a single wait rather than the per-format map the detail
@@ -724,11 +740,13 @@ type RequestLog struct {
 
 // PendingRequest is one row of the admin approval queue.
 type PendingRequest struct {
-	ID       int64  `json:"id"`
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	TmdbID   int    `json:"tmdb_id"`
-	TvdbID   int    `json:"tvdb_id"`
+	CatalogRef *CatalogRef     `json:"catalog_ref,omitempty"`
+	Delivery   []DeliveryState `json:"delivery,omitempty"`
+	ID         int64           `json:"id"`
+	UserID     int64           `json:"user_id"`
+	Username   string          `json:"username"`
+	TmdbID     int             `json:"tmdb_id"`
+	TvdbID     int             `json:"tvdb_id"`
 	// ForeignID is the Chaptarr identity a book row is addressed by; movie and
 	// TV rows are addressed by TmdbID and leave it empty.
 	ForeignID string `json:"foreign_id,omitempty"`
@@ -831,16 +849,17 @@ type effective struct {
 
 // resolvedRequest is a request whose options have all been resolved server-side.
 type resolvedRequest struct {
-	userID     int64
-	actorID    int64 // optional execution authority; history remains userID-owned
-	tmdbID     int
-	tvdbID     int
-	foreignID  string // Chaptarr foreignBookId (book requests)
-	bookFormat string
-	searchTerm string // the requester's own search text (book requests)
-	parkReason string // why a pending row is server-owned (see bookParkReasonAuthorImport)
-	addFailure string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
-	instanceID string
+	userID               int64
+	actorID              int64 // optional execution authority; history remains userID-owned
+	tmdbID               int
+	tvdbID               int
+	foreignID            string // Chaptarr foreignBookId (book requests)
+	bookFormat           string
+	requestedBookFormats string
+	searchTerm           string // the requester's own search text (book requests)
+	parkReason           string // why a pending row is server-owned (see bookParkReasonAuthorImport)
+	addFailure           string // the add that already ran and failed (see bookAddFailureMetadataUnresolved)
+	instanceID           string
 	// instanceIsUserDefault marks a movie/TV request whose resolved instance is
 	// the requester's effective default, which is the only target allowed to
 	// absorb legacy pending rows written before instances were stamped.
@@ -1061,7 +1080,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	if req.MediaType == "book" {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			return nil, fmt.Errorf("foreign_id is required for book requests")
 		}
 		if req.BookFormat != "" && !validBookFormat(req.BookFormat) {
@@ -1071,7 +1090,7 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	if req.MediaType == "music" {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			return nil, fmt.Errorf("foreign_id is required for music requests")
 		}
 		if req.BookFormat != "" {
@@ -1090,6 +1109,10 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		return nil, err
 	}
 
+	if req.MediaType == "book" || req.MediaType == "music" {
+		return s.createCatalogRequest(userID, req, eff)
+	}
+
 	resolved := &resolvedRequest{
 		userID:     userID,
 		tmdbID:     req.TmdbID,
@@ -1099,43 +1122,6 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 		instanceID: strings.TrimSpace(req.InstanceID),
 		mediaType:  req.MediaType,
 		title:      req.Title,
-	}
-	if resolved.mediaType == "book" {
-		resolved.bookFormat = normalizeBookFormat(req.BookFormat)
-	}
-	var resolvedBookClient *chaptarr.Client
-	if resolved.mediaType == "book" {
-		client, instanceID, err := s.resolveChaptarr(userID, resolved.instanceID)
-		if err != nil {
-			return nil, err
-		}
-		if client == nil {
-			return nil, fmt.Errorf("chaptarr is not configured for you")
-		}
-		resolvedBookClient = client
-		resolved.instanceID = instanceID
-		// Keep the live preflight, external mutation, and request-log write in one
-		// same-process per-title critical section.
-		bookLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
-		bookLock.Lock()
-		defer bookLock.Unlock()
-	}
-	var resolvedMusicClient *lidarr.Client
-	if resolved.mediaType == "music" {
-		client, instanceID, err := s.resolveLidarr(userID, resolved.instanceID)
-		if err != nil {
-			return nil, err
-		}
-		if client == nil {
-			return nil, fmt.Errorf("lidarr is not configured for you")
-		}
-		resolvedMusicClient = client
-		resolved.instanceID = instanceID
-		// Same per-title critical section as books: preflight, external
-		// mutation, and request-log write stay one unit.
-		musicLock := s.bookLock(resolved.instanceID + "\x00" + resolved.foreignID)
-		musicLock.Lock()
-		defer musicLock.Unlock()
 	}
 	if resolved.mediaType == "movie" || resolved.mediaType == "tv" {
 		// Resolve and authorize the target library up front so a pending row
@@ -1194,71 +1180,11 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 	case "movie":
 		resolved.qualityProfileID = eff.QualityRadarr
 	}
-	// Books resolve deterministic Chaptarr profile/root settings at add time, so
-	// they carry no requester-selectable quality profile here.
-	if req.QualityProfileID != 0 && eff.AllowQualityChoice && req.MediaType != "book" {
+	if req.QualityProfileID != 0 && eff.AllowQualityChoice {
 		resolved.qualityProfileID = req.QualityProfileID
 	}
 
 	if eff.RequiresApproval {
-		if resolved.mediaType == "book" {
-			live, err := s.freshLiveBookFormats(resolvedBookClient, resolved.instanceID, resolved.foreignID)
-			if err != nil {
-				return nil, err
-			}
-			if resolved.title == "" && len(live) == 0 {
-				return nil, fmt.Errorf("title is required to add a new book")
-			}
-			missing := make([]string, 0, 2)
-			for _, format := range expandBookFormat(resolved.bookFormat) {
-				status, covered := live[format]
-				if !covered || status == StatusUnavailable || status == StatusDenied {
-					missing = append(missing, format)
-				}
-			}
-			if len(missing) == 0 {
-				return &CreateResponse{Success: true, Status: collapseBookStatuses(live, ""), Title: resolved.title, BookFormats: live}, nil
-			}
-			if len(missing) == 1 {
-				resolved.bookFormat = missing[0]
-			} else {
-				resolved.bookFormat = BookFormatBoth
-			}
-			pendingResp, err := s.createPendingUnlocked(resolved)
-			if err != nil {
-				return nil, err
-			}
-			if pendingResp.BookFormats == nil {
-				pendingResp.BookFormats = map[string]string{}
-			}
-			for format, status := range live {
-				if status != StatusUnavailable {
-					pendingResp.BookFormats[format] = status
-				}
-			}
-			pendingResp.Status = collapseBookStatuses(pendingResp.BookFormats, StatusPending)
-			return pendingResp, nil
-		}
-		if resolved.mediaType == "music" {
-			// An album the library already covers must answer with that truth
-			// instead of queueing a no-op decision.
-			live, known, err := s.freshLiveMusicStatus(resolvedMusicClient, resolved.instanceID, resolved.foreignID)
-			if err != nil {
-				return nil, err
-			}
-			if known && live != StatusUnavailable {
-				return &CreateResponse{Success: true, Status: live, Title: resolved.title, InstanceID: resolved.instanceID}, nil
-			}
-			if resolved.title == "" {
-				return nil, fmt.Errorf("title is required to add a new album")
-			}
-			resp, err := s.createPendingUnlocked(resolved)
-			if err != nil {
-				return nil, err
-			}
-			resp.InstanceID = resolved.instanceID
-			return resp, nil
-		}
 		resp, err := s.createPending(resolved)
 		if err != nil {
 			return nil, err
@@ -1269,77 +1195,6 @@ func (s *Service) CreateMediaRequest(userID int64, req *CreateRequest) (*CreateR
 
 	status, title, err := s.addToArr(resolved)
 	if err != nil {
-		// A book whose add cannot complete yet must not end with the request on
-		// the floor: the requester wanted this title and nothing about it is
-		// invalid. Two such failures park into the approval queue — a metadata
-		// record that can't be re-found (an admin who adds the author in Chaptarr
-		// can then approve the parked row and have it work), and an author the
-		// library's metadata service is still importing (the import completes on
-		// its own; approving afterwards replays the add). Every other failure (no
-		// instance, no root folder, ambiguous profiles) is a configuration answer
-		// the requester needs to see, not queue.
-		if resolved.mediaType == "music" && errors.Is(err, ErrMusicMetadataUnresolved) {
-			// Music gets the metadata-unresolved rescue too: the add already
-			// ran and failed, so the row queues for an admin with that fact
-			// recorded instead of landing on the floor. There is no
-			// author-import analogue — a Lidarr add is synchronous and fails
-			// loudly, never leaving a pending import to wait on.
-			resolved.addFailure = bookAddFailureMetadataUnresolved
-			parked, parkErr := s.createPendingUnlocked(resolved)
-			if parkErr != nil {
-				return nil, err
-			}
-			parked.Message = musicParkedMessage
-			parked.InstanceID = resolved.instanceID
-			return parked, nil
-		}
-		if resolved.mediaType == "book" {
-			parkMessage := ""
-			switch {
-			case errors.Is(err, ErrBookMetadataUnresolved):
-				parkMessage = bookParkedMessage
-				// This row goes to a human (park_reason stays NULL), but it is
-				// not a policy question: the add already ran and failed. Record
-				// that so the queue can say so instead of showing it as an
-				// ordinary decision.
-				resolved.addFailure = bookAddFailureMetadataUnresolved
-			case errors.Is(err, chaptarr.ErrAuthorPendingImport):
-				parkMessage = bookAuthorImportingMessage
-				// Only this create path can park for author_import, and it is by
-				// definition auto-approved (approval-required creates never reach
-				// the add). The marker makes the row server-owned: hidden from
-				// the approval surfaces and retried by the maintenance sweep.
-				resolved.parkReason = bookParkReasonAuthorImport
-			}
-			if parkMessage != "" {
-				// The lock is already held for books, so park through the unlocked path.
-				parked, parkErr := s.createPendingUnlocked(resolved)
-				if parkErr != nil {
-					return nil, err
-				}
-				parked.Message = parkMessage
-				if resolved.parkReason == bookParkReasonAuthorImport {
-					// Neither stored word is the truth here. Pending narrates an
-					// approval that is not happening; requested promises a
-					// monitored library record that does not exist yet. The status
-					// stays requested for clients that know no other word, and the
-					// wait alongside it carries what requested leaves out — which
-					// is the only reason a requester can tell an active retry loop
-					// from an app that quietly dropped their request.
-					wait := s.bookFormatWaitFor(resolved.parkReason, time.Now())
-					waits := map[string]BookFormatWait{}
-					for format, status := range parked.BookFormats {
-						if status == StatusPending {
-							parked.BookFormats[format] = StatusRequested
-							waits[format] = wait
-						}
-					}
-					parked.BookFormatWaits = waits
-					parked.Status = collapseBookStatuses(parked.BookFormats, StatusRequested)
-				}
-				return parked, nil
-			}
-		}
 		return nil, err
 	}
 	resolved.title = title
@@ -1603,6 +1458,11 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("chaptarr is not configured for you")
 	}
 
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(actorID, instanceID)
+		return err
+	})
+
 	// Preflight the live library before lookup/add. The request boundary is the
 	// idempotency boundary: a file is already available, a monitored record is
 	// already requested, and an unmonitored record is monitored/searched in
@@ -1616,8 +1476,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if unresolved {
 		return "", "", ErrBookFormatUnresolved
 	}
-	// One memoized id fetch serves both the alias probe below and the add-time
-	// lookup's first term — the identical query must not run twice per request.
+	// Memoize an ID lookup so fallback terms never repeat the same fetch.
 	var idFetchResults []chaptarr.LookupResult
 	var idFetchErr error
 	idFetched := false
@@ -1629,33 +1488,10 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return idFetchResults, idFetchErr
 	}
 
-	// The library may already track this book under a different id: the
-	// metadata provider keeps alias listings whose id-fetch resolves to the
-	// canonical sibling. When the provider itself declares the requested id an
-	// alias of a record the library already has, the request completes that
-	// record — a requester tapping the duplicate listing means "I want this
-	// book", not "track it twice".
+	// A lookup returning another ID does not prove it is the selected book.
+	// Keep the request pinned; only a record ID returned by an accepted add
+	// can establish a later native re-key.
 	attachID := r.foreignID
-	if len(existing) == 0 {
-		// Nothing tracked under this id means every remaining outcome — the
-		// alias attach, or the add — starts from a metadata lookup, and a
-		// request with no title is malformed before any of that: fail it
-		// without spending a network call.
-		if r.title == "" {
-			return "", "", fmt.Errorf("title is required to add a new book")
-		}
-		if canonicalID, ok := lookupCanonicalAlias(idFetch, r.foreignID); ok {
-			aliasTitle, aliasRecords, aliasUnresolved := recordsForForeignID(books, canonicalID)
-			if aliasUnresolved {
-				return "", "", ErrBookFormatUnresolved
-			}
-			if len(aliasRecords) > 0 {
-				attachID = canonicalID
-				existing = aliasRecords
-				title = strings.TrimSpace(aliasTitle)
-			}
-		}
-	}
 	if title == "" {
 		title = r.title
 	}
@@ -1746,6 +1582,9 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 			return "", "", fmt.Errorf("existing book configuration is incomplete for one or more formats")
 		}
 		config.includeRequestedFormats(r.bookFormat)
+		if r.requestedBookFormats != "" {
+			config.includeRequestedFormats(r.requestedBookFormats)
+		}
 		// Missing sibling formats are added under the id the library groups this
 		// title by — the attach id — so an alias-fulfilled request never splits
 		// one book across two title groups.
@@ -1794,15 +1633,24 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	}
 
 	qps, err := client.GetQualityProfiles()
-	if err != nil || len(qps) == 0 {
+	if err != nil {
+		return "", "", fmt.Errorf("load quality profiles: %w", err)
+	}
+	if len(qps) == 0 {
 		return "", "", fmt.Errorf("no quality profiles available")
 	}
 	mps, err := client.GetMetadataProfiles()
-	if err != nil || len(mps) == 0 {
+	if err != nil {
+		return "", "", fmt.Errorf("load metadata profiles: %w", err)
+	}
+	if len(mps) == 0 {
 		return "", "", fmt.Errorf("no metadata profiles available")
 	}
 	folders, err := client.GetRootFolders()
-	if err != nil || len(folders) == 0 {
+	if err != nil {
+		return "", "", fmt.Errorf("load root folders: %w", err)
+	}
+	if len(folders) == 0 {
 		return "", "", fmt.Errorf("no root folders available")
 	}
 	config, err := selectBookConfig(qps, mps, folders)
@@ -1810,6 +1658,9 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", err
 	}
 	config.includeRequestedFormats(r.bookFormat)
+	if r.requestedBookFormats != "" {
+		config.includeRequestedFormats(r.requestedBookFormats)
+	}
 
 	title = strings.TrimSpace(match.Title)
 	if title == "" {
@@ -1837,25 +1688,6 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 	}
 	return s.finishBookMutation(r, title, lastErr)
-}
-
-// lookupCanonicalAlias resolves the provider's alias→canonical link for a
-// foreignBookId, given the id-term fetch. Chaptarr answers an id term with an
-// exact fetch of that record, and fetching an alias id returns its canonical
-// sibling (verified live; see bookLookupTerms). A response of exactly one
-// record filed under a DIFFERENT id is therefore the provider itself declaring
-// the two ids one work. Anything else — a miss, an error, a fuzzy multi-hit —
-// declares nothing, and the caller must treat the ids as distinct.
-func lookupCanonicalAlias(idFetch func() ([]chaptarr.LookupResult, error), foreignID string) (string, bool) {
-	results, err := idFetch()
-	if err != nil || len(results) != 1 {
-		return "", false
-	}
-	canonical := strings.TrimSpace(results[0].ForeignBookID)
-	if canonical == "" || canonical == strings.TrimSpace(foreignID) {
-		return "", false
-	}
-	return canonical, true
 }
 
 // lookupBookForAdd re-finds the metadata record a book request points at, so a
@@ -1891,31 +1723,9 @@ func lookupBookForAdd(lookup func(term string) ([]chaptarr.LookupResult, error),
 	return nil, firstErr
 }
 
-// bookLookupTerms is the ordered search-term list lookupBookForAdd tries.
-//
-// The foreignBookId itself comes first: Chaptarr's lookup answers an id term
-// with an exact fetch of that record (verified live against Chaptarr 0.9.720:
-// `term=gr:297977925` returns exactly that book, an unknown id returns empty),
-// which is the same deterministic resolution Radarr gives movies via
-// `term=tmdb:{id}`. One caveat keeps the fallbacks alive: the provider resolves
-// an alias id to its canonical sibling (two works for one title, id-fetching
-// the alias returns the canonical record), and the exact-id gate rightly
-// refuses that substitute — the fuzzy terms below then re-find the alias row
-// the requester actually chose.
-//
-// The requester's own search text is that first fallback, because it is the
-// one query already proven to return the exact row — they were looking at it
-// when they tapped Request. Chaptarr's own UI never faces any of this: its web
-// client posts the whole search row straight back and re-searches nothing.
-// Cantinarr's client keeps only the id and title, so the server must re-find
-// the record here.
-//
-// The title forms are last, for requests with no search behind them (a
-// notification tap, a deep link) on forks whose lookup doesn't answer id
-// terms: the exact title, then its headline, because a long title carrying a
-// subtitle and a parenthetical series suffix routinely defeats a fuzzy text
-// search outright (verified live: the full title above returns zero results
-// while its headline finds the book).
+// bookLookupTerms tries the requester's proven search first, then the ID and
+// title fallbacks. Every response is filtered by the selected native ID; these
+// are search terms, never candidate identities.
 func bookLookupTerms(foreignID, title, searchTerm string) []string {
 	terms := make([]string, 0, 4)
 	add := func(term string) {
@@ -1930,8 +1740,8 @@ func bookLookupTerms(foreignID, title, searchTerm string) []string {
 		}
 		terms = append(terms, term)
 	}
-	add(foreignID)
 	add(searchTerm)
+	add(foreignID)
 	add(title)
 	add(mainBookTitle(title))
 	return terms
@@ -2378,7 +2188,10 @@ func (s *Service) addMovie(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("no quality profiles available")
 	}
 	folders, err := radarrClient.GetRootFolders()
-	if err != nil || len(folders) == 0 {
+	if err != nil {
+		return "", "", fmt.Errorf("load root folders: %w", err)
+	}
+	if len(folders) == 0 {
 		return "", "", fmt.Errorf("no root folders available")
 	}
 
@@ -2489,7 +2302,10 @@ func (s *Service) addSeries(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("no quality profiles available")
 	}
 	folders, err := sonarrClient.GetRootFolders()
-	if err != nil || len(folders) == 0 {
+	if err != nil {
+		return "", "", fmt.Errorf("load root folders: %w", err)
+	}
+	if len(folders) == 0 {
 		return "", "", fmt.Errorf("no root folders available")
 	}
 
@@ -3032,6 +2848,10 @@ func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResp
 // per-format Chaptarr truth for the selected authorized instance. Live file,
 // queue, and monitored state outrank pending/denied/history labels.
 func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requestedInstanceID string) (*StatusResponse, error) {
+	if delivery, err := s.activeDeliveryStatus(userID, "book", foreignID, requestedInstanceID); err != nil || delivery != nil {
+		return delivery, err
+	}
+
 	foreignID = strings.TrimSpace(foreignID)
 	if foreignID == "" {
 		return nil, fmt.Errorf("foreign_id is required")
@@ -3040,23 +2860,23 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT COALESCE(book_format, 'both'), status, COALESCE(book_record_id, 0), COALESCE(park_reason, ''), requested_at FROM request_log WHERE (user_id = ? OR status = 'pending') AND foreign_id = ? AND media_type = 'book'"
+	query := "SELECT COALESCE(d.format,r.book_format, 'both'), r.status, COALESCE(NULLIF(d.book_record_id,0),r.book_record_id,0), COALESCE(r.park_reason,''), r.requested_at FROM request_log r LEFT JOIN request_dispatch d ON d.request_id=r.id WHERE (r.user_id = ? OR r.status = 'pending') AND r.foreign_id = ? AND r.media_type = 'book'"
 	args := []interface{}{userID, foreignID}
 	if instanceID != "" {
 		if requestedInstanceID != "" {
 			// An explicit selection must never absorb unscoped legacy history from
 			// another instance.
-			query += " AND instance_id = ?"
+			query += " AND r.instance_id = ?"
 		} else {
 			// Omitted IDs are the compatibility path for pre-pinning clients/rows.
-			query += " AND (instance_id = ? OR instance_id IS NULL)"
+			query += " AND (r.instance_id = ? OR r.instance_id IS NULL)"
 		}
 		args = append(args, instanceID)
 	} else if requestedInstanceID != "" {
-		query += " AND instance_id = ?"
+		query += " AND r.instance_id = ?"
 		args = append(args, requestedInstanceID)
 	}
-	query += " ORDER BY requested_at DESC, id DESC"
+	query += " ORDER BY r.requested_at DESC, r.id DESC"
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query book request status: %w", err)
@@ -3644,9 +3464,9 @@ type historyRow struct {
 // admin deleted directly in the arr, would otherwise read wrong forever).
 func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	rows, err := s.db.Query(
-		`SELECT tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, park_reason, requested_at
+		`SELECT id, tmdb_id, tvdb_id, foreign_id, book_format, instance_id, media_type, title, status, deny_reason, park_reason, requested_at
 		 FROM (
-		   SELECT r.tmdb_id,
+		   SELECT r.id, r.tmdb_id,
 		          COALESCE(r.tvdb_id, 0) AS tvdb_id,
 		          COALESCE(r.foreign_id, '') AS foreign_id,
 		          COALESCE(r.book_format, '') AS book_format,
@@ -3658,7 +3478,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		   FROM request_log r
 		   WHERE r.user_id = ?
 		   UNION ALL
-		   SELECT r.tmdb_id,
+		   SELECT r.id, r.tmdb_id,
 		          COALESCE(r.tvdb_id, 0),
 		          COALESCE(r.foreign_id, ''),
 		          bw.book_format,
@@ -3672,7 +3492,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 		   WHERE bw.user_id = ?
 		     AND r.user_id <> ?
 		     AND r.media_type = 'book'
-		     AND r.status = ?
+		     AND (r.status = ? OR EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id))
 		 )
 		 ORDER BY requested_at DESC`,
 		userID, userID, userID, StatusPending,
@@ -3685,7 +3505,7 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 	var history []historyRow
 	for rows.Next() {
 		var r historyRow
-		if err := rows.Scan(&r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.parkReason, &r.log.RequestedAt); err != nil {
+		if err := rows.Scan(&r.log.RequestID, &r.log.TmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.log.MediaType, &r.log.Title, &r.log.Status, &r.log.DenyReason, &r.parkReason, &r.log.RequestedAt); err != nil {
 			return nil, fmt.Errorf("scan request: %w", err)
 		}
 		r.log.StatusKnown = true
@@ -3713,6 +3533,15 @@ func (s *Service) GetRequests(userID int64) ([]RequestLog, error) {
 			history[i].log.BookFormatWait = &wait
 		}
 		requests[i] = history[i].log
+		if s.hasDispatch(requests[i].RequestID) {
+			p := PendingRequest{ID: requests[i].RequestID}
+			s.attachPendingDelivery(&p)
+			requests[i].CatalogRef = p.CatalogRef
+			requests[i].Delivery = p.Delivery
+			if history[i].parkReason == "delivery" {
+				requests[i].Status = StatusRequested
+			}
+		}
 	}
 	return s.hideBlockedRequests(userID, s.userIsAdmin(userID), requests)
 }
@@ -4048,6 +3877,9 @@ func (s *Service) ListWaiting() ([]PendingRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i := range out {
+		s.attachPendingDelivery(&out[i])
+	}
 	s.attachPosterPaths(out)
 	return out, nil
 }
@@ -4104,9 +3936,9 @@ func (s *Service) loadRequest(requestID int64) (*resolvedRequest, string, error)
 	var r resolvedRequest
 	var status string
 	err := s.db.QueryRow(
-		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0), COALESCE(search_term, '') FROM request_log WHERE id = ?",
+		"SELECT user_id, tmdb_id, COALESCE(tvdb_id, 0), COALESCE(foreign_id, ''), COALESCE(book_format, ''), COALESCE(instance_id, ''), media_type, title, status, COALESCE(season_scope, ''), COALESCE(quality_profile_id, 0), COALESCE(search_term, ''), COALESCE(park_reason,'') FROM request_log WHERE id = ?",
 		requestID,
-	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID, &r.searchTerm)
+	).Scan(&r.userID, &r.tmdbID, &r.tvdbID, &r.foreignID, &r.bookFormat, &r.instanceID, &r.mediaType, &r.title, &status, &r.seasonScope, &r.qualityProfileID, &r.searchTerm, &r.parkReason)
 	if err == sql.ErrNoRows {
 		return nil, "", fmt.Errorf("request not found")
 	}
@@ -4140,6 +3972,9 @@ func (s *Service) isAuthorImportParked(requestID int64) bool {
 // ApproveRequest fulfills a pending request (optionally with admin overrides)
 // and marks the row approved. The arr add reuses the normal add path.
 func (s *Service) ApproveRequest(adminID, requestID int64, override *DecisionOverride) (*CreateResponse, error) {
+	if s.hasDispatch(requestID) {
+		return s.approveDelivery(adminID, requestID, override)
+	}
 	resp, err := s.fulfillPendingRequest(adminID, requestID, override, false)
 	if err != nil && errors.Is(err, chaptarr.ErrAuthorPendingImport) {
 		// The row is untouched either way, but who watches next depends on
@@ -4241,6 +4076,11 @@ func (s *Service) reopenFailedAuthorImport(requestID int64) {
 		log.Printf("request: reopen author import for request %d: resolve chaptarr: %v", requestID, err)
 		return
 	}
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+		return err
+	})
+
 	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
 	if !ok || foreignAuthorID == "" {
 		return
@@ -4269,6 +4109,11 @@ func (s *Service) cancelAuthorImportForDeniedRequest(requestID int64, r *resolve
 		log.Printf("request: cancel author import for denied request %d: resolve chaptarr: %v", requestID, err)
 		return
 	}
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+		return err
+	})
+
 	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
 	if !ok || foreignAuthorID == "" {
 		return
@@ -4632,10 +4477,11 @@ func (s *Service) StartBookParkMaintenance(ctx context.Context) {
 func (s *Service) SweepParkedBookRequests() {
 	s.parkSweepRunMu.Lock()
 	defer s.parkSweepRunMu.Unlock()
+	s.sweepDeliveryImports()
 	rows, err := s.db.Query(
 		`SELECT id, COALESCE(user_id, 0), COALESCE(foreign_id, ''), COALESCE(instance_id, ''), title
 		 FROM request_log
-		 WHERE media_type = 'book' AND status = ? AND park_reason = ?
+		 WHERE media_type = 'book' AND status = ? AND park_reason = ? AND NOT EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=request_log.id)
 		 ORDER BY id ASC`,
 		StatusPending, bookParkReasonAuthorImport,
 	)
@@ -4787,7 +4633,11 @@ func (s *Service) lookupParkedAuthorID(client *chaptarr.Client, foreignID string
 	foreignID = strings.TrimSpace(foreignID)
 	for i := range results {
 		if strings.TrimSpace(results[i].ForeignBookID) == foreignID {
-			return strings.TrimSpace(results[i].ForeignAuthorID), true
+			id := strings.TrimSpace(results[i].ForeignAuthorID)
+			if id == "" && results[i].Author != nil {
+				id = strings.TrimSpace(results[i].Author.ForeignAuthorID)
+			}
+			return id, true
 		}
 	}
 	return "", true
@@ -4986,6 +4836,16 @@ func (s *Service) DenyRequest(adminID, requestID int64, reason string) error {
 		return fmt.Errorf("begin request denial: %w", err)
 	}
 	defer tx.Rollback()
+	var processing int
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM request_dispatch WHERE request_id=? AND state='processing'`, requestID).Scan(&processing); err != nil {
+		return err
+	}
+	if processing > 0 {
+		return fmt.Errorf("delivery is in progress; refresh before changing this request")
+	}
+	if _, err = tx.Exec(`UPDATE request_dispatch SET state='cancelled',message='',next_attempt_at=0 WHERE request_id=? AND state!='complete'`, requestID); err != nil {
+		return err
+	}
 	res, err := tx.Exec(
 		"UPDATE request_log SET status = ?, deny_reason = ?, approved_by = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ? AND status = ?",
 		StatusDenied, sqlNullStr(reason), adminID, requestID, StatusPending,
@@ -5368,6 +5228,7 @@ func sonarrProfileExists(profiles []sonarr.QualityProfile, id int) bool {
 // or relative cover paths are dropped rather than surfaced to a client (this
 // fork's lookups often carry no external cover at all, so it is usually empty).
 type BookSearchResult struct {
+	InstanceID    string `json:"instance_id"`
 	Title         string `json:"title"`
 	AuthorName    string `json:"author_name,omitempty"`
 	Year          int    `json:"year,omitempty"`
@@ -5406,18 +5267,24 @@ func externalCoverURL(raw string) string {
 // resolution every book request uses, so the AI assistant sees exactly the
 // catalog the Books tab would.
 func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchResult, error) {
+	return s.SearchBooksForUserInInstance(userID, query, "")
+}
+
+func (s *Service) SearchBooksForUserInInstance(userID int64, query, requestedInstanceID string) ([]BookSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
-	client, instanceID, err := s.resolveChaptarr(userID, "")
+	client, instanceID, err := s.resolveChaptarr(userID, requestedInstanceID)
 	if err != nil {
 		return nil, err
 	}
 	if client == nil {
 		return nil, ErrNoChaptarrAccess
 	}
-	results, err := client.LookupBook(query)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, err := client.LookupBookContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("book lookup: %w", err)
 	}
@@ -5438,6 +5305,7 @@ func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchRe
 			author = r.Author.AuthorName
 		}
 		result := BookSearchResult{
+			InstanceID:    instanceID,
 			Title:         r.Title,
 			AuthorName:    author,
 			Year:          r.Year,
@@ -5452,6 +5320,9 @@ func (s *Service) SearchBooksForUser(userID int64, query string) ([]BookSearchRe
 			}
 		}
 	}
+	if _, _, err := s.resolveChaptarr(userID, instanceID); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -5464,10 +5335,14 @@ func bookSearchCacheKey(instanceID, foreignID string) string {
 // a miss means the id was not in a recent search and the caller must re-verify
 // with a live lookup (or reject).
 func (s *Service) CachedBookByForeignID(userID int64, foreignID string) (*BookSearchResult, bool) {
+	return s.CachedBookByForeignIDInInstance(userID, foreignID, "")
+}
+
+func (s *Service) CachedBookByForeignIDInInstance(userID int64, foreignID, requestedInstanceID string) (*BookSearchResult, bool) {
 	if s.libraryCache == nil {
 		return nil, false
 	}
-	_, instanceID, err := s.resolveChaptarr(userID, "")
+	_, instanceID, err := s.resolveChaptarr(userID, requestedInstanceID)
 	if err != nil || instanceID == "" {
 		return nil, false
 	}

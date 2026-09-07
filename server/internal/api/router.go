@@ -70,7 +70,7 @@ func NewRouter(
 		instanceHandler.SetConfigChangedObserver(configChanged)
 	}
 	r := chi.NewRouter()
-	musicDiscovery := musicdiscovery.NewHandler(instanceStore)
+	musicDiscovery := musicdiscovery.NewHandlerWithService(instanceStore, requestHandler.MusicCatalog())
 
 	// Middleware
 	r.Use(middleware.RequestID)
@@ -422,6 +422,8 @@ func NewRouter(
 			r.Post("/requests", requestHandler.Create)
 			r.Get("/requests", requestHandler.List)
 			r.Get("/requests/options", requestHandler.Options)
+			r.Get("/requests/delivery-status", requestHandler.GetDelivery)
+			r.Post("/requests/{id}/delivery", requestHandler.UpdateDelivery)
 			r.Get("/requests/book-status", requestHandler.GetBookStatus)
 			r.Get("/requests/book-library", requestHandler.GetBookLibrary)
 			r.Get("/requests/book-recent", requestHandler.GetBookRecent)
@@ -431,6 +433,7 @@ func NewRouter(
 			r.Get("/requests/book-series-detail", requestHandler.GetBookSeriesDetail)
 			r.Get("/requests/music-status", requestHandler.GetMusicStatus)
 			r.Get("/requests/music-library", requestHandler.GetMusicLibrary)
+			r.Get("/requests/music-saved", requestHandler.GetSavedMusic)
 			r.Get("/requests/music-recent", requestHandler.GetMusicRecent)
 			r.Get("/requests/music-artists", requestHandler.GetMusicArtists)
 			r.Get("/requests/music-artist", requestHandler.GetMusicArtist)
@@ -455,11 +458,16 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
-			books := bookdiscovery.NewHandler(instanceStore)
+			books := bookdiscovery.NewHandler()
+			r.Get("/discover/books/search", books.Search)
 			r.Get("/discover/books/{feed}", books.Feed)
 			r.Get("/genres/book", books.Genres)
 			r.Get("/media/book/{workId}", books.Book)
 			r.Get("/media/book/{workId}/request-target", books.RequestTarget)
+			r.Get("/discover/music/search", musicDiscovery.Search)
+			r.Get("/discover/music/artists", musicDiscovery.Artists)
+			r.Get("/media/music/artists/{mbid}", musicDiscovery.Artist)
+			r.Get("/media/music/artists/{mbid}/albums", musicDiscovery.ArtistAlbums)
 			r.Get("/discover/music/{feed}", musicDiscovery.Feed)
 			r.Get("/discover/music/artwork/{mbid}", musicDiscovery.Artwork)
 			r.Get("/genres/music", musicDiscovery.Genres)

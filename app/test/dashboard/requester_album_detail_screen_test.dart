@@ -19,7 +19,8 @@ import 'package:go_router/go_router.dart';
 /// dead id degrades to a graceful not-found state that points back to the
 /// Music tab.
 void main() {
-  testWidgets('a deep link resolves lookup metadata and offers a request',
+  testWidgets(
+      'a deep link resolves exact MusicBrainz metadata and offers a request',
       (tester) async {
     final adapter = _MusicAdapter();
     final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
@@ -30,9 +31,7 @@ void main() {
     expect(find.byType(RequesterAlbumDetailScreen), findsOneWidget);
     expect(find.text('Pinkerton'), findsOneWidget);
     expect(find.text('Weezer'), findsOneWidget);
-    expect(find.text('1996 · Album · 10 tracks'), findsOneWidget);
-    expect(find.text('Alternative Rock'), findsOneWidget);
-    expect(find.text('A dark second record.'), findsOneWidget);
+    expect(find.text('1996 · Album'), findsOneWidget);
     // Unrequested and unowned: the one action is Request.
     expect(find.text('Request'), findsOneWidget);
   });
@@ -95,16 +94,21 @@ void main() {
     expect(find.text('Browse Music'), findsOneWidget);
   });
 
-  testWidgets('an unreadable status renders no Request button', (tester) async {
+  testWidgets('an unreadable library still permits saving a durable request',
+      (tester) async {
     final adapter = _MusicAdapter(statusCode: 500);
     final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
 
     router.go('/detail/album/mb-1?title=Pinkerton');
     await tester.pumpAndSettle();
 
-    expect(find.text('Request'), findsNothing,
-        reason: 'an outage must not mint requests');
-    expect(find.textContaining('could not be read'), findsOneWidget);
+    expect(find.text('Request'), findsOneWidget,
+        reason: 'saving intent does not require a live library');
+    expect(find.textContaining('could not be checked'), findsOneWidget);
+    await tester.tap(find.text('Request'));
+    await tester.pumpAndSettle();
+    expect(find.text('Requested'), findsOneWidget);
+    expect(adapter.submissions.single['foreign_id'], 'mb-1');
   });
 
   testWidgets('a downloads-enabled instance offers labelled per-track rows',
@@ -443,6 +447,26 @@ class _MusicAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path.startsWith('/api/media/music/')) {
+      final id = options.path.split('/').last;
+      final match =
+          lookupAlbums.where((a) => a['foreignAlbumId'] == id).firstOrNull;
+      if (match == null) return _json({});
+      final artist = match['artist'] as Map;
+      return _json({
+        'foreign_id': id,
+        'title': match['title'],
+        'artist': artist['artistName'],
+        'artists': [
+          {
+            'foreign_id': artist['foreignArtistId'],
+            'name': artist['artistName']
+          }
+        ],
+        'release_date': '1996-09-24',
+        'release_type': 'Album'
+      });
+    }
     if (options.path == '/api/requests/music-library') {
       return _json({'titles': owned});
     }

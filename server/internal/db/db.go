@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS request_log (
     book_format TEXT,
     book_record_id INTEGER,
     search_term TEXT,
+    catalog_provider TEXT,
+    catalog_id TEXT,
+    match_confirmed INTEGER NOT NULL DEFAULT 0,
     park_reason TEXT,
     add_failure_reason TEXT,
     instance_id TEXT REFERENCES service_instances(id) ON DELETE SET NULL,
@@ -59,6 +62,31 @@ CREATE TABLE IF NOT EXISTS book_request_waiters (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     book_format TEXT NOT NULL DEFAULT 'both',
     PRIMARY KEY (request_id, user_id)
+);
+
+-- Durable delivery is separate from approval and from live library state.
+CREATE TABLE IF NOT EXISTS request_dispatch (
+    request_id INTEGER NOT NULL REFERENCES request_log(id) ON DELETE CASCADE,
+    format TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_until INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT NOT NULL DEFAULT '',
+    canonical_foreign_id TEXT NOT NULL DEFAULT '',
+    book_record_id INTEGER NOT NULL DEFAULT 0,
+    code TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (request_id, format)
+);
+CREATE INDEX IF NOT EXISTS request_dispatch_due ON request_dispatch(state, next_attempt_at);
+-- Serializing native mutations per instance also covers aliases that resolve
+-- to the same book/album only after a metadata lookup, across server processes.
+CREATE TABLE IF NOT EXISTS request_dispatch_locks (
+    instance_id TEXT PRIMARY KEY,
+    lease_token TEXT NOT NULL,
+    lease_until INTEGER NOT NULL
 );
 
 -- Per-user request policy overrides. Any NULL column means "inherit the
@@ -950,6 +978,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		// metadata record by searching, and this is the one term already proven to
 		// return it, so approval must replay the same starting point the submit had.
 		{alter: "ALTER TABLE request_log ADD COLUMN search_term TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN catalog_provider TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN catalog_id TEXT"},
+		{alter: "ALTER TABLE request_log ADD COLUMN match_confirmed INTEGER NOT NULL DEFAULT 0"},
 		// Book availability alerts: pushed when a Chaptarr book import lands.
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
@@ -1046,6 +1077,20 @@ func Open(dbPath string) (*sql.DB, error) {
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
+	}
+
+	// Retire unresolved Open Library deliveries without approving, deleting,
+	// or redirecting them. Verified native bindings retain their delivery jobs.
+	if _, err := db.Exec(`UPDATE request_dispatch SET state='attention', code='catalog_retired',
+        message='', next_attempt_at=0, lease_until=0, lease_token=''
+        WHERE state NOT IN ('complete','cancelled') AND request_id IN (
+          SELECT r.id FROM request_log r WHERE r.media_type='book' AND r.catalog_provider='openlibrary'
+          AND r.status='pending' AND NOT (
+            COALESCE(r.foreign_id,'')!='' AND (r.match_confirmed=1 OR COALESCE(r.book_record_id,0)>0 OR EXISTS (
+              SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id AND
+                (d.canonical_foreign_id!='' OR d.book_record_id>0 OR d.state='waiting_library')))))`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retire unresolved book catalog requests: %w", err)
 	}
 
 	// Auto-detected issues used to store the *arr service type in media_type

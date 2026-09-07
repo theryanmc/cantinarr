@@ -234,7 +234,7 @@ void main() {
         'media_type': 'book',
         'foreign_id': '29749107',
       });
-      expect(h.router.pushed, ['/detail/book/29749107']);
+      expect(h.router.pushed, ['/detail/book/29749107?source=chaptarr']);
     });
 
     test('a book payload title rides along as an encoded query parameter',
@@ -249,7 +249,7 @@ void main() {
         'foreign_id': '29749107',
         'title': 'Dune Messiah',
       });
-      expect(h.router.pushed, ['/detail/book/29749107?title=Dune%20Messiah']);
+      expect(h.router.pushed, ['/detail/book/29749107?source=chaptarr&title=Dune%20Messiah']);
     });
 
     test('a book decision pins its Chaptarr instance in the detail link',
@@ -265,7 +265,7 @@ void main() {
       });
       expect(
         h.router.pushed,
-        ['/detail/book/29749107?title=Flock&instance_id=books-two'],
+        ['/detail/book/29749107?source=chaptarr&title=Flock&instance_id=books-two'],
       );
     });
 
@@ -285,8 +285,8 @@ void main() {
       expect(
         h.router.pushed,
         [
-          '/detail/book/29749107'
-              '?title=Ahsoka%20(Star%20Wars)&instance_id=books-a'
+          '/detail/book/29749107?source=chaptarr'
+              '&title=Ahsoka%20(Star%20Wars)&instance_id=books-a'
         ],
       );
     });

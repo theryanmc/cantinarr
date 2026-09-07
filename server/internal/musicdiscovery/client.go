@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/windoze95/cantinarr-server/internal/transporterr"
 	"sync"
 	"time"
 
@@ -30,11 +32,19 @@ type provider struct {
 }
 
 func newProvider(base string) *provider {
-	return &provider{base: base, interval: time.Second, client: &http.Client{
-		Transport: httpx.External(), Timeout: 12 * time.Second,
-		// Metadata endpoints have fixed origins. Only artwork needs redirects.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}
+	p := &provider{base: base, interval: time.Second}
+	p.client = &http.Client{Transport: httpx.External(), Timeout: 12 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Merged MusicBrainz identities may redirect, but metadata stays on its
+			// configured origin. Redirects also count against provider pacing.
+			if len(via) == 0 || len(via) >= 4 || req.URL.User != nil ||
+				req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
+				return http.ErrUseLastResponse
+			}
+			return p.wait(req.Context())
+		},
+	}
+	return p
 }
 
 func (p *provider) wait(ctx context.Context) error {
@@ -44,9 +54,15 @@ func (p *provider) wait(ctx context.Context) error {
 		if delay <= 0 {
 			p.next = time.Now().Add(p.interval)
 			p.mu.Unlock()
-			return ctx.Err()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return nil
 		}
 		p.mu.Unlock()
+		if delay > 5*time.Second {
+			return &transporterr.Upstream{Message: errUnavailable.Error(), Transient: true, RetryAfter: delay}
+		}
 		if err := pause(ctx, delay); err != nil {
 			return err
 		}
@@ -64,7 +80,8 @@ func pause(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (p *provider) get(ctx context.Context, path string, dst any) error {
+func (p *provider) get(ctx context.Context, path string, dst any, resolvedPath ...*string) error {
+	var last error = &transporterr.Upstream{Message: errUnavailable.Error(), Transient: true}
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := p.wait(ctx); err != nil {
 			return err
@@ -80,11 +97,13 @@ func (p *provider) get(ctx context.Context, path string, dst any) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			last = transporterr.Connection(errUnavailable.Error(), err)
 			continue
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			last = transporterr.HTTP(errUnavailable.Error(), resp)
 			// Respect a bounded Retry-After. A long hold returns a retryable
 			// error instead of tying up the caller indefinitely.
 			delay := time.Duration(attempt+1) * time.Second
@@ -100,19 +119,28 @@ func (p *provider) get(ctx context.Context, path string, dst any) error {
 			}
 			p.mu.Unlock()
 			if delay > 5*time.Second {
-				return errUnavailable
+				return last
 			}
 			continue
 		}
-		if resp.StatusCode != http.StatusOK || readErr != nil || len(data) > 16<<20 {
-			return errUnavailable
+		if resp.StatusCode != http.StatusOK {
+			return transporterr.HTTP(errUnavailable.Error(), resp)
+		}
+		if readErr != nil {
+			return transporterr.Connection(errUnavailable.Error(), readErr)
+		}
+		if len(data) > 16<<20 {
+			return fmt.Errorf("invalid music provider response")
 		}
 		if err := json.Unmarshal(data, dst); err != nil {
 			return fmt.Errorf("invalid music provider response")
 		}
+		if len(resolvedPath) > 0 && resp.Request != nil {
+			*resolvedPath[0] = resp.Request.URL.Path
+		}
 		return nil
 	}
-	return errUnavailable
+	return last
 }
 
 type cacheEntry struct {
@@ -120,9 +148,11 @@ type cacheEntry struct {
 	expires time.Time
 }
 type pending struct {
-	done chan struct{}
-	body []byte
-	err  error
+	done    chan struct{}
+	body    []byte
+	err     error
+	callers int
+	cancel  context.CancelFunc
 }
 
 // A bounded metadata/artwork cache also coalesces identical concurrent reads.
@@ -135,6 +165,9 @@ type memo struct {
 }
 
 func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func(context.Context) ([]byte, error)) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	if e, ok := m.entries[key]; ok && time.Now().Before(e.expires) {
 		m.mu.Unlock()
@@ -149,15 +182,19 @@ func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func
 			m.mu.Unlock()
 			return nil, errUnavailable
 		}
-		p = &pending{done: make(chan struct{})}
+		deadline := time.Now().Add(40 * time.Second)
+		if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+			deadline = callerDeadline
+		}
+		work, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		p = &pending{done: make(chan struct{}), cancel: cancel}
 		m.pending[key] = p
 		go func() {
-			work, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
 			defer cancel()
 			body, err := load(work)
 			m.mu.Lock()
 			defer m.mu.Unlock()
-			if err == nil {
+			if err == nil && work.Err() == nil {
 				if m.entries == nil {
 					m.entries = make(map[string]cacheEntry)
 				}
@@ -180,11 +217,25 @@ func (m *memo) get(ctx context.Context, key string, ttl time.Duration, load func
 				m.bytes += len(body)
 			}
 			p.body, p.err = body, err
-			delete(m.pending, key)
+			if m.pending[key] == p {
+				delete(m.pending, key)
+			}
 			close(p.done)
 		}()
 	}
+	p.callers++
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		p.callers--
+		if p.callers == 0 {
+			p.cancel()
+			if m.pending[key] == p {
+				delete(m.pending, key)
+			}
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
