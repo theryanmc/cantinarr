@@ -256,18 +256,27 @@ func TestCacheCombinesConcurrentRequestsAndSurvivesCanceledWaiter(t *testing.T) 
 	var m memo
 	var hits atomic.Int32
 	started, release := make(chan struct{}), make(chan struct{})
-	load := func(context.Context) ([]byte, error) {
-		hits.Add(1)
-		close(started)
-		<-release
-		return []byte("album"), nil
+	releaseLoad := sync.OnceFunc(func() { close(release) })
+	var wg sync.WaitGroup
+	t.Cleanup(func() { releaseLoad(); wg.Wait() })
+	load := func(ctx context.Context) ([]byte, error) {
+		if hits.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-release:
+			return []byte("album"), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := m.get(ctx, "key", time.Hour, load); done <- err }()
 	<-started
-	var wg sync.WaitGroup
-	for range 12 {
+	const waiters = 12
+	for range waiters {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -277,11 +286,27 @@ func TestCacheCombinesConcurrentRequestsAndSurvivesCanceledWaiter(t *testing.T) 
 			}
 		}()
 	}
+	// Starting goroutines does not mean they have joined the shared fill.
+	// Without this barrier, cancel can abandon the only caller's work before
+	// the other readers arrive, correctly causing a new fill.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		callers := m.pending["key"].callers
+		m.mu.Unlock()
+		if callers == waiters+1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d callers joined the shared fill", callers, waiters+1)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
-	close(release)
+	releaseLoad()
 	wg.Wait()
 	if hits.Load() != 1 {
 		t.Fatalf("duplicate fills %d", hits.Load())
