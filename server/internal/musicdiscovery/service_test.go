@@ -361,3 +361,95 @@ func TestLiveProviders(t *testing.T) {
 		}
 	}
 }
+
+func TestPublicSearchQuotesUserQueryAndPreservesDistinctGroups(t *testing.T) {
+	service := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		if !strings.Contains(q, `artist:"Same title"`) || !strings.Contains(q, `primarytype:ep`) {
+			t.Errorf("search scope: %s", q)
+		}
+		fmt.Fprintf(w, `{"count":2,"offset":0,"release-groups":[{"id":%q,"title":"Same title","primary-type":"Album","artist-credit":[{"name":"Artist A"}]},{"id":%q,"title":"Same title","primary-type":"EP","artist-credit":[{"name":"Artist B"}]}]}`, "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+	})
+	body, err := service.Search(context.Background(), "Same title", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page Page
+	if json.Unmarshal(body, &page) != nil || len(page.Results) != 2 {
+		t.Fatalf("distinct albums merged: %s", body)
+	}
+}
+
+func TestReleaseReferenceResolvesProviderCanonicalGroup(t *testing.T) {
+	release := "11111111-1111-1111-1111-111111111111"
+	alias := "22222222-2222-2222-2222-222222222222"
+	canonical := "33333333-3333-3333-3333-333333333333"
+	service := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release/" + release:
+			fmt.Fprintf(w, `{"release-group":{"id":%q}}`, alias)
+		case "/release-group/" + alias:
+			fmt.Fprintf(w, `{"id":%q,"title":"Canonical","primary-type":"Album","artist-credit":[{"name":"Artist"}]}`, canonical)
+		default:
+			t.Errorf("unexpected resolution path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+	album, err := service.ResolveAlbum(context.Background(), release, true)
+	if err != nil || album.ForeignID != canonical {
+		t.Fatalf("release/group identity conflated: %+v %v", album, err)
+	}
+}
+
+func TestLivePublicSearchAndResolution(t *testing.T) {
+	if !*liveMusic {
+		t.Skip("pass -music-live for public provider verification")
+	}
+	s := NewService()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	body, err := s.Search(ctx, "Nevermind", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page Page
+	if json.Unmarshal(body, &page) != nil || len(page.Results) == 0 {
+		t.Fatal("public album search returned no results")
+	}
+	album, err := s.ResolveAlbum(ctx, page.Results[0].ForeignID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := s.Album(ctx, album.ForeignID); err != nil || !strings.Contains(string(body), album.ForeignID) {
+		t.Fatalf("live cold metadata identity: %v", err)
+	}
+	t.Logf("MusicBrainz: %d album/EP results; verified release group %s (%s)", len(page.Results), album.ForeignID, album.Title)
+}
+
+func TestCanonicalRedirectStaysOnProviderAndPreservesGroupIdentity(t *testing.T) {
+	var foreignHits atomic.Int32
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { foreignHits.Add(1) }))
+	defer foreign.Close()
+	s := testService(t, func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.URL.Path, "/ws/2") {
+		case "/release-group/" + aID:
+			http.Redirect(w, r, "/ws/2/release-group/"+bID+"?fmt=json", http.StatusMovedPermanently)
+		case "/release-group/" + bID:
+			fmt.Fprintf(w, `{"id":%q,"title":"Canonical album","primary-type":"Album","artist-credit":[]}`, bID)
+		default:
+			http.Redirect(w, r, foreign.URL, http.StatusMovedPermanently)
+		}
+	})
+	s.mb.base += "/ws/2"
+	album, err := s.ResolveAlbum(context.Background(), aID, false)
+	if err != nil || album.ForeignID != bID {
+		t.Fatalf("merged identity: %+v %v", album, err)
+	}
+	metadata, err := s.Album(context.Background(), aID)
+	if err != nil || !strings.Contains(string(metadata), bID) {
+		t.Fatalf("cold merged album under the production API prefix: %s %v", metadata, err)
+	}
+	if err := s.mb.get(context.Background(), "/escape", &map[string]any{}); err == nil || foreignHits.Load() != 0 {
+		t.Fatalf("redirect left provider: %v hits=%d", err, foreignHits.Load())
+	}
+}

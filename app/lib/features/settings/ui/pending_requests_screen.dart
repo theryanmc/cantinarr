@@ -1,3 +1,4 @@
+import '../../request/ui/catalog_request_panel.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -483,7 +484,7 @@ class _PendingRequestsScreenState extends ConsumerState<PendingRequestsScreen> {
 
     if (_waiting.isNotEmpty || _waitingBlind) {
       children.add(const _SectionHeader(
-        title: 'Waiting for library',
+        title: 'Saved requests',
         caption: 'Being retried automatically. Nothing to approve.',
       ));
       if (_waitingBlind) {
@@ -674,6 +675,18 @@ class _WaitingTile extends StatelessWidget {
               ),
             ],
           ),
+          if (item.delivery.isNotEmpty)
+            CatalogRequestPanel(
+                mediaType: item.mediaType,
+                foreignId: item.catalogProvider == 'openlibrary'
+                    ? 'ol:${item.catalogId}'
+                    : item.foreignId,
+                title: item.title,
+                instanceId: item.instanceId,
+                provider: item.catalogProvider,
+                sourceId: item.catalogId,
+                requestId: item.id,
+                progressOnly: true),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,
@@ -828,8 +841,7 @@ class _PendingTile extends StatelessWidget {
               if (showScope) _chip(SeasonScope.describe(item.seasonScope)),
               if (showBookFormat)
                 _chip(item.requestedBookFormat?.label ?? 'Unsupported format'),
-              if ((item.isBook || item.isMusic) &&
-                  item.instanceName.isNotEmpty)
+              if ((item.isBook || item.isMusic) && item.instanceName.isNotEmpty)
                 _chip('Library: ${item.instanceName}'),
             ],
           ),

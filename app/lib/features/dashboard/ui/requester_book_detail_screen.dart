@@ -30,6 +30,7 @@ import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/book_format_panel.dart';
+import '../../request/ui/catalog_request_panel.dart';
 import '../data/book_library_service.dart';
 import '../logic/book_ownership_matcher.dart';
 
@@ -429,9 +430,10 @@ class _RequesterBookDetailScreenState
       if (!access.canBrowse('chaptarr', id)) {
         return Scaffold(
             appBar: AppBar(title: const Text('Book details')),
-            body: Center(child: Text(access.needsUpdate(id)
-                ? adminCatalogUpdateMessage
-                : 'Books are not available for this account.')));
+            body: Center(
+                child: Text(access.needsUpdate(id)
+                    ? adminCatalogUpdateMessage
+                    : 'Books are not available for this account.')));
       }
       final key = (foreignId: widget.foreignId, instanceId: id);
       final metadata = ref.watch(bookDiscoveryDetailProvider(key));
@@ -440,7 +442,8 @@ class _RequesterBookDetailScreenState
       _metadataLoading = metadata.isLoading && _discoveryBook == null;
       _targets = id == null
           ? const AsyncData(<BookRequestTarget>[])
-          : ref.watch(bookRequestTargetsProvider((foreignId: widget.foreignId, instanceId: id)));
+          : ref.watch(bookRequestTargetsProvider(
+              (foreignId: widget.foreignId, instanceId: id)));
       final candidates = _targets.hasError || _targets.isLoading
           ? <BookRequestTarget>[]
           : _targets.valueOrNull ?? <BookRequestTarget>[];
@@ -495,7 +498,8 @@ class _RequesterBookDetailScreenState
         });
       },
     );
-    final digest = _instanceId == null ? const AsyncData(<OwnedTitle>[])
+    final digest = _instanceId == null
+        ? const AsyncData(<OwnedTitle>[])
         : ref.watch(ownedBooksForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Book details')),
@@ -514,46 +518,15 @@ class _RequesterBookDetailScreenState
   Widget _discoveryRequestControls() {
     final id = _instanceId;
     if (id == null) return const CatalogSetupButton(serviceType: 'chaptarr');
-    final key = (foreignId: widget.foreignId, instanceId: id);
-    if (_targets.hasError) {
-      return BookDiscoveryError(
-          const BookDiscoveryException(
-              'Could not check this book in your library catalog. Please retry.'),
-          onRetry: () => ref.invalidate(bookRequestTargetsProvider(key)));
-    }
-    if (_targets.isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    final candidates = _targets.valueOrNull ?? <BookRequestTarget>[];
-    if (candidates.isNotEmpty) {
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Choose a matching library title'),
-        for (final candidate in candidates)
-          Material(
-              color: Colors.transparent,
-              child: ListTile(
-                  title: Text(candidate.title),
-                  subtitle: Text(candidate.author),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      setState(() => _chosenTargetId = candidate.foreignId))),
-      ]);
-    }
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text(
-          'This Open Library book could not be matched to your library catalog. Try searching its title and author.'),
-      const SizedBox(height: 8),
-      OutlinedButton.icon(
-          icon: const Icon(Icons.search),
-          label: const Text('Search books'),
-          onPressed: () {
-            final book = _discoveryBook;
-            if (book == null) return;
-            ref.read(bookDiscoverySearchSeedProvider.notifier).state =
-                (query: book.searchTerm, instanceId: id);
-            context.go('/dashboard/books');
-          }),
-    ]);
+    return CatalogRequestPanel(
+        mediaType: 'book',
+        foreignId: widget.foreignId,
+        title: _discoveryBook?.title ?? widget.titleHint ?? '',
+        instanceId: id,
+        provider: 'openlibrary',
+        sourceId: widget.foreignId.substring(3),
+        nativeId: _discoveryTarget?.foreignId,
+        onCanonicalForeignId: _onCanonicalForeignId);
   }
 
   /// Library titles this page's book may duplicate: fuzzy title/author matches
@@ -820,7 +793,7 @@ class _RequesterBookDetailScreenState
             ),
             const SizedBox(height: 14),
           ],
-          if (_isDiscovery && _discoveryTarget == null)
+          if (_isDiscovery)
             _discoveryRequestControls()
           else
             BookFormatPanel(
@@ -856,6 +829,13 @@ class _RequesterBookDetailScreenState
                     ),
               onRequestCompleted: _onRequestCompleted,
             ),
+          if (!_isDiscovery && instanceId != null)
+            CatalogRequestPanel(
+                mediaType: 'book',
+                foreignId: widget.foreignId,
+                title: title,
+                instanceId: instanceId,
+                progressOnly: true),
           if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the

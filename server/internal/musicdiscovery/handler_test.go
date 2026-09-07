@@ -76,7 +76,7 @@ func newAccessEnv(t *testing.T) *accessEnv {
 			jsonResponse(w, groups(aID)[0])
 		}
 	})
-	e.h.service.art.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	e.h.service.(*Service).art.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		e.hits.Add(1)
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader([]byte{137, 80, 78, 71, 13, 10, 26, 10})), Request: r}, nil
 	})

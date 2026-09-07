@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'catalog_search_results.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -41,6 +42,7 @@ class MusicSearchResultsView extends ConsumerWidget {
   /// matched", and has to say so.
   final bool artistsUnavailable;
   final VoidCallback? onResultTap;
+  final bool includePublicCatalog;
 
   /// Re-runs the search for an artist the library does not hold, so their
   /// albums land in this same overlay and can be requested. A metadata-only
@@ -51,6 +53,7 @@ class MusicSearchResultsView extends ConsumerWidget {
 
   const MusicSearchResultsView({
     super.key,
+    this.includePublicCatalog = true,
     required this.results,
     this.artists = const [],
     required this.query,
@@ -64,6 +67,16 @@ class MusicSearchResultsView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final library = _buildLibrary(context, ref);
+    if (!includePublicCatalog) return library;
+    return CatalogSearchResults(
+        mediaType: 'music',
+        query: query,
+        onResultTap: onResultTap,
+        libraryResults: library);
+  }
+
+  Widget _buildLibrary(BuildContext context, WidgetRef ref) {
     if (error != null) {
       final message = switch (error!) {
         MusicSearchError.noInstance => 'No Lidarr instance is available.',
@@ -369,9 +382,8 @@ class _ArtistResultTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final record = resolved.record;
     final libraryForeignId = record?.foreignArtistId?.trim() ?? '';
-    final canOpen = resolved.inLibrary &&
-        libraryForeignId.isNotEmpty &&
-        instanceId != null;
+    final canOpen =
+        resolved.inLibrary && libraryForeignId.isNotEmpty && instanceId != null;
     final canDrillDown = !resolved.inLibrary && onDrillDown != null;
 
     final count = resolved.countLabel;
@@ -598,9 +610,8 @@ LidarrAlbum _ownedAlbumAsLookup(OwnedAlbum a) => LidarrAlbum(
       title: a.title,
       foreignAlbumId:
           a.foreignAlbumId.trim().isNotEmpty ? a.foreignAlbumId.trim() : null,
-      artist: a.artist.isEmpty
-          ? null
-          : LidarrArtist(id: 0, artistName: a.artist),
+      artist:
+          a.artist.isEmpty ? null : LidarrArtist(id: 0, artistName: a.artist),
       releaseDate: a.year > 0 ? DateTime(a.year) : null,
     );
 

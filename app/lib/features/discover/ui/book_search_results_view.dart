@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'catalog_search_results.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -40,6 +41,7 @@ class BookSearchResultsView extends ConsumerWidget {
   /// to say so.
   final bool authorsUnavailable;
   final VoidCallback? onResultTap;
+  final bool includePublicCatalog;
 
   /// Re-runs the search for an author the library does not hold, so their books
   /// land in this same overlay and can be requested.
@@ -51,6 +53,7 @@ class BookSearchResultsView extends ConsumerWidget {
 
   const BookSearchResultsView({
     super.key,
+    this.includePublicCatalog = true,
     required this.results,
     this.authors = const [],
     required this.query,
@@ -64,6 +67,16 @@ class BookSearchResultsView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final library = _buildLibrary(context, ref);
+    if (!includePublicCatalog) return library;
+    return CatalogSearchResults(
+        mediaType: 'book',
+        query: query,
+        onResultTap: onResultTap,
+        libraryResults: library);
+  }
+
+  Widget _buildLibrary(BuildContext context, WidgetRef ref) {
     if (error != null) {
       // Copied character-for-character out of dashboard_books_tab.dart —
       // user-facing contract text (FAIL-01/02/03). Reword nothing,
@@ -186,8 +199,8 @@ class BookSearchResultsView extends ConsumerWidget {
         if (resolved.record != null) resolved.record!.id,
     };
     final injectedAuthors = <_ResolvedAuthor>[
-      for (final record in index
-          .recordsWhere((name) => titleMatchesQuery(query, name)))
+      for (final record
+          in index.recordsWhere((name) => titleMatchesQuery(query, name)))
         if (!presentRecordIds.contains(record.id))
           _ResolvedAuthor(
             lookup: record,
@@ -273,8 +286,7 @@ class BookSearchResultsView extends ConsumerWidget {
             resolved: resolved,
             image: instanceId == null
                 ? null
-                : chaptarrImageSource(
-                    ref, resolved.portraitUrl, instanceId),
+                : chaptarrImageSource(ref, resolved.portraitUrl, instanceId),
             instanceId: instanceId,
             onTap: onResultTap,
             onDrillDown: onAuthorDrillDown,
@@ -437,9 +449,8 @@ class _AuthorResultTile extends StatelessWidget {
     // Openable only with a library record that carries an id to open it by —
     // the same rule the browse row applies. An id-less record stays visible;
     // dropping the row would hide a real match.
-    final canOpen = resolved.inLibrary &&
-        libraryForeignId.isNotEmpty &&
-        instanceId != null;
+    final canOpen =
+        resolved.inLibrary && libraryForeignId.isNotEmpty && instanceId != null;
     final canDrillDown =
         !resolved.inLibrary && !resolved.ambiguous && onDrillDown != null;
 

@@ -355,8 +355,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final term = artistName.trim();
     if (term.isEmpty) return;
     _searchController.text = term;
-    _searchController.selection =
-        TextSelection.collapsed(offset: term.length);
+    _searchController.selection = TextSelection.collapsed(offset: term.length);
     // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
     // rather than firing off the tap that just happened.
     _resetAskAiIdle();
@@ -367,8 +366,7 @@ class _AppShellState extends ConsumerState<AppShell>
     final term = authorName.trim();
     if (term.isEmpty) return;
     _searchController.text = term;
-    _searchController.selection =
-        TextSelection.collapsed(offset: term.length);
+    _searchController.selection = TextSelection.collapsed(offset: term.length);
     // Treat it as a fresh keystroke: the Ask AI pill's idle timer restarts
     // rather than firing off the tap that just happened.
     _resetAskAiIdle();
@@ -647,23 +645,13 @@ class _AppShellState extends ConsumerState<AppShell>
     // reads the Chaptarr notifier, never the TMDB one, so the overlay and
     // scroll gates cannot be driven by a notifier that no longer receives
     // Books-tab keystrokes.
-    final searchOverlayActive = discoveryAccess.isAdmin && ((booksTab && discoveryAccess.activeId('chaptarr') == null) ||
-            (musicTab && discoveryAccess.activeId('lidarr') == null)) ? false : booksTab
+    final searchOverlayActive = booksTab
         ? bookSearchState.isSearching
         : musicTab
             ? musicSearchState.isSearching
             : searchState.isSearching;
 
-    final setupService = discoveryAccess.isAdmin
-        ? (booksTab && discoveryAccess.activeId('chaptarr') == null
-            ? 'chaptarr'
-            : musicTab && discoveryAccess.activeId('lidarr') == null
-                ? 'lidarr'
-                : null)
-        : null;
-    final searchBar = setupService != null
-        ? const SizedBox.shrink()
-        : Padding(
+    final searchBar = Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
       child: AnimatedBuilder(
         animation: _shimmerRotationAnim,
@@ -999,27 +987,28 @@ class _AppShellState extends ConsumerState<AppShell>
                                     onAuthorDrillDown: _searchAuthorBooks,
                                   )
                                 : musicTab
-                                ? MusicSearchResultsView(
-                                    results: musicSearchState.results,
-                                    artists: musicSearchState.artists,
-                                    query: musicSearchState.searchQuery,
-                                    isLoading:
-                                        musicSearchState.isLoadingSearch,
-                                    searched: musicSearchState.searched,
-                                    error: musicSearchState.error,
-                                    artistsUnavailable:
-                                        musicSearchState.artistsUnavailable,
-                                    onResultTap: _dismissKeyboard,
-                                    onArtistDrillDown: _searchArtistAlbums,
-                                  )
-                                : SearchResultsView(
-                                    results: searchState.searchResults,
-                                    isLoading: searchState.isLoadingSearch,
-                                    query: searchState.searchQuery,
-                                    onLoadMore: searchNotifier.loadMoreSearch,
-                                    libraryStatus: libraryStatus,
-                                    onResultTap: _dismissKeyboard,
-                                  ),
+                                    ? MusicSearchResultsView(
+                                        results: musicSearchState.results,
+                                        artists: musicSearchState.artists,
+                                        query: musicSearchState.searchQuery,
+                                        isLoading:
+                                            musicSearchState.isLoadingSearch,
+                                        searched: musicSearchState.searched,
+                                        error: musicSearchState.error,
+                                        artistsUnavailable:
+                                            musicSearchState.artistsUnavailable,
+                                        onResultTap: _dismissKeyboard,
+                                        onArtistDrillDown: _searchArtistAlbums,
+                                      )
+                                    : SearchResultsView(
+                                        results: searchState.searchResults,
+                                        isLoading: searchState.isLoadingSearch,
+                                        query: searchState.searchQuery,
+                                        onLoadMore:
+                                            searchNotifier.loadMoreSearch,
+                                        libraryStatus: libraryStatus,
+                                        onResultTap: _dismissKeyboard,
+                                      ),
                           ),
                         ),
                       // Floating "Ask AI" pill: the explicit door into AI
@@ -1059,7 +1048,9 @@ class _AppShellState extends ConsumerState<AppShell>
                                       final visible =
                                           _searchFocusNode.hasFocus &&
                                               _searchIdle &&
-                                              _searchController.text.trim().isNotEmpty;
+                                              _searchController.text
+                                                  .trim()
+                                                  .isNotEmpty;
                                       final duration = reduceMotion
                                           ? Duration.zero
                                           : AppTheme.motionFast;
@@ -1080,8 +1071,7 @@ class _AppShellState extends ConsumerState<AppShell>
                                       );
                                     },
                                     child: TextFieldTapRegion(
-                                      child:
-                                          _AskAiPill(onTap: _enterAiMode),
+                                      child: _AskAiPill(onTap: _enterAiMode),
                                     ),
                                   ),
                                 ),

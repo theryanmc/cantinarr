@@ -40,6 +40,14 @@ class MusicDiscoveryService {
       MusicPage.fromJson(await _get('/api/discover/music/${query.feed}',
           {...query.parameters, 'page': page}));
 
+  Future<MusicPage> search(String query, String? instanceId,
+          {int page = 1}) async =>
+      MusicPage.fromJson(await _get('/api/discover/music/search', {
+        'query': query,
+        'page': page,
+        if (instanceId != null) 'instance_id': instanceId
+      }));
+
   Future<List<MusicGenre>> genres(String? instanceId) async {
     final data = await _get('/api/genres/music',
         {if (instanceId != null) 'instance_id': instanceId});

@@ -305,33 +305,18 @@ func TestMusicRequestParksWhenMetadataUnresolved(t *testing.T) {
 	fake := &fakeLidarr{albums: `[]`, lookupByTerm: map[string]string{}}
 	server := httptest.NewServer(fake.handler(t))
 	t.Cleanup(server.Close)
-	svc, uid, instID := newLidarrMusicTestService(t, server.URL)
+	svc, uid, _ := newLidarrMusicTestService(t, server.URL)
 
 	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", ForeignID: "mb-unknown", Title: "Ghost Album", SearchTerm: "ghost album"})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest error = %v", err)
 	}
-	if resp.Status != StatusPending || resp.Message != musicParkedMessage {
-		t.Fatalf("resp = %+v", resp)
+
+	if len(resp.Delivery) != 1 || resp.Delivery[0].State != "attention" || resp.Delivery[0].Code != "metadata_unresolved" {
+		t.Fatalf("unresolved album not retained: %+v", resp)
 	}
-	// The parked row records that its add already ran and failed, so the
-	// approval queue can say so instead of inviting a blind Approve.
-	pending, err := svc.ListPending()
-	if err != nil {
-		t.Fatalf("ListPending error = %v", err)
-	}
-	if len(pending) != 1 {
-		t.Fatalf("pending = %+v", pending)
-	}
-	row := pending[0]
-	if row.MediaType != "music" || row.ForeignID != "mb-unknown" || row.InstanceID != instID {
-		t.Fatalf("pending row = %+v", row)
-	}
-	if row.AddFailureReason != bookAddFailureMetadataUnresolved {
-		t.Fatalf("add failure = %q", row.AddFailureReason)
-	}
-	if row.BookFormat != "" {
-		t.Fatalf("music row grew a book_format %q", row.BookFormat)
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("delivery failure entered approval count: %d %v", count, err)
 	}
 }
 
@@ -366,7 +351,7 @@ func TestMusicApprovalReplaysAddAndStampsRecordID(t *testing.T) {
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending = %+v, %v", pending, err)
 	}
-	approved, err := svc.ApproveRequest(0, pending[0].ID, nil)
+	approved, err := svc.ApproveRequest(createTestAdmin(t, svc), pending[0].ID, nil)
 	if err != nil {
 		t.Fatalf("ApproveRequest error = %v", err)
 	}

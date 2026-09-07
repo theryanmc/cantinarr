@@ -3,6 +3,8 @@ package request
 import (
 	"encoding/json"
 	"errors"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
+	"github.com/windoze95/cantinarr-server/internal/musicdiscovery"
 	"io"
 	"log"
 	"net/http"
@@ -44,7 +46,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
 		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for book requests"})
 			return
 		}
@@ -60,7 +62,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		req.ForeignID = strings.TrimSpace(req.ForeignID)
 		req.Title = strings.TrimSpace(req.Title)
 		req.SearchTerm = strings.TrimSpace(req.SearchTerm)
-		if req.ForeignID == "" {
+		if req.ForeignID == "" && req.CatalogRef == nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required for music requests"})
 			return
 		}
@@ -625,4 +627,77 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func (h *Handler) BookCatalog() bookdiscovery.Catalog {
+	if h == nil {
+		return nil
+	}
+	return h.service.BookCatalog
+}
+func (h *Handler) MusicCatalog() musicdiscovery.Catalog {
+	if h == nil {
+		return nil
+	}
+	return h.service.MusicCatalog
+}
+
+func (h *Handler) GetDelivery(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	q := r.URL.Query()
+	if raw := q.Get("request_id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id < 1 {
+			writeJSON(w, 400, map[string]string{"error": "invalid request id"})
+			return
+		}
+		out, err := h.service.DeliveryByID(claims.UserID, id)
+		if err != nil {
+			writeJSON(w, 403, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, out)
+		return
+	}
+	var ref *CatalogRef
+	if q.Get("catalog_provider") != "" {
+		ref = &CatalogRef{Provider: q.Get("catalog_provider"), ID: q.Get("catalog_id")}
+	}
+	out, err := h.service.DeliveryStatus(claims.UserID, q.Get("media_type"), q.Get("foreign_id"), q.Get("instance_id"), ref)
+	if err != nil {
+		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+func (h *Handler) UpdateDelivery(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id < 1 {
+		writeJSON(w, 400, map[string]string{"error": "invalid request id"})
+		return
+	}
+	var body struct {
+		Action    string `json:"action"`
+		ForeignID string `json:"foreign_id"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid delivery action"})
+		return
+	}
+	out, err := h.service.DeliveryAction(r.Context(), claims.UserID, id, body.Action, body.ForeignID)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, out)
 }

@@ -45,6 +45,7 @@ void main() {
     await tester.enterText(searchField, 'meditations');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(find.text('Meditations'), findsOneWidget);
     // Both formats are covered, so no redundant aggregate status/action sits
@@ -84,6 +85,7 @@ void main() {
     await tester.enterText(searchField, 'meditations');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(find.text('Request'), findsNothing);
 
@@ -121,6 +123,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(adapter.statusForeignIds, isEmpty);
     expect(
@@ -190,6 +193,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     final row = find.byKey(
       const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
@@ -242,6 +246,7 @@ void main() {
     await tester.enterText(searchField, 'meditations');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     final chip = tester.widget<Text>(
       find.text('eBook available · Audiobook requested'),
@@ -265,6 +270,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.text('May be the same as a book listed above'),
@@ -343,6 +349,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     // The row carrying the library's own id binds to it and reports its state;
     // the sibling's resemblance no longer cancels that identity.
@@ -383,6 +390,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.text('May be the same as a book listed above'),
@@ -414,6 +422,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     final row = find.byKey(const ValueKey('book-result:::lookup:0'));
     expect(row, findsOneWidget);
@@ -452,6 +461,7 @@ void main() {
     await tester.enterText(searchField, 'flock');
     await tester.pump(const Duration(milliseconds: 450));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
     expect(tester.takeException(), isNull);
     expect(find.text('Ask an admin to check this book’s format'), findsNothing);
 
@@ -600,6 +610,7 @@ void main() {
     await tester.enterText(toolbar, 'library book');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.descendant(
@@ -622,8 +633,7 @@ void main() {
         matching: find.text('First Library Book'),
       ),
       findsNothing,
-      reason:
-          'BOOK-07: the old instance\'s results are discarded, not merged',
+      reason: 'BOOK-07: the old instance\'s results are discarded, not merged',
     );
     expect(
       find.descendant(
@@ -649,6 +659,7 @@ void main() {
     await tester.enterText(toolbar, '');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
     final lookupsBeforeEmptySwitch = adapter.bookLookupPaths.length;
 
     container
@@ -690,6 +701,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.descendant(
@@ -751,6 +763,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(noInstanceMessage), findsOneWidget);
     expect(overlayText(forbiddenMessage), findsNothing);
@@ -774,6 +787,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(forbiddenMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -796,6 +810,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(requestFailedMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -819,6 +834,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(noBooksMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -849,6 +865,7 @@ void main() {
     await tester.enterText(toolbar, 'books like meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(noInstanceMessage), findsOneWidget);
     expect(overlayText(forbiddenMessage), findsNothing);
@@ -880,6 +897,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(forbiddenMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -911,6 +929,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(requestFailedMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -928,6 +947,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(requestFailedMessage), findsOneWidget);
   });
@@ -951,6 +971,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(overlayText(noBooksMessage), findsOneWidget);
     expect(overlayText(noInstanceMessage), findsNothing);
@@ -1054,6 +1075,7 @@ void main() {
       await tester.enterText(toolbar, 'meditations');
       await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpAndSettle();
+      await _showLibraryResults(tester);
 
       expect(
         find.byType(BookSearchResultsView),
@@ -1108,6 +1130,7 @@ void main() {
     await tester.enterText(toolbar, 'books like dune');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.byType(BookSearchResultsView),
@@ -1151,6 +1174,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       find.descendant(
@@ -1179,6 +1203,7 @@ void main() {
     await tester.enterText(toolbar, 'meditations');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       adapter.tmdbSearchRequests,
@@ -1528,6 +1553,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
     return adapter;
   }
 
@@ -1632,6 +1658,7 @@ void main() {
     await tester.tap(find.text('Metadata Only Author'));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     // Still in the overlay, now showing a fresh search for that author.
     expect(find.byType(BookSearchResultsView), findsOneWidget);
@@ -1754,6 +1781,7 @@ void main() {
     await tester.enterText(field, 'le guin');
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
+    await _showLibraryResults(tester);
 
     expect(
       adapter.authorLibraryPaths,
@@ -1912,7 +1940,9 @@ void main() {
       reason: 'no chevron on a row that cannot be opened',
     );
   });
-}void _usePhoneSize(WidgetTester tester) {
+}
+
+void _usePhoneSize(WidgetTester tester) {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
@@ -2488,30 +2518,19 @@ class _BooksSearchAdapter implements HttpClientAdapter {
               ];
       } else {
         body = (mismatchedIdentity ||
-              unresolvedIdentity ||
-              ambiguousLookup ||
-              aliasSibling ||
-              duplicateLibraryRecords ||
-              blankIdentity)
-          ? [
-              {
-                'title': 'Flock',
-                'foreignBookId': blankIdentity
-                    ? ''
-                    : aliasSibling
-                        ? 'library-flock'
-                        : 'lookup-flock',
-                'year': 2024,
-                'author': {
-                  'id': 0,
-                  'authorName': 'Kate Stewart',
-                  'foreignAuthorId': 'author-flock',
-                },
-              },
-              if (ambiguousLookup || aliasSibling)
+                unresolvedIdentity ||
+                ambiguousLookup ||
+                aliasSibling ||
+                duplicateLibraryRecords ||
+                blankIdentity)
+            ? [
                 {
                   'title': 'Flock',
-                  'foreignBookId': 'lookup-flock',
+                  'foreignBookId': blankIdentity
+                      ? ''
+                      : aliasSibling
+                          ? 'library-flock'
+                          : 'lookup-flock',
                   'year': 2024,
                   'author': {
                     'id': 0,
@@ -2519,35 +2538,46 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                     'foreignAuthorId': 'author-flock',
                   },
                 },
-            ]
-          : [
-              {
-                'title': 'Meditations',
-                'foreignBookId': 'book-1',
-                'year': 2002,
-                'pageCount': 304,
-                'overview': 'A practical guide to Stoic philosophy.',
-                'genres': ['Philosophy'],
-                'author': {
-                  'id': 0,
-                  'authorName': 'Marcus Aurelius',
-                  'foreignAuthorId': 'author-1',
+                if (ambiguousLookup || aliasSibling)
+                  {
+                    'title': 'Flock',
+                    'foreignBookId': 'lookup-flock',
+                    'year': 2024,
+                    'author': {
+                      'id': 0,
+                      'authorName': 'Kate Stewart',
+                      'foreignAuthorId': 'author-flock',
+                    },
+                  },
+              ]
+            : [
+                {
+                  'title': 'Meditations',
+                  'foreignBookId': 'book-1',
+                  'year': 2002,
+                  'pageCount': 304,
+                  'overview': 'A practical guide to Stoic philosophy.',
+                  'genres': ['Philosophy'],
+                  'author': {
+                    'id': 0,
+                    'authorName': 'Marcus Aurelius',
+                    'foreignAuthorId': 'author-1',
+                  },
                 },
-              },
-              {
-                'title': 'Letters from a Stoic',
-                'foreignBookId': 'book-2',
-                'year': 1965,
-                'pageCount': 254,
-                'overview': 'Seneca on living with wisdom and courage.',
-                'genres': ['Philosophy'],
-                'author': {
-                  'id': 0,
-                  'authorName': 'Seneca',
-                  'foreignAuthorId': 'author-2',
+                {
+                  'title': 'Letters from a Stoic',
+                  'foreignBookId': 'book-2',
+                  'year': 1965,
+                  'pageCount': 254,
+                  'overview': 'Seneca on living with wisdom and courage.',
+                  'genres': ['Philosophy'],
+                  'author': {
+                    'id': 0,
+                    'authorName': 'Seneca',
+                    'foreignAuthorId': 'author-2',
+                  },
                 },
-              },
-            ];
+              ];
       }
     } else if (options.path == '/api/requests/book-recent') {
       recentRequests++;
@@ -2590,4 +2620,18 @@ class _BooksSearchAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+Future<void> _showLibraryResults(WidgetTester tester) async {
+  final tab = find.text('Library catalog');
+  if (tab.evaluate().isNotEmpty) {
+    await tester.tap(tab);
+    await tester.pumpAndSettle();
+    final search = find.descendant(
+        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField));
+    if (search.evaluate().isNotEmpty) {
+      await tester.tap(search);
+      await tester.pump();
+    }
+  }
 }

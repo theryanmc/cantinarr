@@ -104,10 +104,14 @@ func (s *Service) Album(ctx context.Context, id string) ([]byte, error) {
 	}
 	return s.cache.get(ctx, "album:"+id, 24*time.Hour, func(ctx context.Context) ([]byte, error) {
 		var rg releaseGroup
-		if err := s.mb.get(ctx, "/release-group/"+id+"?inc=artists&fmt=json", &rg); err != nil {
+		path := "/release-group/" + id
+		base, _ := url.Parse(s.mb.base)
+		prefix := strings.TrimSuffix(base.Path, "/")
+		resolvedPath := prefix + path
+		if err := s.mb.get(ctx, path+"?inc=artists&fmt=json", &rg, &resolvedPath); err != nil {
 			return nil, err
 		}
-		if rg.ID != id {
+		if resolvedPath != prefix+"/release-group/"+rg.ID {
 			return nil, errors.New("MusicBrainz returned a different album identity")
 		}
 		album, err := rg.album()
@@ -143,4 +147,80 @@ func (s *Service) genre(ctx context.Context, genre Genre, page int) (Page, error
 		result.NextPage = page + 1
 	}
 	return result, nil
+}
+
+func (s *Service) Search(ctx context.Context, query string, page int) ([]byte, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
+		return nil, errors.New("invalid music search")
+	}
+	return s.cache.get(ctx, "search:"+query+":"+strconv.Itoa(page), 5*time.Minute, func(ctx context.Context) ([]byte, error) {
+		// Quote user text so it cannot remove the album/EP constraint.
+		escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(query)
+		found, err := s.search(ctx, `(releasegroup:"`+escaped+`" OR artist:"`+escaped+`") AND (primarytype:album OR primarytype:ep)`, (page-1)*pageSize, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		out := Page{Page: page, Results: []Album{}, Source: "MusicBrainz", Scope: "MusicBrainz album and EP search"}
+		for _, group := range found.Groups {
+			album, err := group.album()
+			if err != nil {
+				return nil, err
+			}
+			if album.ReleaseType != "" {
+				out.Results = append(out.Results, album)
+			}
+		}
+		if (page-1)*pageSize+len(found.Groups) < *found.Count && page < maxPage {
+			out.NextPage = page + 1
+		}
+		if len(out.Results) == 0 {
+			out.EmptyMessage = "No albums or EPs matched this MusicBrainz page. This does not search your library."
+		}
+		return json.Marshal(out)
+	})
+}
+
+// ResolveAlbum accepts the provider's canonical release-group identity from an
+// exact lookup. A release reference is explicitly converted to its group.
+func (s *Service) ResolveAlbum(ctx context.Context, id string, isRelease bool) (Album, error) {
+	if !validID(id) {
+		return Album{}, errors.New("invalid MusicBrainz identity")
+	}
+	key := "resolved-group:" + id
+	if isRelease {
+		key = "resolved-release:" + id
+	}
+	body, err := s.cache.get(ctx, key, 24*time.Hour, func(ctx context.Context) ([]byte, error) {
+		groupID := id
+		if isRelease {
+			var release struct {
+				Group releaseGroup `json:"release-group"`
+			}
+			if err := s.mb.get(ctx, "/release/"+id+"?inc=release-groups&fmt=json", &release); err != nil {
+				return nil, err
+			}
+			groupID = release.Group.ID
+			if !validID(groupID) {
+				return nil, errors.New("the release does not identify an album")
+			}
+		}
+		var group releaseGroup
+		if err := s.mb.get(ctx, "/release-group/"+groupID+"?inc=artists&fmt=json", &group); err != nil {
+			return nil, err
+		}
+		album, err := group.album()
+		if err != nil {
+			return nil, err
+		}
+		if album.ReleaseType == "" {
+			return nil, errors.New("this release is not an album or EP")
+		}
+		return json.Marshal(album)
+	})
+	var album Album
+	if err == nil {
+		err = json.Unmarshal(body, &album)
+	}
+	return album, err
 }

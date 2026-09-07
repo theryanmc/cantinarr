@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/windoze95/cantinarr-server/internal/auth"
@@ -13,7 +14,7 @@ import (
 
 type Handler struct {
 	store   *instance.Store
-	service *Service
+	service Catalog
 }
 
 func NewHandler(store *instance.Store) *Handler {
@@ -115,6 +116,15 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, id string, body 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	if !metadata {
+		var result Targets
+		if json.Unmarshal(body, &result) == nil && result.State == "unavailable" {
+			if result.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.FormatInt(result.RetryAfter, 10))
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}
 	w.Write(body)
 }
 
@@ -191,4 +201,34 @@ func (h *Handler) book(w http.ResponseWriter, r *http.Request, target bool) {
 		body, err = h.service.Book(r.Context(), work)
 	}
 	h.serve(w, r, id, body, err, !target)
+}
+
+func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		var err error
+		page, err = strconv.Atoi(raw)
+		if err != nil {
+			fail(w, 400, "invalid search page")
+			return
+		}
+	}
+	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
+		fail(w, 400, "enter a search query and valid page")
+		return
+	}
+	body, err := h.service.Search(r.Context(), query, page)
+	h.serve(w, r, id, body, err, true)
+}
+
+func NewHandlerWithService(store *instance.Store, service Catalog) *Handler {
+	if service == nil {
+		service = NewService()
+	}
+	return &Handler{store: store, service: service}
 }

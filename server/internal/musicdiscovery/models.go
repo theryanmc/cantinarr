@@ -71,3 +71,5 @@ func genreByID(id string) (Genre, bool) {
 	}
 	return Genre{}, false
 }
+
+func ValidID(id string) bool { return validID(id) }

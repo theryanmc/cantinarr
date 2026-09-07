@@ -59,6 +59,11 @@ enum BookWaitReason {
   /// The library's metadata service is still importing the book's author, so
   /// the add cannot be made yet. It completes on its own.
   authorImport('author_import'),
+  queued('queued'),
+  retry('retry'),
+  processing('processing'),
+  needsMatch('needs_match'),
+  attention('attention'),
 
   /// A wait this app version has no words for. Still a wait: the format stays
   /// covered and unrequestable, and the generic copy says what is knowable.
@@ -102,12 +107,28 @@ class BookFormatWait {
 
   /// The pill that replaces "Requested" — the whole point is that the requester
   /// can tell the two states apart at a glance.
-  String get label => 'Waiting for library';
+  String get label => switch (reason) {
+        BookWaitReason.queued ||
+        BookWaitReason.retry ||
+        BookWaitReason.processing =>
+          'Waiting for catalog',
+        BookWaitReason.needsMatch => 'Choose a matching book',
+        BookWaitReason.attention => 'Needs attention',
+        _ => 'Waiting for library',
+      };
 
   /// The persistent explanation. It says what is happening, who is doing it,
   /// and that the requester is not the one being waited on. No ETA is offered
   /// because none is knowable.
   String get explanation => switch (reason) {
+        BookWaitReason.queued ||
+        BookWaitReason.retry ||
+        BookWaitReason.processing =>
+          'Your request is saved. The catalog is temporarily unavailable; Cantinarr will retry automatically.',
+        BookWaitReason.needsMatch =>
+          'Your request is saved. Choose the matching book on its details page.',
+        BookWaitReason.attention =>
+          'Your request is saved and needs attention before delivery can continue.',
         BookWaitReason.authorImport =>
           'Your request is saved. The library is still adding this author. '
               'Cantinarr keeps retrying automatically — no action is needed.',
@@ -249,9 +270,7 @@ class BookRequestStatusDetail {
         server == RequestStatus.downloading ||
         server == RequestStatus.requested ||
         server == RequestStatus.partial) {
-      return server == RequestStatus.partial
-          ? RequestStatus.requested
-          : server;
+      return server == RequestStatus.partial ? RequestStatus.requested : server;
     }
     if (owned?.monitored ?? false) return RequestStatus.requested;
     if (server == RequestStatus.pending || server == RequestStatus.denied) {
@@ -337,7 +356,8 @@ class BookRequestSubmission {
       RequestStatus.downloading ||
       RequestStatus.requested ||
       RequestStatus.pending ||
-      RequestStatus.partial => true,
+      RequestStatus.partial =>
+        true,
       RequestStatus.denied || RequestStatus.unavailable || null => false,
     };
   }
@@ -422,8 +442,7 @@ String _requestErrorMessage(DioException error) {
   if (lower.contains('root folder')) {
     return 'No library folder is available for this book format. Ask an admin to check the book settings.';
   }
-  if (lower.contains('quality profile') ||
-      lower.contains('metadata profile')) {
+  if (lower.contains('quality profile') || lower.contains('metadata profile')) {
     return 'Ask an admin to check the book settings.';
   }
   if (lower.contains('book not found') || lower.contains('foreign id')) {
@@ -794,9 +813,8 @@ class RequestService {
       );
       final data = resp.data as Map<String, dynamic>;
       var isKnown = data['status_known'] as bool? ?? true;
-      final BookStatusUnknownReason? unknownReason = isKnown
-          ? null
-          : BookStatusUnknownReason.formatNeedsAttention;
+      final BookStatusUnknownReason? unknownReason =
+          isKnown ? null : BookStatusUnknownReason.formatNeedsAttention;
       RequestStatus? parseStatus(Object? value) {
         for (final status in RequestStatus.values) {
           if (status.name == value?.toString()) return status;
@@ -844,10 +862,9 @@ class RequestService {
         isKnown = false;
       }
       final rawCanonical = data['canonical_foreign_id'];
-      final canonical =
-          rawCanonical is String && rawCanonical.trim().isNotEmpty
-              ? rawCanonical.trim()
-              : null;
+      final canonical = rawCanonical is String && rawCanonical.trim().isNotEmpty
+          ? rawCanonical.trim()
+          : null;
       return BookRequestStatusDetail(
         status: status ?? RequestStatus.unavailable,
         formats: formats,

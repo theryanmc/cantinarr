@@ -415,7 +415,10 @@ type musicAddConfig struct {
 // marker, not a real profile — selecting it would hydrate no albums).
 func (s *Service) selectMusicAddConfig(client *lidarr.Client) (musicAddConfig, error) {
 	folders, err := client.GetRootFolders()
-	if err != nil || len(folders) == 0 {
+	if err != nil {
+		return musicAddConfig{}, fmt.Errorf("load root folders: %w", err)
+	}
+	if len(folders) == 0 {
 		return musicAddConfig{}, fmt.Errorf("no root folders available")
 	}
 	var root *lidarr.RootFolder
@@ -430,11 +433,17 @@ func (s *Service) selectMusicAddConfig(client *lidarr.Client) (musicAddConfig, e
 	}
 
 	qps, err := client.GetQualityProfiles()
-	if err != nil || len(qps) == 0 {
+	if err != nil {
+		return musicAddConfig{}, fmt.Errorf("load quality profiles: %w", err)
+	}
+	if len(qps) == 0 {
 		return musicAddConfig{}, fmt.Errorf("no quality profiles available")
 	}
 	mps, err := client.GetMetadataProfiles()
-	if err != nil || len(mps) == 0 {
+	if err != nil {
+		return musicAddConfig{}, fmt.Errorf("load metadata profiles: %w", err)
+	}
+	if len(mps) == 0 {
 		return musicAddConfig{}, fmt.Errorf("no metadata profiles available")
 	}
 
@@ -478,6 +487,10 @@ func isNoneMetadataProfile(p lidarr.MetadataProfile) bool {
 // library re-keyed to a different foreignAlbumId is followed through its
 // persisted record id.
 func (s *Service) GetUserMusicStatusForInstance(userID int64, foreignID, requestedInstanceID string) (*StatusResponse, error) {
+	if delivery, err := s.activeDeliveryStatus(userID, "music", foreignID, requestedInstanceID); err != nil || delivery != nil {
+		return delivery, err
+	}
+
 	foreignID = strings.TrimSpace(foreignID)
 	if foreignID == "" {
 		return nil, fmt.Errorf("foreign_id is required")
@@ -821,11 +834,15 @@ const musicSearchCacheTTL = 60 * time.Second
 // resolution every music request uses, so the AI assistant sees exactly the
 // catalog the Music tab would.
 func (s *Service) SearchAlbumsForUser(userID int64, query string) ([]MusicSearchResult, error) {
+	return s.SearchAlbumsForUserInInstance(userID, query, "")
+}
+
+func (s *Service) SearchAlbumsForUserInInstance(userID int64, query, requestedInstanceID string) ([]MusicSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
-	client, instanceID, err := s.resolveLidarr(userID, "")
+	client, instanceID, err := s.resolveLidarr(userID, requestedInstanceID)
 	if err != nil {
 		return nil, err
 	}
@@ -871,6 +888,9 @@ func (s *Service) SearchAlbumsForUser(userID int64, query string) ([]MusicSearch
 			}
 		}
 	}
+	if _, _, err := s.resolveLidarr(userID, instanceID); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -883,10 +903,14 @@ func musicSearchCacheKey(instanceID, foreignID string) string {
 // network I/O: a miss means the id was not in a recent search and the caller
 // must re-verify with a live lookup (or reject).
 func (s *Service) CachedAlbumByForeignID(userID int64, foreignID string) (*MusicSearchResult, bool) {
+	return s.CachedAlbumByForeignIDInInstance(userID, foreignID, "")
+}
+
+func (s *Service) CachedAlbumByForeignIDInInstance(userID int64, foreignID, requestedInstanceID string) (*MusicSearchResult, bool) {
 	if s.libraryCache == nil {
 		return nil, false
 	}
-	_, instanceID, err := s.resolveLidarr(userID, "")
+	_, instanceID, err := s.resolveLidarr(userID, requestedInstanceID)
 	if err != nil || instanceID == "" {
 		return nil, false
 	}

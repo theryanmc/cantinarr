@@ -339,12 +339,12 @@ func (c *Client) doWith(client *http.Client, method, path string, body, out any)
 		// the hostname). These errors surface beyond admins — e.g. in request
 		// failures — so summarize them host-free like the status branch below.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("lidarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return transporterr.Connection(fmt.Sprintf("lidarr %s %s: ", method, requestPath), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		requestPath, _, _ := strings.Cut(path, "?")
-		return fmt.Errorf("lidarr %s %s returned status %d", method, requestPath, resp.StatusCode)
+		return transporterr.HTTP(fmt.Sprintf("lidarr %s %s returned status %d", method, requestPath, resp.StatusCode), resp)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -368,7 +368,7 @@ func (c *Client) doRequestContext(ctx context.Context, method, path string) (*ht
 	if err != nil {
 		// Host-free, like doWith: transport errors embed the full request URL.
 		requestPath, _, _ := strings.Cut(path, "?")
-		return nil, fmt.Errorf("lidarr %s %s: %s", method, requestPath, transporterr.Summarize(err))
+		return nil, transporterr.Connection(fmt.Sprintf("lidarr %s %s: ", method, requestPath), err)
 	}
 	return resp, nil
 }
@@ -467,7 +467,7 @@ func (c *Client) GetAlbum(id int) (*Album, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, fmt.Errorf("lidarr GET /api/v1/album/%d returned status %d", id, resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("lidarr GET /api/v1/album/%d returned status %d", id, resp.StatusCode), resp)
 	}
 
 	var album Album
@@ -866,7 +866,7 @@ func (c *Client) GetQualityProfilesRawContext(ctx context.Context) ([]json.RawMe
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("lidarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("lidarr GET /api/v1/qualityprofile returned status %d", resp.StatusCode), resp)
 	}
 	var profiles []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&profiles); err != nil {
@@ -904,7 +904,7 @@ func (c *Client) GetCustomFormatsRawContext(ctx context.Context) ([]json.RawMess
 		return nil, ErrCustomFormatsNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("lidarr GET /api/v1/customformat returned status %d", resp.StatusCode)
+		return nil, transporterr.HTTP(fmt.Sprintf("lidarr GET /api/v1/customformat returned status %d", resp.StatusCode), resp)
 	}
 	var formats []json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&formats); err != nil {

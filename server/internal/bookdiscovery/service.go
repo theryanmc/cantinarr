@@ -172,3 +172,32 @@ func (s *Service) Book(ctx context.Context, id string) ([]byte, error) {
 		return json.Marshal(book)
 	})
 }
+
+// Search uses the public catalog independently of service search.
+func (s *Service) Search(ctx context.Context, query string, page int) ([]byte, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
+		return nil, errMalformed
+	}
+	return s.cache.get(ctx, fmt.Sprintf("search:%s:%d", query, page), 5*time.Minute, func(ctx context.Context) ([]byte, error) {
+		result, err := s.search(ctx, query, "", (page-1)*pageSize, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		out := Page{Results: []Book{}, Page: page, Total: *result.Total, Scope: "Open Library book search"}
+		for _, doc := range result.Docs {
+			book, err := doc.book()
+			if err != nil {
+				return nil, err
+			}
+			out.Results = append(out.Results, book)
+		}
+		if *result.Start+len(result.Docs) < *result.Total && page < maxPage {
+			out.NextPage = page + 1
+		}
+		if len(out.Results) == 0 {
+			out.EmptyMessage = "No books matched this Open Library search. This does not search your library."
+		}
+		return json.Marshal(out)
+	})
+}

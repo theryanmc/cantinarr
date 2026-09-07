@@ -288,7 +288,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Needs approval'), findsOneWidget);
-    expect(find.text('Waiting for library'), findsOneWidget);
+    expect(find.text('Saved requests'), findsOneWidget);
     expect(find.text('The Body Keeps the Score'), findsOneWidget);
     // The facts an admin asked "where is Yana's book?" actually needs.
     expect(find.text('Library: Yana’s Books'), findsOneWidget);
@@ -356,7 +356,7 @@ void main() {
     // Both rows are real decisions and keep their buttons — this is not the
     // waiting section. The difference is that one of them stops pretending to
     // be a routine yes/no.
-    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.text('Saved requests'), findsNothing);
     expect(find.byIcon(Icons.check_circle_outline), findsNWidgets(2));
     expect(find.byIcon(Icons.cancel_outlined), findsNWidgets(2));
     expect(container.read(pendingApprovalsProvider), 2);
@@ -367,7 +367,8 @@ void main() {
       findsOneWidget,
     );
     // The ordinary decision says nothing extra.
-    expect(find.textContaining('The automatic add already failed'), findsNothing);
+    expect(
+        find.textContaining('The automatic add already failed'), findsNothing);
   });
 
   testWidgets('an ended author-import wait offers try again, not approve',
@@ -441,8 +442,8 @@ void main() {
     }
     // The other failure kind keeps its own instruction, and an unknown reason
     // stays a non-routine row without inventing a wait to resume.
-    final unresolved =
-        PendingRequestItem.fromJson({'add_failure_reason': 'metadata_unresolved'});
+    final unresolved = PendingRequestItem.fromJson(
+        {'add_failure_reason': 'metadata_unresolved'});
     expect(unresolved.isImportWait, isFalse);
     expect(
       PendingRequestItem.fromJson({'add_failure_reason': 'some_future_reason'})
@@ -547,7 +548,7 @@ void main() {
     // An older server simply has no such section; Approvals reads as it always
     // did rather than reporting an error nobody can act on.
     expect(find.text('No pending requests.'), findsOneWidget);
-    expect(find.text('Waiting for library'), findsNothing);
+    expect(find.text('Saved requests'), findsNothing);
     expect(find.textContaining('Couldn’t check'), findsNothing);
   });
 
@@ -659,8 +660,8 @@ void main() {
     expect(dialog, findsOneWidget);
     expect(find.descendant(of: dialog, matching: find.text('Requested format')),
         findsOneWidget);
-    expect(find.descendant(
-            of: dialog, matching: find.text('eBook + Audiobook')),
+    expect(
+        find.descendant(of: dialog, matching: find.text('eBook + Audiobook')),
         findsOneWidget);
     expect(
       find.descendant(
@@ -676,8 +677,8 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.byType(DropdownButtonFormField<BookRequestFormat>),
-        findsNothing);
+    expect(
+        find.byType(DropdownButtonFormField<BookRequestFormat>), findsNothing);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Approve'));
     await tester.pumpAndSettle();
@@ -758,7 +759,8 @@ void main() {
     };
     await approve();
     expect(
-      find.text('Check this book library’s paths and profiles, then try again.'),
+      find.text(
+          'Check this book library’s paths and profiles, then try again.'),
       findsOneWidget,
     );
     tester

@@ -324,8 +324,11 @@ func TestCatalogFailuresDoNotBecomeUnresolvedMatches(t *testing.T) {
 				w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			body, err := NewService().RequestTargets(context.Background(), &instance.Instance{ID: "one", URL: srv.URL}, "OL1W")
-			if err == nil || body != nil {
+			service := NewService()
+			service.provider.base = srv.URL
+			service.provider.interval = 0
+			body, err := service.RequestTargets(context.Background(), &instance.Instance{ID: "one", URL: srv.URL}, "OL1W")
+			if err != nil || !strings.Contains(string(body), `"state":"unavailable"`) || !strings.Contains(string(body), `"code":"catalog_unavailable"`) {
 				t.Fatalf("failed catalog looked empty: %s %v", body, err)
 			}
 		})

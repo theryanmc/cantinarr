@@ -23,6 +23,7 @@ import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/album_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/album_request_panel.dart';
+import '../../request/ui/catalog_request_panel.dart';
 import '../data/music_library_service.dart';
 
 /// Requester-facing detail for one album, addressed by its MusicBrainz
@@ -178,7 +179,8 @@ class _RequesterAlbumDetailScreenState
     if (!mounted || generation != _loadGeneration) return;
     MusicAlbum? discovery;
     var failed = false;
-    if (match == null && ref.read(discoveryAccessProvider).canBrowse('lidarr', instanceId)) {
+    if (match == null &&
+        ref.read(discoveryAccessProvider).canBrowse('lidarr', instanceId)) {
       try {
         discovery = await ref
             .read(musicDiscoveryServiceProvider)
@@ -337,9 +339,12 @@ class _RequesterAlbumDetailScreenState
       if (previous != next) setState(_startLoads);
     });
     if (!access.canBrowse('lidarr', _instanceId)) {
-      return Scaffold(appBar: AppBar(title: const Text('Album details')),
-        body: Center(child: Text(access.needsUpdate(_instanceId)
-            ? adminCatalogUpdateMessage : 'Music is not available for this account.')));
+      return Scaffold(
+          appBar: AppBar(title: const Text('Album details')),
+          body: Center(
+              child: Text(access.needsUpdate(_instanceId)
+                  ? adminCatalogUpdateMessage
+                  : 'Music is not available for this account.')));
     }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshMusicTruth();
@@ -353,7 +358,8 @@ class _RequesterAlbumDetailScreenState
         });
       },
     );
-    final digest = _instanceId == null ? const AsyncData(<OwnedAlbum>[])
+    final digest = _instanceId == null
+        ? const AsyncData(<OwnedAlbum>[])
         : ref.watch(ownedAlbumsForInstanceProvider(_instanceId));
     return Scaffold(
       appBar: AppBar(title: const Text('Album details')),
@@ -410,7 +416,9 @@ class _RequesterAlbumDetailScreenState
 
     final requestRefreshTick = ref.watch(libraryRefreshTickProvider);
     // Keep discovery artwork while the new library record downloads its cover.
-    LidarrImageSource? cover = _discoveryMetadata == null ? null : musicArtworkSource(ref, _discoveryMetadata!, instanceId);
+    LidarrImageSource? cover = _discoveryMetadata == null
+        ? null
+        : musicArtworkSource(ref, _discoveryMetadata!, instanceId);
     if (instanceId != null) {
       final rawOwnedCover = owned?.cover.trim() ?? '';
       final ownedCover =
@@ -484,17 +492,34 @@ class _RequesterAlbumDetailScreenState
           const SizedBox(height: 24),
           if (instanceId == null)
             const CatalogSetupButton(serviceType: 'lidarr')
-          else AlbumRequestPanel(
-            foreignId: _effectiveForeignId,
-            title: title,
-            instanceId: instanceId,
-            searchTerm: widget.searchTerm,
-            service: _requestService,
-            ownership: owned,
-            refreshTick: requestRefreshTick,
-            onCanonicalForeignId: _onCanonicalForeignId,
-            onRequestCompleted: _onRequestCompleted,
-          ),
+          else if (_discoveryMetadata != null)
+            CatalogRequestPanel(
+                mediaType: 'music',
+                foreignId: widget.foreignId,
+                title: title,
+                instanceId: instanceId,
+                provider: 'musicbrainz',
+                sourceId: widget.foreignId,
+                onCanonicalForeignId: _onCanonicalForeignId)
+          else
+            AlbumRequestPanel(
+              foreignId: _effectiveForeignId,
+              title: title,
+              instanceId: instanceId,
+              searchTerm: widget.searchTerm,
+              service: _requestService,
+              ownership: owned,
+              refreshTick: requestRefreshTick,
+              onCanonicalForeignId: _onCanonicalForeignId,
+              onRequestCompleted: _onRequestCompleted,
+            ),
+          if (instanceId != null && _discoveryMetadata == null)
+            CatalogRequestPanel(
+                mediaType: 'music',
+                foreignId: widget.foreignId,
+                title: title,
+                instanceId: instanceId,
+                progressOnly: true),
           if (instanceId != null && _trackFiles.isNotEmpty) ...[
             const SizedBox(height: 14),
             MediaDownloadChoiceButton(

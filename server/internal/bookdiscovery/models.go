@@ -11,12 +11,13 @@ const maxPage = 50
 // Book is shared external metadata. A catalog's request identity and library
 // state never belong here; an edition changes presentation, never identity.
 type Book struct {
-	ForeignID   string   `json:"foreign_id"`
-	Title       string   `json:"title"`
-	Authors     []string `json:"authors"`
-	Year        int      `json:"year,omitempty"`
-	Description string   `json:"description,omitempty"`
-	CoverID     int64    `json:"cover_id,omitempty"`
+	Editions    []SourceEdition `json:"editions,omitempty"`
+	ForeignID   string          `json:"foreign_id"`
+	Title       string          `json:"title"`
+	Authors     []string        `json:"authors"`
+	Year        int             `json:"year,omitempty"`
+	Description string          `json:"description,omitempty"`
+	CoverID     int64           `json:"cover_id,omitempty"`
 }
 
 type Page struct {

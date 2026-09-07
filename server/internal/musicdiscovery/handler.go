@@ -13,7 +13,7 @@ import (
 
 type Handler struct {
 	store   *instance.Store
-	service *Service
+	service Catalog
 }
 
 func NewHandler(store *instance.Store) *Handler {
@@ -184,4 +184,34 @@ func (h *Handler) Artwork(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Write(body)
+}
+
+func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
+	id, ok := h.authorizeMetadata(w, r, r.URL.Query().Get("instance_id"))
+	if !ok {
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	page := 1
+	if raw := r.URL.Query().Get("page"); raw != "" {
+		var err error
+		page, err = strconv.Atoi(raw)
+		if err != nil {
+			fail(w, 400, "invalid search page")
+			return
+		}
+	}
+	if query == "" || len(query) > 300 || page < 1 || page > maxPage {
+		fail(w, 400, "enter a search query and valid page")
+		return
+	}
+	body, err := h.service.Search(r.Context(), query, page)
+	h.serve(w, r, id, body, err)
+}
+
+func NewHandlerWithService(store *instance.Store, service Catalog) *Handler {
+	if service == nil {
+		service = NewService()
+	}
+	return &Handler{store: store, service: service}
 }

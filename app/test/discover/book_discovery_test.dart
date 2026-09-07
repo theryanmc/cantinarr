@@ -18,6 +18,7 @@ import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dar
 import 'package:cantinarr/features/discover/data/book_discovery_service.dart';
 import 'package:cantinarr/features/discover/logic/book_discovery_provider.dart';
 import 'package:cantinarr/features/discover/ui/book_browse_screen.dart';
+import 'package:cantinarr/features/discover/ui/catalog_search_results.dart';
 import 'package:cantinarr/features/discover/ui/book_discovery_row.dart';
 import 'package:cantinarr/navigation/app_router.dart';
 import 'package:dio/dio.dart';
@@ -27,6 +28,38 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('public search remains usable when the library catalog fails',
+      (t) async {
+    final h = await pump(t, adapter: Adapter()..librarySearchStatus = 503);
+    final field = find.descendant(
+        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField));
+    await t.enterText(field, 'book');
+    await t.pump(const Duration(milliseconds: 750));
+    await t.pumpAndSettle();
+    expect(h.adapter.publicSearches, isNotEmpty);
+    expect(find.text('Open Library'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(CatalogSearchResults),
+            matching: find.text('Same title')),
+        findsNWidgets(2));
+    await t.scrollUntilVisible(find.text('Next'), 500,
+        scrollable: find
+            .descendant(
+                of: find.byType(ListView).hitTestable().first,
+                matching: find.byType(Scrollable))
+            .first);
+    await t.tap(find.text('Next'));
+    await t.pump(const Duration(milliseconds: 400));
+    await t.pumpAndSettle();
+    expect(h.adapter.publicSearches.last, 2);
+    await t.tap(find.text('Library catalog'));
+    await t.pumpAndSettle();
+    expect(
+        find.text(
+            'Books could not be searched. Check the connection and try again.'),
+        findsOneWidget);
+  });
   test('validated work IDs, covers and encoded browse links', () {
     expect(DiscoveryBook.fromJson({...book(1), 'cover_id': 42}).coverUrl,
         'https://covers.openlibrary.org/b/id/42-M.jpg?default=false');
@@ -132,14 +165,16 @@ void main() {
     expect(find.text('Same title'), findsOneWidget);
     expect(find.text('An Author'), findsOneWidget);
     expect(find.text('Available'), findsOneWidget);
-    expect(find.text('Request'), findsOneWidget);
+    expect(find.text('Request audiobook'), findsOneWidget);
     final img = t.widget<CachedImage>(find.byType(CachedImage).first);
     expect(img.url, isNull);
     expect(img.headers, isNull);
     expect(img.icon, Icons.menu_book);
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    expect(h.adapter.posts.single['foreign_id'], 'gr:1');
+    expect(h.adapter.posts.single['catalog_ref'],
+        {'provider': 'openlibrary', 'id': 'OL1W'});
+    expect(h.adapter.posts.single.containsKey('foreign_id'), false);
     expect(h.adapter.posts.single['book_format'], 'audiobook');
     expect(h.adapter.posts.single['instance_id'], 'books');
     expect(h.adapter.statusIDs.every((id) => id == 'gr:1'), isTrue);
@@ -149,25 +184,25 @@ void main() {
     final a = Adapter()..submissionStatus = 'pending';
     await pump(t,
         adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    expect(find.text('Pending Approval'), findsWidgets);
-    expect(find.text('Request'), findsNothing);
+    expect(find.textContaining('Waiting for approval'), findsWidgets);
+    expect(find.text('Request audiobook'), findsNothing);
     expect(a.posts.length, 1);
   });
   testWidgets('author-import waiting survives status refresh', (t) async {
     final a = Adapter()..waiting = true;
     final h = await pump(t,
         adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    expect(find.text('Waiting for library'), findsWidgets);
+    expect(find.textContaining('Waiting for library'), findsWidgets);
     h.container.read(libraryRefreshTickProvider.notifier).state++;
     await t.pump();
     await t.pump(const Duration(milliseconds: 100));
     await t.pumpAndSettle();
-    expect(find.text('Waiting for library'), findsWidgets);
-    expect(find.text('Request'), findsNothing);
+    expect(find.textContaining('Waiting for library'), findsWidgets);
+    expect(find.text('Request audiobook'), findsNothing);
   });
   testWidgets(
       'library canonical alias does not oscillate back to discovery target',
@@ -187,54 +222,33 @@ void main() {
     await t.pumpAndSettle();
     expect(h.adapter.targetReads, greaterThan(before));
   });
-  testWidgets(
-      'metadata displays while resolving and provider failure offers retry',
+  testWidgets('catalog outage preserves metadata and saves a request',
       (t) async {
-    final a = Adapter();
-    final h = await pump(t, adapter: a);
-    final wait = Completer<void>();
-    a.targetWait = wait.future;
-    h.router.push('/detail/book/ol:OL40W?instance_id=books&source=openlibrary',
-        extra: const DiscoveryBook(
-            foreignId: 'ol:OL40W', title: 'Immediate title'));
-    await t.pump();
-    await t.pump();
-    expect(find.text('Immediate title'), findsOneWidget);
-    expect(find.text('Request'), findsNothing);
-    a.targetStatus = 503;
-    wait.complete();
+    final a = Adapter()..targetStatus = 503;
+    await pump(t,
+        adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
+    expect(find.text('Same title'), findsOneWidget);
+    expect(find.textContaining('catalog is temporarily unavailable'),
+        findsWidgets);
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    expect(
-        find.text(
-            'Could not check this book in your library catalog. Please retry.'),
-        findsOneWidget);
-    expect(find.text('Search books'), findsNothing);
-    a.targetWait = null;
-    a.targetStatus = 200;
-    await t.tap(find.widgetWithText(TextButton, 'Retry'));
-    await t.pumpAndSettle();
-    expect(find.text('Request'), findsOneWidget);
+    expect(a.posts.single['catalog_ref'],
+        {'provider': 'openlibrary', 'id': 'OL1W'});
+    expect(find.textContaining('Waiting for catalog'), findsWidgets);
   });
-  testWidgets(
-      'unresolved identity fills existing book search with title and author',
+  testWidgets('unresolved identity remains on-page with a saved request',
       (t) async {
     final a = Adapter()..candidates = [];
     final h = await pump(t,
         adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    expect(find.text('Request'), findsNothing);
-    await t.tap(find.text('Search books'));
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    await t.pump(const Duration(milliseconds: 450));
-    await t.pumpAndSettle();
-    expect(
-        h.router.routeInformationProvider.value.uri.path, '/dashboard/books');
-    final field = t.widget<TextField>(find.descendant(
-        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField)));
-    expect(field.controller!.text, 'Same title An Author');
-    expect(a.searchTerms, contains('Same title An Author'));
+    expect(h.router.routeInformationProvider.value.uri.path,
+        '/detail/book/ol:OL1W');
+    expect(find.text('Choose the matching book'), findsOneWidget);
+    expect(a.posts.length, 1);
   });
-  testWidgets(
-      'distinct candidates require a choice and use selected canonical ID',
+  testWidgets('distinct candidates require confirmation on the saved request',
       (t) async {
     final a = Adapter()
       ..candidates = [
@@ -243,13 +257,12 @@ void main() {
       ];
     await pump(t,
         adapter: a, location: '/detail/book/ol:OL1W?instance_id=books');
-    expect(find.text('Choose a matching library title'), findsOneWidget);
-    expect(find.text('Request'), findsNothing);
+    await t.tap(find.text('Request audiobook'));
+    await t.pumpAndSettle();
+    expect(find.text('Choose the matching book'), findsOneWidget);
     await t.tap(find.text('Second edition'));
     await t.pumpAndSettle();
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
-    await t.pumpAndSettle();
-    expect(a.posts.single['foreign_id'], 'hc:2');
+    expect(a.actions.single, {'action': 'confirm', 'foreign_id': 'hc:2'});
   });
   testWidgets('grid keeps filters and scroll when returning from detail',
       (t) async {
@@ -369,6 +382,8 @@ Future<({GoRouter router, ProviderContainer container, Adapter adapter})> pump(
 
 class Adapter implements HttpClientAdapter {
   int feedStatus = 200, targetStatus = 200, targetReads = 0;
+  int librarySearchStatus = 200;
+  final publicSearches = <int>[];
   bool wrongDetail = false, audioAvailable = false;
   bool waiting = false;
   String submissionStatus = 'requested';
@@ -382,6 +397,7 @@ class Adapter implements HttpClientAdapter {
   Future<void>? targetWait;
   List<Map<String, dynamic>> candidates = [target('gr:1', 'Catalog title')];
   final List<Map<String, dynamic>> posts = [];
+  final List<Map<String, dynamic>> actions = [];
   final List<String> statusIDs = [], searchTerms = [];
   final List<int> pages = [];
   @override
@@ -390,6 +406,9 @@ class Adapter implements HttpClientAdapter {
     Object data = <String, dynamic>{};
     var code = 200;
     if (o.path.startsWith('/api/discover/books/')) {
+      if (o.path.endsWith('/search')) {
+        publicSearches.add((o.queryParameters['page'] as int?) ?? 1);
+      }
       code = feedStatus;
       final p = o.queryParameters['page'] as int;
       pages.add(p);
@@ -417,6 +436,40 @@ class Adapter implements HttpClientAdapter {
     } else if (o.path.startsWith('/api/media/book/')) {
       final id = int.parse(RegExp(r'OL(\d+)W').firstMatch(o.path)!.group(1)!);
       data = book(wrongDetail ? 2 : id);
+    } else if (o.path == '/api/requests/delivery-status') {
+      final state = submissionStatus == 'pending'
+          ? 'approval'
+          : waiting
+              ? 'waiting_library'
+              : targetStatus != 200
+                  ? 'retry'
+                  : candidates.length != 1 && actions.isEmpty
+                      ? 'needs_match'
+                      : 'complete';
+      data = {
+        'request_id': posts.isEmpty ? 0 : 1,
+        'status': submissionStatus,
+        'delivery': [
+          if (posts.isNotEmpty)
+            {
+              'request_id': 1,
+              'format': 'audiobook',
+              'state': state,
+              'message': switch (state) {
+                'approval' => 'Waiting for approval. Your request is saved.',
+                'waiting_library' =>
+                  'Waiting for library. Your request is saved.',
+                'retry' => 'Waiting for catalog. Your request is saved.',
+                'needs_match' =>
+                  'Choose a matching book. Your request is saved.',
+                _ => 'The library accepted this request.'
+              }
+            }
+        ]
+      };
+    } else if (o.path == '/api/requests/1/delivery') {
+      actions.add(Map<String, dynamic>.from(o.data as Map));
+      data = {'success': true};
     } else if (o.path == '/api/requests/book-status') {
       statusIDs.add(o.queryParameters['foreign_id'] as String);
       data = {
@@ -449,6 +502,7 @@ class Adapter implements HttpClientAdapter {
     } else if (o.path == '/api/requests/book-series') {
       data = {'series': []};
     } else if (o.path.contains('/api/v1/')) {
+      code = librarySearchStatus;
       if (o.path.endsWith('/lookup')) {
         searchTerms.add(o.queryParameters['term'] as String);
       }

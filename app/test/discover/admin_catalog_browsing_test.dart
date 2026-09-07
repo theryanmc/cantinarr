@@ -132,7 +132,7 @@ void main() {
           types.contains('lidarr') ? findsOneWidget : findsNothing);
       if (types.isEmpty) {
         expect(h.backend.libraryReads, isEmpty);
-        expect(find.byType(CantinarrSearchBar), findsNothing);
+        expect(find.byType(CantinarrSearchBar), findsOneWidget);
         expect(find.text('Set up Lidarr'), findsOneWidget);
         expect(
             h.backend.catalogReads
@@ -455,9 +455,10 @@ void main() {
         '/detail/book/ol:OL1W');
     expect(find.text('Book 1'), findsOneWidget);
     expect(find.text('Available'), findsOneWidget);
-    await t.tap(find.byKey(const ValueKey('book-format-row:audiobook')));
+    await t.tap(find.text('Request audiobook'));
     await t.pumpAndSettle();
-    expect(h.backend.requests.single, containsPair('foreign_id', 'gr:1'));
+    expect(h.backend.requests.single,
+        containsPair('catalog_ref', {'provider': 'openlibrary', 'id': 'OL1W'}));
     expect(h.backend.requests.single, containsPair('book_format', 'audiobook'));
     expect(h.backend.requests.single, containsPair('instance_id', 'chaptarr'));
     expect(find.text('Request'), findsNothing);
@@ -476,10 +477,13 @@ void main() {
     expect(find.text('Catalog Album'), findsOneWidget);
     expect(h.router.routerDelegate.currentConfiguration.uri.path,
         '/detail/album/$_albumId');
-    expect(find.text('Request'), findsOneWidget);
-    await t.tap(find.text('Request'));
+    expect(find.text('Request album'), findsOneWidget);
+    await t.tap(find.text('Request album'));
     await t.pumpAndSettle();
-    expect(h.backend.requests.single, containsPair('foreign_id', _albumId));
+    expect(
+        h.backend.requests.single,
+        containsPair(
+            'catalog_ref', {'provider': 'musicbrainz', 'id': _albumId}));
     expect(h.backend.requests.single, containsPair('instance_id', 'lidarr'));
   });
 

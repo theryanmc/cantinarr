@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/windoze95/cantinarr-server/internal/transporterr"
 	"sync"
 	"time"
 
@@ -44,9 +46,15 @@ func (p *provider) wait(ctx context.Context) error {
 		if delay <= 0 {
 			p.next = time.Now().Add(p.interval)
 			p.mu.Unlock()
-			return ctx.Err()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return nil
 		}
 		p.mu.Unlock()
+		if delay > 5*time.Second {
+			return &transporterr.Upstream{Message: errUnavailable.Error(), Transient: true, RetryAfter: delay}
+		}
 		if err := pause(ctx, delay); err != nil {
 			return err
 		}
@@ -65,6 +73,7 @@ func pause(ctx context.Context, d time.Duration) error {
 }
 
 func (p *provider) get(ctx context.Context, path string, dst any) error {
+	var last error = &transporterr.Upstream{Message: errUnavailable.Error(), Transient: true}
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := p.wait(ctx); err != nil {
 			return err
@@ -80,11 +89,13 @@ func (p *provider) get(ctx context.Context, path string, dst any) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			last = transporterr.Connection(errUnavailable.Error(), err)
 			continue
 		}
 		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			last = transporterr.HTTP(errUnavailable.Error(), resp)
 			// Respect a bounded Retry-After. A long hold returns a retryable
 			// error instead of tying up the caller indefinitely.
 			delay := time.Duration(attempt+1) * time.Second
@@ -100,19 +111,25 @@ func (p *provider) get(ctx context.Context, path string, dst any) error {
 			}
 			p.mu.Unlock()
 			if delay > 5*time.Second {
-				return errUnavailable
+				return last
 			}
 			continue
 		}
-		if resp.StatusCode != http.StatusOK || readErr != nil || len(data) > 4<<20 {
-			return errUnavailable
+		if resp.StatusCode != http.StatusOK {
+			return transporterr.HTTP(errUnavailable.Error(), resp)
+		}
+		if readErr != nil {
+			return transporterr.Connection(errUnavailable.Error(), readErr)
+		}
+		if len(data) > 4<<20 {
+			return fmt.Errorf("invalid book provider response")
 		}
 		if err := json.Unmarshal(data, dst); err != nil {
 			return fmt.Errorf("invalid book provider response")
 		}
 		return nil
 	}
-	return errUnavailable
+	return last
 }
 
 type cacheEntry struct {

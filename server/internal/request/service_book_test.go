@@ -972,24 +972,20 @@ func TestBookRequestBothReportsAndStoresPartialPerFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
 	}
-	if resp.Status != StatusPartial || resp.BookFormats[BookFormatEbook] != StatusRequested || resp.BookFormats[BookFormatAudiobook] != StatusUnavailable {
-		t.Fatalf("response = %#v, want concrete requested/unavailable partial", resp)
+
+	if len(resp.Delivery) != 2 || resp.BookFormatWaits[BookFormatAudiobook].Reason != "retry" || resp.BookFormats[BookFormatEbook] != StatusRequested {
+		t.Fatalf("partial delivery not retained: %+v", resp)
 	}
-	rows, err := svc.db.Query("SELECT book_format, status FROM request_log WHERE user_id=? AND foreign_id=?", uid, "partial-1")
+	states, err := svc.deliveryStates(resp.RequestID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	stored := map[string]string{}
-	for rows.Next() {
-		var format, status string
-		if err := rows.Scan(&format, &status); err != nil {
-			t.Fatal(err)
-		}
-		stored[format] = status
+	found := map[string]string{}
+	for _, d := range states {
+		found[d.Format] = d.State
 	}
-	if len(stored) != 1 || stored[BookFormatEbook] != StatusRequested {
-		t.Fatalf("stored outcomes = %#v, want only successful ebook", stored)
+	if found[BookFormatEbook] != "complete" || found[BookFormatAudiobook] != "retry" {
+		t.Fatalf("format checkpoints: %+v", states)
 	}
 }
 
@@ -1207,8 +1203,8 @@ func TestUnknownFormatExactRecordFailsClosed(t *testing.T) {
 	if err != nil || status.Status != StatusUnavailable || status.StatusKnown == nil || *status.StatusKnown {
 		t.Fatalf("unknown exact status = %+v err=%v, want unavailable status_known=false", status, err)
 	}
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "unknown", Title: "Unknown", BookFormat: BookFormatEbook}); err == nil {
-		t.Fatal("unknown exact format allowed mutation")
+	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "unknown", Title: "Unknown", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
+		t.Fatalf("expected saved attention without a completed delivery: %+v %v", response, err)
 	}
 	if mutations != 0 {
 		t.Fatalf("unknown format caused %d mutations", mutations)
@@ -1365,8 +1361,8 @@ func TestCanonicalSiblingFailsClosedOnConflictingAuthors(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "conflict", Title: "Conflict", BookFormat: BookFormatEbook}); err == nil {
-		t.Fatal("conflicting canonical authors allowed sibling mutation")
+	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "conflict", Title: "Conflict", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
+		t.Fatalf("expected saved attention without a completed delivery: %+v %v", response, err)
 	}
 	if mutations != 0 {
 		t.Fatalf("conflicting authors caused %d mutations", mutations)
@@ -1458,11 +1454,11 @@ func TestBookRequestAddedUnmonitoredRequiresMonitoringSuccess(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "new", Title: "New", BookFormat: BookFormatEbook}); err == nil {
-		t.Fatal("unmonitored add reported success after required monitoring failed")
+	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "new", Title: "New", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" {
+		t.Fatalf("expected saved retry without a completed delivery: %+v %v", response, err)
 	}
 	var count int
-	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE foreign_id='new'").Scan(&count); err != nil {
+	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE foreign_id='new' AND status='requested'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
@@ -1485,10 +1481,10 @@ func TestBookRequestFailsClosedWhenPreflightUnavailable(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "x", Title: "X", BookFormat: BookFormatEbook,
-	}); err == nil {
-		t.Fatal("request succeeded without authoritative preflight")
+	}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" {
+		t.Fatalf("expected saved retry without mutation: %+v %v", response, err)
 	}
 	if lookupCalls != 0 {
 		t.Fatalf("lookup called %d times after failed preflight, want zero duplicate-risk mutations", lookupCalls)
@@ -1618,10 +1614,16 @@ func TestApproveBookRequestNotifiesWithForeignID(t *testing.T) {
 	if _, err := svc.ApproveRequest(adminID, pending[0].ID, nil); err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}
-	if len(rec.userEvents) != 1 {
+	decisions := rec.userEvents[:0]
+	for _, event := range rec.userEvents {
+		if event.eventType == "request_decision" {
+			decisions = append(decisions, event)
+		}
+	}
+	if len(decisions) != 1 {
 		t.Fatalf("user events = %+v, want exactly one decision", rec.userEvents)
 	}
-	ev := rec.userEvents[0]
+	ev := decisions[0]
 	if ev.userID != uid || ev.eventType != "request_decision" || ev.data["decision"] != "approved" {
 		t.Errorf("event = %+v, want an approved request_decision to the requester", ev)
 	}
@@ -2021,8 +2023,8 @@ func TestBookRequestOnlyAcceptsAnExactForeignIDMatch(t *testing.T) {
 	if added {
 		t.Fatal("a lookup row with a different foreignBookId was added; only an exact id match may add")
 	}
-	if resp.Status != StatusPending {
-		t.Fatalf("status = %s, want pending (unresolved metadata parks the request)", resp.Status)
+	if len(resp.Delivery) != 1 || resp.Delivery[0].State != "attention" {
+		t.Fatalf("status = %s, want saved attention for an unverified identity", resp.Status)
 	}
 }
 
@@ -2061,80 +2063,19 @@ func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
 	if added {
 		t.Fatal("AddBook was called without a resolved metadata record")
 	}
-	if resp.Status != StatusPending {
-		t.Fatalf("status = %s, want pending", resp.Status)
-	}
-	if resp.Message == "" {
-		t.Fatal("parked request carried no message; the requester would read pending as normal approval")
-	}
-	if got := resp.BookFormats[BookFormatEbook]; got != StatusPending {
-		t.Fatalf("book_formats[ebook] = %q, want pending", got)
-	}
-	var count int
-	if err := svc.db.QueryRow(
-		"SELECT COUNT(*) FROM request_log WHERE user_id=? AND foreign_id='ghost-1' AND media_type='book' AND book_format='ebook' AND status='pending'",
-		uid,
-	).Scan(&count); err != nil {
-		t.Fatalf("count parked rows: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("parked pending rows = %d, want 1 (the request must survive the failed add)", count)
-	}
 
-	// This row goes to a human, so it belongs in the approval queue and in the
-	// badge — but it is not a policy question, and rendered as one it invited an
-	// Approve that replays the same failed add.
-	pending, err := svc.ListPending()
-	if err != nil {
-		t.Fatalf("ListPending: %v", err)
+	if len(resp.Delivery) != 1 || resp.Delivery[0].State != "attention" || resp.Delivery[0].Code != "metadata_unresolved" {
+		t.Fatalf("unresolved delivery: %+v", resp)
 	}
-	if len(pending) != 1 {
-		t.Fatalf("ListPending rows = %d, want the parked row awaiting a decision", len(pending))
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("delivery failure entered approval count: %d %v", count, err)
 	}
-	if pending[0].AddFailureReason != bookAddFailureMetadataUnresolved {
-		t.Fatalf("add_failure_reason = %q, want %q — an ordinary-looking row is the defect", pending[0].AddFailureReason, bookAddFailureMetadataUnresolved)
-	}
-	// park_reason must stay NULL. It answers a different question (who owns the
-	// row), and its NULL is the guard that keeps the sweep from bypassing
-	// approval policy; a value here would hide this row from the queue.
-	var parkReason sql.NullString
-	if err := svc.db.QueryRow(
-		"SELECT park_reason FROM request_log WHERE id = ?", pending[0].ID,
-	).Scan(&parkReason); err != nil {
-		t.Fatalf("read park_reason: %v", err)
-	}
-	if parkReason.Valid {
-		t.Fatalf("park_reason = %q, want NULL (a human decides this one)", parkReason.String)
-	}
-	if waiting, err := svc.ListWaiting(); err != nil || len(waiting) != 0 {
-		t.Fatalf("ListWaiting = %+v err=%v, want empty (the server is not retrying this)", waiting, err)
-	}
-	if count, err := svc.PendingCount(); err != nil || count != 1 {
-		t.Fatalf("PendingCount = %d err=%v, want 1 (a person really must act)", count, err)
-	}
-
-	// Approving replays the same add against the same unresolved metadata. The
-	// bare error read as a transient glitch; the admin needs the one action that
-	// actually moves this.
-	adminID := createTestAdmin(t, svc)
-	_, approveErr := svc.ApproveRequest(adminID, pending[0].ID, nil)
-	if approveErr == nil {
-		t.Fatal("ApproveRequest succeeded; the metadata record is still unresolvable")
-	}
-	if !errors.Is(approveErr, ErrBookMetadataUnresolved) {
-		t.Fatalf("approve error = %v, want it to wrap ErrBookMetadataUnresolved", approveErr)
-	}
-	if !strings.Contains(approveErr.Error(), "add this book in the library first") {
-		t.Fatalf("approve error = %q, want the next step named", approveErr)
+	waiting, err := svc.ListWaiting()
+	if err != nil || len(waiting) != 1 || len(waiting[0].Delivery) != 1 {
+		t.Fatalf("missing saved attention: %+v %v", waiting, err)
 	}
 }
 
-// TestBookRequestParksWhenAuthorImportIsPending covers the 0.9.879+ Chaptarr
-// behavior of queuing an unknown author for an asynchronous metadata import and
-// rejecting the add until it lands. The park is server-owned: the requester is
-// told "requested, finishes automatically", no admin surface counts or pages
-// it, an early approval is refused with the plan, and the maintenance sweep
-// completes it silently once the import lands.
 func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	var authorImported atomic.Bool
 	var addSucceeded atomic.Bool
@@ -2327,7 +2268,7 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	// still gets the content alert when the file lands. Non-owner waiters keep
 	// their push.
 	for _, ev := range rec.userEvents {
-		if ev.userID == uid {
+		if ev.userID == uid && ev.eventType == "request_decision" {
 			t.Fatalf("owner received %+v; a system completion invents no approval", ev)
 		}
 	}
@@ -3240,7 +3181,7 @@ func testInstanceID(t *testing.T, s *Service) string {
 // TestBookRequestLookupTransportFailureStaysAnError separates "the provider does
 // not know this book" from "the provider could not be asked". Only the former is
 // parked; an unreachable Chaptarr must still tell the requester to retry.
-func TestBookRequestLookupTransportFailureStaysAnError(t *testing.T) {
+func TestBookRequestLookupTransportFailureIsSavedForRetry(t *testing.T) {
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/book" {
 			w.Header().Set("Content-Type", "application/json")
@@ -3252,24 +3193,18 @@ func TestBookRequestLookupTransportFailureStaysAnError(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	_, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	response, err := svc.CreateMediaRequest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "unreachable-1",
 		Title:      "Flock",
 		BookFormat: BookFormatEbook,
 	})
-	if err == nil {
-		t.Fatal("CreateMediaRequest succeeded; a lookup that could not be performed must not be parked as pending")
+
+	if err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" || response.Delivery[0].Code != "service_unavailable" {
+		t.Fatalf("transport failure misclassified: %+v %v", response, err)
 	}
-	if errors.Is(err, ErrBookMetadataUnresolved) {
-		t.Fatalf("error = %v, want a lookup failure rather than an unresolved-metadata verdict", err)
-	}
-	var count int
-	if err := svc.db.QueryRow("SELECT COUNT(*) FROM request_log WHERE foreign_id='unreachable-1'").Scan(&count); err != nil {
-		t.Fatalf("count rows: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("request_log rows = %d, want 0", count)
+	if count, err := svc.PendingCount(); err != nil || count != 0 {
+		t.Fatalf("automatic retry entered approvals: %d %v", count, err)
 	}
 }
 

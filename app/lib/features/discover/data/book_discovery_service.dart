@@ -67,7 +67,8 @@ class BookRequestTarget {
   final String foreignId;
   final String title;
   final String author;
-  const BookRequestTarget(this.foreignId, this.title, this.author);
+  final int? year;
+  const BookRequestTarget(this.foreignId, this.title, this.author, {this.year});
 }
 
 class BookDiscoveryException implements Exception {
@@ -86,7 +87,8 @@ class BookDiscoveryService {
   BookDiscoveryService(this._dio);
 
   Future<Map<String, dynamic>> _get(String path, String? instanceId,
-      [Map<String, dynamic> params = const {}]) async {
+      [Map<String, dynamic> params = const {},
+      bool acceptUnavailable = false]) async {
     try {
       final response = await _dio.get(path, queryParameters: {
         if (instanceId != null) 'instance_id': instanceId,
@@ -97,6 +99,12 @@ class BookDiscoveryService {
       }
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
+      if (acceptUnavailable &&
+          e.response?.statusCode == 503 &&
+          e.response?.data is Map<String, dynamic> &&
+          e.response?.data['state'] == 'unavailable') {
+        return e.response!.data as Map<String, dynamic>;
+      }
       if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
         throw const BookDiscoveryException(
             'Books are not available for this account.',
@@ -127,6 +135,43 @@ class BookDiscoveryService {
         json['next_page'] as int?,
         json['empty_message'] as String? ??
             'No books found on this page of Open Library.');
+  }
+
+  Future<BookDiscoveryPage> search(String query, String? instanceId,
+      {int page = 1}) async {
+    final json = await _get('/api/discover/books/search', instanceId,
+        {'query': query, 'page': page});
+    if (json['page'] != page || json['results'] is! List) {
+      throw const FormatException('Invalid book search');
+    }
+    return BookDiscoveryPage(
+        (json['results'] as List)
+            .map((b) => DiscoveryBook.fromJson(b as Map<String, dynamic>))
+            .toList(),
+        json['next_page'] as int?,
+        json['empty_message'] as String? ?? '');
+  }
+
+  Future<BookResolution> resolution(String foreignId, String instanceId) async {
+    if (!DiscoveryBook.validId(foreignId)) {
+      throw const FormatException('Invalid book ID');
+    }
+    final json = await _get(
+        '/api/media/book/${foreignId.substring(3)}/request-target',
+        instanceId,
+        const {},
+        true);
+    List<BookRequestTarget> parse(Object? raw) => ((raw as List?) ?? [])
+        .map((item) => BookRequestTarget(item['foreign_id'] as String,
+            item['title'] as String, item['author'] as String? ?? '',
+            year: (item['year'] as num?)?.toInt()))
+        .toList();
+    return BookResolution(
+        parse(json['candidates']),
+        parse(json['suggestions']),
+        json['state'] as String? ?? 'matched',
+        json['empty_message'] as String? ?? '',
+        code: json['code'] as String? ?? '');
   }
 
   Future<List<BookGenre>> genres(String? instanceId) async {
@@ -164,4 +209,15 @@ class BookDiscoveryService {
       return BookRequestTarget(id, title, t['author'] as String? ?? '');
     }).toList();
   }
+}
+
+class BookResolution {
+  final List<BookRequestTarget> candidates;
+  final List<BookRequestTarget> suggestions;
+  final String state;
+  final String message;
+  final String code;
+  const BookResolution(
+      this.candidates, this.suggestions, this.state, this.message,
+      {this.code = ''});
 }
