@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
+	"github.com/windoze95/cantinarr-server/internal/instance"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -488,5 +489,38 @@ func TestLostAddResponseReconcilesNativeImportBeforeReplay(t *testing.T) {
 	next, _ := restarted.deliveryStates(ids[0])
 	if next[0].Attempts != states[0].Attempts || next[0].State != "waiting_library" {
 		t.Fatalf("native observation consumed delivery retries: %+v", next)
+	}
+}
+
+func TestAdminCanInspectAndCancelDeliveryAfterInstanceRemoval(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("removed instance should never be contacted") }))
+	defer server.Close()
+	s, uid, instanceID := newLidarrMusicTestService(t, server.URL)
+	adminID := createTestAdmin(t, s)
+	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "music", Title: "Saved album", CatalogRef: &CatalogRef{Provider: "musicbrainz", ID: "11111111-1111-4111-8111-111111111111"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = instance.NewStore(s.db, nil).Delete(instanceID); err != nil {
+		t.Fatal(err)
+	}
+	s.registry.InvalidateClient(instanceID)
+	s.SweepDispatch(context.Background())
+	detail, err := s.DeliveryByID(adminID, out.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Delivery) != 1 || detail.Delivery[0].State != "attention" || !detail.Delivery[0].CanManage || !detail.Delivery[0].CanCancel || detail.StatusKnown == nil || *detail.StatusKnown {
+		t.Fatalf("saved admin controls disappeared or claimed library truth: %+v", detail)
+	}
+	if _, err = s.DeliveryByID(uid, out.RequestID); err == nil {
+		t.Fatal("requester read bypassed a removed grant")
+	}
+	if _, err = s.DeliveryAction(context.Background(), adminID, out.RequestID, "retry", ""); err == nil {
+		t.Fatal("retry bypassed the missing instance")
+	}
+	cancelled, err := s.DeliveryAction(context.Background(), adminID, out.RequestID, "cancel", "")
+	if err != nil || cancelled.Delivery[0].State != "cancelled" {
+		t.Fatalf("admin could not cancel saved intent: %+v %v", cancelled, err)
 	}
 }

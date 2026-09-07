@@ -312,7 +312,7 @@ The consent surface for quality-profile changes proposed over external MCP. The 
 
 ### Requests
 ```
-GET    /api/requests/delivery-status        # book/music saved delivery; media_type + instance_id and foreign_id or catalog_provider + catalog_id; alternatively request_id
+GET    /api/requests/delivery-status        # book/music saved delivery; media_type + instance_id and foreign_id or catalog_provider + catalog_id; alternatively request_id (admins can inspect saved intent after instance removal, with live state unknown)
 POST   /api/requests/{id}/delivery          # requester/admin: {action: retry|cancel|confirm, foreign_id?}; confirm requires a current book match
 POST   /api/requests                       # user: create (movie/tv by tmdb_id; books by foreign_id +
                                            #   book_format; music by foreign_id — the MusicBrainz

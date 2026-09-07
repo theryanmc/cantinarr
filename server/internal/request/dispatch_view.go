@@ -194,28 +194,36 @@ func (s *Service) attachPendingDelivery(p *PendingRequest) {
 	}
 }
 
+// Administrators can inspect saved intent even after its instance is removed.
+// This does not authorize a library read or retry against another instance.
+func (s *Service) authorizeDeliveryRead(userID, id int64, r *resolvedRequest) error {
+	if s.userIsAdmin(userID) {
+		return nil
+	}
+	var owns int
+	if s.db.QueryRow(`SELECT COUNT(*) FROM request_log r WHERE r.id=? AND (r.user_id=? OR EXISTS(SELECT 1 FROM book_request_waiters w WHERE w.request_id=r.id AND w.user_id=?))`, id, userID, userID).Scan(&owns) != nil || owns != 1 {
+		return fmt.Errorf("request is not available to you")
+	}
+	_, err := s.deliveryInstance(userID, r.mediaType, r.instanceID)
+	return err
+}
+
 func (s *Service) DeliveryByID(userID, id int64) (*CreateResponse, error) {
 	r, _, err := s.loadRequest(id)
 	if err != nil {
 		return nil, err
 	}
-	if !s.userIsAdmin(userID) && r.userID != userID {
-		var n int
-		if s.db.QueryRow(`SELECT COUNT(*) FROM book_request_waiters WHERE request_id=? AND user_id=?`, id, userID).Scan(&n) != nil || n == 0 {
-			return nil, fmt.Errorf("request is not available to you")
-		}
+	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
+		return nil, err
 	}
 	p := PendingRequest{ID: id}
 	s.attachPendingDelivery(&p)
-	if _, err = s.deliveryInstance(userID, r.mediaType, r.instanceID); err != nil {
-		return nil, err
-	}
 	out, err := s.deliveryResponse(userID, []int64{id}, r.title, r.instanceID, p.CatalogRef)
 	if err != nil {
 		return nil, err
 	}
 	s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
-	if _, err = s.deliveryInstance(userID, r.mediaType, r.instanceID); err != nil {
+	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
 		return nil, err
 	}
 	return out, nil
