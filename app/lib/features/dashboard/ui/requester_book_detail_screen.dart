@@ -13,10 +13,8 @@ import '../../../core/widgets/cached_image.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/book_discovery_service.dart';
-import '../../discover/logic/book_discovery_provider.dart';
-import '../../discover/logic/discovery_access.dart';
 import '../../discover/ui/catalog_setup_button.dart';
-import '../../discover/ui/book_discovery_row.dart';
+import '../../discover/ui/book_browse_screen.dart';
 import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
@@ -30,9 +28,7 @@ import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
 import '../../request/data/request_service.dart';
 import '../../request/ui/book_format_panel.dart';
-import '../../request/ui/catalog_request_panel.dart';
 import '../data/book_library_service.dart';
-import '../logic/book_ownership_matcher.dart';
 
 /// Requester-facing detail for one book, addressed by its Chaptarr/Readarr
 /// foreignBookId. Search navigation supplies [initialBook] for an immediate,
@@ -82,12 +78,6 @@ class _RequesterBookDetailScreenState
   int _recordsLoadGeneration = 0;
   String? _instanceId;
   bool get _isDiscovery => widget.discovery || widget.discoveryBook != null;
-  DiscoveryBook? _discoveryBook;
-  Object? _discoveryError;
-  AsyncValue<List<BookRequestTarget>> _targets = const AsyncLoading();
-  BookRequestTarget? _discoveryTarget;
-  String? _boundDiscoveryTargetId;
-  String? _chosenTargetId;
 
   /// The foreignBookId the library files this book under, when the server
   /// reported it differs from [widget.foreignId] (Chaptarr re-keys created
@@ -139,13 +129,6 @@ class _RequesterBookDetailScreenState
     _chaptarrRecords = const [];
     _filesByBook = const {};
     _canonicalForeignId = null;
-    _discoveryBook = widget.discoveryBook?.foreignId == widget.foreignId
-        ? widget.discoveryBook
-        : null;
-    _discoveryTarget = null;
-    _boundDiscoveryTargetId = null;
-    _chosenTargetId = null;
-    _discoveryError = null;
     // The id fetch runs whenever no record rode along, so the page waits on
     // it rather than flashing "not found" at a book only that fetch can name.
     _metadataLoading = widget.initialBook == null;
@@ -165,18 +148,8 @@ class _RequesterBookDetailScreenState
     );
   }
 
-  /// Resolves the book's metadata with the same read-only lookup as Books
-  /// search, by the exact foreign id first. Chaptarr answers `book/lookup`
-  /// for an id term with an exact fetch: the library's own record, editions
-  /// included, when it tracks the book, else the metadata work itself, and
-  /// nothing for an id it does not know. A result counts only when it carries
-  /// this page's id: the provider resolves an alias id to its canonical
-  /// sibling, a record the requester did not open, and the page is re-keyed
-  /// to that id separately once the server reports it. Only when the id names
-  /// nothing does the title hint's search run, since this provider routinely
-  /// answers nothing for a full title; an older provider-id mismatch may then
-  /// use metadata only when the canonical digest row exists and exactly one
-  /// lookup result strongly matches both that row's title and author.
+  /// Cold native links load metadata by ID, then title. Only the selected
+  /// native ID can supply metadata; a similar title is a different result.
   Future<void> _resolveMetadata(int generation) async {
     if (_metadata != null) return;
     final service = _chaptarrService();
@@ -200,29 +173,6 @@ class _RequesterBookDetailScreenState
       try {
         final results = await service.lookupBook(term);
         match = _exactMatch(results);
-        if (match == null) {
-          final digest = await ref.read(
-            ownedBooksForInstanceProvider(_instanceId).future,
-          );
-          final canonicalRows = digest
-              .where((owned) =>
-                  owned.foreignBookId.trim() == widget.foreignId.trim())
-              .toList(growable: false);
-          if (canonicalRows.length == 1) {
-            final canonical = canonicalRows.single;
-            final strongIdentityMatches = results
-                .where((book) =>
-                    strongNormalizedTitleMatch(book.title, canonical.title) &&
-                    strongAuthorMatch(
-                      book.author?.authorName,
-                      canonical.author,
-                    ))
-                .toList(growable: false);
-            if (strongIdentityMatches.length == 1) {
-              match = strongIdentityMatches.single;
-            }
-          }
-        }
       } catch (_) {
         // The title hint still gives the requester a useful fallback.
       }
@@ -246,7 +196,7 @@ class _RequesterBookDetailScreenState
   /// digest intentionally lack trustworthy numeric library/file ids, so only
   /// this live list may back admin navigation or requester downloads.
   Future<void> _resolveChaptarrRecords(int generation) async {
-    if (_isDiscovery && _discoveryTarget == null) return;
+    if (_isDiscovery) return;
     final auth = ref.read(authProvider).valueOrNull;
     final isAdmin = auth?.user?.isAdmin ?? false;
     final downloadsEnabled =
@@ -422,63 +372,10 @@ class _RequesterBookDetailScreenState
   @override
   Widget build(BuildContext context) {
     if (_isDiscovery) {
-      ref.listen(bookDiscoveryScopeProvider, (previous, next) {
-        if (previous != next) setState(_startLoads);
-      });
-      final id = _instanceId;
-      final access = ref.watch(discoveryAccessProvider);
-      if (!access.canBrowse('chaptarr', id)) {
-        return Scaffold(
-            appBar: AppBar(title: const Text('Book details')),
-            body: Center(
-                child: Text(access.needsUpdate(id)
-                    ? adminCatalogUpdateMessage
-                    : 'Books are not available for this account.')));
-      }
-      final key = (foreignId: widget.foreignId, instanceId: id);
-      final metadata = ref.watch(bookDiscoveryDetailProvider(key));
-      _discoveryBook = metadata.valueOrNull ?? _discoveryBook;
-      _discoveryError = metadata.error;
-      _metadataLoading = metadata.isLoading && _discoveryBook == null;
-      _targets = id == null
-          ? const AsyncData(<BookRequestTarget>[])
-          : ref.watch(bookRequestTargetsProvider(
-              (foreignId: widget.foreignId, instanceId: id)));
-      final candidates = _targets.hasError || _targets.isLoading
-          ? <BookRequestTarget>[]
-          : _targets.valueOrNull ?? <BookRequestTarget>[];
-      _discoveryTarget = null;
-      if (candidates.length == 1) {
-        _discoveryTarget = candidates.single;
-      } else {
-        for (final candidate in candidates) {
-          if (candidate.foreignId == _chosenTargetId) {
-            _discoveryTarget = candidate;
-          }
-        }
-      }
-      final canonical = _discoveryTarget?.foreignId;
-      if (_boundDiscoveryTargetId != canonical) {
-        _boundDiscoveryTargetId = canonical;
-        _canonicalForeignId = canonical;
-        _chaptarrRecords = const [];
-        _filesByBook = const {};
-        _recordsLoadGeneration++;
-        if (canonical != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _resolveChaptarrRecords(_loadGeneration);
-          });
-        }
-      }
-      if ((_discoveryError is BookDiscoveryException &&
-              (_discoveryError as BookDiscoveryException).accessDenied) ||
-          (_targets.error is BookDiscoveryException &&
-              (_targets.error as BookDiscoveryException).accessDenied)) {
-        return Scaffold(
-            appBar: AppBar(title: const Text('Book details')),
-            body: const Center(
-                child: Text('Books are not available for this account.')));
-      }
+      return BookCatalogRetiredScreen(
+        title: widget.discoveryBook?.title ?? widget.titleHint ?? '',
+        instanceId: _instanceId,
+      );
     }
     ref.listen(libraryChangedEventsProvider, (_, next) {
       if (next.hasValue) _refreshBookTruth();
@@ -509,60 +406,6 @@ class _RequesterBookDetailScreenState
     );
   }
 
-  void _retryDiscoveryMetadata() {
-    final id = _instanceId;
-    ref.invalidate(bookDiscoveryDetailProvider(
-        (foreignId: widget.foreignId, instanceId: id)));
-  }
-
-  Widget _discoveryRequestControls() {
-    final id = _instanceId;
-    if (id == null) return const CatalogSetupButton(serviceType: 'chaptarr');
-    return CatalogRequestPanel(
-        mediaType: 'book',
-        foreignId: widget.foreignId,
-        title: _discoveryBook?.title ?? widget.titleHint ?? '',
-        instanceId: id,
-        provider: 'openlibrary',
-        sourceId: widget.foreignId.substring(3),
-        nativeId: _discoveryTarget?.foreignId,
-        onCanonicalForeignId: _onCanonicalForeignId);
-  }
-
-  /// Library titles this page's book may duplicate: fuzzy title/author matches
-  /// with some owned format, minus the page's own record. The metadata catalog
-  /// keeps duplicate listings for one work, so a requester can land on the
-  /// listing their library doesn't use — this is the plain "you may already
-  /// have this" pointer that keeps them from requesting the book twice.
-  List<OwnedTitle> _libraryLookalikes(
-    List<OwnedTitle> titles,
-    String title,
-    String author,
-  ) {
-    final probe = ChaptarrBook(
-      id: 0,
-      title: title,
-      author: author.isEmpty
-          ? null
-          : ChaptarrAuthorContext(id: 0, authorName: author),
-    );
-    return ownedMatchesFor(probe, titles)
-        .where((t) =>
-            t.ownership.anyOwned &&
-            t.foreignBookId.trim().isNotEmpty &&
-            t.foreignBookId.trim() != _effectiveForeignId)
-        .toList(growable: false);
-  }
-
-  void _openLookalike(OwnedTitle candidate) {
-    final instanceId = _instanceId;
-    context.push(
-      '/detail/book/${Uri.encodeComponent(candidate.foreignBookId.trim())}'
-      '?title=${Uri.encodeQueryComponent(candidate.title)}'
-      '${instanceId == null ? '' : '&instance_id=${Uri.encodeQueryComponent(instanceId)}'}',
-    );
-  }
-
   Widget _resolved(List<OwnedTitle> titles) {
     OwnedTitle? owned;
     for (final title in titles) {
@@ -576,17 +419,12 @@ class _RequesterBookDetailScreenState
     final live = _chaptarrRecords.isEmpty ? null : _chaptarrRecords.first;
     final hintedTitle = widget.titleHint?.trim() ?? '';
     final title = _firstText([
-      _discoveryBook?.title,
       _metadata?.title,
       live?.title,
       owned?.title,
       hintedTitle,
     ]);
     if (title.isEmpty) {
-      if (_isDiscovery && _discoveryError != null) {
-        return BookDiscoveryError(_discoveryError!,
-            onRetry: _retryDiscoveryMetadata);
-      }
       return _metadataLoading
           ? const Center(
               child: CircularProgressIndicator(color: AppTheme.accent),
@@ -595,7 +433,6 @@ class _RequesterBookDetailScreenState
     }
 
     final author = _firstText([
-      _discoveryBook?.author,
       _metadata?.author?.authorName,
       live?.author?.authorName,
       owned?.author,
@@ -627,9 +464,8 @@ class _RequesterBookDetailScreenState
       _metadata?.seriesTitle,
     ]);
     final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
-    final year = _discoveryBook?.year ?? releaseDate?.year ?? owned?.year ?? 0;
+    final year = releaseDate?.year ?? owned?.year ?? 0;
     final overview = _firstText([
-      _discoveryBook?.description,
       _metadata?.displayOverview,
       live?.displayOverview,
     ]);
@@ -644,17 +480,10 @@ class _RequesterBookDetailScreenState
     // library record fills in only when the lookup named no outside page.
     final metadataLinks =
         _metadata == null ? const <TitleLink>[] : bookLinks(_metadata!);
-    final links = _discoveryBook != null
-        ? [TitleLink('Open Library', _discoveryBook!.openLibraryUrl)]
-        : metadataLinks.isNotEmpty
-            ? metadataLinks
-            : (live == null ? const <TitleLink>[] : bookLinks(live));
+    final links = metadataLinks.isNotEmpty
+        ? metadataLinks
+        : (live == null ? const <TitleLink>[] : bookLinks(live));
     final ownership = owned?.ownership;
-    // Only a page that could not bind to its own library record needs the
-    // pointer; a bound page's format panel already tells the whole truth.
-    final lookalikes = owned != null
-        ? const <OwnedTitle>[]
-        : _libraryLookalikes(titles, title, author);
     final auth = ref.watch(authProvider).valueOrNull;
     final instanceId = _instanceId;
     final downloadsEnabled =
@@ -696,8 +525,8 @@ class _RequesterBookDetailScreenState
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
               child: CachedImage(
-                url: _isDiscovery ? _discoveryBook?.coverUrl : cover?.url,
-                headers: _isDiscovery ? null : cover?.headers,
+                url: cover?.url,
+                headers: cover?.headers,
                 width: 132,
                 height: 198,
                 icon: Icons.menu_book,
@@ -783,42 +612,30 @@ class _RequesterBookDetailScreenState
             ),
           ],
           const SizedBox(height: 24),
-          if (_isDiscovery && _discoveryError != null)
-            BookDiscoveryError(_discoveryError!,
-                onRetry: _retryDiscoveryMetadata),
-          if (lookalikes.isNotEmpty) ...[
-            _LookalikeNotice(
-              candidates: lookalikes,
-              onOpen: _openLookalike,
-            ),
-            const SizedBox(height: 14),
-          ],
-          if (_isDiscovery)
-            _discoveryRequestControls()
+          if (instanceId == null)
+            const CatalogSetupButton(serviceType: 'chaptarr')
           else
             BookFormatPanel(
-              foreignId: _effectiveForeignId,
-              title: _discoveryTarget?.title ?? title,
+              key: ValueKey('book-formats:${widget.foreignId}:$instanceId'),
+              foreignId: widget.foreignId,
+              title: title,
               instanceId: instanceId,
-              searchTerm: _discoveryTarget?.foreignId ?? widget.searchTerm,
+              searchTerm: widget.searchTerm,
               service: _requestService,
               ownership: ownership,
               ownershipStatusKnown: owned?.statusKnown ?? true,
               refreshTick: requestRefreshTick,
               onCanonicalForeignId: _onCanonicalForeignId,
-              ebookDownload:
-                  !downloadsEnabled || instanceId == null || ebookFiles.isEmpty
-                      ? null
-                      : MediaDownloadChoiceButton(
-                          instanceId: instanceId,
-                          choices: ebookFiles,
-                          label: 'Download eBook',
-                          sheetTitle: 'Download eBook',
-                          iconOnly: true,
-                        ),
-              audiobookDownload: !downloadsEnabled ||
-                      instanceId == null ||
-                      audiobookFiles.isEmpty
+              ebookDownload: !downloadsEnabled || ebookFiles.isEmpty
+                  ? null
+                  : MediaDownloadChoiceButton(
+                      instanceId: instanceId,
+                      choices: ebookFiles,
+                      label: 'Download eBook',
+                      sheetTitle: 'Download eBook',
+                      iconOnly: true,
+                    ),
+              audiobookDownload: !downloadsEnabled || audiobookFiles.isEmpty
                   ? null
                   : MediaDownloadChoiceButton(
                       instanceId: instanceId,
@@ -829,13 +646,6 @@ class _RequesterBookDetailScreenState
                     ),
               onRequestCompleted: _onRequestCompleted,
             ),
-          if (!_isDiscovery && instanceId != null)
-            CatalogRequestPanel(
-                mediaType: 'book',
-                foreignId: widget.foreignId,
-                title: title,
-                instanceId: instanceId,
-                progressOnly: true),
           if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the
@@ -955,90 +765,6 @@ class _RequesterBookDetailScreenState
     );
   }
 }
-
-/// A plain "you may already have this book" pointer shown above the format
-/// panel when the library tracks what looks like the same title under another
-/// catalog listing. Each candidate stays its own tappable row — records are
-/// never merged — and opening one lands on the page whose request state is
-/// real, which is the honest way to prevent an accidental duplicate request.
-class _LookalikeNotice extends StatelessWidget {
-  final List<OwnedTitle> candidates;
-  final ValueChanged<OwnedTitle> onOpen;
-
-  const _LookalikeNotice({required this.candidates, required this.onOpen});
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: AppTheme.surface,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
-        side: const BorderSide(color: AppTheme.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: Row(
-              children: [
-                Icon(Icons.library_books_outlined,
-                    size: 18, color: AppTheme.requested),
-                SizedBox(width: 8),
-                Flexible(
-                  child: Text(
-                    'Your library may already have this book',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: AppTheme.border),
-          for (final candidate in candidates)
-            ListTile(
-              key: ValueKey('book-lookalike:${candidate.foreignBookId.trim()}'),
-              dense: true,
-              title: Text(
-                candidate.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppTheme.textPrimary),
-              ),
-              subtitle: Text(
-                _lookalikeStates(candidate.ownership),
-                style: const TextStyle(
-                  color: AppTheme.requested,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              trailing: const Icon(Icons.chevron_right,
-                  color: AppTheme.textSecondary),
-              onTap: () => onOpen(candidate),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// The same per-format state phrases the search results use, so the requester
-/// reads one vocabulary everywhere.
-String _lookalikeStates(BookOwnership o) => [
-      if (o.ebook.downloaded)
-        'eBook available'
-      else if (o.ebook.monitored)
-        'eBook requested',
-      if (o.audiobook.downloaded)
-        'Audiobook available'
-      else if (o.audiobook.monitored)
-        'Audiobook requested',
-    ].join(' · ');
 
 String _bookFileLabel(ChaptarrBookFile file, int index) {
   final path = file.path?.replaceAll('\\', '/') ?? '';

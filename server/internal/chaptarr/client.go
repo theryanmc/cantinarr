@@ -46,6 +46,30 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
+// WithMutationGuard returns a private client that checks current authority
+// immediately before every write, including follow-up writes after a read.
+func (c *Client) WithMutationGuard(check func() error) *Client {
+	clone := *c
+	httpClient := *c.httpClient
+	httpClient.Transport = mutationGuard{base: c.httpClient.Transport, check: check}
+	clone.httpClient = &httpClient
+	return &clone
+}
+
+type mutationGuard struct {
+	base  http.RoundTripper
+	check func() error
+}
+
+func (g mutationGuard) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if err := g.check(); err != nil {
+			return nil, err
+		}
+	}
+	return g.base.RoundTrip(r)
+}
+
 // Image is a cover/poster reference returned on authors, books, and editions.
 type Image struct {
 	CoverType string `json:"coverType"`

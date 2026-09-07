@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/httpx"
@@ -25,7 +26,12 @@ import (
 // and no indexers or download clients. It is never used by the default suite.
 var catalogCanary = flag.String("catalog-canary", "", "private JSON manifest for disposable loopback Chaptarr/Lidarr instances")
 
-type catalogCanaryInstance struct{ URL, Key, Container string }
+type catalogCanaryInstance struct {
+	URL, Key, Container string
+	// Explicitly seeded, unmonitored copies of the selected native book. This
+	// exercises real monitoring/search writes without claiming a new metadata import.
+	ExistingBookFixture bool
+}
 
 func TestLiveDisposableCatalogDelivery(t *testing.T) {
 	if *catalogCanary == "" {
@@ -41,7 +47,10 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 	}
 	for _, serviceType := range []string{"lidarr", "chaptarr"} {
 		t.Run(serviceType, func(t *testing.T) {
-			cfg := configs[serviceType]
+			cfg, present := configs[serviceType]
+			if !present {
+				t.Skip("service not included in disposable manifest")
+			}
 			target, err := url.Parse(cfg.URL)
 			if err != nil || target.Scheme != "http" || target.Hostname() != "127.0.0.1" || cfg.Key == "" {
 				t.Fatal("canary must use a disposable loopback service")
@@ -82,14 +91,26 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 			s := NewService(database, instance.NewRegistry(store), nil, nil)
 			req := &CreateRequest{MediaType: "music", Title: "Nevermind", InstanceID: inst.ID, CatalogRef: &CatalogRef{Provider: "musicbrainz", ID: "1b022e01-4da6-387b-8658-8678046e4cef"}}
 			if serviceType == "chaptarr" {
-				req = &CreateRequest{MediaType: "book", Title: "The Subtle Art of Not Giving a Fuck", BookFormat: "both", InstanceID: inst.ID, CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL17590212W"}}
+				req = &CreateRequest{MediaType: "book", Title: "The Subtle Art of Not Giving a Fuck", BookFormat: "both", InstanceID: inst.ID, ForeignID: "gr:48297245", SearchTerm: "The Subtle Art of Not Giving a Fuck"}
 			}
 			// Refuse to run against a populated library, even on loopback.
 			outage.Store(false)
 			if serviceType == "chaptarr" {
 				client, _, _ := s.resolveChaptarr(uid, inst.ID)
 				books, e := client.GetAllBooks()
-				if e != nil || len(books) != 0 {
+				if e != nil {
+					t.Fatal("canary book library is not readable")
+				}
+				if cfg.ExistingBookFixture {
+					if len(books) != 2 {
+						t.Fatal("expected exactly two unmonitored native fixture records")
+					}
+					for _, book := range books {
+						if book.ForeignBookID != req.ForeignID || book.Monitored || book.Statistics.BookFileCount > 0 {
+							t.Fatal("book library does not contain the expected unmonitored fixture")
+						}
+					}
+				} else if len(books) != 0 {
 					t.Fatal("canary book library is not empty or readable")
 				}
 			} else {
@@ -100,7 +121,14 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 				}
 			}
 			outage.Store(serviceType == "lidarr")
+			started := time.Now()
 			out, err := s.CreateMediaRequest(uid, req)
+			if serviceType == "chaptarr" {
+				t.Logf("native acknowledgement: %s", time.Since(started))
+				if time.Since(started) > time.Second {
+					t.Fatal("book acknowledgement exceeded one second")
+				}
+			}
 			if err != nil || out.RequestID == 0 {
 				t.Fatalf("request was not saved: %v", err)
 			}
@@ -143,17 +171,52 @@ func TestLiveDisposableCatalogDelivery(t *testing.T) {
 				}
 				t.Log("saved through HTTP 503, reopened database, delivered one exact release group to live Lidarr")
 			} else {
-				for _, state := range states {
-					if state.State != "retry" && state.State != "needs_match" && state.State != "waiting_library" && state.State != "complete" {
-						t.Fatalf("unexpected live book outcome: %+v", states)
+				deadline := time.Now().Add(5 * time.Minute)
+				previous := ""
+				for {
+					s.SweepParkedBookRequests()
+					states, _ = s.deliveryStates(out.RequestID)
+					ready := len(states) == 2
+					for _, state := range states {
+						ready = ready && state.State == "complete"
 					}
-					t.Logf("live Chaptarr: %s retained as %s (code %s)", state.Format, state.State, state.Code)
+					if ready {
+						break
+					}
+					for _, state := range states {
+						if state.State == "attention" {
+							t.Fatalf("native delivery requires attention: %+v", states)
+						}
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("native delivery did not complete: %+v", states)
+					}
+					snapshot, _ := json.Marshal(states)
+					if string(snapshot) != previous {
+						t.Logf("native delivery still waiting: %+v", states)
+						previous = string(snapshot)
+					}
+					time.Sleep(5 * time.Second)
+					s.SweepDispatch(context.Background())
 				}
-				if states[0].State != "complete" {
-					if _, err = s.DeliveryAction(context.Background(), uid, out.RequestID, "cancel", ""); err != nil {
-						t.Fatal(err)
+				client, _, _ := s.resolveChaptarr(uid, inst.ID)
+				books, err := client.GetAllBooks()
+				if err != nil {
+					t.Fatal(err)
+				}
+				formats := map[string]int{}
+				for _, book := range books {
+					if book.Monitored {
+						if book.ForeignBookID != req.ForeignID {
+							t.Fatalf("different title was targeted: %s", book.ForeignBookID)
+						}
+						formats[book.MediaType]++
 					}
 				}
+				if formats["ebook"] != 1 || formats["audiobook"] != 1 {
+					t.Fatalf("expected one exact record per format: %v", formats)
+				}
+				t.Log("delivered one eBook and one audiobook for gr:48297245 to real Chaptarr")
 			}
 		})
 	}

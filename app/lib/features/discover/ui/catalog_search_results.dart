@@ -3,10 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/providers/instance_provider.dart';
-import '../data/book_discovery_service.dart';
 import '../data/music_discovery_service.dart';
 import '../data/music_models.dart';
-import '../logic/book_discovery_provider.dart';
 import '../logic/discovery_access.dart';
 
 typedef CatalogSearchKey = ({
@@ -32,16 +30,8 @@ final catalogSearchProvider = FutureProvider.autoDispose.family<
   ref.onDispose(() => cancelled = true);
   await Future<void>.delayed(const Duration(milliseconds: 300));
   if (cancelled) throw StateError('Search changed');
-  if (key.mediaType == 'book') {
-    final page = await ref
-        .read(bookDiscoveryServiceProvider)
-        .search(key.query, key.instanceId, page: key.page);
-    return (
-      results: page.results,
-      nextPage: page.nextPage,
-      message: page.emptyMessage
-    );
-  }
+  if (key.mediaType == 'book') throw StateError('catalog_retired');
+
   final page = await ref
       .read(musicDiscoveryServiceProvider)
       .search(key.query, key.instanceId, page: key.page);
@@ -92,7 +82,7 @@ class _CatalogSearchResultsState extends ConsumerState<CatalogSearchResults> {
       page: _page
     );
     final result = ref.watch(catalogSearchProvider(key));
-    final label = widget.mediaType == 'book' ? 'Open Library' : 'MusicBrainz';
+    const label = 'MusicBrainz';
     final publicResults = result.when(
       skipLoadingOnRefresh: false,
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -107,16 +97,7 @@ class _CatalogSearchResultsState extends ConsumerState<CatalogSearchResults> {
         if (page.results.isEmpty)
           Padding(padding: const EdgeInsets.all(24), child: Text(page.message)),
         for (final item in page.results)
-          if (item is DiscoveryBook)
-            ListTile(
-                leading: const Icon(Icons.menu_book),
-                title: Text(item.title),
-                subtitle: Text(item.author),
-                onTap: () {
-                  widget.onResultTap?.call();
-                  context.push(item.detailLocation(instanceId), extra: item);
-                })
-          else if (item is MusicAlbum)
+          if (item is MusicAlbum)
             ListTile(
                 leading: const Icon(Icons.album),
                 title: Text(item.title),

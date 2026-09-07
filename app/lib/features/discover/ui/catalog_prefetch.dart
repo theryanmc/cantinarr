@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/cached_image.dart';
 import '../data/music_discovery_service.dart';
-import '../logic/book_discovery_provider.dart';
 import '../logic/discovery_access.dart';
 import '../logic/music_browse_query.dart';
 import '../logic/music_feed_provider.dart';
@@ -17,16 +16,6 @@ final catalogOpeningArtworkProvider =
     Provider.autoDispose<List<ImageSource>>((ref) {
   final access = ref.watch(discoveryAccessProvider);
   final sources = <ImageSource>[];
-  final books = access.activeId('chaptarr');
-  if (access.showBooks && access.canBrowse('chaptarr', books)) {
-    ref.watch(bookGenresProvider(books));
-    final feed =
-        ref.watch(bookFeedProvider(BookBrowseQuery(instanceId: books)));
-    sources.addAll(feed.items
-        .take(6)
-        .where((b) => b.coverUrl != null)
-        .map((b) => (url: b.coverUrl!, headers: null)));
-  }
   final music = access.activeId('lidarr');
   if (access.showMusic && access.canBrowse('lidarr', music)) {
     ref.watch(musicGenresProvider(music));

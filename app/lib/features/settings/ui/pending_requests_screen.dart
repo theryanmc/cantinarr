@@ -798,6 +798,20 @@ class _PendingTile extends StatelessWidget {
           // Most rows are a plain yes/no and say nothing here. A row whose add
           // already failed is not one, and without this it looked identical —
           // so Approve got pressed, failed, and left no idea what to do next.
+          if (item.isCatalogRetired) ...[
+            const SizedBox(height: 4),
+            const Text('Needs attention',
+                style: TextStyle(color: AppTheme.requested)),
+            CatalogRequestPanel(
+                mediaType: item.mediaType,
+                foreignId: 'ol:${item.catalogId}',
+                title: item.title,
+                instanceId: item.instanceId,
+                provider: item.catalogProvider,
+                sourceId: item.catalogId,
+                requestId: item.id,
+                progressOnly: true),
+          ],
           if (item.addFailure case final failure?) ...[
             const SizedBox(height: 4),
             Row(
@@ -854,7 +868,9 @@ class _PendingTile extends StatelessWidget {
           // approving just replays an add the library already refused, so the
           // honest verb is "try again" — resume the wait, or complete on the
           // spot if the author has landed since.
-          if (item.isImportWait)
+          if (item.isCatalogRetired)
+            const SizedBox.shrink()
+          else if (item.isImportWait)
             IconButton(
               icon: const Icon(Icons.replay),
               color: AppTheme.requested,

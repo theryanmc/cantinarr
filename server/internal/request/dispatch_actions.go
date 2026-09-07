@@ -3,6 +3,7 @@ package request
 import (
 	"context"
 	"fmt"
+	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 )
 
 func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride) (*CreateResponse, error) {
@@ -12,6 +13,10 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 	r, _, err := s.loadRequest(id)
 	if err != nil {
 		return nil, err
+	}
+	var retired int
+	if s.db.QueryRow(`SELECT COUNT(*) FROM request_dispatch WHERE request_id=? AND code='catalog_retired'`, id).Scan(&retired) == nil && retired > 0 {
+		return nil, bookdiscovery.ErrRetired
 	}
 	if r.parkReason == bookParkReasonAuthorImport {
 		return nil, fmt.Errorf("the request completes automatically once the import lands")
@@ -49,16 +54,26 @@ func (s *Service) approveDelivery(adminID, id int64, override *DecisionOverride)
 			s.notifier.NotifyUser(subscriber.UserID, "request_decision", map[string]interface{}{"request_id": id, "tmdb_id": 0, "media_type": r.mediaType, "foreign_id": r.foreignID, "title": r.title, "instance_id": r.instanceID, "decision": "approved", "book_format": subscriber.BookFormat})
 		}
 	}
-	s.dispatchRequest(context.Background(), id)
+	if r.mediaType == "book" {
+		s.wakeDispatch()
+	} else {
+		s.dispatchRequest(context.Background(), id)
+	}
 	return s.deliveryResponse(r.userID, []int64{id}, r.title, r.instanceID, nil)
 }
 
-// DeliveryStatus is the common app/MCP read, including unresolved source IDs.
-// It authorizes before touching saved intent and again before returning it.
-func (s *Service) DeliveryAction(ctx context.Context, userID, id int64, action, foreignID string) (*CreateResponse, error) {
+// DeliveryAction manages saved intent without running an upstream delivery.
+func (s *Service) DeliveryAction(ctx context.Context, userID, id int64, action, foreignID string, requestedFormat ...string) (*CreateResponse, error) {
 	r, status, err := s.loadRequest(id)
 	if err != nil {
 		return nil, err
+	}
+	format := ""
+	if len(requestedFormat) > 0 {
+		format = requestedFormat[0]
+	}
+	if format != "" && (r.mediaType != "book" || (format != BookFormatEbook && format != BookFormatAudiobook)) {
+		return nil, fmt.Errorf("choose ebook or audiobook")
 	}
 	admin := s.userIsAdmin(userID)
 	if action == "cancel" {
@@ -83,26 +98,19 @@ func (s *Service) DeliveryAction(ctx context.Context, userID, id int64, action, 
 		return nil, err
 	}
 	if action == "confirm" {
-		if provider != "openlibrary" || foreignID == "" {
-			return nil, fmt.Errorf("choose a matching book")
-		}
-		client, _, _ := s.resolveChaptarr(userID, r.instanceID)
-		matches, e := s.BookCatalog.ResolveClient(ctx, client, sourceID)
-		if e != nil {
-			return nil, e
-		}
-		found := false
-		for _, candidate := range append(matches.Candidates, matches.Suggestions...) {
-			found = found || candidate.ForeignID == foreignID
-		}
-		if !found {
-			return nil, fmt.Errorf("that book is not among the current matches; refresh the choices")
+		return nil, bookdiscovery.ErrRetired
+	}
+	if provider == "openlibrary" {
+		var confirmed bool
+		s.db.QueryRow(`SELECT match_confirmed FROM request_log WHERE id=?`, id).Scan(&confirmed)
+		if !s.verifiedBookBinding(id, r.foreignID, confirmed) {
+			return nil, bookdiscovery.ErrRetired
 		}
 	}
 	if action != "confirm" && action != "retry" {
 		return nil, fmt.Errorf("unsupported delivery action")
 	}
-	// Matching can wait on external providers; a grant may change during it.
+	// Recheck current access before re-queuing saved intent.
 	if _, err = s.deliveryInstance(userID, r.mediaType, r.instanceID); err != nil {
 		return nil, err
 	}
@@ -118,19 +126,15 @@ func (s *Service) DeliveryAction(ctx context.Context, userID, id int64, action, 
 	if processing > 0 {
 		return nil, fmt.Errorf("delivery is in progress; refresh before changing this request")
 	}
-	if action == "confirm" {
-		_, err = tx.Exec(`UPDATE request_log SET foreign_id=?,match_confirmed=1 WHERE id=? AND status='pending'`, foreignID, id)
-		if err != nil {
-			return nil, err
-		}
-	}
-	_, err = tx.Exec(`UPDATE request_dispatch SET state=CASE WHEN (SELECT park_reason FROM request_log WHERE id=?) IS NULL THEN 'approval' ELSE 'queued' END,attempts=0,next_attempt_at=0,message='',code=CASE WHEN code IN ('import_failed','import_cancelled','manual_import_retry') THEN 'manual_import_retry' ELSE '' END WHERE request_id=? AND state IN ('attention','needs_match','retry') AND EXISTS(SELECT 1 FROM request_log WHERE id=? AND status='pending')`, id, id, id)
+
+	_, err = tx.Exec(`UPDATE request_dispatch SET state=CASE WHEN (SELECT park_reason FROM request_log WHERE id=?) IS NULL THEN 'approval' ELSE 'queued' END,attempts=0,next_attempt_at=0,message='',code=CASE WHEN code IN ('import_failed','import_cancelled','manual_import_retry') THEN 'manual_import_retry' ELSE '' END WHERE request_id=? AND (?='' OR format=?) AND state IN ('attention','needs_match','retry') AND EXISTS(SELECT 1 FROM request_log WHERE id=? AND status='pending')`, id, id, format, format, id)
 	if err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	s.wakeDispatch()
 	s.notifyDelivery(id, "queued")
 	var ref *CatalogRef
 	if provider != "" {

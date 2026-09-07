@@ -1079,6 +1079,20 @@ func Open(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)
 	}
 
+	// Retire unresolved Open Library deliveries without approving, deleting,
+	// or redirecting them. Verified native bindings retain their delivery jobs.
+	if _, err := db.Exec(`UPDATE request_dispatch SET state='attention', code='catalog_retired',
+        message='', next_attempt_at=0, lease_until=0, lease_token=''
+        WHERE state NOT IN ('complete','cancelled') AND request_id IN (
+          SELECT r.id FROM request_log r WHERE r.media_type='book' AND r.catalog_provider='openlibrary'
+          AND r.status='pending' AND NOT (
+            COALESCE(r.foreign_id,'')!='' AND (r.match_confirmed=1 OR COALESCE(r.book_record_id,0)>0 OR EXISTS (
+              SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id AND
+                (d.canonical_foreign_id!='' OR d.book_record_id>0 OR d.state='waiting_library')))))`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("retire unresolved book catalog requests: %w", err)
+	}
+
 	// Auto-detected issues used to store the *arr service type in media_type
 	// (e.g. 'sonarr'), which clients rendered under the fallback "Movie" label.
 	// Normalize legacy rows to the 'movie'|'tv'|'book' contract. Runs every

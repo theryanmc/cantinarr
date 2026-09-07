@@ -111,8 +111,8 @@ class BookFormatWait {
         BookWaitReason.queued ||
         BookWaitReason.retry ||
         BookWaitReason.processing =>
-          'Waiting for catalog',
-        BookWaitReason.needsMatch => 'Choose a matching book',
+          'Request saved',
+        BookWaitReason.needsMatch => 'Needs attention',
         BookWaitReason.attention => 'Needs attention',
         _ => 'Waiting for library',
       };
@@ -124,9 +124,9 @@ class BookFormatWait {
         BookWaitReason.queued ||
         BookWaitReason.retry ||
         BookWaitReason.processing =>
-          'Your request is saved. The catalog is temporarily unavailable; Cantinarr will retry automatically.',
+          'Your request is saved. Delivery to the library continues in the background.',
         BookWaitReason.needsMatch =>
-          'Your request is saved. Choose the matching book on its details page.',
+          'This saved request needs attention. Search your Chaptarr library for the book.',
         BookWaitReason.attention =>
           'Your request is saved and needs attention before delivery can continue.',
         BookWaitReason.authorImport =>
@@ -327,6 +327,8 @@ class RequestSubmissionException implements Exception {
 
 class BookRequestSubmission {
   final RequestStatus? status;
+  final List<Map<String, dynamic>> delivery;
+  final int? requestId;
   final Map<BookRequestFormat, RequestStatus> formats;
   final bool isKnown;
 
@@ -343,6 +345,8 @@ class BookRequestSubmission {
 
   const BookRequestSubmission({
     required this.status,
+    this.delivery = const [],
+    this.requestId,
     this.formats = const {},
     this.isKnown = true,
     this.message = '',
@@ -878,6 +882,37 @@ class RequestService {
     }
   }
 
+  /// Saved intent is independent of library availability and never waits on Chaptarr.
+  Future<Map<String, dynamic>?> bookDeliveryStatus(String foreignId,
+      {String? instanceId}) async {
+    try {
+      final response = await _backendDio
+          .get('/api/requests/delivery-status', queryParameters: {
+        'media_type': 'book',
+        'foreign_id': foreignId,
+        if (instanceId != null) 'instance_id': instanceId,
+        'include_live': false,
+      });
+      final data = Map<String, dynamic>.from(response.data as Map);
+      return data['success'] == true ? data : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> bookDeliveryAction(int requestId, String action,
+      {String? format}) async {
+    try {
+      final response = await _backendDio.post(
+          '/api/requests/$requestId/delivery',
+          data: {'action': action, if (format != null) 'book_format': format});
+      return Map<String, dynamic>.from(response.data as Map);
+    } on DioException catch (e) {
+      throw RequestSubmissionException(_requestErrorMessage(e),
+          definitive: _requestErrorIsDefinitive(e));
+    }
+  }
+
   /// Submit a book request. Books are keyed by the foreignBookId, not a tmdb_id;
   /// the backend adds the book to the user's granted Chaptarr instance (after
   /// approval when the user's policy requires it). Returns the resulting status
@@ -943,6 +978,10 @@ class RequestService {
       final rawMessage = data?['message'];
       return BookRequestSubmission(
         status: status,
+        requestId: data?['request_id'] as int?,
+        delivery: ((data?['delivery'] as List?) ?? [])
+            .map((d) => Map<String, dynamic>.from(d as Map))
+            .toList(),
         formats: formats,
         isKnown: isKnown,
         message: rawMessage is String ? rawMessage.trim() : '',

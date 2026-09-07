@@ -260,6 +260,8 @@ class PendingRequestItem {
   bool get isTv => mediaType == 'tv';
   bool get isBook => mediaType == 'book';
   bool get isMusic => mediaType == 'music';
+  bool get isCatalogRetired =>
+      isBook && delivery.any((d) => d['code'] == 'catalog_retired');
 
   /// Route to the content this request is for, or null when the row can't
   /// address one (a legacy book row stored without its foreign id, a movie row
@@ -268,9 +270,12 @@ class PendingRequestItem {
   /// instance.
   String? get detailRoute {
     if (isBook || isMusic) {
-      final id = foreignId.trim();
+      final id = isCatalogRetired && catalogId.isNotEmpty
+          ? 'ol:$catalogId'
+          : foreignId.trim();
       if (id.isEmpty) return null;
       final query = <String>[
+        if (isBook) 'source=${isCatalogRetired ? 'openlibrary' : 'chaptarr'}',
         if (title.trim().isNotEmpty)
           'title=${Uri.encodeQueryComponent(title.trim())}',
         if (instanceId.trim().isNotEmpty)

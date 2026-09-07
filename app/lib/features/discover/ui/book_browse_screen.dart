@@ -1,167 +1,61 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import '../data/book_discovery_service.dart';
+import 'package:go_router/go_router.dart';
+import '../../../core/providers/instance_provider.dart';
 import '../logic/book_discovery_provider.dart';
-import '../logic/discovery_access.dart';
-import 'book_discovery_row.dart';
-import 'catalog_prefetch.dart';
+import 'catalog_setup_button.dart';
 
-class BookBrowseScreen extends ConsumerStatefulWidget {
+class BookBrowseScreen extends StatelessWidget {
   final BookBrowseQuery query;
   const BookBrowseScreen({super.key, required this.query});
   @override
-  ConsumerState<BookBrowseScreen> createState() => _BookBrowseScreenState();
+  Widget build(BuildContext context) =>
+      BookCatalogRetiredScreen(instanceId: query.instanceId);
 }
 
-class _BookBrowseScreenState extends ConsumerState<BookBrowseScreen> {
-  final _scroll = ScrollController();
-  BookBrowseQuery? _query;
-  double? _setupReturnOffset;
+class NativeBookSearchButton extends ConsumerWidget {
+  final String title;
+  final String? instanceId;
+  const NativeBookSearchButton({super.key, this.title = '', this.instanceId});
   @override
-  void initState() {
-    super.initState();
-    _scroll.addListener(_more);
-  }
+  Widget build(BuildContext context, WidgetRef ref) => TextButton.icon(
+        icon: const Icon(Icons.search),
+        label: const Text('Search books'),
+        onPressed: () {
+          ref.read(bookDiscoverySearchSeedProvider.notifier).state =
+              (query: title, instanceId: instanceId);
+          context.go('/dashboard/books');
+        },
+      );
+}
 
+class BookCatalogRetiredScreen extends ConsumerWidget {
+  final String title;
+  final String? instanceId;
+  const BookCatalogRetiredScreen({super.key, this.title = '', this.instanceId});
   @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _more() {
-    if (!_scroll.hasClients ||
-        _scroll.position.extentAfter >
-            _scroll.position.viewportDimension * 1.5) {
-      return;
-    }
-    if (_query == null) return;
-    final feed = ref.read(bookFeedProvider(_query!));
-    if (feed.error == null) feed.load();
-  }
-
-  void _restoreAfterSetup(BookFeedNotifier feed) {
-    if (_setupReturnOffset == null || feed.loading || feed.error != null) {
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients || _setupReturnOffset == null) return;
-      final offset = _setupReturnOffset!;
-      if (_scroll.position.maxScrollExtent < offset && feed.nextPage != null) {
-        feed.load();
-        return;
-      }
-      _setupReturnOffset = null;
-      _scroll.jumpTo(offset.clamp(0, _scroll.position.maxScrollExtent));
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final access = ref.watch(discoveryAccessProvider);
-    final id = widget.query.instanceId ?? access.activeId('chaptarr');
-    if (_query != null &&
-        _query!.instanceId == null &&
-        id != null &&
-        _scroll.hasClients) {
-      _setupReturnOffset = _scroll.offset;
-    }
-    _query = null;
-    if (!access.canBrowse('chaptarr', id)) {
-      _setupReturnOffset = null;
-      return Scaffold(
-          appBar: AppBar(title: const Text('Books')),
-          body: Center(
-              child: Text(access.needsUpdate(id)
-                  ? adminCatalogUpdateMessage
-                  : 'Books are not available for this account.')));
-    }
-    final query = BookBrowseQuery(
-        feed: widget.query.feed, genre: widget.query.genre, instanceId: id);
-    _query = query;
-    final feed = ref.watch(bookFeedProvider(query));
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      feed.enablePrefetch();
-      if (feed.items.isNotEmpty) _more();
-    });
-    _restoreAfterSetup(feed);
-    final genres =
-        ref.watch(bookGenresProvider(id)).valueOrNull ?? <BookGenre>[];
-    var title =
-        widget.query.feed == 'popular' ? 'Popular Books' : 'Books by genre';
-    for (final g in genres) {
-      if (g.id == widget.query.genre) title = g.name;
-    }
-    final scale = MediaQuery.textScalerOf(context).scale(1);
-    return CatalogArtworkPrefetch(
-        sources: [...feed.items.take(6), ...feed.upcoming.take(6)]
-            .where((b) => b.coverUrl != null)
-            .map((b) => (url: b.coverUrl!, headers: null))
-            .toList(),
-        child: Scaffold(
-            appBar: AppBar(title: Text(title)),
-            body: RefreshIndicator(
-              onRefresh: () => feed.load(refresh: true),
-              child: CustomScrollView(
-                key: PageStorageKey(widget.query.location),
-                controller: _scroll,
-                cacheExtent: MediaQuery.sizeOf(context).height,
-                slivers: [
-                  const SliverToBoxAdapter(
-                      child: Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text('Open Library'))),
-                  if (feed.error != null)
-                    SliverToBoxAdapter(
-                        child: BookDiscoveryError(feed.error!,
-                            onRetry: feed.retry)),
-                  if (feed.items.isEmpty && !feed.loading && feed.error == null)
-                    SliverToBoxAdapter(
-                        child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Text(feed.emptyMessage))),
-                  SliverPadding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      sliver:
-                          SliverLayoutBuilder(builder: (context, constraints) {
-                        final columns = (constraints.crossAxisExtent / 146)
-                            .floor()
-                            .clamp(2, 8);
-                        final width =
-                            (constraints.crossAxisExtent - (columns - 1) * 14) /
-                                columns;
-                        return SliverGrid(
-                            delegate:
-                                SliverChildBuilderDelegate((context, index) {
-                              final book = feed.items[index];
-                              return BookDiscoveryCard(
-                                  key: ValueKey(book.foreignId),
-                                  book: book,
-                                  instanceId: id,
-                                  width: width);
-                            }, childCount: feed.items.length),
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: columns,
-                                    crossAxisSpacing: 14,
-                                    mainAxisSpacing: 16,
-                                    mainAxisExtent: width * 1.5 + 110 * scale));
-                      })),
-                  SliverToBoxAdapter(
-                      child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Center(
-                              child: feed.loading
-                                  ? const CircularProgressIndicator()
-                                  : feed.nextPage != null
-                                      ? TextButton(
-                                          onPressed: () => feed.load(),
-                                          child: const Text('Load more'))
-                                      : const SizedBox.shrink()))),
-                ],
-              ),
-            )));
-  }
+  Widget build(BuildContext context, WidgetRef ref) => Scaffold(
+        appBar: AppBar(title: const Text('Book details')),
+        body: Center(
+            child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (title.isNotEmpty)
+                      Text(title,
+                          style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 16),
+                    const Text(
+                        'Open Library book discovery has retired. Search your Chaptarr library and select the book to request.',
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 16),
+                    NativeBookSearchButton(
+                        title: title, instanceId: instanceId),
+                    if (ref.watch(instanceProvider).activeChaptarrInstance ==
+                        null)
+                      const CatalogSetupButton(serviceType: 'chaptarr'),
+                  ],
+                ))),
+      );
 }

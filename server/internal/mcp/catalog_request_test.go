@@ -9,28 +9,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
-	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/db"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/request"
 	"github.com/windoze95/cantinarr-server/internal/secrets"
 )
 
-type toolBookCatalog struct{ bookdiscovery.Catalog }
-
-func (toolBookCatalog) Search(context.Context, string, int) ([]byte, error) {
-	return []byte(`{"page":1,"results":[{"foreign_id":"ol:OL1W","title":"Public book","authors":["Author"]}]}`), nil
-}
-func (toolBookCatalog) Book(context.Context, string) ([]byte, error) {
-	return []byte(`{"foreign_id":"ol:OL1W","title":"Public book","authors":["Author"]}`), nil
-}
-func (toolBookCatalog) ResolveClient(context.Context, *chaptarr.Client, string) (bookdiscovery.Targets, error) {
-	return bookdiscovery.Targets{State: "needs_match", Suggestions: []bookdiscovery.Target{{ForeignID: "native:choice", Title: "Public book", Author: "Author"}}}, nil
-}
-
-func TestPublicCatalogToolsRetainIdentityAndExplicitMatchChoice(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+func TestBookToolsUseNativeIdentityAndRetirePublicRequests(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/book/lookup" {
+			w.Write([]byte(`[{"foreignBookId":"gr:48297245","title":"The Subtle Art of Not Giving a Fuck","authorName":"Mark Manson"}]`))
+			return
+		}
+		t.Errorf("unexpected upstream call: %s", r.URL.Path)
+		w.WriteHeader(503)
+	}))
 	defer upstream.Close()
 	database, err := db.Open(":memory:")
 	if err != nil {
@@ -53,41 +46,35 @@ func TestPublicCatalogToolsRetainIdentityAndExplicitMatchChoice(t *testing.T) {
 	}
 	registry := instance.NewRegistry(store)
 	service := request.NewService(database, registry, nil, nil)
-	service.BookCatalog = toolBookCatalog{}
+
 	server := NewToolServer(nil, service, registry, nil)
-	search, err := server.searchBooks(json.RawMessage(`{"query":"Public book","catalog":"all"}`), uid)
-	if err != nil || !strings.Contains(search.Text, `"provider":"openlibrary"`) || !strings.Contains(search.Text, `"source":"library"`) || !strings.Contains(search.Text, `"error"`) {
-		t.Fatalf("independent catalogs lost: %+v %v", search, err)
+	search, err := server.searchBooks(json.RawMessage(`{"query":"The Subtle Art of Not Giving a Fuck","catalog":"all"}`), uid)
+	if err != nil || !strings.Contains(search.Text, "gr:48297245") || !strings.Contains(search.Text, inst.ID) || strings.Contains(search.Text, "openlibrary") {
+		t.Fatalf("native identity lost: %+v %v", search, err)
 	}
-	display, err := server.displayMedia(context.Background(), json.RawMessage(`{"items":[{"media_type":"book","title":"Public book","catalog_ref":{"provider":"openlibrary","id":"OL1W"}}]}`), uid, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cards, _ := json.Marshal(display.StructuredData)
-	if !strings.Contains(string(cards), `"catalog_ref":{"provider":"openlibrary","id":"OL1W"}`) {
-		t.Fatalf("card lost source identity: %s", cards)
-	}
-	out, err := service.CreateMediaRequest(uid, &request.CreateRequest{MediaType: "book", Title: "Public book", BookFormat: "ebook", CatalogRef: &request.CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	service.SweepDispatch(context.Background())
-	status, err := server.checkRequestStatus(json.RawMessage(`{"media_type":"book","catalog_ref":{"provider":"openlibrary","id":"OL1W"}}`), uid)
-	if err != nil || !strings.Contains(status.Text, `"matches"`) || !strings.Contains(status.Text, `native:choice`) || !strings.Contains(status.Text, `Never choose a suggestion automatically`) {
-		t.Fatalf("choice not exposed: %+v %v", status, err)
-	}
-	if _, err = service.DeliveryAction(context.Background(), uid, out.RequestID, "confirm", "invented"); err == nil {
-		t.Fatal("invented model identity accepted")
-	}
-	if _, err = database.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid); err != nil {
-		t.Fatal(err)
-	}
-	display, err = server.displayMedia(context.Background(), json.RawMessage(`{"items":[{"media_type":"book","title":"Public book","catalog_ref":{"provider":"openlibrary","id":"OL1W"}}]}`), uid, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cards, _ = json.Marshal(display.StructuredData)
-	if strings.Contains(string(cards), `OL1W`) {
-		t.Fatal("revoked catalog leaked a card")
+	for name, call := range map[string]func() (*ToolResult, error){
+		"search": func() (*ToolResult, error) {
+			return server.searchBooks(json.RawMessage(`{"query":"book","catalog":"public"}`), uid)
+		},
+		"display": func() (*ToolResult, error) {
+			return server.displayMedia(context.Background(), json.RawMessage(`{"items":[{"media_type":"book","title":"Book","catalog_ref":{"provider":"openlibrary","id":"OL1W"}}]}`), uid, nil)
+		},
+		"request": func() (*ToolResult, error) {
+			return server.requestMedia(json.RawMessage(`{"media_type":"book","title":"Book","catalog_ref":{"provider":"openlibrary","id":"OL1W"}}`), uid)
+		},
+		"confirm": func() (*ToolResult, error) {
+			return server.requestMedia(json.RawMessage(`{"media_type":"book","action":"confirm","request_id":1,"foreign_id":"summary"}`), uid)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := call()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var data map[string]string
+			if json.Unmarshal([]byte(out.Text), &data) != nil || data["code"] != "catalog_retired" {
+				t.Fatalf("retirement missing: %+v", out)
+			}
+		})
 	}
 }

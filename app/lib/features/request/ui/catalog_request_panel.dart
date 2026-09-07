@@ -7,8 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/backend_client.dart';
 import '../../../core/providers/library_refresh_provider.dart';
 import '../data/request_service.dart';
-import '../../discover/data/book_discovery_service.dart';
-import '../../discover/logic/book_discovery_provider.dart';
+import '../../discover/ui/book_browse_screen.dart';
 import '../../discover/logic/discovery_access.dart';
 
 typedef DeliveryKey = ({
@@ -28,6 +27,7 @@ final savedDeliveryProvider = FutureProvider.autoDispose
       .read(backendClientProvider)
       .get('/api/requests/delivery-status', queryParameters: {
     if (key.requestId != null) 'request_id': key.requestId,
+    if (key.mediaType == 'book') 'include_live': false,
     'media_type': key.mediaType,
     'instance_id': key.instanceId,
     if (key.provider.isEmpty) 'foreign_id': key.foreignId,
@@ -42,21 +42,6 @@ final savedDeliveryProvider = FutureProvider.autoDispose
     ref.onCancel(timer.cancel);
   }
   return data;
-});
-
-final bookResolutionProvider = FutureProvider.autoDispose
-    .family<BookResolution, ({String foreignId, String instanceId})>(
-        (ref, key) {
-  ref.watch(catalogDiscoveryScopeProvider);
-  ref.watch(libraryRefreshTickProvider);
-  if (!ref
-      .watch(discoveryAccessProvider)
-      .canBrowse('chaptarr', key.instanceId)) {
-    throw StateError('Books are not available for this account.');
-  }
-  return ref
-      .read(bookDiscoveryServiceProvider)
-      .resolution(key.foreignId, key.instanceId);
 });
 
 final _deliveryBookTruth = FutureProvider.autoDispose
@@ -176,10 +161,6 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       setState(
           () => _receipt = Map<String, dynamic>.from(response.data as Map));
       ref.invalidate(savedDeliveryProvider(key));
-      if (key.mediaType == 'book') {
-        ref.invalidate(bookResolutionProvider(
-            (foreignId: widget.foreignId, instanceId: widget.instanceId)));
-      }
     } on DioException catch (e) {
       if (!mounted ||
           _key != key ||
@@ -218,9 +199,7 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
     }
     final key = _key;
     final saved = ref.watch(savedDeliveryProvider(key));
-    final data = saved.hasError || saved.isLoading
-        ? _receipt
-        : saved.valueOrNull ?? _receipt;
+    final data = _receipt ?? saved.valueOrNull;
     final deliveries = ((data?['delivery'] as List?) ?? []).cast<Map>();
     final active = deliveries
         .where((d) => !{'complete', 'cancelled'}.contains(d['state']))
@@ -239,17 +218,7 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
         }
       });
     }
-    AsyncValue<BookResolution>? resolution;
-    if (widget.provider == 'openlibrary') {
-      resolution = ref.watch(bookResolutionProvider(
-          (foreignId: widget.foreignId, instanceId: widget.instanceId)));
-    }
-    final resolved =
-        resolution?.hasError == true ? null : resolution?.valueOrNull;
-    final nativeId = canonical ??
-        (resolved?.candidates.length == 1
-            ? resolved!.candidates.single.foreignId
-            : null);
+    final nativeId = canonical;
     final bookTruth = widget.mediaType == 'book' && nativeId != null
         ? ref
             .watch(_deliveryBookTruth(
@@ -277,7 +246,7 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
       });
     }
     ref.listen(savedDeliveryProvider(key), (previous, next) {
-      if (next.hasValue && !next.isLoading) _receipt = null;
+      if (next.hasValue && !next.isLoading) _receipt = next.valueOrNull;
       if (nativeId != null &&
           previous?.hasValue == true &&
           next.hasValue &&
@@ -291,11 +260,6 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
         }
       }
     });
-    final choices = [...?resolved?.candidates, ...?resolved?.suggestions];
-    final matchRequests = active
-        .where((d) => d['state'] == 'needs_match' && d['can_manage'] != false)
-        .map((d) => d['request_id'] as int)
-        .toSet();
     final pendingFormats =
         active.map((d) => d['format'] as String? ?? '').toSet();
     final requestable = <String>[];
@@ -338,15 +302,6 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(_error!,
                 style: TextStyle(color: Theme.of(context).colorScheme.error))),
-      if (!widget.progressOnly &&
-          (resolution?.hasError == true || resolved?.state == 'unavailable'))
-        Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(resolved?.code == 'catalog_access_denied'
-                ? 'The library connection needs an administrator’s attention. You can still save your request.'
-                : 'The library catalog is temporarily unavailable. You can save your request and we will retry automatically.')),
-      if (!widget.progressOnly && resolved?.state == 'not_found')
-        Text(resolved!.message),
       for (final delivery in active)
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -364,6 +319,7 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
             if (active.any((d) =>
                 d['request_id'] == id &&
                 d['can_manage'] != false &&
+                d['code'] != 'catalog_retired' &&
                 {'attention', 'retry'}.contains(d['state'])))
               TextButton(
                   onPressed: _busy
@@ -379,40 +335,9 @@ class _CatalogRequestPanelState extends ConsumerState<CatalogRequestPanel> {
                   child: const Text('Cancel request')),
           ],
         ]),
-      if (matchRequests.isNotEmpty) ...[
-        const Text('Choose the matching book'),
-        if (choices.isEmpty)
-          const Text(
-              'No matching choices are available yet. Your request remains saved.'),
-        for (final candidate in choices)
-          ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(candidate.title),
-              subtitle: Text([
-                if (candidate.author.isNotEmpty) candidate.author,
-                if (candidate.year != null && candidate.year! > 0)
-                  candidate.year.toString(),
-              ].join(' · ')),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: _busy
-                  ? null
-                  : () async {
-                      for (final id in matchRequests) {
-                        await _perform(
-                            requestId: id,
-                            action: 'confirm',
-                            nativeId: candidate.foreignId);
-                      }
-                    }),
-        TextButton(
-            onPressed: _busy
-                ? null
-                : () => ref.invalidate(bookResolutionProvider((
-                      foreignId: widget.foreignId,
-                      instanceId: widget.instanceId
-                    ))),
-            child: const Text('Refresh matches')),
-      ],
+      if (active.any((d) => d['code'] == 'catalog_retired'))
+        NativeBookSearchButton(
+            title: widget.title, instanceId: widget.instanceId),
       if (!widget.progressOnly && requestable.isNotEmpty)
         Wrap(spacing: 12, runSpacing: 8, children: [
           for (final format in requestable)

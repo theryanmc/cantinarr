@@ -12,9 +12,9 @@ func dispatchMessage(state string) string {
 	case "approval":
 		return "Waiting for approval. Your request is saved."
 	case "queued", "processing", "retry":
-		return "Waiting for catalog. Your request is saved and will retry automatically."
+		return "Your request is saved. Delivery to the library continues in the background."
 	case "needs_match":
-		return "Choose a matching book. Your request is saved."
+		return "This saved request needs attention. Search your Chaptarr library for the book."
 	case "attention":
 		return "This saved request needs attention before delivery can continue."
 	case "waiting_library":
@@ -30,6 +30,9 @@ func dispatchMessage(state string) string {
 // Messages explain the action a requester can take without exposing service
 // URLs, credentials, or untrusted upstream error bodies.
 func deliveryMessage(state, code string) string {
+	if code == "catalog_retired" {
+		return "Needs attention. Open Library requests can no longer be matched. Cancel this request and search your Chaptarr library for the book."
+	}
 	if state != "attention" {
 		return dispatchMessage(state)
 	}
@@ -181,6 +184,19 @@ func (s *Service) hasDispatch(id int64) bool {
 	return s.db.QueryRow(`SELECT COUNT(*) FROM request_dispatch WHERE request_id=?`, id).Scan(&n) == nil && n > 0
 }
 
+// Saved delivery is evidence of intent or acceptance, never of current files.
+// Availability is read separately from Chaptarr (or overlaid by the default
+// delivery-status read for older clients).
+func savedBookState(out *CreateResponse) {
+	known := false
+	out.StatusKnown = &known
+	for format, status := range out.BookFormats {
+		if status == StatusAvailable || status == StatusDownloading {
+			out.BookFormats[format] = StatusRequested
+		}
+	}
+}
+
 func (s *Service) attachPendingDelivery(p *PendingRequest) {
 	p.Delivery, _ = s.deliveryStates(p.ID)
 	var provider, id string
@@ -208,7 +224,7 @@ func (s *Service) authorizeDeliveryRead(userID, id int64, r *resolvedRequest) er
 	return err
 }
 
-func (s *Service) DeliveryByID(userID, id int64) (*CreateResponse, error) {
+func (s *Service) DeliveryByID(userID, id int64, includeLive ...bool) (*CreateResponse, error) {
 	r, _, err := s.loadRequest(id)
 	if err != nil {
 		return nil, err
@@ -222,14 +238,18 @@ func (s *Service) DeliveryByID(userID, id int64) (*CreateResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
+	if len(includeLive) == 0 || includeLive[0] {
+		s.overlayDeliveryTruth(userID, r.mediaType, r.foreignID, out)
+	} else if r.mediaType == "book" {
+		savedBookState(out)
+	}
 	if err = s.authorizeDeliveryRead(userID, id, r); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID string, ref *CatalogRef) (*CreateResponse, error) {
+func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID string, ref *CatalogRef, includeLive ...bool) (*CreateResponse, error) {
 	if err := validateCatalogRef(mediaType, ref); err != nil {
 		return nil, err
 	}
@@ -281,7 +301,11 @@ func (s *Service) DeliveryStatus(userID int64, mediaType, foreignID, instanceID 
 	if err != nil {
 		return nil, err
 	}
-	s.overlayDeliveryTruth(userID, mediaType, foreignID, out)
+	if len(includeLive) == 0 || includeLive[0] {
+		s.overlayDeliveryTruth(userID, mediaType, foreignID, out)
+	} else if mediaType == "book" {
+		savedBookState(out)
+	}
 	if _, err = s.deliveryInstance(userID, mediaType, id); err != nil {
 		return nil, err
 	}

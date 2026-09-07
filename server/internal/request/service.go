@@ -15,7 +15,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
 	"github.com/windoze95/cantinarr-server/internal/cache"
 	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/contentpolicy"
@@ -215,9 +214,9 @@ type Notifier interface {
 }
 
 type Service struct {
-	BookCatalog  bookdiscovery.Catalog
 	MusicCatalog musicdiscovery.Catalog
 	dispatchMu   sync.Mutex
+	dispatchWake chan struct{}
 	db           *sql.DB
 	registry     *instance.Registry
 	bridge       *tmdb.Bridge
@@ -348,7 +347,7 @@ func (s *Service) hideBlockedRequests(userID int64, isAdmin bool, requests []Req
 
 func NewService(db *sql.DB, registry *instance.Registry, bridge *tmdb.Bridge, notifier Notifier) *Service {
 	return &Service{
-		BookCatalog:  bookdiscovery.NewService(),
+		dispatchWake: make(chan struct{}, 1),
 		MusicCatalog: musicdiscovery.NewService(),
 		db:           db,
 		registry:     registry,
@@ -1459,6 +1458,11 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return "", "", fmt.Errorf("chaptarr is not configured for you")
 	}
 
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(actorID, instanceID)
+		return err
+	})
+
 	// Preflight the live library before lookup/add. The request boundary is the
 	// idempotency boundary: a file is already available, a monitored record is
 	// already requested, and an unmonitored record is monitored/searched in
@@ -1472,8 +1476,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if unresolved {
 		return "", "", ErrBookFormatUnresolved
 	}
-	// One memoized id fetch serves both the alias probe below and the add-time
-	// lookup's first term — the identical query must not run twice per request.
+	// Memoize an ID lookup so fallback terms never repeat the same fetch.
 	var idFetchResults []chaptarr.LookupResult
 	var idFetchErr error
 	idFetched := false
@@ -1485,33 +1488,10 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		return idFetchResults, idFetchErr
 	}
 
-	// The library may already track this book under a different id: the
-	// metadata provider keeps alias listings whose id-fetch resolves to the
-	// canonical sibling. When the provider itself declares the requested id an
-	// alias of a record the library already has, the request completes that
-	// record — a requester tapping the duplicate listing means "I want this
-	// book", not "track it twice".
+	// A lookup returning another ID does not prove it is the selected book.
+	// Keep the request pinned; only a record ID returned by an accepted add
+	// can establish a later native re-key.
 	attachID := r.foreignID
-	if len(existing) == 0 {
-		// Nothing tracked under this id means every remaining outcome — the
-		// alias attach, or the add — starts from a metadata lookup, and a
-		// request with no title is malformed before any of that: fail it
-		// without spending a network call.
-		if r.title == "" {
-			return "", "", fmt.Errorf("title is required to add a new book")
-		}
-		if canonicalID, ok := lookupCanonicalAlias(idFetch, r.foreignID); ok {
-			aliasTitle, aliasRecords, aliasUnresolved := recordsForForeignID(books, canonicalID)
-			if aliasUnresolved {
-				return "", "", ErrBookFormatUnresolved
-			}
-			if len(aliasRecords) > 0 {
-				attachID = canonicalID
-				existing = aliasRecords
-				title = strings.TrimSpace(aliasTitle)
-			}
-		}
-	}
 	if title == "" {
 		title = r.title
 	}
@@ -1710,25 +1690,6 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	return s.finishBookMutation(r, title, lastErr)
 }
 
-// lookupCanonicalAlias resolves the provider's alias→canonical link for a
-// foreignBookId, given the id-term fetch. Chaptarr answers an id term with an
-// exact fetch of that record, and fetching an alias id returns its canonical
-// sibling (verified live; see bookLookupTerms). A response of exactly one
-// record filed under a DIFFERENT id is therefore the provider itself declaring
-// the two ids one work. Anything else — a miss, an error, a fuzzy multi-hit —
-// declares nothing, and the caller must treat the ids as distinct.
-func lookupCanonicalAlias(idFetch func() ([]chaptarr.LookupResult, error), foreignID string) (string, bool) {
-	results, err := idFetch()
-	if err != nil || len(results) != 1 {
-		return "", false
-	}
-	canonical := strings.TrimSpace(results[0].ForeignBookID)
-	if canonical == "" || canonical == strings.TrimSpace(foreignID) {
-		return "", false
-	}
-	return canonical, true
-}
-
 // lookupBookForAdd re-finds the metadata record a book request points at, so a
 // brand-new title can be added. Unlike Radarr — which resolves a movie by
 // `term=tmdb:{id}` and therefore cannot miss — Chaptarr's book lookup is a fuzzy
@@ -1762,31 +1723,9 @@ func lookupBookForAdd(lookup func(term string) ([]chaptarr.LookupResult, error),
 	return nil, firstErr
 }
 
-// bookLookupTerms is the ordered search-term list lookupBookForAdd tries.
-//
-// The foreignBookId itself comes first: Chaptarr's lookup answers an id term
-// with an exact fetch of that record (verified live against Chaptarr 0.9.720:
-// `term=gr:297977925` returns exactly that book, an unknown id returns empty),
-// which is the same deterministic resolution Radarr gives movies via
-// `term=tmdb:{id}`. One caveat keeps the fallbacks alive: the provider resolves
-// an alias id to its canonical sibling (two works for one title, id-fetching
-// the alias returns the canonical record), and the exact-id gate rightly
-// refuses that substitute — the fuzzy terms below then re-find the alias row
-// the requester actually chose.
-//
-// The requester's own search text is that first fallback, because it is the
-// one query already proven to return the exact row — they were looking at it
-// when they tapped Request. Chaptarr's own UI never faces any of this: its web
-// client posts the whole search row straight back and re-searches nothing.
-// Cantinarr's client keeps only the id and title, so the server must re-find
-// the record here.
-//
-// The title forms are last, for requests with no search behind them (a
-// notification tap, a deep link) on forks whose lookup doesn't answer id
-// terms: the exact title, then its headline, because a long title carrying a
-// subtitle and a parenthetical series suffix routinely defeats a fuzzy text
-// search outright (verified live: the full title above returns zero results
-// while its headline finds the book).
+// bookLookupTerms tries the requester's proven search first, then the ID and
+// title fallbacks. Every response is filtered by the selected native ID; these
+// are search terms, never candidate identities.
 func bookLookupTerms(foreignID, title, searchTerm string) []string {
 	terms := make([]string, 0, 4)
 	add := func(term string) {
@@ -1801,8 +1740,8 @@ func bookLookupTerms(foreignID, title, searchTerm string) []string {
 		}
 		terms = append(terms, term)
 	}
-	add(foreignID)
 	add(searchTerm)
+	add(foreignID)
 	add(title)
 	add(mainBookTitle(title))
 	return terms
@@ -4137,6 +4076,11 @@ func (s *Service) reopenFailedAuthorImport(requestID int64) {
 		log.Printf("request: reopen author import for request %d: resolve chaptarr: %v", requestID, err)
 		return
 	}
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+		return err
+	})
+
 	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
 	if !ok || foreignAuthorID == "" {
 		return
@@ -4165,6 +4109,11 @@ func (s *Service) cancelAuthorImportForDeniedRequest(requestID int64, r *resolve
 		log.Printf("request: cancel author import for denied request %d: resolve chaptarr: %v", requestID, err)
 		return
 	}
+	client = client.WithMutationGuard(func() error {
+		_, _, err := s.resolveChaptarr(r.userID, r.instanceID)
+		return err
+	})
+
 	foreignAuthorID, ok := s.lookupParkedAuthorID(client, r.foreignID)
 	if !ok || foreignAuthorID == "" {
 		return
@@ -5279,6 +5228,7 @@ func sonarrProfileExists(profiles []sonarr.QualityProfile, id int) bool {
 // or relative cover paths are dropped rather than surfaced to a client (this
 // fork's lookups often carry no external cover at all, so it is usually empty).
 type BookSearchResult struct {
+	InstanceID    string `json:"instance_id"`
 	Title         string `json:"title"`
 	AuthorName    string `json:"author_name,omitempty"`
 	Year          int    `json:"year,omitempty"`
@@ -5332,7 +5282,9 @@ func (s *Service) SearchBooksForUserInInstance(userID int64, query, requestedIns
 	if client == nil {
 		return nil, ErrNoChaptarrAccess
 	}
-	results, err := client.LookupBook(query)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	results, err := client.LookupBookContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("book lookup: %w", err)
 	}
@@ -5353,6 +5305,7 @@ func (s *Service) SearchBooksForUserInInstance(userID int64, query, requestedIns
 			author = r.Author.AuthorName
 		}
 		result := BookSearchResult{
+			InstanceID:    instanceID,
 			Title:         r.Title,
 			AuthorName:    author,
 			Year:          r.Year,

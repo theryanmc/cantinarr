@@ -209,6 +209,7 @@ class PushService {
           final title = _asTrimmedString(data['title']);
           final instanceId = _asTrimmedString(data['instance_id']);
           final query = <String>[
+            'source=chaptarr',
             if (title != null) 'title=${Uri.encodeComponent(title)}',
             if (instanceId != null)
               'instance_id=${Uri.encodeComponent(instanceId)}',

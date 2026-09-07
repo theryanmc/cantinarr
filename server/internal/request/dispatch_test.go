@@ -3,8 +3,6 @@ package request
 import (
 	"context"
 	"fmt"
-	"github.com/windoze95/cantinarr-server/internal/bookdiscovery"
-	"github.com/windoze95/cantinarr-server/internal/chaptarr"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +41,7 @@ func TestDeliverySavedBeforeAttemptAndRecoveredAfterRestart(t *testing.T) {
 	defer server.Close()
 	var userID int64
 	service, userID = newChaptarrBookTestService(t, server.URL)
-	out, err := service.CreateMediaRequest(userID, &CreateRequest{MediaType: "book", ForeignID: "saved", Title: "Saved", BookFormat: "ebook"})
+	out, err := service.createAndDispatchForTest(userID, &CreateRequest{MediaType: "book", ForeignID: "saved", Title: "Saved", BookFormat: "ebook"})
 	if err != nil || len(out.Delivery) != 1 || out.Delivery[0].State != "retry" {
 		t.Fatalf("save: %+v %v", out, err)
 	}
@@ -114,7 +112,7 @@ func TestDispatchLeaseAndPartialProgress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 	defer server.Close()
 	s, userID := newChaptarrBookTestService(t, server.URL)
-	out, err := s.CreateMediaRequest(userID, &CreateRequest{MediaType: "book", Title: "Source", BookFormat: "both", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
+	out, err := s.CreateMediaRequest(userID, &CreateRequest{MediaType: "book", Title: "Source", BookFormat: "both", ForeignID: "native-choice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +144,7 @@ func TestDispatchLeaseAndPartialProgress(t *testing.T) {
 	}
 }
 
-func TestSourceDedupAfterBindingAndRevokedAccess(t *testing.T) {
+func TestNativeDedupAndRevokedAccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("intake or revoked worker reached the service")
 		w.WriteHeader(503)
@@ -154,13 +152,12 @@ func TestSourceDedupAfterBindingAndRevokedAccess(t *testing.T) {
 	defer server.Close()
 	s, userID := newChaptarrBookTestService(t, server.URL)
 	makeRequest := func() *CreateRequest {
-		return &CreateRequest{MediaType: "book", Title: "Source", BookFormat: "ebook", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}}
+		return &CreateRequest{MediaType: "book", Title: "Source", BookFormat: "ebook", ForeignID: "native-choice"}
 	}
 	first, err := s.CreateMediaRequest(userID, makeRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.db.Exec(`UPDATE request_log SET foreign_id='hc:canonical' WHERE id=?`, first.RequestID)
 	second, err := s.CreateMediaRequest(userID, makeRequest())
 	if err != nil || second.RequestID != first.RequestID {
 		t.Fatalf("source binding broke dedup: %+v %v", second, err)
@@ -173,69 +170,6 @@ func TestSourceDedupAfterBindingAndRevokedAccess(t *testing.T) {
 	}
 	if _, err = s.DeliveryAction(context.Background(), userID, first.RequestID, "cancel", ""); err != nil {
 		t.Fatalf("owner cannot cancel after revocation: %v", err)
-	}
-}
-
-type deliveryBookCatalog struct {
-	bookdiscovery.Catalog
-	resolve func(context.Context, *chaptarr.Client, string) (bookdiscovery.Targets, error)
-}
-
-func (c deliveryBookCatalog) ResolveClient(ctx context.Context, client *chaptarr.Client, id string) (bookdiscovery.Targets, error) {
-	return c.resolve(ctx, client, id)
-}
-
-func TestSourceConfirmationSurvivesRestartAndRejectsInventedMapping(t *testing.T) {
-	var mutations atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			mutations.Add(1)
-		}
-		switch r.URL.Path {
-		case "/api/v1/book":
-			fmt.Fprint(w, `[{"id":10,"foreignBookId":"chosen","title":"Chosen book","mediaType":"ebook","statistics":{"bookFileCount":1}}]`)
-		case "/api/v1/queue":
-			fmt.Fprint(w, `{"records":[],"totalRecords":0}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	s, uid := newChaptarrBookTestService(t, server.URL)
-	s.BookCatalog = deliveryBookCatalog{resolve: func(_ context.Context, _ *chaptarr.Client, id string) (bookdiscovery.Targets, error) {
-		if id != "OL1W" {
-			t.Errorf("source identity lost: %s", id)
-		}
-		return bookdiscovery.Targets{State: "needs_match", Suggestions: []bookdiscovery.Target{{ForeignID: "chosen", Title: "Chosen book"}, {ForeignID: "other", Title: "Different book"}}}, nil
-	}}
-	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "injected", Title: "Public title", BookFormat: "ebook", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.SweepDispatch(context.Background())
-	states, _ := s.deliveryStates(out.RequestID)
-	if states[0].State != "needs_match" || mutations.Load() != 0 {
-		t.Fatalf("suggestion auto-selected: %+v", states)
-	}
-	if _, err = s.DeliveryAction(context.Background(), uid, out.RequestID, "confirm", "injected"); err == nil {
-		t.Fatal("invented mapping accepted")
-	}
-	if _, err = s.DeliveryAction(context.Background(), uid, out.RequestID, "confirm", "chosen"); err != nil {
-		t.Fatal(err)
-	}
-	restarted := NewService(s.db, s.registry, nil, nil)
-	restarted.BookCatalog = deliveryBookCatalog{resolve: func(context.Context, *chaptarr.Client, string) (bookdiscovery.Targets, error) {
-		t.Error("confirmed mapping was discarded")
-		return bookdiscovery.Targets{}, fmt.Errorf("unused")
-	}}
-	restarted.SweepDispatch(context.Background())
-	states, _ = s.deliveryStates(out.RequestID)
-	if states[0].State != "complete" || mutations.Load() != 0 {
-		t.Fatalf("existing chosen record not reconciled: %+v", states)
-	}
-	var native string
-	if err = s.db.QueryRow(`SELECT foreign_id FROM request_log WHERE id=?`, out.RequestID).Scan(&native); err != nil || native != "chosen" {
-		t.Fatalf("wrong native binding: %s %v", native, err)
 	}
 }
 
@@ -261,13 +195,13 @@ func TestCancellationPreservesOtherSubscribersAndTheirFormats(t *testing.T) {
 			}))
 			defer server.Close()
 			s, owner := newChaptarrBookTestService(t, server.URL)
-			ref := &CatalogRef{Provider: "openlibrary", ID: "OL1W"}
-			out, err := s.CreateMediaRequest(owner, &CreateRequest{MediaType: "book", Title: "Shared", BookFormat: "both", CatalogRef: ref})
+			var ref *CatalogRef
+			out, err := s.CreateMediaRequest(owner, &CreateRequest{MediaType: "book", Title: "Shared", BookFormat: "both", ForeignID: "native-choice"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			subscriber := addDeliverySubscriber(t, s, out.InstanceID)
-			other, err := s.CreateMediaRequest(subscriber, &CreateRequest{MediaType: "book", Title: "Shared", BookFormat: "audiobook", CatalogRef: ref})
+			other, err := s.CreateMediaRequest(subscriber, &CreateRequest{MediaType: "book", Title: "Shared", BookFormat: "audiobook", ForeignID: "native-choice"})
 			if err != nil || other.RequestID != out.RequestID {
 				t.Fatalf("subscription: %+v %v", other, err)
 			}
@@ -289,7 +223,7 @@ func TestCancellationPreservesOtherSubscribersAndTheirFormats(t *testing.T) {
 			if err = s.db.QueryRow(`SELECT user_id FROM request_log WHERE id=?`, out.RequestID).Scan(&currentOwner); err != nil || currentOwner != remaining {
 				t.Fatalf("owner transfer: %d %v", currentOwner, err)
 			}
-			status, err := s.DeliveryStatus(remaining, "book", "", out.InstanceID, ref)
+			status, err := s.DeliveryStatus(remaining, "book", "native-choice", out.InstanceID, ref, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -305,9 +239,9 @@ func TestCancellationPreservesOtherSubscribersAndTheirFormats(t *testing.T) {
 
 func TestOldCancellationDoesNotReplaceNewRequest(t *testing.T) {
 	s, uid := newChaptarrBookTestService(t, "http://unused")
-	ref := &CatalogRef{Provider: "openlibrary", ID: "OL1W"}
+	var ref *CatalogRef
 	create := func() *CreateResponse {
-		out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Again", BookFormat: "ebook", CatalogRef: ref})
+		out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Again", BookFormat: "ebook", ForeignID: "native-choice"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -318,7 +252,7 @@ func TestOldCancellationDoesNotReplaceNewRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := create()
-	out, err := s.DeliveryStatus(uid, "book", "", second.InstanceID, ref)
+	out, err := s.DeliveryStatus(uid, "book", "native-choice", second.InstanceID, ref, false)
 	if err != nil || len(out.Delivery) != 1 || out.Delivery[0].State != "queued" || out.RequestID != second.RequestID {
 		t.Fatalf("old history masked new intent: %+v %v", out, err)
 	}
@@ -354,14 +288,14 @@ func TestPendingDeliveryDoesNotHideLiveLibraryChanges(t *testing.T) {
 		t.Fatalf("live import masked: %+v %v", status, err)
 	}
 	states, _ := s.deliveryStates(out.RequestID)
-	if states[0].State != "retry" {
+	if states[0].State != "queued" {
 		t.Fatal("read mutated delivery")
 	}
 }
 
 func TestRetryBackoffAndLimit(t *testing.T) {
 	s, uid := newChaptarrBookTestService(t, "http://unused")
-	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Retry", BookFormat: "ebook", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
+	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Retry", BookFormat: "ebook", ForeignID: "native-choice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,32 +330,10 @@ func TestRetryBackoffAndLimit(t *testing.T) {
 	}
 }
 
-func TestGrantRevocationDuringSourceResolutionPreventsMutation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("revoked worker contacted library")
-		w.WriteHeader(503)
-	}))
-	defer server.Close()
-	s, uid := newChaptarrBookTestService(t, server.URL)
-	s.BookCatalog = deliveryBookCatalog{resolve: func(context.Context, *chaptarr.Client, string) (bookdiscovery.Targets, error) {
-		s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
-		return bookdiscovery.Targets{State: "matched", Candidates: []bookdiscovery.Target{{ForeignID: "chosen", Title: "Chosen"}}}, nil
-	}}
-	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Revoked", BookFormat: "ebook", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.SweepDispatch(context.Background())
-	states, _ := s.deliveryStates(out.RequestID)
-	if states[0].State != "attention" || states[0].Code != "access_unavailable" {
-		t.Fatalf("grant not rechecked: %+v", states)
-	}
-}
-
 func TestManualDeliveryRetryResumesFailedNativeImport(t *testing.T) {
 	stub := newPendingImportAPIStub(t)
 	s, uid := newChaptarrBookTestService(t, stub.server.URL)
-	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "gr:253739298", Title: "Waiting Book", BookFormat: "ebook"})
+	out, err := s.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "gr:253739298", Title: "Waiting Book", BookFormat: "ebook"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,28 +356,6 @@ func TestManualDeliveryRetryResumesFailedNativeImport(t *testing.T) {
 	states, _ = restarted.deliveryStates(out.RequestID)
 	if states[0].State != "waiting_library" || stub.retryHits.Load() != 1 || stub.addAttempts.Load() != adds {
 		t.Fatalf("retry replaced native import: %+v retry=%d adds=%d", states, stub.retryHits.Load(), stub.addAttempts.Load())
-	}
-}
-
-func TestGrantRevocationDuringMatchConfirmation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
-	defer server.Close()
-	s, uid := newChaptarrBookTestService(t, server.URL)
-	out, err := s.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", Title: "Revoked", BookFormat: "ebook", CatalogRef: &CatalogRef{Provider: "openlibrary", ID: "OL1W"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.BookCatalog = deliveryBookCatalog{resolve: func(context.Context, *chaptarr.Client, string) (bookdiscovery.Targets, error) {
-		s.db.Exec(`DELETE FROM user_default_instances WHERE user_id=?`, uid)
-		return bookdiscovery.Targets{Suggestions: []bookdiscovery.Target{{ForeignID: "chosen", Title: "Chosen"}}}, nil
-	}}
-	if _, err = s.DeliveryAction(context.Background(), uid, out.RequestID, "confirm", "chosen"); err == nil {
-		t.Fatal("revoked grant confirmed a mapping")
-	}
-	var confirmed bool
-	s.db.QueryRow(`SELECT match_confirmed FROM request_log WHERE id=?`, out.RequestID).Scan(&confirmed)
-	if confirmed {
-		t.Fatal("mapping persisted after revocation")
 	}
 }
 

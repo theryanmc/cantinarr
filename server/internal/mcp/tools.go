@@ -139,12 +139,12 @@ var toolDefinitions = []Tool{
 	{
 		Name:        "search_books",
 		Permission:  auth.PermissionMediaDiscover,
-		Description: "Search books by title or author. Use catalog all for independent Open Library and library results. Public results carry catalog_ref; library results carry foreign_book_id. Preserve that identity for status, requests, and display.",
+		Description: "Search the selected Chaptarr instance by title or author. Preserve each result's foreign_book_id, instance_id, title and search_term for status, requests, and display. Books and authors with similar names remain distinct.",
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"catalog":     map[string]interface{}{"type": "string", "enum": []string{"all", "public", "library"}, "description": "Use all to search both public and service catalogs independently. Omit for legacy library search."},
-				"page":        map[string]interface{}{"type": "integer", "minimum": 1, "description": "Public catalog page, starting at 1."},
+				"catalog": map[string]interface{}{"type": "string", "enum": []string{"library"}, "description": "Search Chaptarr directly. Open Library search has retired."},
+
 				"instance_id": map[string]interface{}{"type": "string", "description": "Selected authorized Chaptarr or Lidarr instance."},
 
 				"query": map[string]interface{}{
@@ -181,7 +181,7 @@ var toolDefinitions = []Tool{
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"openlibrary", "musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
+				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
 
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
@@ -231,10 +231,11 @@ var toolDefinitions = []Tool{
 		InputSchema: map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
-				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"openlibrary", "musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
+				"search_term": map[string]interface{}{"type": "string", "description": "Original Chaptarr search query that returned the selected book."},
+				"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz", "musicbrainz_release"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public identity from catalog search, separate from a native foreign_id."},
 
 				"request_id": map[string]interface{}{"type": "integer", "description": "Saved request to retry, cancel, or confirm."},
-				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel", "confirm"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
+				"action":     map[string]interface{}{"type": "string", "enum": []string{"retry", "cancel"}, "description": "Modify saved delivery. confirm uses foreign_id and is allowed only after the user explicitly chooses that book from the offered matches. Never infer confirmation from title similarity."},
 
 				"tmdb_id": map[string]interface{}{
 					"type":        "integer",
@@ -303,7 +304,7 @@ var toolDefinitions = []Tool{
 								"enum":        []string{"movie", "tv", "book", "music"},
 								"description": "Whether this is a movie, TV show, book, or album",
 							},
-							"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"openlibrary", "musicbrainz"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public source identity from search; use instead of a native foreign_id."},
+							"catalog_ref": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "enum": []string{"musicbrainz"}}, "id": map[string]interface{}{"type": "string"}}, "required": []string{"provider", "id"}, "description": "Public source identity from search; use instead of a native foreign_id."},
 							"instance_id": map[string]interface{}{"type": "string", "description": "Selected library instance from the search."},
 							"foreign_id": map[string]interface{}{
 								"type":        "string",
@@ -750,8 +751,8 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
-	if params.Catalog == "public" || params.Catalog == "all" {
-		return s.searchCatalogs(input, userID, "book")
+	if params.Catalog == "public" {
+		return retiredBookCatalogResult(), nil
 	}
 	results, err := s.request.SearchBooksForUserInInstance(userID, params.Query, params.InstanceID)
 	if errors.Is(err, request.ErrNoChaptarrAccess) {
@@ -761,7 +762,7 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 		return nil, err
 	}
 	if len(results) == 0 {
-		return &ToolResult{Text: fmt.Sprintf("No books found for %q.", params.Query)}, nil
+		return &ToolResult{Text: fmt.Sprintf("No books found for %q in the selected Chaptarr catalog. This does not rule out another query or another library.", params.Query)}, nil
 	}
 	const maxBookResults = 10
 	if len(results) > maxBookResults {
@@ -778,14 +779,14 @@ func (s *ToolServer) searchBooks(input json.RawMessage, userID int64) (*ToolResu
 		if r.Year > 0 {
 			fmt.Fprintf(&sb, " (%d)", r.Year)
 		}
-		fmt.Fprintf(&sb, " [foreign_book_id: %s]", r.ForeignBookID)
+		fmt.Fprintf(&sb, " [foreign_book_id: %s, instance_id: %s, search_term: %q]", r.ForeignBookID, r.InstanceID, params.Query)
 		year := ""
 		if r.Year > 0 {
 			year = strconv.Itoa(r.Year)
 		}
 		items = append(items, MediaResultItem{
 			Title: r.Title, Year: year, Overview: r.Overview,
-			MediaType: "book", ForeignID: r.ForeignBookID, PosterURL: r.RemoteCover,
+			MediaType: "book", ForeignID: r.ForeignBookID, PosterURL: r.RemoteCover, InstanceID: r.InstanceID,
 		})
 	}
 	sb.WriteString("\nUse the foreign_book_id with check_request_status, request_media, and display_media.")
@@ -857,23 +858,20 @@ func (s *ToolServer) checkRequestStatus(input json.RawMessage, userID int64) (*T
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if params.RequestID > 0 {
+		status, err := s.request.DeliveryByID(userID, params.RequestID, false)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := json.Marshal(status)
+		return &ToolResult{Text: string(data)}, nil
+	}
 	if params.CatalogRef != nil {
 		status, err := s.request.DeliveryStatus(userID, params.MediaType, params.ForeignID, params.InstanceID, params.CatalogRef)
 		if err != nil {
 			return nil, err
 		}
-		if params.MediaType == "book" {
-			for _, delivery := range status.Delivery {
-				if delivery.State == "needs_match" {
-					matches, e := s.request.CatalogMatches(context.Background(), userID, status.InstanceID, params.CatalogRef)
-					if e != nil {
-						return nil, e
-					}
-					data, _ := json.Marshal(map[string]any{"request": status, "matches": matches, "instruction": "Ask the user to choose a match, then request_media action confirm with this request_id and chosen foreign_id. Never choose a suggestion automatically."})
-					return &ToolResult{Text: string(data)}, nil
-				}
-			}
-		}
+
 		data, _ := json.Marshal(status)
 		return &ToolResult{Text: string(data)}, nil
 	}
@@ -1007,14 +1005,21 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 		ForeignID        string              `json:"foreign_id"`
 		BookFormat       string              `json:"book_format"`
 		Title            string              `json:"title"`
+		SearchTerm       string              `json:"search_term"`
 		QualityProfileID int                 `json:"quality_profile_id"`
 		InstanceID       string              `json:"instance_id"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
+	if params.Action == "confirm" || (params.Action == "" && params.MediaType == "book" && params.CatalogRef != nil) {
+		return retiredBookCatalogResult(), nil
+	}
 	if params.Action != "" {
-		response, err := s.request.DeliveryAction(context.Background(), userID, params.RequestID, params.Action, params.ForeignID)
+		response, err := s.request.DeliveryAction(context.Background(), userID, params.RequestID, params.Action, params.ForeignID, params.BookFormat)
+		if errors.Is(err, bookdiscovery.ErrRetired) {
+			return retiredBookCatalogResult(), nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1039,6 +1044,7 @@ func (s *ToolServer) requestMedia(input json.RawMessage, userID int64) (*ToolRes
 		ForeignID:        params.ForeignID,
 		BookFormat:       params.BookFormat,
 		Title:            params.Title,
+		SearchTerm:       params.SearchTerm,
 		QualityProfileID: params.QualityProfileID,
 		InstanceID:       params.InstanceID,
 	})
@@ -1125,26 +1131,16 @@ func (s *ToolServer) displayMedia(ctx context.Context, input json.RawMessage, us
 			continue
 		}
 		if p.CatalogRef != nil {
+			if p.MediaType == "book" {
+				return retiredBookCatalogResult(), nil
+			}
 			body, err := s.request.CatalogMetadata(ctx, userID, p.MediaType, p.InstanceID, p.CatalogRef)
 			if err != nil {
 				failures = append(failures, fmt.Sprintf("%s %q: could not read this catalog record", p.MediaType, p.Title))
 				continue
 			}
 			item := MediaResultItem{MediaType: p.MediaType, CatalogRef: p.CatalogRef, InstanceID: p.InstanceID}
-			if p.MediaType == "book" {
-				var book bookdiscovery.Book
-				if json.Unmarshal(body, &book) != nil {
-					failures = append(failures, "Invalid book metadata")
-					continue
-				}
-				item.Title, item.ForeignID, item.Overview = book.Title, book.ForeignID, book.Description
-				if book.Year > 0 {
-					item.Year = strconv.Itoa(book.Year)
-				}
-				if book.CoverID > 0 {
-					item.PosterURL = fmt.Sprintf("https://covers.openlibrary.org/b/id/%d-M.jpg?default=false", book.CoverID)
-				}
-			} else {
+			{
 				var album musicdiscovery.Album
 				if json.Unmarshal(body, &album) != nil {
 					failures = append(failures, "Invalid album metadata")
@@ -1532,4 +1528,9 @@ func (s *ToolServer) searchCatalogs(input json.RawMessage, userID int64, mediaTy
 	sections = append(sections, <-public)
 	body, _ := json.Marshal(sections)
 	return &ToolResult{Text: string(body)}, nil
+}
+
+func retiredBookCatalogResult() *ToolResult {
+	data, _ := json.Marshal(bookdiscovery.Retirement())
+	return &ToolResult{Text: string(data)}
 }

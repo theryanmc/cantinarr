@@ -558,9 +558,11 @@ class _AppShellState extends ConsumerState<AppShell>
           return;
         }
         ref.read(bookDiscoverySearchSeedProvider.notifier).state = null;
-        ref
-            .read(instanceProvider.notifier)
-            .setActiveChaptarrInstance(bookSeed.instanceId);
+        if (bookSeed.instanceId != null) {
+          ref
+              .read(instanceProvider.notifier)
+              .setActiveChaptarrInstance(bookSeed.instanceId!);
+        }
         _searchAuthorBooks(bookSeed.query);
       });
     }
@@ -977,6 +979,8 @@ class _AppShellState extends ConsumerState<AppShell>
                                 ? BookSearchResultsView(
                                     results: bookSearchState.results,
                                     authors: bookSearchState.authors,
+                                    authorsLoading:
+                                        bookSearchState.authorsLoading,
                                     query: bookSearchState.searchQuery,
                                     isLoading: bookSearchState.isLoadingSearch,
                                     searched: bookSearchState.searched,

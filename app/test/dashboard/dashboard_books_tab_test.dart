@@ -108,7 +108,7 @@ void main() {
   });
 
   testWidgets(
-      'fuzzy ownership keeps lookup metadata but uses the canonical library id',
+      'native search keeps its selected identity despite a similar library title',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -128,7 +128,7 @@ void main() {
     expect(adapter.statusForeignIds, isEmpty);
     expect(
       find.byKey(
-        const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
+        const ValueKey('book-result:lookup-flock:lookup-flock:lookup:0'),
       ),
       findsOneWidget,
     );
@@ -136,7 +136,7 @@ void main() {
     // through the exact route/extra the mismatched row owns so the remainder
     // can assert detail identity and mutation payload end to end.
     router.go(
-      '/detail/book/library-flock?title=Flock&instance_id=books',
+      '/detail/book/lookup-flock?title=Flock&instance_id=books',
       extra: ChaptarrBook.fromJson({
         'title': 'Flock',
         'foreignBookId': 'lookup-flock',
@@ -146,9 +146,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(adapter.statusForeignIds, isNotEmpty);
-    expect(adapter.statusForeignIds, everyElement('library-flock'));
+    expect(adapter.statusForeignIds, everyElement('lookup-flock'));
     expect(router.routeInformationProvider.value.uri.path,
-        '/detail/book/library-flock');
+        '/detail/book/lookup-flock');
     expect(
       router.routeInformationProvider.value.uri.queryParameters['instance_id'],
       'books',
@@ -156,7 +156,7 @@ void main() {
     final screen = tester.widget<RequesterBookDetailScreen>(
       find.byType(RequesterBookDetailScreen),
     );
-    expect(screen.foreignId, 'library-flock');
+    expect(screen.foreignId, 'lookup-flock');
     expect(screen.initialBook?.foreignBookId, 'lookup-flock');
 
     final ebookRow = find.byKey(const ValueKey('book-format-row:ebook'));
@@ -172,13 +172,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(adapter.requestBodies, hasLength(1));
-    expect(adapter.requestBodies.single['foreign_id'], 'library-flock');
+    expect(adapter.requestBodies.single['foreign_id'], 'lookup-flock');
     expect(adapter.requestBodies.single['instance_id'], 'books');
     expect(adapter.requestBodies.single['book_format'], 'ebook');
   });
 
   testWidgets(
-      'an unresolved fuzzy match keeps its canonical id and blocks requests',
+      'an exact library record with unknown formats blocks requests',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -196,7 +196,7 @@ void main() {
     await _showLibraryResults(tester);
 
     final row = find.byKey(
-      const ValueKey('book-result:lookup-flock:library-flock:lookup:0'),
+      const ValueKey('book-result:library-flock:library-flock:library:0'),
     );
     expect(row, findsOneWidget);
     expect(adapter.statusForeignIds, isEmpty);
@@ -213,7 +213,7 @@ void main() {
       '/detail/book/library-flock?title=Flock&instance_id=books',
       extra: ChaptarrBook.fromJson({
         'title': 'Flock',
-        'foreignBookId': 'lookup-flock',
+        'foreignBookId': 'library-flock',
         'author': {'authorName': 'Kate Stewart'},
       }),
     );
@@ -274,7 +274,7 @@ void main() {
 
     expect(
       find.text('May be the same as a book listed above'),
-      findsNWidgets(2),
+      findsNothing,
     );
     final firstAmbiguous = find.byKey(
       const ValueKey('book-result:lookup-flock:lookup-flock:lookup:0'),
@@ -304,34 +304,8 @@ void main() {
     expect(screen.foreignId, 'lookup-flock');
     expect(adapter.statusForeignIds, everyElement('lookup-flock'));
 
-    // The page that could not bind to its own library record points at the
-    // record it may duplicate — in requester words, with the record's real
-    // state — before any Request can be tapped.
-    expect(
-      find.text('Your library may already have this book'),
-      findsOneWidget,
-    );
-    final lookalike =
-        find.byKey(const ValueKey('book-lookalike:library-flock'));
-    expect(lookalike, findsOneWidget);
-    expect(
-      find.descendant(
-          of: lookalike, matching: find.text('Audiobook requested')),
-      findsOneWidget,
-    );
-
-    // Tapping it lands on the record whose request state is real.
-    await tester.tap(lookalike);
-    await tester.pumpAndSettle();
-    final opened = tester.widget<RequesterBookDetailScreen>(
-      find.byType(RequesterBookDetailScreen).last,
-    );
-    expect(opened.foreignId, 'library-flock');
-    // A page bound to its own record needs no pointer.
-    expect(
-      find.text('Your library may already have this book'),
-      findsNothing,
-    );
+    expect(find.text('Your library may already have this book'), findsNothing);
+    expect(screen.foreignId, 'lookup-flock');
   });
 
   testWidgets('an exact library id outranks a same-title sibling row',
@@ -394,7 +368,7 @@ void main() {
 
     expect(
       find.text('May be the same as a book listed above'),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.byKey(const ValueKey('book-result:library-a:library-a:library:0')),
@@ -1558,7 +1532,7 @@ void main() {
   }
 
   testWidgets(
-      'SEARCH-01: an author search returns author rows, and they render above '
+      'SEARCH-01: an author search returns author rows, and they render below '
       'the book rows', (tester) async {
     final adapter = await searchBooksTab(tester, authorMatches: true);
 
@@ -1570,14 +1544,14 @@ void main() {
     expect(find.text('Tracked Author'), findsOneWidget);
     expect(find.text('Metadata Only Author'), findsOneWidget);
 
-    // Authors sit above books on screen. Compare against a book row known to
+    // Authors sit below books on screen. Compare against a book row known to
     // be in this fixture's lookup response.
     final firstAuthorY = tester.getTopLeft(find.text('Tracked Author')).dy;
     final firstBookY = tester.getTopLeft(find.text('Meditations')).dy;
     expect(
       firstAuthorY,
-      lessThan(firstBookY),
-      reason: 'authors render above books',
+      greaterThan(firstBookY),
+      reason: 'authors render below books',
     );
 
     // Both groups are labelled once both kinds are present.

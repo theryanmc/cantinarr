@@ -377,7 +377,9 @@ class _MediaResultCard extends StatelessWidget {
                 'title': item.title,
                 if (item.instanceId != null) 'instance_id': item.instanceId!,
                 if (item.catalogProvider != null)
-                  'source': item.catalogProvider!,
+                  'source': item.catalogProvider!
+                else if (isBook)
+                  'source': 'chaptarr',
               }).toString())
         : '/detail/$mediaType/${item.id}';
 

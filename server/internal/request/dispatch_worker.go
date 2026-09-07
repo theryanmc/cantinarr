@@ -24,9 +24,19 @@ func (s *Service) StartDispatchMaintenance(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.SweepDispatch(ctx)
+			case <-s.dispatchWake:
+				s.SweepDispatch(ctx)
 			}
 		}
 	}()
+}
+
+// Wakeups coalesce; persisted jobs and the periodic sweep own recovery.
+func (s *Service) wakeDispatch() {
+	select {
+	case s.dispatchWake <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Service) SweepDispatch(ctx context.Context) {
@@ -56,6 +66,7 @@ func (s *Service) SweepDispatch(ctx context.Context) {
 		}
 		s.dispatchRequest(ctx, id)
 	}
+	s.reconcileBookApprovals(ctx)
 }
 
 func (s *Service) dispatchRequest(ctx context.Context, id int64) {
@@ -168,26 +179,9 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		return
 	}
 	if provider == "openlibrary" {
-		client, _, _ := s.resolveChaptarr(r.userID, instanceID)
-		if !confirmed || r.foreignID == "" {
-			result, e := s.BookCatalog.ResolveClient(ctx, client, sourceID)
-			if e != nil || result.State == "unavailable" {
-				if result.Code == "catalog_access_denied" {
-					s.finishDelivery(id, format, token, "attention", result.Code, nil)
-					return
-				}
-				s.finishDelivery(id, format, token, "retry", "catalog_unavailable", &transporterr.Upstream{Transient: true, RetryAfter: time.Duration(result.RetryAfter) * time.Second})
-				return
-			}
-			if len(result.Candidates) != 1 {
-				s.finishDelivery(id, format, token, "needs_match", "match_required", nil)
-				return
-			}
-			r.foreignID = result.Candidates[0].ForeignID
-			r.title = result.Candidates[0].Title
-		} else {
-			// A prior human choice permits this identity, not a cached add body.
-			// addToChaptarr re-fetches the native record and refuses a mismatch.
+		if !s.verifiedBookBinding(id, r.foreignID, confirmed) {
+			s.finishDelivery(id, format, token, "attention", "catalog_retired", nil)
+			return
 		}
 	} else if provider == "musicbrainz" || provider == "musicbrainz_release" {
 		album, e := s.MusicCatalog.ResolveAlbum(ctx, sourceID, provider == "musicbrainz_release")
@@ -220,7 +214,15 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 		s.db.QueryRow(`SELECT attempts,code FROM request_dispatch WHERE request_id=? AND format=?`, id, format).Scan(&attempts, &retryCode)
 		manualImportRetry := retryCode == "manual_import_retry"
 		if attempts > 1 || manualImportRetry {
-			client, _, _ := s.resolveChaptarr(r.userID, instanceID)
+			client, _, e := s.resolveChaptarr(r.userID, instanceID)
+			if e != nil || client == nil {
+				s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
+				return
+			}
+			client = client.WithMutationGuard(func() error {
+				_, _, err := s.resolveChaptarr(r.userID, instanceID)
+				return err
+			})
 			books, e := client.GetAllBooks()
 			if e != nil {
 				s.finishDelivery(id, format, token, "retry", "library_unavailable", e)
@@ -271,17 +273,17 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 	}
 	status, title, err := s.addToArr(r)
 	if err != nil {
+		if _, accessErr := s.deliveryInstance(r.userID, r.mediaType, instanceID); accessErr != nil {
+			s.finishDelivery(id, format, token, "attention", "access_unavailable", nil)
+			return
+		}
 		switch {
 		case errors.Is(err, chaptarr.ErrAuthorPendingImport):
 			s.finishDelivery(id, format, token, "waiting_library", "author_import", nil)
 		case errors.Is(err, chaptarr.ErrEditionsNotHydrated):
 			s.finishDelivery(id, format, token, "retry", "editions_unavailable", err)
 		case errors.Is(err, ErrBookMetadataUnresolved), errors.Is(err, ErrMusicMetadataUnresolved):
-			state := "attention"
-			if provider == "openlibrary" {
-				state = "needs_match"
-			}
-			s.finishDelivery(id, format, token, state, "metadata_unresolved", nil)
+			s.finishDelivery(id, format, token, "attention", "metadata_unresolved", nil)
 		default:
 			retry, _ := transporterr.Retry(err)
 			state := "attention"
@@ -384,4 +386,15 @@ func (s *Service) notifyDelivery(id int64, state string) {
 	for _, subscriber := range audience {
 		s.notifier.NotifyUser(subscriber.UserID, "request_updated", map[string]interface{}{"request_id": id, "delivery_state": state, "media_type": r.mediaType, "instance_id": r.instanceID, "foreign_id": r.foreignID})
 	}
+}
+
+func (s *Service) verifiedBookBinding(id int64, foreignID string, confirmed bool) bool {
+	if foreignID == "" {
+		return false
+	}
+	if confirmed {
+		return true
+	}
+	var n int
+	return s.db.QueryRow(`SELECT COUNT(*) FROM request_log r WHERE r.id=? AND (COALESCE(r.book_record_id,0)>0 OR EXISTS(SELECT 1 FROM request_dispatch d WHERE d.request_id=r.id AND (d.canonical_foreign_id!='' OR d.book_record_id>0 OR d.state='waiting_library')))`, id).Scan(&n) == nil && n > 0
 }

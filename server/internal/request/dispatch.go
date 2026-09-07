@@ -71,6 +71,9 @@ func validateCatalogRef(mediaType string, ref *CatalogRef) error {
 }
 
 func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff effective) (*CreateResponse, error) {
+	if req.MediaType == "book" && req.CatalogRef != nil {
+		return nil, bookdiscovery.ErrRetired
+	}
 	if err := validateCatalogRef(req.MediaType, req.CatalogRef); err != nil {
 		return nil, err
 	}
@@ -82,28 +85,16 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	if req.CatalogRef != nil {
 		provider, sourceID = req.CatalogRef.Provider, req.CatalogRef.ID
 	}
-	// Source callers cannot smuggle in a native mapping. Confirmation has its
-	// own server-verified action; exact matches are resolved again at dispatch.
+	// Music source callers cannot supply their own native mapping.
 	foreignID := req.ForeignID
 	if provider != "" {
 		foreignID = ""
 	}
 	if req.Title == "" {
-		// Legacy native callers may request an existing book using only its ID.
-		if req.MediaType == "book" && provider == "" {
-			client, _, _ := s.resolveChaptarr(userID, instanceID)
-			books, e := client.GetAllBooks()
-			if e == nil {
-				title, _, _ := recordsForForeignID(books, foreignID)
-				req.Title = title
-			}
+		if req.MediaType == "book" {
+			return nil, fmt.Errorf("title is required to add a new book")
 		}
-		if req.Title == "" {
-			if req.MediaType == "book" {
-				return nil, fmt.Errorf("title is required to add a new book")
-			}
-			return nil, fmt.Errorf("title is required to add a new album")
-		}
+		return nil, fmt.Errorf("title is required to add a new album")
 	}
 	formats := []string{""}
 	if req.MediaType == "book" {
@@ -113,21 +104,7 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	// still saves the request; delivery reconciles it after recovery.
 	liveFormats := map[string]string{}
 	if eff.RequiresApproval && provider == "" {
-		if req.MediaType == "book" {
-			client, _, _ := s.resolveChaptarr(userID, instanceID)
-			if live, e := s.freshLiveBookFormats(client, instanceID, foreignID); e == nil {
-				missing := []string{}
-				for _, f := range formats {
-					status := live[f]
-					if status != "" && status != StatusUnavailable && status != StatusDenied {
-						liveFormats[f] = status
-					} else {
-						missing = append(missing, f)
-					}
-				}
-				formats = missing
-			}
-		} else {
+		if req.MediaType == "music" {
 			client, _, _ := s.resolveLidarr(userID, instanceID)
 			if live, known, e := s.freshLiveMusicStatus(client, instanceID, foreignID); e == nil && known && live != StatusUnavailable {
 				return &CreateResponse{Success: true, Status: live, Title: req.Title, InstanceID: instanceID}, nil
@@ -147,16 +124,19 @@ func (s *Service) createCatalogRequest(userID int64, req *CreateRequest, eff eff
 	if inserted && eff.RequiresApproval && s.notifier != nil {
 		s.notifier.NotifyAdmins("request_pending", map[string]interface{}{"media_type": req.MediaType, "title": req.Title, "instance_id": instanceID, "foreign_id": foreignID})
 	}
-	// Native callers keep the immediate-success behavior; persistence precedes
-	// even this first attempt. External catalog requests return promptly and are
-	// dispatched by the worker, so an unavailable lookup never holds the UI.
-	if provider == "" && !eff.RequiresApproval {
+	// Book acknowledgement is saved-state only. The durable worker performs
+	// all Chaptarr reads and mutations after the request has been saved.
+	if req.MediaType == "music" && provider == "" && !eff.RequiresApproval {
 		for _, id := range ids {
 			s.dispatchRequest(context.Background(), id)
 		}
 	}
+	s.wakeDispatch()
 	response, err := s.deliveryResponse(userID, ids, req.Title, instanceID, req.CatalogRef)
 	if err == nil {
+		if req.MediaType == "book" {
+			savedBookState(response)
+		}
 		for f, status := range liveFormats {
 			response.BookFormats[f] = status
 		}

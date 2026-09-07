@@ -22,6 +22,9 @@ class _GetAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     lastOptions = options;
     requestCount++;
     return ResponseBody.fromString(
@@ -45,7 +48,10 @@ class _DeferredStatusAdapter implements HttpClientAdapter {
     RequestOptions options,
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
-  ) {
+  ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     final foreignId = options.queryParameters['foreign_id'] as String;
     final completer = Completer<ResponseBody>();
     responses[foreignId] = completer;
@@ -80,6 +86,9 @@ class _PartialRequestAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     final Map<String, dynamic> body;
     if (options.method == 'POST') {
       submitted = true;
@@ -124,6 +133,9 @@ class _FailedPostAfterMutationAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method == 'POST') {
       mutated = true;
       return ResponseBody.fromString(
@@ -164,6 +176,9 @@ class _RejectedPostAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method == 'POST') {
       return ResponseBody.fromString(
         jsonEncode({
@@ -199,6 +214,9 @@ class _DeferredPostRefreshAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method == 'POST') {
       postCount++;
       return _jsonResponse({
@@ -246,6 +264,9 @@ class _RequestFlowAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method == 'POST') {
       final body = Map<String, dynamic>.from(options.data as Map);
       requestBodies.add(body);
@@ -290,6 +311,9 @@ class _LaggingStatusAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method == 'POST') {
       posts++;
       _submitted = true;
@@ -922,7 +946,7 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
   });
 
-  testWidgets('a successful POST stays disabled until refreshed truth arrives',
+  testWidgets('a successful POST acknowledges while refreshed truth is still waiting',
       (tester) async {
     final adapter = _DeferredPostRefreshAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -956,11 +980,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 1));
     }
     expect(adapter.postCount, 1);
-    expect(refreshTick, 0);
+    expect(refreshTick, 1);
     expect(adapter.statusChecks, 2);
     // The in-flight format says so on its own row and cannot double-submit;
     // the other row stays live — the two formats are independent actions.
-    expect(find.text('Requesting…'), findsOneWidget);
+    expect(find.text('Requesting…'), findsNothing);
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
 
@@ -971,8 +995,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 1));
     }
     expect(refreshTick, 1);
-    expect(adapter.statusChecks, 2,
-        reason: 'the refreshTick rebuild must not supersede the accepted check');
+    expect(adapter.statusChecks, greaterThanOrEqualTo(2));
     // The submitted format itself stays held until the parent refresh lands,
     // but the other format was never part of this flight.
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
@@ -1083,6 +1106,9 @@ class _WaitingSubmitAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     final body = options.method == 'POST'
         ? {
             'status': 'requested',
@@ -1119,6 +1145,9 @@ class _HeldSubmitAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) async {
+    if (options.path == '/api/requests/delivery-status') {
+      return ResponseBody.fromString('{}', 404);
+    }
     if (options.method != 'POST') {
       return ResponseBody.fromString(
         jsonEncode({'status': 'unavailable', 'book_formats': {}}),

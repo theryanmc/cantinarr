@@ -78,7 +78,7 @@ void main() {
     expect(find.text('Requested'), findsNWidgets(2));
   });
 
-  testWidgets('a canonical deep link accepts one strong title metadata match',
+  testWidgets('a native deep link rejects metadata from a different ID',
       (tester) async {
     final (:router, container: _) = await _pumpRouter(
       tester,
@@ -90,7 +90,7 @@ void main() {
 
     expect(find.text('Dune Messiah'), findsOneWidget);
     expect(find.text('Frank Herbert'), findsOneWidget);
-    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    expect(find.text('1969 · 336 pages'), findsNothing);
   });
 
   testWidgets(
@@ -134,7 +134,7 @@ void main() {
     expect(find.text('Request'), findsNothing);
   });
 
-  testWidgets('a re-keyed record re-addresses the book by its canonical id',
+  testWidgets('a re-keyed record updates ownership while the selected ID stays fixed',
       (tester) async {
     final adapter = _BooksAdapter();
     final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
@@ -146,7 +146,7 @@ void main() {
     // the stored record, answers with the library's canonical id, and every
     // later read uses that id.
     expect(adapter.statusForeignIds.first, 'lookup-29749107');
-    expect(adapter.statusForeignIds.last, '29749107');
+    expect(adapter.statusForeignIds.last, 'lookup-29749107');
     // The owned digest row (canonical id) binds: the monitored audiobook reads
     // Requested while the untouched eBook row remains the open action.
     expect(find.text('Requested'), findsOneWidget);
@@ -540,7 +540,7 @@ void main() {
     expect(adapter.lookupTerms, ['555', 'Dune Messiah']);
     expect(find.text('Dune Messiah'), findsOneWidget);
     expect(find.text('Frank Herbert'), findsOneWidget);
-    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    expect(find.text('1969 · 336 pages'), findsNothing);
   });
 
   testWidgets('an unresolvable id shows a graceful state with a Books tab exit',

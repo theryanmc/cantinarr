@@ -134,6 +134,51 @@ void main() {
     expect(pushedLocation, '/detail/tv/94997');
   });
 
+  testWidgets(
+      'a retired approval offers attention, cancellation and native search',
+      (tester) async {
+    const delivery = [
+      {
+        'request_id': 7,
+        'format': 'ebook',
+        'state': 'attention',
+        'code': 'catalog_retired',
+        'message': 'Open Library requests have retired.',
+        'can_cancel': true,
+        'can_manage': false
+      },
+    ];
+    final adapter = _ApprovalsAdapter(pending: const [
+      {
+        'id': 7,
+        'media_type': 'book',
+        'title': 'Selected',
+        'book_format': 'ebook',
+        'catalog_provider': 'openlibrary',
+        'catalog_id': 'OL1W',
+        'delivery': delivery
+      },
+    ], delivery: delivery);
+    final container = ProviderContainer(overrides: [
+      authProvider.overrideWith(_FakeAuthNotifier.new),
+      backendClientProvider.overrideWithValue(
+          Dio(BaseOptions(baseUrl: 'http://localhost'))
+            ..httpClientAdapter = adapter),
+      realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
+    ]);
+    addTearDown(container.dispose);
+    await tester.pumpWidget(UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PendingRequestsScreen())));
+    await tester.pumpAndSettle();
+    expect(find.text('Needs attention'), findsOneWidget);
+    expect(find.text('Cancel request'), findsOneWidget);
+    expect(find.text('Search books'), findsOneWidget);
+    expect(find.byTooltip('Approve'), findsNothing);
+    expect(adapter.approvalBodies, isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a book row keeps its placeholder and stays inert without an id',
       (tester) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -802,6 +847,7 @@ class _FakeAuthNotifier extends AuthNotifier {
 
 class _ApprovalsAdapter implements HttpClientAdapter {
   final List<Map<String, dynamic>> pending;
+  final List<Map<String, dynamic>> delivery;
   Map<String, dynamic> approvalResponse;
   final int approvalStatusCode;
   final List<Map<String, dynamic>> approvalBodies = [];
@@ -817,6 +863,7 @@ class _ApprovalsAdapter implements HttpClientAdapter {
 
   _ApprovalsAdapter({
     this.pending = const [],
+    this.delivery = const [],
     this.approvalResponse = const {},
     this.approvalStatusCode = 200,
     this.waiting = const [],
@@ -854,6 +901,10 @@ class _ApprovalsAdapter implements HttpClientAdapter {
       );
     }
     final body = switch (options.uri.path) {
+      '/api/requests/delivery-status' => {
+          'success': true,
+          'delivery': delivery
+        },
       '/api/admin/requests' => pending,
       '/api/admin/requests/waiting' =>
         waitingStatusCode == 200 ? waiting : const <String, dynamic>{},

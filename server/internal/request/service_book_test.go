@@ -2,6 +2,7 @@ package request
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -43,7 +44,7 @@ func newBookTestService(t *testing.T) (*Service, int64) {
 func TestBookRequestTrimsAndRejectsBlankForeignID(t *testing.T) {
 	svc, uid := newBookTestService(t)
 	request := &CreateRequest{MediaType: "book", ForeignID: " \t\n ", Title: "Flock", BookFormat: BookFormatAudiobook}
-	if _, err := svc.CreateMediaRequest(uid, request); err == nil || err.Error() != "foreign_id is required for book requests" {
+	if _, err := svc.createAndDispatchForTest(uid, request); err == nil || err.Error() != "foreign_id is required for book requests" {
 		t.Fatalf("CreateMediaRequest error = %v, want requester-safe foreign_id validation", err)
 	}
 	if request.ForeignID != "" {
@@ -68,7 +69,7 @@ func TestBookRequestRequiresTitleOnlyForNewCanonicalBook(t *testing.T) {
 		defer chaptarrServer.Close()
 		svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
 		request := &CreateRequest{MediaType: "book", ForeignID: "  new-book  ", Title: " \t ", BookFormat: BookFormatEbook}
-		if _, err := svc.CreateMediaRequest(uid, request); err == nil || err.Error() != "title is required to add a new book" {
+		if _, err := svc.createAndDispatchForTest(uid, request); err == nil || err.Error() != "title is required to add a new book" {
 			t.Fatalf("CreateMediaRequest error = %v, want title validation", err)
 		}
 		if lookupCalls != 0 {
@@ -94,8 +95,8 @@ func TestBookRequestRequiresTitleOnlyForNewCanonicalBook(t *testing.T) {
 		}))
 		defer chaptarrServer.Close()
 		svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-		resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
-			MediaType: "book", ForeignID: " existing-book ", Title: "  ", BookFormat: BookFormatEbook,
+		resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
+			MediaType: "book", ForeignID: " existing-book ", Title: " Existing Title ", BookFormat: BookFormatEbook,
 		})
 		if err != nil {
 			t.Fatalf("CreateMediaRequest: %v", err)
@@ -375,7 +376,7 @@ func TestApproveLegacyUnpinnedBookFailsClosed(t *testing.T) {
 	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'legacy'").Scan(&requestID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ApproveRequest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "no pinned Chaptarr instance") {
+	if _, err := svc.approveAndDispatchForTest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "no pinned Chaptarr instance") {
 		t.Fatalf("ApproveRequest error = %v, want pinned-instance failure", err)
 	}
 	var status string
@@ -407,7 +408,7 @@ func TestBookAudienceReadFailureAbortsDecision(t *testing.T) {
 	if _, err := svc.db.Exec("DROP TABLE book_request_waiters"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ApproveRequest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "subscribers") {
+	if _, err := svc.approveAndDispatchForTest(adminID, requestID, nil); err == nil || !strings.Contains(err.Error(), "subscribers") {
 		t.Fatalf("ApproveRequest error = %v, want subscriber read failure", err)
 	}
 	if err := svc.DenyRequest(adminID, requestID, "no"); err == nil || !strings.Contains(err.Error(), "subscribers") {
@@ -442,7 +443,7 @@ func TestBookPendingPreflightUsesLiveAndSharedPendingState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "flock", Title: "Flock", BookFormat: BookFormatBoth})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "flock", Title: "Flock", BookFormat: BookFormatBoth})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +451,7 @@ func TestBookPendingPreflightUsesLiveAndSharedPendingState(t *testing.T) {
 		t.Fatalf("pending response = %#v", resp)
 	}
 	var pendingFormat string
-	if err := svc.db.QueryRow("SELECT book_format FROM request_log WHERE foreign_id='flock' AND status='pending'").Scan(&pendingFormat); err != nil {
+	if err := svc.db.QueryRow("SELECT d.format FROM request_dispatch d JOIN request_log r ON r.id=d.request_id WHERE r.foreign_id='flock' AND d.state='approval'").Scan(&pendingFormat); err != nil {
 		t.Fatal(err)
 	}
 	if pendingFormat != BookFormatEbook {
@@ -469,10 +470,10 @@ func TestBookPendingPreflightUsesLiveAndSharedPendingState(t *testing.T) {
 	if _, err := svc.db.Exec("INSERT INTO user_default_instances (user_id, service_type, instance_id) VALUES (?, 'chaptarr', ?)", secondUID, instanceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "shared", Title: "Shared", BookFormat: BookFormatEbook}); err != nil {
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "shared", Title: "Shared", BookFormat: BookFormatEbook}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateMediaRequest(secondUID, &CreateRequest{MediaType: "book", ForeignID: "shared", Title: "Shared", BookFormat: BookFormatEbook}); err != nil {
+	if _, err := svc.createAndDispatchForTest(secondUID, &CreateRequest{MediaType: "book", ForeignID: "shared", Title: "Shared", BookFormat: BookFormatEbook}); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -613,7 +614,7 @@ func TestBookRequestFormatMonitorsRequestedEditions(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "book-123",
 		Title:      "Star Wars: Heir to the Empire",
@@ -797,7 +798,7 @@ func TestBookRequestEbookFormatAddsRealisticEdition(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "29749107",
 		Title:      "Ahsoka (Star Wars)",
@@ -885,7 +886,7 @@ func TestBookRequestBothFormatAddsEbookAndAudiobookRecords(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "29749107",
 		Title:      "Ahsoka (Star Wars)",
@@ -966,7 +967,7 @@ func TestBookRequestBothReportsAndStoresPartialPerFormat(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "partial-1", Title: "Partial", BookFormat: BookFormatBoth,
 	})
 	if err != nil {
@@ -1069,7 +1070,7 @@ func TestPartialApprovalKeepsFailedWaiterPending(t *testing.T) {
 	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'partial-approval' AND status = 'pending'").Scan(&requestID); err != nil {
 		t.Fatal(err)
 	}
-	response, err := svc.ApproveRequest(adminID, requestID, nil)
+	response, err := svc.approveAndDispatchForTest(adminID, requestID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,7 +1204,7 @@ func TestUnknownFormatExactRecordFailsClosed(t *testing.T) {
 	if err != nil || status.Status != StatusUnavailable || status.StatusKnown == nil || *status.StatusKnown {
 		t.Fatalf("unknown exact status = %+v err=%v, want unavailable status_known=false", status, err)
 	}
-	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "unknown", Title: "Unknown", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
+	if response, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "unknown", Title: "Unknown", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
 		t.Fatalf("expected saved attention without a completed delivery: %+v %v", response, err)
 	}
 	if mutations != 0 {
@@ -1290,7 +1291,7 @@ func TestConcurrentBookRequestsSerializePreflightAndAdd(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "race", Title: "Race", BookFormat: BookFormatEbook}); err != nil {
+			if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "race", Title: "Race", BookFormat: BookFormatEbook}); err != nil {
 				t.Errorf("CreateMediaRequest: %v", err)
 			}
 		}()
@@ -1325,7 +1326,7 @@ func TestBookRequestAddsCanonicalSiblingWhenLookupIDDiffers(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "library-flock", Title: "Flock", BookFormat: BookFormatEbook})
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "library-flock", Title: "Flock", BookFormat: BookFormatEbook})
 	if err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
 	}
@@ -1361,7 +1362,7 @@ func TestCanonicalSiblingFailsClosedOnConflictingAuthors(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "conflict", Title: "Conflict", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
+	if response, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "conflict", Title: "Conflict", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "attention" {
 		t.Fatalf("expected saved attention without a completed delivery: %+v %v", response, err)
 	}
 	if mutations != 0 {
@@ -1387,7 +1388,7 @@ func TestBookRequestMonitoredRecordIsIdempotent(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "flock", Title: "Flock", BookFormat: BookFormatAudiobook,
 	})
 	if err != nil {
@@ -1419,7 +1420,7 @@ func TestBookRequestMonitorSuccessSurvivesImmediateSearchFailure(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "later", Title: "Later", BookFormat: BookFormatEbook,
 	})
 	if err != nil {
@@ -1454,7 +1455,7 @@ func TestBookRequestAddedUnmonitoredRequiresMonitoringSuccess(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{MediaType: "book", ForeignID: "new", Title: "New", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" {
+	if response, err := svc.createAndDispatchForTest(uid, &CreateRequest{MediaType: "book", ForeignID: "new", Title: "New", BookFormat: BookFormatEbook}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" {
 		t.Fatalf("expected saved retry without a completed delivery: %+v %v", response, err)
 	}
 	var count int
@@ -1481,7 +1482,7 @@ func TestBookRequestFailsClosedWhenPreflightUnavailable(t *testing.T) {
 	}))
 	defer chaptarrServer.Close()
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if response, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	if response, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "x", Title: "X", BookFormat: BookFormatEbook,
 	}); err != nil || len(response.Delivery) != 1 || response.Delivery[0].State != "retry" {
 		t.Fatalf("expected saved retry without mutation: %+v %v", response, err)
@@ -1536,7 +1537,7 @@ func TestBookRequestMonitorsAndSearchesNewAuthorBook(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "29749107", Title: "Ahsoka (Star Wars)", BookFormat: BookFormatEbook,
 	})
 	if err != nil {
@@ -1595,7 +1596,7 @@ func TestApproveBookRequestNotifiesWithForeignID(t *testing.T) {
 	requireApproval(t, svc)
 	adminID := createTestAdmin(t, svc)
 
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType: "book", ForeignID: "29749107", Title: "Ahsoka (Star Wars)", BookFormat: BookFormatEbook,
 	}); err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
@@ -1607,11 +1608,11 @@ func TestApproveBookRequestNotifiesWithForeignID(t *testing.T) {
 	if pending[0].InstanceName != "Books" {
 		t.Fatalf("pending instance_name = %q, want safe library name Books", pending[0].InstanceName)
 	}
-	if _, err := svc.ApproveRequest(adminID, pending[0].ID, &DecisionOverride{BookFormat: BookFormatAudiobook}); err == nil {
+	if _, err := svc.approveAndDispatchForTest(adminID, pending[0].ID, &DecisionOverride{BookFormat: BookFormatAudiobook}); err == nil {
 		t.Fatal("approval changed the requester's stored book format")
 	}
 
-	if _, err := svc.ApproveRequest(adminID, pending[0].ID, nil); err != nil {
+	if _, err := svc.approveAndDispatchForTest(adminID, pending[0].ID, nil); err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}
 	decisions := rec.userEvents[:0]
@@ -1875,7 +1876,7 @@ func TestBookRequestPersistsCreatedRecordIdentity(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "lookup-999",
 		Title:      "Flock",
@@ -1964,7 +1965,7 @@ func TestBookRequestRecoversWhenFullTitleLookupMissesTheID(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "fde-1",
 		Title:      fullTitle,
@@ -2011,7 +2012,7 @@ func TestBookRequestOnlyAcceptsAnExactForeignIDMatch(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "wanted-edition",
 		Title:      "Flock",
@@ -2051,7 +2052,7 @@ func TestBookRequestParksInsteadOfDroppingWhenMetadataUnresolved(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "ghost-1",
 		Title:      "A Book The Provider Forgot",
@@ -2124,7 +2125,7 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
 	rec := &recordingNotifier{}
 	svc.notifier = rec
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:253739298",
 		Title:      "The CEO Mindset",
@@ -2237,7 +2238,7 @@ func TestBookRequestParksWhenAuthorImportIsPending(t *testing.T) {
 	// Approving before the import lands is a refused non-event: the row stays
 	// parked and the admin is handed the plan.
 	adminID := createTestAdmin(t, svc)
-	if _, err := svc.ApproveRequest(adminID, requestID, nil); err == nil ||
+	if _, err := svc.approveAndDispatchForTest(adminID, requestID, nil); err == nil ||
 		!strings.Contains(err.Error(), "completes automatically") {
 		t.Fatalf("early ApproveRequest error = %v, want the still-importing plan", err)
 	}
@@ -2403,7 +2404,7 @@ func TestSweepAdvancesTheReportedLastAttempt(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:253739298",
 		Title:      "The CEO Mindset",
@@ -2667,7 +2668,7 @@ func TestDemotedParkApproveDoesNotPromiseAutomaticRetries(t *testing.T) {
 	svc.demoteParkedBookRequest(requestID, bookAddFailureImportFailed)
 
 	adminID := createTestAdmin(t, svc)
-	_, err = svc.ApproveRequest(adminID, requestID, nil)
+	_, err = svc.approveAndDispatchForTest(adminID, requestID, nil)
 	if err == nil || !strings.Contains(err.Error(), "Try again") {
 		t.Fatalf("post-demotion ApproveRequest error = %v, want the Try again / close copy", err)
 	}
@@ -2797,7 +2798,7 @@ func TestSweepWatchesChaptarrsOwnImportRetries(t *testing.T) {
 	rec := &recordingNotifier{}
 	svc.notifier = rec
 
-	if _, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	if _, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:253739298",
 		Title:      "Waiting Book",
@@ -3193,7 +3194,7 @@ func TestBookRequestLookupTransportFailureIsSavedForRetry(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	response, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	response, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "unreachable-1",
 		Title:      "Flock",
@@ -3208,11 +3209,11 @@ func TestBookRequestLookupTransportFailureIsSavedForRetry(t *testing.T) {
 	}
 }
 
-func TestBookLookupTermsTryIDThenSearchThenTitleThenHeadline(t *testing.T) {
+func TestBookLookupTermsTryProvenSearchThenIDThenTitleThenHeadline(t *testing.T) {
 	terms := bookLookupTerms("gr:297977925", "Ten Algorithms: A Guide (Part 1) (A Series)", "a guide part 1")
 	want := []string{
-		"gr:297977925",
 		"a guide part 1",
+		"gr:297977925",
 		"Ten Algorithms: A Guide (Part 1) (A Series)",
 		"Ten Algorithms",
 	}
@@ -3320,15 +3321,15 @@ func TestPendingBookApprovalReplaysTheRequestersSearchTerm(t *testing.T) {
 	if err := svc.db.QueryRow("SELECT id FROM request_log WHERE foreign_id = 'replay-1' AND status = 'pending'").Scan(&requestID); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := svc.ApproveRequest(adminID, requestID, nil)
+	resp, err := svc.approveAndDispatchForTest(adminID, requestID, nil)
 	if err != nil {
 		t.Fatalf("ApproveRequest: %v", err)
 	}
 	if resp.Status != StatusRequested {
 		t.Fatalf("approval status = %s, want requested", resp.Status)
 	}
-	if len(terms) < 2 || terms[0] != "replay-1" || terms[1] != "ten algorithms every" {
-		t.Fatalf("approval lookup terms = %#v, want the id fetch then the requester's stored search", terms)
+	if len(terms) < 1 || terms[0] != "ten algorithms every" {
+		t.Fatalf("approval lookup terms = %#v, want the requester's stored search first", terms)
 	}
 }
 
@@ -3374,7 +3375,7 @@ func TestBookRequestDeepLinkResolvesByIdFetchAlone(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:424242",
 		Title:      "An Unsearchable Title: With Subtitle (Part 9) (Series)",
@@ -3442,7 +3443,7 @@ func TestBookRequestAliasIdIsNotSubstitutedByCanonicalSibling(t *testing.T) {
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:297978618",
 		Title:      "Part One",
@@ -3463,13 +3464,7 @@ func TestBookRequestAliasIdIsNotSubstitutedByCanonicalSibling(t *testing.T) {
 	}
 }
 
-// TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary is the sequel
-// to the no-substitute rule above: once the library DOES track the canonical
-// record, a request for its alias id must complete that record, not create a
-// twin. The provider's id fetch is the authority linking the two ids; a
-// requester tapping the duplicate listing means "I want this book", not
-// "track it twice".
-func TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary(t *testing.T) {
+func TestBookRequestNeverAttachesToDifferentLookupIDAlreadyInLibrary(t *testing.T) {
 	var monitorBody map[string]any
 	addCalls := 0
 	chaptarrServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3506,7 +3501,7 @@ func TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary(t *testing.T)
 	defer chaptarrServer.Close()
 
 	svc, uid := newChaptarrBookTestService(t, chaptarrServer.URL)
-	resp, err := svc.CreateMediaRequest(uid, &CreateRequest{
+	resp, err := svc.createAndDispatchForTest(uid, &CreateRequest{
 		MediaType:  "book",
 		ForeignID:  "gr:297978618",
 		Title:      "Part One",
@@ -3516,37 +3511,46 @@ func TestBookRequestAliasAttachesToCanonicalRecordAlreadyInLibrary(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateMediaRequest: %v", err)
 	}
-	if resp.Status != StatusRequested {
-		t.Fatalf("status = %s, want requested via the existing record", resp.Status)
+	if resp.Status != StatusRequested || len(resp.Delivery) != 1 || resp.Delivery[0].State != "attention" {
+		t.Fatalf("expected saved attention for the original ID: %+v", resp)
 	}
-	if addCalls != 0 {
-		t.Fatalf("AddBook was called %d times; the existing canonical record must be completed, not duplicated", addCalls)
+	if addCalls != 0 || monitorBody != nil {
+		t.Fatal("an unrelated lookup result became the request target")
 	}
-	if monitorBody == nil {
-		t.Fatal("the existing canonical record was not monitored")
+	var foreignID string
+	if err := svc.db.QueryRow(`SELECT foreign_id FROM request_log WHERE id=?`, resp.RequestID).Scan(&foreignID); err != nil || foreignID != "gr:297978618" {
+		t.Fatalf("selected ID changed: %s %v", foreignID, err)
 	}
-	ids, _ := monitorBody["bookIds"].([]any)
-	if len(ids) != 1 || ids[0] != float64(21) {
-		t.Fatalf("monitored bookIds = %v, want the canonical record 21", monitorBody["bookIds"])
+
+}
+
+// Delivery tests deliberately separate intake from the background worker.
+// Fast acknowledgement has its own HTTP regression tests.
+func (s *Service) createAndDispatchForTest(userID int64, req *CreateRequest) (*CreateResponse, error) {
+	out, err := s.CreateMediaRequest(userID, req)
+	if err != nil || out.RequestID == 0 {
+		return out, err
 	}
-	// The client asked with the alias id; the response must re-address it to
-	// the id the library will report from now on, and the history row must
-	// carry the fulfilling record id so status reads survive re-keying.
-	if resp.CanonicalForeignID != "gr:297977925" {
-		t.Fatalf("canonical_foreign_id = %q, want gr:297977925", resp.CanonicalForeignID)
+	s.SweepDispatch(context.Background())
+	ids := []int64{}
+	seen := map[int64]bool{}
+	for _, d := range out.Delivery {
+		if !seen[d.RequestID] {
+			ids = append(ids, d.RequestID)
+			seen[d.RequestID] = true
+		}
 	}
-	var loggedForeignID string
-	var recordID int
-	if err := svc.db.QueryRow(
-		"SELECT foreign_id, COALESCE(book_record_id, 0) FROM request_log WHERE user_id = ? AND media_type = 'book'",
-		uid,
-	).Scan(&loggedForeignID, &recordID); err != nil {
-		t.Fatal(err)
+	return s.deliveryResponse(userID, ids, out.Title, out.InstanceID, out.CatalogRef)
+}
+func (s *Service) approveAndDispatchForTest(adminID, id int64, override *DecisionOverride) (*CreateResponse, error) {
+	out, err := s.ApproveRequest(adminID, id, override)
+	if err != nil || out == nil || len(out.Delivery) == 0 {
+		return out, err
 	}
-	if loggedForeignID != "gr:297978618" {
-		t.Fatalf("logged foreign_id = %q, want the id the requester used", loggedForeignID)
+	s.SweepDispatch(context.Background())
+	r, _, err := s.loadRequest(id)
+	if err != nil {
+		return nil, err
 	}
-	if recordID != 21 {
-		t.Fatalf("logged book_record_id = %d, want the canonical record 21", recordID)
-	}
+	return s.deliveryResponse(r.userID, []int64{id}, r.title, r.instanceID, out.CatalogRef)
 }

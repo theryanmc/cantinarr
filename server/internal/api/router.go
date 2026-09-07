@@ -457,7 +457,7 @@ func NewRouter(
 			r.Use(auth.RequirePermission(auth.PermissionMediaDiscover))
 
 			// Discover
-			books := bookdiscovery.NewHandlerWithService(instanceStore, requestHandler.BookCatalog())
+			books := bookdiscovery.NewHandler()
 			r.Get("/discover/books/search", books.Search)
 			r.Get("/discover/books/{feed}", books.Feed)
 			r.Get("/genres/book", books.Genres)
