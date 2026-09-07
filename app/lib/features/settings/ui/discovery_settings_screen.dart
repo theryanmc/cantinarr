@@ -7,6 +7,7 @@ import '../../../core/widgets/settings_highlight.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/logic/discovery_access.dart';
 import '../data/credentials_service.dart';
 import '../data/discovery_settings_service.dart';
 import '../settings_anchors.dart';
@@ -35,6 +36,7 @@ class _DiscoverySettingsScreenState
   Object get _draftValues => [
         _edited?.source,
         _edited?.englishOnly,
+        _edited?.hiddenWhenUnconfigured,
         _tmdbController.text,
         _traktIdController.text,
       ];
@@ -131,6 +133,10 @@ class _DiscoverySettingsScreenState
         _draft.markSaved(_draftValues);
         _saving = false;
       });
+      try {
+        await ref.read(authProvider.notifier).refreshConfig();
+      } catch (_) {}
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Saved')),
       );
@@ -328,6 +334,35 @@ class _DiscoverySettingsScreenState
             ),
           ),
         ),
+        const _SectionLabel('Discover tabs'),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Text(
+              'These choices affect everyone on this server. A hidden tab '
+              'returns automatically when its service is connected. If the service '
+              'is removed, the tab is hidden again. Access permissions stay the same.'),
+        ),
+        if (edited.hiddenWhenUnconfigured == null)
+          const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(discoverVisibilityUpdateMessage)),
+        for (final tab in discoverCatalogs)
+          SettingsHighlight(
+            anchorId: SettingsAnchors.discoveryTabAnchors[tab.mediaType]!,
+            highlightId: widget.highlightId,
+            child: SwitchListTile(
+              title: Text(
+                  "Hide ${tab.label} when ${tab.serviceName} isn't connected"),
+              value: edited.hiddenWhenUnconfigured?[tab.mediaType] ?? false,
+              onChanged: edited.hiddenWhenUnconfigured == null || _saving
+                  ? null
+                  : (value) => setState(
+                      () => _edited = edited.copyWith(hiddenWhenUnconfigured: {
+                            ...edited.hiddenWhenUnconfigured!,
+                            tab.mediaType: value,
+                          })),
+            ),
+          ),
         const _SectionLabel('Credentials'),
         // Trakt leads: it is the credential that unlocks a source, while
         // TMDB is an optional override of the built-in key.

@@ -31,7 +31,7 @@ Use Chaptarr's **root** URL, never one of its media-scoped prefixes (`/ebook`, `
 
 This is the step people miss. Unlike Radarr and Sonarr, Chaptarr has no global default — pinning a user to a Chaptarr instance is how you grant that user access to books.
 
-Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup and configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
+Pin from either side: the instance editor, or **Settings → Users** for one person. Remove both the pin and any explicit grants to revoke access. Admins see Books before setup unless it was conditionally hidden for the server, and see configured Chaptarr instances without a pin; everyone else needs one, and until they have it `services.chaptarr` stays `false` and the Books tab stays hidden.
 
 Running more than one Chaptarr instance is fine — pin different households or different libraries to different instances.
 
@@ -65,7 +65,7 @@ An instance offers downloads only once explicit mappings are saved for it.
 
 ## Discover books
 
-Admins can browse Popular Books, genres, covers, and cold work links before Chaptarr is connected. **Connect Chaptarr to request books** opens the existing instance form with Chaptarr selected; saving returns to the title and loads its verified request target and per-format status. The Books toolbar offers the same setup action until library search is available. Library rows and ownership badges require a connected instance. Requesters and kids still need an explicit grant. On an older server, admins see an update notice for browsing before setup.
+Admins can browse Popular Books, genres, covers, and cold work links before Chaptarr is connected. **Connect Chaptarr to request books** opens the existing instance form with Chaptarr selected; saving returns to the title and loads its verified request target and per-format status. The Books tab has a fixed **Set up Chaptarr** / **Hide this tab** footer until a Chaptarr instance is configured. Hiding applies to everyone and can be changed under **Settings > Modules > Discover > Discover tabs**. Configuring Chaptarr restores the tab automatically, even if it later goes offline; removing it makes the saved hide preference apply again. The footer replaces the previous toolbar setup shortcut, and setup returns to the catalog after saving or cancelling. Library rows and ownership badges require a connected instance. Requesters and kids still need an explicit grant. On an older server, admins see an update notice for unsupported browsing before setup; Hide is disabled with an update explanation when tab visibility settings are unsupported.
 
 Popular Books and twelve genres use [Open Library search](https://openlibrary.org/dev/docs/api/search), with no extra account, API key or setting. Popularity is the provider's overall reading-list ranking, labelled **Popular on Open Library**. Genre pages keep provider relevance order; Biography & Memoir searches either subject. There is no time-period selector or separate audiobook chart.
 

@@ -18,7 +18,7 @@ final catalogOpeningArtworkProvider =
   final access = ref.watch(discoveryAccessProvider);
   final sources = <ImageSource>[];
   final books = access.activeId('chaptarr');
-  if (access.canBrowse('chaptarr', books)) {
+  if (access.showBooks && access.canBrowse('chaptarr', books)) {
     ref.watch(bookGenresProvider(books));
     final feed =
         ref.watch(bookFeedProvider(BookBrowseQuery(instanceId: books)));
@@ -28,7 +28,7 @@ final catalogOpeningArtworkProvider =
         .map((b) => (url: b.coverUrl!, headers: null)));
   }
   final music = access.activeId('lidarr');
-  if (access.canBrowse('lidarr', music)) {
+  if (access.showMusic && access.canBrowse('lidarr', music)) {
     ref.watch(musicGenresProvider(music));
     for (final name in ['popular', 'new-releases']) {
       final feed = ref.watch(

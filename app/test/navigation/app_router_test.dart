@@ -29,6 +29,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('hidden Movies at login lands on the first visible tab',
+      (tester) async {
+    final (:container, :router) = await _pumpRouter(tester, const AuthState());
+    (container.read(authProvider.notifier) as _FakeAuthNotifier).push(
+        _authedState.copyWith(
+            connection: _authedState.connection!
+                .copyWith(hiddenDiscoverTabs: ['movie'])));
+    await tester.pumpAndSettle();
+    expect(
+        router.routerDelegate.currentConfiguration.uri.path, '/dashboard/tv');
+  });
+
   testWidgets('settings edits block sidebar navigation but not session expiry',
       (tester) async {
     final (:router, :container) = await _pumpRouter(tester, _adminState,

@@ -44,6 +44,7 @@ class _DashboardMoviesTabState extends ConsumerState<DashboardMoviesTab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       ref.read(movieDiscoverProvider.notifier).bootstrap();
       _loadLibraryPreview();
     });

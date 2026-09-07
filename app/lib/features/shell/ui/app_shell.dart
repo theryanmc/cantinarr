@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../discover/logic/discovery_access.dart';
-import '../../discover/ui/catalog_setup_button.dart';
+import '../../../core/providers/config_sync_provider.dart';
 import '../../../core/automation/web_semantics.dart';
 import '../../../core/layout/adaptive.dart';
 import '../../../core/models/app_module.dart';
@@ -571,9 +571,8 @@ class _AppShellState extends ConsumerState<AppShell>
     final musicSearchNotifier = ref.read(shellMusicSearchProvider.notifier);
     final hasAi =
         ref.watch(authProvider).valueOrNull?.connection?.services.ai ?? false;
+    ref.watch(configSyncProvider);
     final discoveryAccess = ref.watch(discoveryAccessProvider);
-    final hasChaptarrService = discoveryAccess.showBooks;
-    final hasLidarrService = discoveryAccess.showMusic;
     // Admin approval queue depth — drives the hamburger dot (here) and the
     // drawer "Approvals" entry. Always 0 for non-admins.
     final pendingApprovals = ref.watch(pendingApprovalsProvider);
@@ -636,8 +635,7 @@ class _AppShellState extends ConsumerState<AppShell>
     if (isAiReady) {
       contextIcon = Icons.auto_awesome_rounded;
     } else if (_moduleTypeForPath(widget.currentPath) == ModuleType.dashboard) {
-      final dashboardPages = modulePagesFor(ModuleType.dashboard,
-          includeBooks: hasChaptarrService, includeMusic: hasLidarrService);
+      final dashboardPages = discoveryAccess.pages;
       for (final page in dashboardPages) {
         if (page.route == widget.currentPath) {
           contextIcon = page.activeIcon;
@@ -664,7 +662,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 : null)
         : null;
     final searchBar = setupService != null
-        ? Padding(padding: const EdgeInsets.all(12), child: CatalogSetupButton(serviceType: setupService))
+        ? const SizedBox.shrink()
         : Padding(
       padding: EdgeInsets.fromLTRB(desktop ? 24 : 6, 12, desktop ? 24 : 12, 10),
       child: AnimatedBuilder(
@@ -1181,8 +1179,6 @@ class _AppShellState extends ConsumerState<AppShell>
     // last drawer selection for locations outside the module shells.
     final pathModule = _moduleTypeForPath(widget.currentPath);
     final discoveryAccess = ref.watch(discoveryAccessProvider);
-    final hasChaptarrService = discoveryAccess.showBooks;
-    final hasLidarrService = discoveryAccess.showMusic;
     // The backend lists a media server only for users an admin granted it,
     // so its presence alone decides whether the access guide is offered —
     // plus a Plex server the user can still ask for.
@@ -1361,9 +1357,9 @@ class _AppShellState extends ConsumerState<AppShell>
       );
 
       final pages = !isOverlay && isActive
-          ? modulePagesFor(module.type,
-              includeBooks: hasChaptarrService,
-              includeMusic: hasLidarrService)
+          ? (module.type == ModuleType.dashboard
+              ? discoveryAccess.pages
+              : modulePagesFor(module.type))
           : const <ModulePage>[];
       if (pages.isEmpty) return item;
 
