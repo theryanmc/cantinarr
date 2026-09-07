@@ -36,8 +36,8 @@ final requestNotificationsEnabledProvider =
 const _setupReminderKey = 'setup_reminder_enabled';
 
 /// Whether the drawer shows a "Setup checklist" reminder while features
-/// remain unconfigured. Admins who have deliberately skipped features can
-/// mute it from the wizard; the Settings tile always remains.
+/// remain to set up or skip. Admins can mute it from the checklist; the
+/// Settings tile always remains.
 class SetupReminderNotifier extends StateNotifier<bool> {
   SetupReminderNotifier() : super(true) {
     _load();

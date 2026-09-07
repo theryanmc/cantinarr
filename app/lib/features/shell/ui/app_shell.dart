@@ -1271,7 +1271,7 @@ class _AppShellState extends ConsumerState<AppShell>
           count: plexInvitesWaiting,
           route: '/settings/users',
         ),
-      // Setup reminder: how many features are still unconfigured. Muteable
+      // Setup reminder: how many features remain to set up or skip. Muteable
       // from the checklist; the Settings tile always remains.
       if (showSetupReminder)
         _AttentionEntry(

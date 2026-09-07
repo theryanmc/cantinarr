@@ -1189,12 +1189,7 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
-/// The Setup Checklist tile. The count carries the state, because this tile is
-/// the only trace of the checklist once an admin mutes the drawer reminder:
-/// amber while anything is unconfigured, red when the server is missing
-/// something it cannot work without, green once everything is done. Colouring
-/// the number in place rather than hanging another badge off the row keeps a
-/// screen of near-identical tiles readable.
+/// The checklist remains available here after its menu reminder is cleared.
 Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
   void open() => context.push('/setup');
   if (status == null) {
@@ -1206,11 +1201,19 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
     );
   }
   final tail = ' of ${status.effectiveTotal} features configured';
-  final countColor = status.missingCoreCapability
-      ? AppTheme.danger
-      : status.remaining > 0
-          ? AppTheme.warning
-          : AppTheme.available;
+  if (status.isComplete) {
+    return _SettingsTile(
+      icon: Icons.checklist_outlined,
+      title: 'Setup Checklist',
+      subtitle: status.summary,
+      subtitleSpans: [
+        TextSpan(
+            text: status.summary,
+            style: const TextStyle(color: AppTheme.available)),
+      ],
+      onTap: open,
+    );
+  }
   return _SettingsTile(
     icon: Icons.checklist_outlined,
     title: 'Setup Checklist',
@@ -1218,7 +1221,8 @@ Widget _setupChecklistTile(BuildContext context, SetupStatus? status) {
     subtitleSpans: [
       TextSpan(
         text: '${status.configured}',
-        style: TextStyle(color: countColor, fontWeight: FontWeight.w700),
+        style: const TextStyle(
+            color: AppTheme.accent, fontWeight: FontWeight.w700),
       ),
       TextSpan(text: tail),
     ],

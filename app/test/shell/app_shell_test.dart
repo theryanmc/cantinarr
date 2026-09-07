@@ -197,8 +197,8 @@ void main() {
 
     router.push('/movie/1');
     await tester.pumpAndSettle();
-    await tester.drag(find.byKey(const ValueKey('detail-scroll')),
-        const Offset(0, -300));
+    await tester.drag(
+        find.byKey(const ValueKey('detail-scroll')), const Offset(0, -300));
     await tester.pumpAndSettle();
 
     router.pop();
@@ -564,7 +564,8 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('the drawer offers the media server guide only when one is shared',
+  testWidgets(
+      'the drawer offers the media server guide only when one is shared',
       (tester) async {
     final semantics = tester.ensureSemantics();
     tester.view.physicalSize = const Size(390, 844);
@@ -608,8 +609,8 @@ void main() {
     // A granted media server (the backend lists it only for granted
     // users) puts the guide in the menu, titled by the product.
     await pump(_mediaServerState());
-    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
-        findsOneWidget);
+    expect(
+        find.bySemanticsIdentifier('nav-action-media-servers'), findsOneWidget);
     expect(find.text('Watch on Jellyfin'), findsOneWidget);
 
     // Without one there is nothing to open. Tear the first tree down first:
@@ -617,8 +618,8 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
     await pump(_multiRadarrState(isAdmin: false));
-    expect(find.bySemanticsIdentifier('nav-action-media-servers'),
-        findsNothing);
+    expect(
+        find.bySemanticsIdentifier('nav-action-media-servers'), findsNothing);
     expect(find.text('Watch on Jellyfin'), findsNothing);
     semantics.dispose();
   });
@@ -915,7 +916,8 @@ void main() {
   });
 
   for (final desktop in [false, true]) {
-    testWidgets('setup reminder loads on first ${desktop ? 'desktop' : 'mobile'} '
+    testWidgets(
+        'setup reminder loads on first ${desktop ? 'desktop' : 'mobile'} '
         'Discover visit without opening Settings', (tester) async {
       await _pumpAdminDrawer(tester, desktop: desktop, setupRemaining: 3);
 
@@ -929,7 +931,41 @@ void main() {
     });
   }
 
-  testWidgets('muted setup reminder stays hidden after loading', (tester) async {
+  for (final desktop in [false, true]) {
+    for (final allSkipped in [false, true]) {
+      testWidgets(
+          '${desktop ? 'desktop' : 'mobile'} reminder excludes skips${allSkipped ? ' and disappears when all are skipped' : ''}',
+          (tester) async {
+        await _pumpAdminDrawer(tester, desktop: desktop, setupStatus: {
+          'items': [
+            for (final key in ['radarr', 'sonarr', 'push'])
+              {
+                'key': key,
+                'configured': false,
+                'optional': true,
+                'skipped': allSkipped || key != 'sonarr'
+              },
+          ],
+          'configured': 0,
+          'total': 3,
+        });
+        if (allSkipped) {
+          expect(find.text('Needs attention'), findsNothing);
+          expect(find.text('Setup checklist'), findsNothing);
+        } else {
+          expect(find.text('Needs attention'), findsOneWidget);
+          expect(find.text('1'), findsOneWidget);
+          await tester.tap(find.text('Needs attention'));
+          await tester.pumpAndSettle();
+          expect(find.text('Setup checklist'), findsOneWidget);
+          expect(find.text('1'), findsNWidgets(2));
+        }
+      });
+    }
+  }
+
+  testWidgets('muted setup reminder stays hidden after loading',
+      (tester) async {
     SharedPreferences.setMockInitialValues({'setup_reminder_enabled': false});
     await _pumpAdminDrawer(tester, setupRemaining: 3);
     expect(find.text('Needs attention'), findsNothing);
@@ -1112,8 +1148,7 @@ void main() {
 
   testWidgets(
       'switching discovery tabs clears the search bar and closes the '
-      'results overlay without firing a search',
-      (tester) async {
+      'results overlay without firing a search', (tester) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -1507,8 +1542,10 @@ Future<void> _pumpAdminDrawer(
   bool hangAttentionQueues = false,
   bool desktop = false,
   int setupRemaining = 0,
+  Map<String, dynamic>? setupStatus,
 }) async {
-  tester.view.physicalSize = desktop ? const Size(1280, 844) : const Size(390, 844);
+  tester.view.physicalSize =
+      desktop ? const Size(1280, 844) : const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(() {
     tester.view.resetPhysicalSize();
@@ -1543,6 +1580,7 @@ Future<void> _pumpAdminDrawer(
           failAttentionQueues: failAttentionQueues,
           hangAttentionQueues: hangAttentionQueues,
           setupRemaining: setupRemaining,
+          setupStatus: setupStatus,
         )),
         realtimeEventsProvider.overrideWithValue(const Stream<WsEvent>.empty()),
       ],
@@ -1770,6 +1808,7 @@ Dio _fakeDio({
   bool failAttentionQueues = false,
   bool hangAttentionQueues = false,
   int setupRemaining = 0,
+  Map<String, dynamic>? setupStatus,
 }) {
   final dio = Dio(BaseOptions(baseUrl: 'http://localhost'));
   dio.httpClientAdapter = _JsonAdapter(
@@ -1778,6 +1817,7 @@ Dio _fakeDio({
     failAttentionQueues: failAttentionQueues,
     hangAttentionQueues: hangAttentionQueues,
     setupRemaining: setupRemaining,
+    setupStatus: setupStatus,
   );
   return dio;
 }
@@ -1789,6 +1829,7 @@ class _JsonAdapter implements HttpClientAdapter {
     this.failAttentionQueues = false,
     this.hangAttentionQueues = false,
     this.setupRemaining = 0,
+    this.setupStatus,
   });
 
   final List<Map<String, dynamic>> requests;
@@ -1796,6 +1837,7 @@ class _JsonAdapter implements HttpClientAdapter {
   final bool failAttentionQueues;
   final bool hangAttentionQueues;
   final int setupRemaining;
+  final Map<String, dynamic>? setupStatus;
 
   static bool _isAttentionQueue(String path) =>
       path == '/api/admin/requests' ||
@@ -1835,7 +1877,8 @@ class _JsonAdapter implements HttpClientAdapter {
     } else if (path == '/api/admin/profile-change-proposals') {
       body = {'proposals': []};
     } else if (path == '/api/admin/setup-status') {
-      body = {'items': [], 'configured': 0, 'total': setupRemaining};
+      body = setupStatus ??
+          {'items': [], 'configured': 0, 'total': setupRemaining};
     } else {
       body = [];
     }
