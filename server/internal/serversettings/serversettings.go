@@ -111,12 +111,9 @@ type Settings struct {
 	// media type. Configured instances always restore their tab, even offline.
 	HiddenWhenUnconfigured map[string]bool `json:"hidden_when_unconfigured,omitempty"`
 
-	// SetupSkippedItems are the optional setup-checklist keys an admin has
-	// acknowledged and skipped, so a feature the deployment deliberately
-	// doesn't use stops counting as unfinished. Only optional items may live
-	// here (the write path enforces it), the set is server-wide — the
-	// checklist grades the server, not a device — and skipping is always
-	// reversible from the checklist itself.
+	// SetupSkippedItems are the checklist keys an admin has skipped, so unused
+	// features stop counting as unfinished. The set is server-wide and every
+	// skip is reversible from the checklist. The handler validates known keys.
 	SetupSkippedItems []string `json:"setup_skipped_items,omitempty"`
 }
 
@@ -340,7 +337,7 @@ func (s *Service) UpdateDiscovery(p DiscoveryPatch) (Settings, error) {
 }
 
 // SetSetupItemSkipped records or clears one setup-checklist skip, leaving
-// every other preference untouched. Key validity (a real, optional item) is
+// every other preference untouched. Key validity (a known checklist item) is
 // the API layer's job — it owns the item list; this stays a plain set edit.
 func (s *Service) SetSetupItemSkipped(key string, skipped bool) (Settings, error) {
 	key = strings.TrimSpace(key)
