@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cantinarr/core/models/backend_connection.dart';
@@ -11,6 +12,7 @@ import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
 import 'package:cantinarr/features/chaptarr/ui/chaptarr_book_screen.dart';
 import 'package:cantinarr/features/chaptarr/data/chaptarr_models.dart';
+import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:cantinarr/features/chaptarr/ui/widgets/book_link_chips.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_author_detail_screen.dart';
@@ -28,6 +30,199 @@ import 'package:go_router/go_router.dart';
 /// payload's title names an unresolvable book, and a dead id degrades to a
 /// graceful not-found state that points back to the Books tab.
 void main() {
+  testWidgets('a route refresh without its search payload keeps loaded details',
+      (tester) async {
+    final adapter = _BooksAdapter();
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    const location = '/detail/book/555?instance_id=books';
+    router.go(location,
+        extra: ChaptarrBook(
+          id: 0,
+          title: 'Dune Messiah',
+          foreignBookId: '555',
+          foreignEditionId: 'gr:501',
+          releaseDate: DateTime(1969),
+          pageCount: 336,
+          overview: 'The desert planet has a new emperor.',
+        ));
+    await tester.pumpAndSettle();
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    final panel = find.byType(BookFormatPanel);
+    final panelState = tester.state(panel);
+    final panelTop = tester.getTopLeft(panel);
+    final checks = adapter.statusForeignIds.length;
+    router.go(location);
+    await tester.pumpAndSettle();
+    expect(find.text('1969 · 336 pages'), findsOneWidget);
+    expect(find.text('The desert planet has a new emperor.'), findsOneWidget);
+    expect(tester.state(panel), same(panelState));
+    expect(tester.getTopLeft(panel), panelTop);
+    expect(adapter.lookupTerms, isEmpty);
+    expect(adapter.statusForeignIds, hasLength(checks));
+  });
+
+  for (final width in [320.0, 390.0, 1280.0]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+          'full synopsis keeps request state while scrolling at $width, scale $scale',
+          (tester) async {
+        final adapter = _BooksAdapter();
+        final (:router, container: _) = await _pumpRouter(tester,
+            adapter: adapter,
+            size: Size(width, 844),
+            textScale: scale,
+            themed: true);
+        final full = List.generate(
+            24,
+            (i) => 'Paragraph $i follows the next part of this long adventure. '
+                'The desert planet has a new emperor, and the story continues.').join(
+            '\n\n');
+        router.go('/detail/book/555?instance_id=books&q=dune',
+            extra: ChaptarrBook(
+                id: 0,
+                title: 'Dune Messiah',
+                foreignBookId: '555',
+                overview: full,
+                goodreadsBookId: 'gr:5907',
+                genres: const ['Science Fiction']));
+        await tester.pumpAndSettle();
+        final synopsis = find.text(full);
+        expect(synopsis, findsOneWidget);
+        expect(tester.widget<Text>(synopsis).maxLines, isNull);
+        expect(find.text('Read more'), findsNothing);
+        expect(find.text('Read less'), findsNothing);
+        expect(tester.getTopLeft(find.text('Science Fiction')).dy,
+            greaterThan(tester.getBottomLeft(synopsis).dy));
+        final panel = find.byType(BookFormatPanel);
+        final state = tester.state(panel);
+        final checks = adapter.statusForeignIds.length;
+        await tester.scrollUntilVisible(find.text('Links'), 600,
+            maxScrolls: 100, scrollable: _detailScrollable());
+        expect(tester.state(panel), same(state));
+        expect(adapter.statusForeignIds, hasLength(checks));
+        final position =
+            tester.state<ScrollableState>(_detailScrollable()).position;
+        final offset = position.pixels;
+        router.go('/detail/book/555?instance_id=books&q=dune');
+        await tester.pumpAndSettle();
+        expect(position.pixels, offset);
+        expect(find.text(full), findsOneWidget);
+        await tester.scrollUntilVisible(panel, -600,
+            maxScrolls: 100, scrollable: _detailScrollable());
+        expect(tester.state(panel), same(state));
+        expect(find.text('Requested'), findsNWidgets(2));
+        expect(adapter.statusForeignIds, hasLength(checks));
+        expect(adapter.lookupTerms, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+      testWidgets(
+          'late download actions keep formats and synopsis in place at $width, scale $scale',
+          (tester) async {
+        final files = Completer<void>();
+        final adapter = _BooksAdapter(
+            verifiedIdentity: true, bookFiles: true, filesReady: files.future);
+        final (:router, container: _) = await _pumpRouter(tester,
+            adapter: adapter,
+            size: Size(width, 844),
+            textScale: scale,
+            themed: true,
+            authState: _adminDownloadBooksState);
+        router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
+        await tester.pumpAndSettle();
+        final ebook = find.byKey(const ValueKey('book-format-row:ebook'));
+        final before = tester.getRect(ebook);
+        final availabilityBefore = tester.getRect(find.text('Available'));
+        final synopsisBefore = tester.getTopLeft(find.text('About this book'));
+        files.complete();
+        await tester.pumpAndSettle();
+        expect(find.byTooltip('Download eBook'), findsOneWidget);
+        expect(tester.getRect(ebook), before);
+        expect(tester.getRect(find.text('Available')), availabilityBefore);
+        expect(tester.getTopLeft(find.text('About this book')), synopsisBefore);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  testWidgets(
+      'a cold link keeps its library year through a sparse lookup and route refresh',
+      (tester) async {
+    final reply = Completer<List<Map<String, dynamic>>>();
+    final adapter = _BooksAdapter(lookupOverride: (_) => reply.future);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
+    // Finish navigation while the metadata response is deliberately pending.
+    await tester.pumpAndSettle();
+    expect(find.text('2016'), findsOneWidget);
+    final panel = find.byType(BookFormatPanel);
+    final panelState = tester.state(panel);
+    final panelTop = tester.getTopLeft(panel);
+    router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['29749107']);
+    reply.complete([
+      for (final format in ['ebook', 'audiobook'])
+        {
+          'foreignBookId': '29749107',
+          'title': 'Ahsoka',
+          'mediaType': format,
+          'overview': '',
+        },
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('2016'), findsOneWidget);
+    expect(tester.getTopLeft(panel), panelTop);
+    expect(tester.state(panel), same(panelState));
+  });
+
+  testWidgets(
+      'a supplied source preview stays intact without expansion or metadata controls',
+      (tester) async {
+    final adapter = _BooksAdapter(verifiedIdentity: true);
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/gr:101?instance_id=books&q=ahso',
+        extra: const ChaptarrBook(
+            id: 0,
+            title: 'Ahsoka (Star Wars)',
+            foreignBookId: 'gr:101',
+            foreignEditionId: 'gr:501',
+            pageCount: 400,
+            overview: 'An alternative cover for this ASIN can be found here\n\n'
+                'A former Jedi searches for a new path…'));
+    await tester.pumpAndSettle();
+    expect(find.text('A former Jedi searches for a new path…'), findsOneWidget);
+    expect(find.textContaining('alternative cover'), findsNothing);
+    expect(find.text('2016 · 400 pages'), findsOneWidget);
+    expect(find.textContaining('Catalog details'), findsNothing);
+    expect(find.textContaining('Library edition'), findsNothing);
+    expect(find.text('Read more'), findsNothing);
+    expect(find.text('Read less'), findsNothing);
+    expect(find.text('Loading more details…'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+    expect(adapter.lookupTerms, isEmpty);
+  });
+
+  testWidgets('a successful cold title fallback clears an exact-lookup error',
+      (tester) async {
+    final adapter = _BooksAdapter(lookupOverride: (term) async {
+      if (term == '555') throw StateError('lookup unavailable');
+      return [
+        {
+          'foreignBookId': '555',
+          'title': 'Dune Messiah',
+          'overview': 'The complete description.'
+        }
+      ];
+    });
+    final (:router, container: _) = await _pumpRouter(tester, adapter: adapter);
+    router.go('/detail/book/555?instance_id=books&title=Dune%20Messiah');
+    await tester.pumpAndSettle();
+    expect(adapter.lookupTerms, ['555', 'Dune Messiah']);
+    expect(find.text('The complete description.'), findsOneWidget);
+    expect(find.text('Couldn’t load more details'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+  });
+
   for (final size in [const Size(390, 844), const Size(1280, 900)]) {
     testWidgets(
         'verified catalog edition keeps metadata and library actions at ${size.width}',
@@ -55,7 +250,9 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.text('Ahsoka (Star Wars)'), findsOneWidget);
       expect(find.text('2016 · 400 pages'), findsOneWidget);
-      expect(find.textContaining('Catalog details'), findsOneWidget);
+      expect(find.text('Disney Lucasfilm Press · Paperback'), findsOneWidget);
+      expect(find.textContaining('Catalog details'), findsNothing);
+      expect(find.textContaining('Library edition'), findsNothing);
       expect(find.textContaining('223 pages'), findsNothing);
       expect(find.byKey(const ValueKey('book-author-link')), findsOneWidget);
       expect(find.byKey(const ValueKey('book-series-link')), findsOneWidget);
@@ -762,6 +959,7 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
   _BooksAdapter? adapter,
   Size size = const Size(390, 844),
   bool themed = false,
+  double textScale = 1,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -787,7 +985,14 @@ Future<({ProviderContainer container, GoRouter router})> _pumpRouter(
     UncontrolledProviderScope(
       container: container,
       child: MaterialApp.router(
-          routerConfig: router, theme: themed ? AppTheme.dark : null),
+          routerConfig: router,
+          theme: themed ? AppTheme.dark : null,
+          builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  textScaler: TextScaler.linear(textScale),
+                ),
+                child: child!,
+              )),
     ),
   );
   await tester.pumpAndSettle();
@@ -816,6 +1021,8 @@ Dio _fakeDio({String ownedCover = '', _BooksAdapter? adapter}) {
 /// Serves requester metadata/status plus the live Chaptarr records an admin
 /// resolves before showing the internal module link.
 class _BooksAdapter implements HttpClientAdapter {
+  final Future<List<Map<String, dynamic>>> Function(String)? lookupOverride;
+  final Future<void>? filesReady;
   final bool verifiedIdentity;
   final String ownedCover;
   final bool divergentLibraries;
@@ -849,6 +1056,8 @@ class _BooksAdapter implements HttpClientAdapter {
   final _requestedFormats = <String, String>{};
 
   _BooksAdapter({
+    this.lookupOverride,
+    this.filesReady,
     this.verifiedIdentity = false,
     this.ownedCover = '',
     this.divergentLibraries = false,
@@ -990,18 +1199,20 @@ class _BooksAdapter implements HttpClientAdapter {
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
       final term = options.queryParameters['term'].toString();
       lookupTerms.add(term);
-      body = switch (term) {
-        // An id term is an exact fetch. For a book the library tracks that
-        // is the record itself, editions included; an alias id resolves to
-        // the same canonical record.
-        '29749107' || 'lookup-29749107' => [_ahsokaLookup()],
-        // The metadata work, under the id the provider currently keys it by
-        // (the mismatch variant models an older id it has since re-keyed).
-        // Its title search hits; Ahsoka's, a full title, answers nothing,
-        // as this provider routinely does.
-        '555' || 'Dune Messiah' => [_duneLookup()],
-        _ => <Object>[],
-      };
+      body = lookupOverride != null
+          ? await lookupOverride!(term)
+          : switch (term) {
+              // An id term is an exact fetch. For a book the library tracks that
+              // is the record itself, editions included; an alias id resolves to
+              // the same canonical record.
+              '29749107' || 'lookup-29749107' => [_ahsokaLookup()],
+              // The metadata work, under the id the provider currently keys it by
+              // (the mismatch variant models an older id it has since re-keyed).
+              // Its title search hits; Ahsoka's, a full title, answers nothing,
+              // as this provider routinely does.
+              '555' || 'Dune Messiah' => [_duneLookup()],
+              _ => <Object>[],
+            };
     } else if (options.path.endsWith('/api/v1/book/42')) {
       body = _liveBook(id: 42, mediaType: 'ebook');
     } else if (options.path.endsWith('/api/v1/book/43')) {
@@ -1015,6 +1226,7 @@ class _BooksAdapter implements HttpClientAdapter {
         _liveBook(id: 43, mediaType: 'audiobook'),
       ];
     } else if (options.path.endsWith('/api/v1/bookfile')) {
+      await filesReady;
       final bookId = options.queryParameters['bookId'] as int?;
       body = bookFiles && (bookId == 42 || bookId == 43)
           ? [

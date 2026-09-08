@@ -113,7 +113,10 @@ class _RequesterBookDetailScreenState
   void didUpdateWidget(covariant RequesterBookDetailScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.foreignId != widget.foreignId ||
-        oldWidget.initialBook != widget.initialBook ||
+        // A route refresh can drop its navigation-only search payload. Keep
+        // the loaded record; an explicitly supplied new selection replaces it.
+        (widget.initialBook != null &&
+            oldWidget.initialBook != widget.initialBook) ||
         oldWidget.titleHint != widget.titleHint ||
         oldWidget.instanceId != widget.instanceId ||
         oldWidget.discovery != widget.discovery ||
@@ -473,13 +476,13 @@ class _RequesterBookDetailScreenState
       live?.seriesTitle,
       _metadata?.seriesTitle,
     ]);
-    final publicationBook = _metadata ?? live;
-    final publication = publicationBook == null
+    final libraryPublication = live == null
         ? BookPublication(year: owned?.year ?? 0)
-        : BookPublication.fromBook(publicationBook);
-    final publicationSource = _metadata != null && _metadata!.id <= 0
-        ? 'Catalog details'
-        : 'Library edition';
+        : BookPublication.fromBook(live, fallbackYear: owned?.year ?? 0);
+    final publication = _metadata == null
+        ? libraryPublication
+        : BookPublication.fromBook(_metadata!,
+            fallbackYear: libraryPublication.year);
     final overview = _firstText([
       _metadata?.displayOverview,
       live?.displayOverview,
@@ -526,12 +529,12 @@ class _RequesterBookDetailScreenState
     }
 
     return CenteredContent(
-      child: ListView(
-        // Build the format panel even when large accessibility text pushes it
-        // just below the viewport; it owns this book's live request state.
-        cacheExtent: MediaQuery.sizeOf(context).height * 2,
+      // Keep the document and its request state mounted while reading a long
+      // synopsis, without lazy-list offset estimates or repeated status reads.
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-        children: [
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Center(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
@@ -619,15 +622,9 @@ class _RequesterBookDetailScreenState
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
-          if (publication.summary.isNotEmpty ||
-              publication.editionLabel.isNotEmpty) ...[
+          if (publication.editionLabel.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(
-                [
-                  publicationSource,
-                  if (publication.editionLabel.isNotEmpty)
-                    publication.editionLabel,
-                ].join(' · '),
+            Text(publication.editionLabel,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
           ],
@@ -667,6 +664,20 @@ class _RequesterBookDetailScreenState
                     ),
               onRequestCompleted: _onRequestCompleted,
             ),
+          // Optional library actions and genres follow the synopsis so late
+          // library responses cannot move it while someone is reading.
+          if (overview.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text('About this book',
+                style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Text(
+              overview,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppTheme.textPrimary,
+                  ),
+            ),
+          ],
           if (_canReportBook(owned)) ...[
             const SizedBox(height: 18),
             // Mirrors the shared ReportProblemButton, but routes through the
@@ -712,18 +723,6 @@ class _RequesterBookDetailScreenState
                   .toList(),
             ),
           ],
-          if (overview.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            Text('About this book',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              overview,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppTheme.textPrimary,
-                  ),
-            ),
-          ],
           // Outbound, and marked as such. Shown with or without an overview:
           // the page is the reader's route to the book's own page elsewhere.
           if (links.isNotEmpty) ...[
@@ -732,7 +731,7 @@ class _RequesterBookDetailScreenState
             const SizedBox(height: 8),
             Center(child: BookLinkChips(links)),
           ],
-        ],
+        ]),
       ),
     );
   }
