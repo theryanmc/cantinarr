@@ -8,18 +8,17 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/cached_image.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
+import '../../chaptarr/logic/book_identity.dart';
+import '../../chaptarr/logic/book_publication.dart';
+import '../../dashboard/data/book_authors_service.dart';
 import '../../dashboard/data/book_library_service.dart';
 import '../../dashboard/logic/book_ownership_matcher.dart';
 import '../../request/data/book_ownership.dart';
 import '../../shell/logic/library_author_index.dart';
 import '../../shell/logic/shell_book_search_provider.dart';
 
-/// Book-search results overlay for the shell toolbar, rendered on
-/// `/dashboard/books` in the same [Positioned.fill] slot [SearchResultsView]
-/// occupies for every other module. Ports `_BookResultTile` / `_OwnershipChip`
-/// / `_ResolvedBookResult` out of `dashboard_books_tab.dart` verbatim; the
-/// ordering/ambiguity rules come from [resolveBookSearchIdentity], reused
-/// unchanged.
+/// Native catalog rows retain their identity and order. A verified identifier
+/// match adds library availability without replacing or hiding a result.
 class BookSearchResultsView extends ConsumerWidget {
   final List<ChaptarrBook> results;
 
@@ -99,6 +98,13 @@ class BookSearchResultsView extends ConsumerWidget {
     // owned/monitored books the metadata search missed.
     final digest =
         ref.watch(ownedBooksProvider).valueOrNull ?? const <OwnedTitle>[];
+    final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
+    final authorSummaries = instanceId == null
+        ? null
+        : ref.watch(bookLibraryDigestProvider(instanceId)).valueOrNull?.authors;
+    final matches = [
+      for (final book in results) matchBookToLibrary(book, digest)
+    ];
     final injected = digest
         .where((owned) =>
             (titleMatchesQuery(query, owned.title) ||
@@ -111,13 +117,11 @@ class BookSearchResultsView extends ConsumerWidget {
       for (var i = 0; i < results.length; i++)
         _ResolvedBookResult(
           book: results[i],
-          ownership: digest
-              .where((owned) => owned.foreignBookId == results[i].foreignBookId)
-              .firstOrNull
-              ?.ownership,
+          ownership: matches[i].title?.ownership,
+          identityAmbiguous: matches[i].ambiguous,
           sourceIdentity: 'lookup:$i',
           cover: results[i].remoteCoverUrl,
-          canonicalForeignId: results[i].foreignBookId?.trim() ?? '',
+          selectedForeignId: results[i].foreignBookId?.trim() ?? '',
         ),
       for (var i = 0; i < injected.length; i++)
         _ResolvedBookResult(
@@ -125,7 +129,7 @@ class BookSearchResultsView extends ConsumerWidget {
           ownership: injected[i].ownership,
           sourceIdentity: 'library:$i',
           cover: injected[i].cover,
-          canonicalForeignId: injected[i].foreignBookId,
+          selectedForeignId: injected[i].foreignBookId,
         ),
     ];
 
@@ -148,7 +152,12 @@ class BookSearchResultsView extends ConsumerWidget {
     final elsewhere = <_ResolvedAuthor>[];
     for (final author in authors) {
       final match = index.match(author);
-      final resolved = _ResolvedAuthor(lookup: author, match: match);
+      final resolved = _ResolvedAuthor(
+          lookup: author,
+          match: match,
+          summary: authorSummaries
+              ?.where((a) => a.foreignAuthorId == match.record?.foreignAuthorId)
+              .firstOrNull);
       (match.kind == LibraryAuthorMatchKind.absent ? elsewhere : inLibrary)
           .add(resolved);
     }
@@ -174,6 +183,9 @@ class BookSearchResultsView extends ConsumerWidget {
               LibraryAuthorMatchKind.resolved,
               record,
             ),
+            summary: authorSummaries
+                ?.where((a) => a.foreignAuthorId == record.foreignAuthorId)
+                .firstOrNull,
           ),
     ];
     final orderedAuthors = <_ResolvedAuthor>[
@@ -216,7 +228,6 @@ class BookSearchResultsView extends ConsumerWidget {
       );
     }
 
-    final instanceId = ref.watch(instanceProvider).activeChaptarrInstance?.id;
     // Full-width scroll surface; the result column is capped and centered so
     // rows stay readable on desktop widths.
     return LayoutBuilder(builder: (context, constraints) {
@@ -252,8 +263,9 @@ class BookSearchResultsView extends ConsumerWidget {
         addRow(
           _BookResultTile(
             book: result.book,
-            canonicalForeignId: result.canonicalForeignId,
+            selectedForeignId: result.selectedForeignId,
             ownership: result.ownership,
+            identityAmbiguous: result.identityAmbiguous,
             sourceIdentity: result.sourceIdentity,
             cover: instanceId == null
                 ? null
@@ -357,12 +369,14 @@ class _OverlayNotice extends StatelessWidget {
 class _ResolvedAuthor {
   final ChaptarrAuthor lookup;
   final LibraryAuthorMatch match;
+  final LibraryAuthor? summary;
 
-  const _ResolvedAuthor({required this.lookup, required this.match});
+  const _ResolvedAuthor(
+      {required this.lookup, required this.match, this.summary});
 
-  /// The library record when there is one — its `statistics` and
-  /// `foreignAuthorId` are the authoritative ones. Null for a metadata-only or
-  /// ambiguous match.
+  /// The resolved library record supplies identity and navigation. Counts come
+  /// from the same complete digest as the author shelves. Null for a
+  /// metadata-only or ambiguous match.
   ChaptarrAuthor? get record => match.record;
 
   bool get inLibrary => match.kind == LibraryAuthorMatchKind.resolved;
@@ -374,10 +388,8 @@ class _ResolvedAuthor {
   /// instance proxy can serve. Otherwise the metadata CDN portrait.
   String? get portraitUrl => record?.portraitUrl ?? lookup.portraitUrl;
 
-  /// Only a library record can say what the library holds. A metadata author
-  /// carries no statistics, and inventing "0 books" for it would assert an
-  /// empty shelf where nothing was counted.
-  String get countLabel => record?.libraryCountLabel ?? '';
+  /// A missing summary means no count was read; it cannot claim an empty shelf.
+  String get countLabel => summary?.countLabel ?? '';
 }
 
 /// One author search result: portrait, name, and what the library holds by
@@ -523,23 +535,26 @@ class _AuthorResultTile extends StatelessWidget {
 class _ResolvedBookResult {
   final ChaptarrBook book;
   final BookOwnership? ownership;
+  final bool identityAmbiguous;
   final String sourceIdentity;
   final String? cover;
-  final String canonicalForeignId;
+  final String selectedForeignId;
 
   const _ResolvedBookResult({
     required this.book,
     required this.ownership,
+    this.identityAmbiguous = false,
     required this.sourceIdentity,
     required this.cover,
-    required this.canonicalForeignId,
+    required this.selectedForeignId,
   });
 }
 
 class _BookResultTile extends StatelessWidget {
   final ChaptarrBook book;
-  final String canonicalForeignId;
+  final String selectedForeignId;
   final BookOwnership? ownership;
+  final bool identityAmbiguous;
   final String sourceIdentity;
   final ChaptarrImageSource? cover;
   final String? instanceId;
@@ -554,8 +569,9 @@ class _BookResultTile extends StatelessWidget {
 
   const _BookResultTile({
     required this.book,
-    required this.canonicalForeignId,
+    required this.selectedForeignId,
     this.ownership,
+    this.identityAmbiguous = false,
     required this.sourceIdentity,
     this.cover,
     required this.instanceId,
@@ -568,16 +584,19 @@ class _BookResultTile extends StatelessWidget {
     final year = book.releaseDate?.year;
     final subtitle = <String>[
       if (book.author?.authorName.isNotEmpty ?? false) book.author!.authorName,
-      if (year != null) '$year',
+      if (year != null) bookPublicationYearLabel(year),
     ].join(' · ');
     // The selected native identity stays attached to metadata and submission.
-    final fid = canonicalForeignId.trim();
+    final fid = selectedForeignId.trim();
     final lookupId = book.foreignBookId?.trim() ?? '';
     final o = ownership;
     final chip = _ownershipChip(o);
     final canOpen = fid.isNotEmpty;
-    final identityGuidance =
-        fid.isEmpty ? 'Ask an admin to check this book’s library record' : null;
+    final identityGuidance = identityAmbiguous
+        ? 'Library match needs attention'
+        : fid.isEmpty
+            ? 'Ask an admin to check this book’s library record'
+            : null;
     final resultKey = ValueKey('book-result:$lookupId:$fid:$sourceIdentity');
     // The shell overlay wraps this view in an opaque ColoredBox (see
     // AppShell's Positioned.fill slot), which sits between a bare ListTile

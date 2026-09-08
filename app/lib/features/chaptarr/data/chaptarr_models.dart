@@ -25,8 +25,7 @@ List<T> _modelList<T>(
         .toList();
 
 DateTime? _bookReleaseDate(Map<String, dynamic> json) {
-  final releaseDate =
-      DateTime.tryParse(json['releaseDate'] as String? ?? '');
+  final releaseDate = DateTime.tryParse(json['releaseDate'] as String? ?? '');
   if (releaseDate != null) return releaseDate;
   final rawYear = json['year'];
   final year = rawYear is num
@@ -349,6 +348,8 @@ class ChaptarrLink {
 class ChaptarrEdition {
   final int id;
   final int bookId;
+  final String? foreignEditionId;
+  final DateTime? releaseDate;
   final String? title;
   final String? format;
   final String? asin;
@@ -362,6 +363,7 @@ class ChaptarrEdition {
   /// This edition's Open Library edition key (`OL...M`), in Chaptarr's
   /// prefixed form (`ol:OL...M`) when it normalized it.
   final String? openLibraryEditionId;
+  final String? hardcoverEditionId;
   final String? overview;
   final String? publisher;
   final int pageCount;
@@ -373,6 +375,8 @@ class ChaptarrEdition {
   const ChaptarrEdition({
     required this.id,
     this.bookId = 0,
+    this.foreignEditionId,
+    this.releaseDate,
     this.title,
     this.format,
     this.asin,
@@ -380,6 +384,7 @@ class ChaptarrEdition {
     this.isbn10,
     this.goodreadsEditionId,
     this.openLibraryEditionId,
+    this.hardcoverEditionId,
     this.overview,
     this.publisher,
     this.pageCount = 0,
@@ -393,6 +398,8 @@ class ChaptarrEdition {
       ChaptarrEdition(
         id: json['id'] as int? ?? 0,
         bookId: json['bookId'] as int? ?? 0,
+        foreignEditionId: _idString(json['foreignEditionId']),
+        releaseDate: DateTime.tryParse(json['releaseDate'] as String? ?? ''),
         title: json['title'] as String?,
         format: json['format'] as String?,
         asin: json['asin'] as String?,
@@ -400,6 +407,7 @@ class ChaptarrEdition {
         isbn10: json['isbn10'] as String?,
         goodreadsEditionId: _idString(json['goodreadsEditionId']),
         openLibraryEditionId: _idString(json['openLibraryEditionId']),
+        hardcoverEditionId: _idString(json['hardcoverEditionId']),
         overview: json['overview'] as String?,
         publisher: json['publisher'] as String?,
         pageCount: json['pageCount'] as int? ?? 0,
@@ -412,6 +420,8 @@ class ChaptarrEdition {
   Map<String, dynamic> toJson() => {
         'id': id,
         'bookId': bookId,
+        'foreignEditionId': foreignEditionId,
+        'releaseDate': releaseDate?.toIso8601String(),
         'title': title,
         'format': format,
         'asin': asin,
@@ -422,6 +432,7 @@ class ChaptarrEdition {
         'goodreadsEditionId':
             int.tryParse(goodreadsEditionId ?? '') ?? goodreadsEditionId,
         'openLibraryEditionId': openLibraryEditionId,
+        'hardcoverEditionId': hardcoverEditionId,
         'overview': overview,
         'publisher': publisher,
         'pageCount': pageCount,
@@ -451,6 +462,7 @@ class ChaptarrBook {
   final String title;
   final int authorId;
   final String? foreignBookId;
+  final String? foreignEditionId;
   final String? titleSlug;
   final String? overview;
   final DateTime? releaseDate;
@@ -494,6 +506,7 @@ class ChaptarrBook {
     required this.title,
     this.authorId = 0,
     this.foreignBookId,
+    this.foreignEditionId,
     this.titleSlug,
     this.overview,
     this.releaseDate,
@@ -519,6 +532,7 @@ class ChaptarrBook {
         title: json['title'] as String? ?? 'Untitled',
         authorId: json['authorId'] as int? ?? 0,
         foreignBookId: json['foreignBookId'] as String?,
+        foreignEditionId: _idString(json['foreignEditionId']),
         titleSlug: json['titleSlug'] as String?,
         overview: json['overview'] as String?,
         // Library records carry releaseDate; metadata lookup rows commonly
@@ -553,6 +567,7 @@ class ChaptarrBook {
         'title': title,
         'authorId': authorId,
         'foreignBookId': foreignBookId,
+        'foreignEditionId': foreignEditionId,
         'titleSlug': titleSlug,
         'overview': overview,
         'releaseDate': releaseDate?.toIso8601String(),
@@ -579,8 +594,7 @@ class ChaptarrBook {
     bool hasRemote(ChaptarrImage image) =>
         image.remoteUrl != null && image.remoteUrl!.isNotEmpty;
     for (final type in ['cover', 'poster']) {
-      final matches =
-          images.where((i) => i.coverType == type && hasRemote(i));
+      final matches = images.where((i) => i.coverType == type && hasRemote(i));
       if (matches.isNotEmpty) return matches.first.remoteUrl;
     }
     final matches = images.where(hasRemote);

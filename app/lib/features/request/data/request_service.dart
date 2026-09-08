@@ -50,7 +50,11 @@ enum BookRequestFormat {
   }
 }
 
-enum BookStatusUnknownReason { transient, formatNeedsAttention }
+enum BookStatusUnknownReason {
+  transient,
+  formatNeedsAttention,
+  identityNeedsAttention
+}
 
 /// Why a book format reads as Requested while the library still has no record
 /// of it. The server owns these requests and retries them itself, so they are
@@ -239,16 +243,26 @@ class BookRequestStatusDetail {
   BookRequestStatusDetail withOwnership(
     BookOwnership? ownership, {
     bool ownershipStatusKnown = true,
+    bool identityAmbiguous = false,
   }) =>
       BookRequestStatusDetail(
         status: status,
-        formats: formats,
+        formats: identityAmbiguous
+            ? {
+                for (final entry in formats.entries)
+                  if (entry.value == RequestStatus.pending ||
+                      entry.value == RequestStatus.denied)
+                    entry.key: entry.value,
+              }
+            : formats,
         formatWaits: formatWaits,
-        ownership: ownership,
-        isKnown: isKnown && ownershipStatusKnown,
-        unknownReason: !ownershipStatusKnown
-            ? BookStatusUnknownReason.formatNeedsAttention
-            : unknownReason,
+        ownership: identityAmbiguous ? null : ownership,
+        isKnown: isKnown && ownershipStatusKnown && !identityAmbiguous,
+        unknownReason: identityAmbiguous
+            ? BookStatusUnknownReason.identityNeedsAttention
+            : !ownershipStatusKnown
+                ? BookStatusUnknownReason.formatNeedsAttention
+                : unknownReason,
         canonicalForeignId: canonicalForeignId,
       );
 
@@ -807,20 +821,30 @@ class RequestService {
   Future<BookRequestStatusDetail> checkBookStatusDetail(
     String foreignId, {
     String? instanceId,
+    String? title,
+    String? searchTerm,
   }) async {
     try {
       final resp = await _backendDio.get(
         '/api/requests/book-status',
         queryParameters: {
           'foreign_id': foreignId,
+          if (title?.isNotEmpty == true) 'title': title,
+          if (searchTerm?.isNotEmpty == true) 'q': searchTerm,
           if (instanceId != null && instanceId.isNotEmpty)
             'instance_id': instanceId,
         },
       );
       final data = resp.data as Map<String, dynamic>;
       var isKnown = data['status_known'] as bool? ?? true;
-      final BookStatusUnknownReason? unknownReason =
-          isKnown ? null : BookStatusUnknownReason.formatNeedsAttention;
+      final BookStatusUnknownReason? unknownReason = isKnown
+          ? null
+          : switch (data['status_unknown_reason']) {
+              'identity_ambiguous' =>
+                BookStatusUnknownReason.identityNeedsAttention,
+              'library_unavailable' => BookStatusUnknownReason.transient,
+              _ => BookStatusUnknownReason.formatNeedsAttention,
+            };
       RequestStatus? parseStatus(Object? value) {
         for (final status in RequestStatus.values) {
           if (status.name == value?.toString()) return status;

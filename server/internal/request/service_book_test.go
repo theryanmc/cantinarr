@@ -1778,7 +1778,7 @@ func TestBookStatusFollowsRekeyedRecord(t *testing.T) {
 		t.Fatalf("seed request row: %v", err)
 	}
 
-	st, err := svc.GetUserBookStatus(uid, "lookup-777")
+	st, err := svc.GetUserBookStatusForInstance(uid, "lookup-777", instanceID, "Flock", "flock")
 	if err != nil {
 		t.Fatalf("GetUserBookStatus: %v", err)
 	}

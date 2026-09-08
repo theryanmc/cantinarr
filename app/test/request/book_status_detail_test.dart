@@ -41,6 +41,9 @@ class _GetAdapter implements HttpClientAdapter {
 }
 
 class _DeferredStatusAdapter implements HttpClientAdapter {
+  _DeferredStatusAdapter({this.delivery});
+
+  final List<Map<String, dynamic>>? delivery;
   final responses = <String, Completer<ResponseBody>>{};
 
   @override
@@ -50,7 +53,13 @@ class _DeferredStatusAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     if (options.path == '/api/requests/delivery-status') {
-      return ResponseBody.fromString('{}', 404);
+      return ResponseBody.fromString(
+        jsonEncode({'success': true, 'delivery': delivery}),
+        delivery == null ? 404 : 200,
+        headers: {
+          'content-type': ['application/json']
+        },
+      );
     }
     final foreignId = options.queryParameters['foreign_id'] as String;
     final completer = Completer<ResponseBody>();
@@ -390,8 +399,8 @@ void main() {
     });
 
     test('no book_formats means nothing is covered', () async {
-      final d = await _service({'status': 'unavailable'})
-          .checkBookStatusDetail('fb');
+      final d =
+          await _service({'status': 'unavailable'}).checkBookStatusDetail('fb');
 
       expect(d.isCovered(BookRequestFormat.ebook), isFalse);
       expect(d.isCovered(BookRequestFormat.audiobook), isFalse);
@@ -400,8 +409,8 @@ void main() {
 
     test('aggregate requested without format truth blocks duplicate actions',
         () async {
-      final d = await _service({'status': 'requested'})
-          .checkBookStatusDetail('fb');
+      final d =
+          await _service({'status': 'requested'}).checkBookStatusDetail('fb');
 
       expect(d.isKnown, isFalse);
       expect(d.statusFor(BookRequestFormat.ebook), isNull);
@@ -487,7 +496,8 @@ void main() {
     });
   });
 
-  testWidgets('tapping a format row requests exactly that format', (tester) async {
+  testWidgets('tapping a format row requests exactly that format',
+      (tester) async {
     final adapter = _RequestFlowAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
       ..httpClientAdapter = adapter;
@@ -511,6 +521,87 @@ void main() {
     expect(find.text('Request'), findsOneWidget);
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
+  });
+
+  for (final savedApproval in [false, true]) {
+    testWidgets(
+        'saved delivery does not enable requests before live availability '
+        '(approval: $savedApproval)', (tester) async {
+      final adapter = _DeferredStatusAdapter(delivery: [
+        if (savedApproval)
+          {
+            'request_id': 1,
+            'format': 'ebook',
+            'state': 'approval',
+            'can_cancel': false,
+          },
+      ]);
+      final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
+        ..httpClientAdapter = adapter;
+      await tester.pumpWidget(_panel(RequestService(backendDio: dio)));
+      await _waitForRequest(tester, adapter, 'fb');
+      await tester.pumpAndSettle();
+
+      expect(find.text('Request'), findsNothing);
+      expect(find.text('Checking…'), findsNWidgets(savedApproval ? 1 : 2));
+      expect(find.text('Pending Approval'),
+          savedApproval ? findsOneWidget : findsNothing);
+      expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+      expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+
+      adapter.complete('fb', {
+        'status': 'unavailable',
+        'status_known': false,
+        'status_unknown_reason': 'library_unavailable',
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('Checking…'), findsNothing);
+      expect(find.text('Request'), findsNothing);
+      expect(find.text('Pending Approval'),
+          savedApproval ? findsOneWidget : findsNothing);
+      expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+      expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
+    });
+  }
+
+  testWidgets('an ambiguous refresh clears a previously verified library link',
+      (tester) async {
+    final ids = <String>[];
+    final body = <String, dynamic>{
+      'status': 'available',
+      'book_formats': {'ebook': 'available', 'audiobook': 'available'},
+      'canonical_foreign_id': 'canon-1',
+    };
+    final service = _service(body);
+    Widget panel(int tick) => MaterialApp(
+          home: Scaffold(
+            body: BookFormatPanel(
+              foreignId: 'fb',
+              title: 'Flock',
+              service: service,
+              refreshTick: tick,
+              onCanonicalForeignId: ids.add,
+            ),
+          ),
+        );
+    await tester.pumpWidget(panel(0));
+    await tester.pumpAndSettle();
+    expect(ids, ['canon-1']);
+
+    body
+      ..clear()
+      ..addAll({
+        'status': 'unavailable',
+        'status_known': false,
+        'status_unknown_reason': 'identity_ambiguous',
+      });
+    await tester.pumpWidget(panel(1));
+    await tester.pumpAndSettle();
+    expect(ids, ['canon-1', 'fb']);
+    expect(find.text('Available'), findsNothing);
+    expect(find.text('Library match needs attention'), findsNWidgets(2));
+    expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
+    expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNull);
   });
 
   testWidgets('a re-keyed record reports its canonical id to the panel owner',
@@ -618,7 +709,8 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
   });
 
-  testWidgets('a request the server holds for approval says so', (tester) async {
+  testWidgets('a request the server holds for approval says so',
+      (tester) async {
     final adapter = _GetAdapter({
       'status': 'pending',
       'book_formats': {'audiobook': 'pending'},
@@ -639,7 +731,8 @@ void main() {
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNull);
   });
 
-  testWidgets('a request the library has not taken yet says what it is waiting on',
+  testWidgets(
+      'a request the library has not taken yet says what it is waiting on',
       (tester) async {
     await tester.pumpWidget(_panel(_service({
       'status': 'requested',
@@ -940,13 +1033,15 @@ void main() {
     // The server answered, so the outcome is a confirmed failure — not the
     // hedged couldn't-confirm line — and the row stays requestable.
     expect(
-      find.text('The library could not complete this request. Try again later.'),
+      find.text(
+          'The library could not complete this request. Try again later.'),
       findsOneWidget,
     );
     expect(tester.widget<InkWell>(_row('ebook')).onTap, isNotNull);
   });
 
-  testWidgets('a successful POST acknowledges while refreshed truth is still waiting',
+  testWidgets(
+      'a successful POST acknowledges while refreshed truth is still waiting',
       (tester) async {
     final adapter = _DeferredPostRefreshAdapter();
     final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -974,9 +1069,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(_row('ebook'));
 
-    for (var attempt = 0;
-        attempt < 50 && adapter.statusChecks < 2;
-        attempt++) {
+    for (var attempt = 0; attempt < 50 && adapter.statusChecks < 2; attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
     expect(adapter.postCount, 1);
@@ -989,9 +1082,7 @@ void main() {
     expect(tester.widget<InkWell>(_row('audiobook')).onTap, isNotNull);
 
     adapter.completeRefresh();
-    for (var attempt = 0;
-        attempt < 50 && refreshTick == 0;
-        attempt++) {
+    for (var attempt = 0; attempt < 50 && refreshTick == 0; attempt++) {
       await tester.pump(const Duration(milliseconds: 1));
     }
     expect(refreshTick, 1);

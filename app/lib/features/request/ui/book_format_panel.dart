@@ -25,6 +25,7 @@ class BookFormatPanel extends StatefulWidget {
   final RequestService service;
   final BookOwnership? ownership;
   final bool ownershipStatusKnown;
+  final bool identityAmbiguous;
   final int refreshTick;
 
   /// Per-format download actions, supplied only for formats whose files the
@@ -49,6 +50,7 @@ class BookFormatPanel extends StatefulWidget {
     required this.service,
     this.ownership,
     this.ownershipStatusKnown = true,
+    this.identityAmbiguous = false,
     this.refreshTick = 0,
     this.ebookDownload,
     this.audiobookDownload,
@@ -65,11 +67,11 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   // [_detail] on every read, so the rows reflect the owned-books digest even
   // when it loads AFTER this panel was first built — otherwise an owned-but-
   // unrequested format would offer a duplicate request action.
-  BookRequestStatusDetail _serverDetail = const BookRequestStatusDetail();
+  BookRequestStatusDetail _serverDetail =
+      const BookRequestStatusDetail(isKnown: false);
   bool _loading = true;
   bool _hasLiveDetail = false;
   bool _refreshFailed = false;
-  bool _savedKnown = false;
   List<Map<String, dynamic>> _delivery = const [];
   int _savedGeneration = 0;
   final Set<int> _actions = {};
@@ -79,6 +81,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
   /// dead-zone the other. Concurrent submissions for one title are safe: the
   /// server serializes them per canonical book behind its own lock.
   final Set<BookRequestFormat> _inFlight = {};
+  String? _reportedCanonicalId;
   int _activeChecks = 0;
   int _checkGeneration = 0;
   Timer? _pendingRecheckTimer;
@@ -105,6 +108,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
     final detail = _serverDetail.withOwnership(
       widget.ownership,
       ownershipStatusKnown: widget.ownershipStatusKnown,
+      identityAmbiguous: widget.identityAmbiguous,
     );
     final formats = {...detail.formats};
     final waits = {...detail.formatWaits};
@@ -143,10 +147,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       formats: formats,
       formatWaits: waits,
       ownership: detail.ownership,
-      isKnown: detail.isKnown ||
-          (_savedKnown &&
-              detail.effectiveUnknownReason !=
-                  BookStatusUnknownReason.formatNeedsAttention),
+      isKnown: detail.isKnown,
       unknownReason: detail.unknownReason,
     );
   }
@@ -165,11 +166,11 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         oldWidget.instanceId != widget.instanceId) {
       _loading = true;
       _hasLiveDetail = false;
-      _serverDetail = const BookRequestStatusDetail();
+      _reportedCanonicalId = null;
+      _serverDetail = const BookRequestStatusDetail(isKnown: false);
       // Another book (or library) knows nothing about what was requested here.
       _submitted.clear();
       _delivery = const [];
-      _savedKnown = false;
       _refresh();
     } else if (oldWidget.refreshTick != widget.refreshTick &&
         _inFlight.isEmpty &&
@@ -195,6 +196,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       final detail = await widget.service.checkBookStatusDetail(
         foreignId,
         instanceId: widget.instanceId,
+        title: widget.title,
+        searchTerm: widget.searchTerm,
       );
       if (!mounted ||
           generation != _checkGeneration ||
@@ -205,8 +208,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
         _refreshFailed = !detail.isKnown;
         if (detail.isKnown ||
             !_hasLiveDetail ||
-            detail.effectiveUnknownReason ==
-                BookStatusUnknownReason.formatNeedsAttention) {
+            detail.effectiveUnknownReason !=
+                BookStatusUnknownReason.transient) {
           _serverDetail = detail;
           _hasLiveDetail = true;
         }
@@ -214,8 +217,14 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       });
       _syncPendingRecheck();
       final canonical = detail.canonicalForeignId ?? '';
-      if (canonical.isNotEmpty && canonical != widget.foreignId) {
-        widget.onCanonicalForeignId?.call(canonical);
+      if (detail.isKnown ||
+          detail.effectiveUnknownReason ==
+              BookStatusUnknownReason.identityNeedsAttention) {
+        final nextId = canonical.isEmpty ? widget.foreignId : canonical;
+        if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
+          _reportedCanonicalId = nextId;
+          widget.onCanonicalForeignId?.call(nextId);
+        }
       }
     } finally {
       _activeChecks--;
@@ -236,8 +245,7 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       _delivery = ((data['delivery'] as List?) ?? [])
           .map((d) => Map<String, dynamic>.from(d as Map))
           .toList();
-      _savedKnown = true;
-      _loading = false;
+      _loading = !_hasLiveDetail;
     });
     _syncPendingRecheck();
   }
@@ -583,18 +591,23 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
             ),
           ),
         if (detail.effectiveUnknownReason ==
-            BookStatusUnknownReason.formatNeedsAttention)
-          const Padding(
-            padding: EdgeInsets.only(top: 10, left: 4, right: 4),
+                BookStatusUnknownReason.formatNeedsAttention ||
+            detail.effectiveUnknownReason ==
+                BookStatusUnknownReason.identityNeedsAttention)
+          Padding(
+            padding: const EdgeInsets.only(top: 10, left: 4, right: 4),
             child: Row(
               children: [
-                Icon(Icons.warning_amber_rounded,
+                const Icon(Icons.warning_amber_rounded,
                     size: 18, color: AppTheme.requested),
-                SizedBox(width: 6),
+                const SizedBox(width: 6),
                 Flexible(
                   child: Text(
-                    'Ask an admin to check this book’s format',
-                    style: TextStyle(
+                    detail.effectiveUnknownReason ==
+                            BookStatusUnknownReason.identityNeedsAttention
+                        ? 'Ask an admin to check this book’s library match'
+                        : 'Ask an admin to check this book’s format',
+                    style: const TextStyle(
                       color: AppTheme.requested,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
@@ -889,6 +902,13 @@ class _SubmittingIndicator extends StatelessWidget {
   }
 
   if (!detail.isKnown) {
+    if (detail.effectiveUnknownReason ==
+        BookStatusUnknownReason.identityNeedsAttention) {
+      return (
+        label: 'Library match needs attention',
+        color: AppTheme.requested
+      );
+    }
     return detail.effectiveUnknownReason ==
             BookStatusUnknownReason.formatNeedsAttention
         ? (label: 'Format needs attention', color: AppTheme.requested)

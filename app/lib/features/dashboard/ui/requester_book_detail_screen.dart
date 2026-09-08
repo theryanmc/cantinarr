@@ -19,6 +19,8 @@ import '../../chaptarr/data/chaptarr_api_service.dart';
 import '../../chaptarr/data/chaptarr_image.dart';
 import '../../chaptarr/data/chaptarr_models.dart';
 import '../../chaptarr/logic/book_links.dart';
+import '../../chaptarr/logic/book_identity.dart';
+import '../../chaptarr/logic/book_publication.dart';
 import '../../chaptarr/ui/chaptarr_book_screen.dart';
 import '../../chaptarr/ui/widgets/book_link_chips.dart';
 import '../../issues/ui/report_problem_sheet.dart';
@@ -240,14 +242,14 @@ class _RequesterBookDetailScreenState
     }
   }
 
-  /// Follows the library's canonical id once the server reports one: the
-  /// digest row can then bind, live records resolve, and the format panel
-  /// re-keys onto the id every future read will agree on.
+  /// Follows a verified library binding for files and actions. Metadata and
+  /// request submission keep the original selected ID.
   void _onCanonicalForeignId(String canonical) {
     if (!mounted || canonical.isEmpty || canonical == _effectiveForeignId) {
       return;
     }
-    setState(() => _canonicalForeignId = canonical);
+    setState(() =>
+        _canonicalForeignId = canonical == widget.foreignId ? null : canonical);
     _resolveChaptarrRecords(_loadGeneration);
   }
 
@@ -255,11 +257,13 @@ class _RequesterBookDetailScreenState
     // The request may have created the live Chaptarr records immediately.
     // Refresh both the ownership digest and the admin destination in place.
     ref.invalidate(ownedBooksForInstanceProvider(_instanceId));
+    ref.invalidate(bookLibraryDigestProvider(_instanceId));
     ref.read(libraryRefreshTickProvider.notifier).state++;
     await _resolveChaptarrRecords(_loadGeneration);
   }
 
   Future<void> _refreshBookTruth() async {
+    ref.invalidate(bookLibraryDigestProvider(_instanceId));
     ref.invalidate(ownedBooksForInstanceProvider(_instanceId));
     ref.read(libraryRefreshTickProvider.notifier).state++;
     await _resolveChaptarrRecords(_loadGeneration);
@@ -407,14 +411,14 @@ class _RequesterBookDetailScreenState
   }
 
   Widget _resolved(List<OwnedTitle> titles) {
-    OwnedTitle? owned;
-    for (final title in titles) {
-      if (title.foreignBookId.isNotEmpty &&
-          title.foreignBookId == _effectiveForeignId) {
-        owned = title;
-        break;
-      }
-    }
+    final libraryMatch = matchBookToLibrary(
+      _canonicalForeignId != null
+          ? ChaptarrBook(id: 0, title: '', foreignBookId: _effectiveForeignId)
+          : _metadata ??
+              ChaptarrBook(id: 0, title: '', foreignBookId: widget.foreignId),
+      titles,
+    );
+    final owned = libraryMatch.title;
 
     final live = _chaptarrRecords.isEmpty ? null : _chaptarrRecords.first;
     final hintedTitle = widget.titleHint?.trim() ?? '';
@@ -463,16 +467,17 @@ class _RequesterBookDetailScreenState
       live?.seriesTitle,
       _metadata?.seriesTitle,
     ]);
-    final releaseDate = _metadata?.releaseDate ?? live?.releaseDate;
-    final year = releaseDate?.year ?? owned?.year ?? 0;
+    final publicationBook = _metadata ?? live;
+    final publication = publicationBook == null
+        ? BookPublication(year: owned?.year ?? 0)
+        : BookPublication.fromBook(publicationBook);
+    final publicationSource = _metadata != null && _metadata!.id <= 0
+        ? 'Catalog details'
+        : 'Library edition';
     final overview = _firstText([
       _metadata?.displayOverview,
       live?.displayOverview,
     ]);
-    final metadataPageCount = _metadata?.displayPageCount ?? 0;
-    final pageCount = metadataPageCount > 0
-        ? metadataPageCount
-        : (live?.displayPageCount ?? 0);
     final genres = _metadata?.genres.isNotEmpty ?? false
         ? _metadata!.genres
         : (live?.genres ?? const <String>[]);
@@ -600,16 +605,25 @@ class _RequesterBookDetailScreenState
                     ),
                   ),
           ],
-          if (year > 0 || pageCount > 0) ...[
+          if (publication.summary.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              [
-                if (year > 0) '$year',
-                if (pageCount > 0) '$pageCount pages',
-              ].join(' · '),
+              publication.summary,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
+          ],
+          if (publication.summary.isNotEmpty ||
+              publication.editionLabel.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+                [
+                  publicationSource,
+                  if (publication.editionLabel.isNotEmpty)
+                    publication.editionLabel,
+                ].join(' · '),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall),
           ],
           const SizedBox(height: 24),
           if (instanceId == null)
@@ -624,6 +638,7 @@ class _RequesterBookDetailScreenState
               service: _requestService,
               ownership: ownership,
               ownershipStatusKnown: owned?.statusKnown ?? true,
+              identityAmbiguous: libraryMatch.ambiguous,
               refreshTick: requestRefreshTick,
               onCanonicalForeignId: _onCanonicalForeignId,
               ebookDownload: !downloadsEnabled || ebookFiles.isEmpty
