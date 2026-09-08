@@ -8,6 +8,7 @@ import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/unsaved_changes_guard.dart';
 import 'package:cantinarr/features/auth/data/auth_service.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
+import 'package:cantinarr/features/discover/data/trending_books_service.dart';
 import 'package:cantinarr/features/settings/ui/instance_edit_screen.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -51,6 +52,7 @@ class _FakeAdapter implements HttpClientAdapter {
   /// hides the section entirely.
   final Map<String, dynamic>? hardcoverStatus;
   final String? testError;
+  bool hardcoverConnected = false;
   final List<({String method, String path, dynamic body})> requests = [];
 
   @override
@@ -151,9 +153,18 @@ class _FakeAdapter implements HttpClientAdapter {
         );
       }
       response = status;
+    } else if (options.method == 'GET' &&
+        path == '/api/discover/books/trending') {
+      response = {
+        'instance_id': options.queryParameters['instance_id'],
+        'connected': hardcoverConnected,
+        'books': <Map<String, dynamic>>[],
+      };
     } else if (options.method == 'PUT' && path.endsWith('/hardcover')) {
+      hardcoverConnected = true;
       response = {'supported': true, 'configured': true};
     } else if (options.method == 'DELETE' && path.endsWith('/hardcover')) {
+      hardcoverConnected = false;
       response = {'supported': true, 'configured': false};
     } else if (options.method == 'PUT') {
       // Instance update echo; the id encodes the service type (radarr-b).
@@ -1624,6 +1635,16 @@ void main() {
     expect(find.text('Connect Hardcover'), findsOneWidget);
     expect(find.text('Disconnect'), findsNothing);
 
+    // The Books tab stays mounted underneath the pushed instance editor.
+    // Its already-loaded feed must follow connection changes immediately.
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(InstanceEditScreen)));
+    final feedProvider = trendingBooksForInstanceProvider('chaptarr-a');
+    final feedSubscription = container.listen(feedProvider, (_, __) {});
+    addTearDown(feedSubscription.close);
+    await tester.pumpAndSettle();
+    expect(container.read(feedProvider).valueOrNull?.connected, isFalse);
+
     // An empty submit never dials the server.
     await tester.tap(find.text('Connect Hardcover'));
     await tester.pumpAndSettle();
@@ -1640,6 +1661,7 @@ void main() {
         r.method == 'PUT' && r.path == '/api/instances/chaptarr-a/hardcover');
     expect(put.body, {'token': 'hc-token'});
     expect(find.text('Hardcover is connected.'), findsOneWidget);
+    expect(container.read(feedProvider).valueOrNull?.connected, isTrue);
     // The token is write-only: the field empties, the state flips.
     expect(
       tester
@@ -1660,6 +1682,7 @@ void main() {
       isTrue,
     );
     expect(find.text('Hardcover is disconnected.'), findsOneWidget);
+    expect(container.read(feedProvider).valueOrNull?.connected, isFalse);
     expect(find.text('Connect Hardcover'), findsOneWidget);
   });
 

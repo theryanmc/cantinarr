@@ -49,7 +49,7 @@ The webhook also speeds up "Waiting for library" requests: Chaptarr announces th
 
 Open the instance and find the **Hardcover** section, just above Instant updates. Paste a [Hardcover](https://hardcover.app) API token (Hardcover → Settings → API) and choose **Connect Hardcover**. The server verifies the token against Hardcover before it stores anything: a token Hardcover rejects is reported and the previous connection, if any, stays; a Hardcover that cannot be reached is reported as exactly that, never as a bad token.
 
-Connecting it turns on the **Trending Books** row at the top of the Books tab for everyone with a grant on this instance (see Discover books below). The server refreshes that list at most every 30 minutes per instance, because Hardcover's API budget is small, so a freshly connected token can take one page load to show up.
+Connecting it turns on the **Trending Books** row at the top of the Books tab for everyone with a grant on this instance (see Discover books below). Connecting, replacing, or disconnecting the token refreshes the Books tab immediately. The server otherwise refreshes that list at most every 30 minutes per instance, because Hardcover's API budget is small.
 
 The token is held encrypted on the server, per Chaptarr instance, and is write-only — the editor only ever shows connected or not. **Replace Hardcover token** swaps it, **Disconnect** removes it, and deleting the instance removes it with everything else. Chaptarr keeps its own copy of a Hardcover token for its metadata and never hands it back through its API, which is why Cantinarr needs one of its own.
 

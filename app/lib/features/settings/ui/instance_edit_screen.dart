@@ -14,6 +14,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
 import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
@@ -1548,6 +1549,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           await InstanceApiService(backendDio: ref.read(backendClientProvider))
               .saveHardcoverToken(id, token);
       if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
       _hardcoverController.clear();
       setState(() {
         _isSavingHardcover = false;
@@ -1576,6 +1578,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       await InstanceApiService(backendDio: ref.read(backendClientProvider))
           .clearHardcoverToken(id);
       if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
       setState(() {
         _isSavingHardcover = false;
         _hardcoverConnected = false;
