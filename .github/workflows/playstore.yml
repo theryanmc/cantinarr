@@ -24,13 +24,14 @@ on:
       - "app/android/**"
       - "app/pubspec.yaml"
       - ".github/workflows/playstore.yml"
+      - "scripts/tests/test_playstore_release.rb"
   workflow_dispatch:
     inputs:
       track:
-        description: "Play track (beta = open testing, alpha = closed testing)"
+        description: "Play tracks (both = open + closed testing, beta = open, alpha = closed)"
         type: choice
-        options: [beta, alpha, internal]
-        default: beta
+        options: [both, beta, alpha, internal]
+        default: both
       release_status:
         description: "Release status (a brand-new app must use draft until its first release is rolled out in the Play Console)"
         type: choice
@@ -93,6 +94,11 @@ jobs:
         with:
           ruby-version: "3.3"
 
+      - name: Verify Play publishing
+        run: |
+          gem install fastlane minitest --no-document
+          ruby ../scripts/tests/test_playstore_release.rb
+
       - name: Calculate build number
         id: build_number
         env:
@@ -104,7 +110,6 @@ jobs:
             printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
             export PLAY_JSON_KEY_PATH="$RUNNER_TEMP/play-service-account.json"
             cd android
-            gem install fastlane
             fastlane next_build_number
           else
             echo "build_number=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
@@ -156,7 +161,8 @@ jobs:
         if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          PLAY_TRACK: ${{ inputs.track || 'beta' }}
+          PLAY_TRACK: ${{ inputs.track || 'both' }}
+          PLAY_VERSION_CODE: ${{ steps.build_number.outputs.build_number }}
           PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
