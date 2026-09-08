@@ -16,6 +16,7 @@ import (
 	"github.com/windoze95/cantinarr-server/internal/credentials"
 	"github.com/windoze95/cantinarr-server/internal/discover"
 	"github.com/windoze95/cantinarr-server/internal/downloads"
+	"github.com/windoze95/cantinarr-server/internal/hardcover"
 	"github.com/windoze95/cantinarr-server/internal/instance"
 	"github.com/windoze95/cantinarr-server/internal/mcp"
 	"github.com/windoze95/cantinarr-server/internal/mcpserver"
@@ -71,6 +72,13 @@ func NewRouter(
 	}
 	r := chi.NewRouter()
 	musicDiscovery := musicdiscovery.NewHandlerWithService(instanceStore, requestHandler.MusicCatalog())
+	// Hardcover trending for the Books tab, read with the token connected to
+	// the caller's Chaptarr instance; a token change drops that instance's
+	// cached list so the row follows the new connection at once.
+	bookTrending := bookdiscovery.NewTrendingHandler(instanceStore, hardcover.NewClient())
+	if instanceHandler != nil {
+		instanceHandler.SetHardcoverObserver(bookTrending.Invalidate)
+	}
 
 	// Middleware
 	r.Use(middleware.RequestID)
@@ -460,6 +468,10 @@ func NewRouter(
 			// Discover
 			books := bookdiscovery.NewHandler()
 			r.Get("/discover/books/search", books.Search)
+			// The one live book feed: Hardcover's trending list, read with
+			// the token connected to the caller's Chaptarr instance. A static
+			// segment, so chi matches it ahead of the retired {feed} routes.
+			r.Get("/discover/books/trending", bookTrending.Trending)
 			r.Get("/discover/books/{feed}", books.Feed)
 			r.Get("/genres/book", books.Genres)
 			r.Get("/media/book/{workId}", books.Book)
@@ -597,6 +609,12 @@ func NewRouter(
 				// call — a stored flag would drift the moment an admin edited
 				// the arr's Connect list.
 				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
+				// Hardcover API token for a Chaptarr instance: verified
+				// against Hardcover on save, encrypted at rest, and only
+				// ever reported as connected or not.
+				r.Get("/instances/{instanceID}/hardcover", instanceHandler.HardcoverStatus)
+				r.Put("/instances/{instanceID}/hardcover", instanceHandler.SaveHardcoverToken)
+				r.Delete("/instances/{instanceID}/hardcover", instanceHandler.ClearHardcoverToken)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only

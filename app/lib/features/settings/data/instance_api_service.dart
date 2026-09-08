@@ -26,6 +26,28 @@ class MediaPathMapping {
       };
 }
 
+/// Whether a Chaptarr instance is connected to Hardcover. `supported` is
+/// false for every other service type (and for a response the client could
+/// not read), so the editor renders nothing rather than a wrong answer.
+class InstanceHardcoverStatus {
+  final bool supported;
+  final bool configured;
+
+  const InstanceHardcoverStatus({
+    required this.supported,
+    required this.configured,
+  });
+
+  factory InstanceHardcoverStatus.fromJson(dynamic json) {
+    final map =
+        json is Map<String, dynamic> ? json : const <String, dynamic>{};
+    return InstanceHardcoverStatus(
+      supported: map['supported'] == true,
+      configured: map['configured'] == true,
+    );
+  }
+}
+
 /// One instance's live instant-updates state. `state` explains a
 /// not-configured answer ('missing', 'stale', 'credential_missing',
 /// 'no_public_url'); unknown values from a newer server render generically.
@@ -318,6 +340,32 @@ class InstanceApiService {
       configured: map['configured'] == true,
       state: map['state'] as String? ?? '',
     );
+  }
+
+  /// Whether this Chaptarr instance holds a Hardcover API token. The token
+  /// itself is write-only and never comes back. Older servers without the
+  /// route answer 404/405; that propagates for the caller to treat as unknown.
+  Future<InstanceHardcoverStatus> hardcoverStatus(String id) async {
+    final resp = await _dio.get('/api/instances/$id/hardcover');
+    return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  /// Connect a Hardcover account: the server verifies the token against
+  /// Hardcover before storing it encrypted. A rejected token is a 400 that
+  /// leaves any previous connection in place.
+  Future<InstanceHardcoverStatus> saveHardcoverToken(
+      String id, String token) async {
+    final resp = await _dio.put(
+      '/api/instances/$id/hardcover',
+      data: {'token': token},
+    );
+    return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  /// Disconnect Hardcover from this instance.
+  Future<InstanceHardcoverStatus> clearHardcoverToken(String id) async {
+    final resp = await _dio.delete('/api/instances/$id/hardcover');
+    return InstanceHardcoverStatus.fromJson(resp.data);
   }
 
   /// Per-user default pins for this instance's service type, keyed by user id.

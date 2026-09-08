@@ -14,6 +14,7 @@ import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
 import 'package:cantinarr/features/dashboard/ui/library_series_row.dart';
 import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/trending_books_row.dart';
 import 'package:cantinarr/features/discover/ui/book_search_results_view.dart';
 import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:cantinarr/navigation/app_router.dart';
@@ -34,8 +35,12 @@ void main() {
             of: find.byType(DashboardBooksTab),
             matching: find.byType(SingleChildScrollView))
         .first);
-    expect((scroll.child as Column).children.map((w) => w.runtimeType),
-        [RecentlyAddedBooksRow, LibraryAuthorsRow, LibrarySeriesRow]);
+    expect((scroll.child as Column).children.map((w) => w.runtimeType), [
+      TrendingBooksRow,
+      RecentlyAddedBooksRow,
+      LibraryAuthorsRow,
+      LibrarySeriesRow,
+    ]);
     expect(h.adapter.retiredReads, isEmpty);
   });
   for (final route in [
@@ -285,7 +290,11 @@ class Adapter implements HttpClientAdapter {
       Future<void>? cancelFuture) async {
     Object data = <String, dynamic>{};
     var code = 200;
-    if (o.path.startsWith('/api/discover/books') ||
+    if (o.path == '/api/discover/books/trending') {
+      // The one live book feed: not connected here, so the row stays out of
+      // the way of these tests. It is not a retired read.
+      data = {'instance_id': 'books', 'connected': false, 'books': []};
+    } else if (o.path.startsWith('/api/discover/books') ||
         o.path == '/api/genres/book' ||
         o.path.startsWith('/api/media/book/')) {
       retiredReads.add(o.path);

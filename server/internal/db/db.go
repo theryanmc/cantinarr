@@ -1051,6 +1051,10 @@ func Open(dbPath string) (*sql.DB, error) {
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
 		{alter: "ALTER TABLE notification_prefs ADD COLUMN new_music INTEGER NOT NULL DEFAULT 1"},
+		// Hardcover: an admin-supplied Hardcover API token held per Chaptarr
+		// instance, encrypted at rest and write-only through the API. Empty =
+		// not connected, which is the only thing the API ever reports about it.
+		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_token TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

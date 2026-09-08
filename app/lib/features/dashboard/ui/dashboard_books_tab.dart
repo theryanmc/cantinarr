@@ -13,8 +13,9 @@ import '../data/recent_books_service.dart';
 import 'library_authors_row.dart';
 import 'library_series_row.dart';
 import 'recently_added_books_row.dart';
+import 'trending_books_row.dart';
 
-/// Dashboard Books tab: Recently Added, Authors,
+/// Dashboard Books tab: Trending Books (Hardcover), Recently Added, Authors,
 /// and Series. Chaptarr book/author search now lives in the shell toolbar
 /// (`shellBookSearchProvider` / `BookSearchResultsView`, see
 /// `app/lib/features/shell/logic/shell_book_search_provider.dart` and
@@ -98,6 +99,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
               child: CatalogSetupButton(serviceType: 'chaptarr'),
             ),
           if (hasLibrary) ...const [
+            TrendingBooksRow(),
             RecentlyAddedBooksRow(),
             LibraryAuthorsRow(),
             LibrarySeriesRow(),
