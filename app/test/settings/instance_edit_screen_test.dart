@@ -28,6 +28,7 @@ class _FakeAdapter implements HttpClientAdapter {
     this.instancesError,
     this.webhookError,
     this.webhookStatus,
+    this.hardcoverStatus,
     this.testError,
   });
 
@@ -45,6 +46,10 @@ class _FakeAdapter implements HttpClientAdapter {
   /// GET /webhook status body; null mimics an older server (404), which the
   /// screen must treat as "unknown" and render nothing.
   final Map<String, dynamic>? webhookStatus;
+
+  /// GET /hardcover status body; null mimics an older server (404), which
+  /// hides the section entirely.
+  final Map<String, dynamic>? hardcoverStatus;
   final String? testError;
   final List<({String method, String path, dynamic body})> requests = [];
 
@@ -134,6 +139,22 @@ class _FakeAdapter implements HttpClientAdapter {
         );
       }
       response = {'status': 'configured', 'action': 'created'};
+    } else if (options.method == 'GET' && path.endsWith('/hardcover')) {
+      final status = hardcoverStatus;
+      if (status == null) {
+        return ResponseBody.fromString(
+          '404 page not found\n',
+          404,
+          headers: {
+            'content-type': ['text/plain; charset=utf-8'],
+          },
+        );
+      }
+      response = status;
+    } else if (options.method == 'PUT' && path.endsWith('/hardcover')) {
+      response = {'supported': true, 'configured': true};
+    } else if (options.method == 'DELETE' && path.endsWith('/hardcover')) {
+      response = {'supported': true, 'configured': false};
     } else if (options.method == 'PUT') {
       // Instance update echo; the id encodes the service type (radarr-b).
       final id = path.split('/').last;
@@ -1561,6 +1582,138 @@ void main() {
       isTrue,
     );
     expect(find.text('Instant updates are on.'), findsOneWidget);
+  });
+
+  testWidgets('a Chaptarr edit offers Hardcover above instant updates',
+      (tester) async {
+    final adapter = _FakeAdapter(
+      instances: [
+        {
+          'id': 'chaptarr-a',
+          'service_type': 'chaptarr',
+          'name': 'Books',
+          'url': 'http://books',
+          'is_default': false,
+          'sort_order': 0,
+        },
+      ],
+      webhookStatus: {'supported': true, 'configured': true, 'state': 'ok'},
+      hardcoverStatus: {'supported': true, 'configured': false},
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'chaptarr-a',
+        initialServiceType: 'chaptarr',
+        initialName: 'Books',
+        initialUrl: 'http://books',
+      ),
+    );
+
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'GET' && r.path == '/api/instances/chaptarr-a/hardcover'),
+      isTrue,
+    );
+    // Sits directly above the instant-updates section, disconnected state.
+    final hardcover = tester.getTopLeft(find.text('Hardcover'));
+    final webhook = tester.getTopLeft(find.text('Instant updates'));
+    expect(hardcover.dy, lessThan(webhook.dy));
+    expect(find.text('Connect Hardcover'), findsOneWidget);
+    expect(find.text('Disconnect'), findsNothing);
+
+    // An empty submit never dials the server.
+    await tester.tap(find.text('Connect Hardcover'));
+    await tester.pumpAndSettle();
+    expect(find.text('Paste the API token from Hardcover first.'),
+        findsOneWidget);
+    expect(adapter.requests.any((r) => r.method == 'PUT'), isFalse);
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Hardcover API token'), 'hc-token');
+    await tester.tap(find.text('Connect Hardcover'));
+    await tester.pumpAndSettle();
+
+    final put = adapter.requests.singleWhere((r) =>
+        r.method == 'PUT' && r.path == '/api/instances/chaptarr-a/hardcover');
+    expect(put.body, {'token': 'hc-token'});
+    expect(find.text('Hardcover is connected.'), findsOneWidget);
+    // The token is write-only: the field empties, the state flips.
+    expect(
+      tester
+          .widget<TextField>(
+              find.widgetWithText(TextField, 'Hardcover API token'))
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(find.text('Replace Hardcover token'), findsOneWidget);
+
+    await tester.tap(find.text('Disconnect'));
+    await tester.pumpAndSettle();
+    expect(
+      adapter.requests.any((r) =>
+          r.method == 'DELETE' &&
+          r.path == '/api/instances/chaptarr-a/hardcover'),
+      isTrue,
+    );
+    expect(find.text('Hardcover is disconnected.'), findsOneWidget);
+    expect(find.text('Connect Hardcover'), findsOneWidget);
+  });
+
+  testWidgets('Hardcover stays hidden on an older server and for other types',
+      (tester) async {
+    // Older server: 404 on the status route. Unknown must not render as
+    // "not connected".
+    final adapter = _FakeAdapter(
+      instances: [
+        {
+          'id': 'chaptarr-a',
+          'service_type': 'chaptarr',
+          'name': 'Books',
+          'url': 'http://books',
+          'is_default': false,
+          'sort_order': 0,
+        },
+      ],
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'chaptarr-a',
+        initialServiceType: 'chaptarr',
+        initialName: 'Books',
+        initialUrl: 'http://books',
+      ),
+    );
+    expect(find.text('Hardcover'), findsNothing);
+  });
+
+  testWidgets('Radarr never asks about Hardcover', (tester) async {
+    final adapter = _FakeAdapter(
+      instances: [Map.of(_radarrB)],
+      hardcoverStatus: {'supported': false, 'configured': false},
+    );
+    await _pumpEdit(
+      tester,
+      adapter: adapter,
+      users: const [],
+      screen: const InstanceEditScreen(
+        instanceId: 'radarr-b',
+        initialServiceType: 'radarr',
+        initialName: 'Radarr B',
+        initialUrl: 'http://radarr-b',
+      ),
+    );
+    expect(
+      adapter.requests.any((r) => r.path.endsWith('/hardcover')),
+      isFalse,
+    );
+    expect(find.text('Hardcover'), findsNothing);
   });
 
   testWidgets('a webhook the arr no longer has reads as not configured',

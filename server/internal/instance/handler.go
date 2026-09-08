@@ -135,11 +135,14 @@ type Handler struct {
 	// plexBaseURL is where the link flow talks to (plex.tv, or a test).
 	plexLinks   *plexLinks
 	plexBaseURL string
+	// hardcoverAPIURL is where a pasted Hardcover token is verified
+	// (api.hardcover.app, or a test).
+	hardcoverAPIURL string
 }
 
 // NewHandler creates a new instance handler.
 func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
-	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL}
+	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL, hardcoverAPIURL: hardcoverAPIURL}
 	if len(arrCallbackURL) > 0 {
 		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}

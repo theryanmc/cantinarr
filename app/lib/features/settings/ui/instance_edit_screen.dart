@@ -132,6 +132,16 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   String? _webhookResult;
   Color _webhookResultColor = AppTheme.textSecondary;
 
+  // Hardcover section state (Chaptarr, editing only). The token is
+  // write-only: the server reports connected-or-not and never the token, so
+  // the field is always empty on open and cleared again after a save.
+  late final TextEditingController _hardcoverController;
+  bool _hardcoverSupported = false;
+  bool _hardcoverConnected = false;
+  bool _isSavingHardcover = false;
+  String? _hardcoverResult;
+  Color _hardcoverResultColor = AppTheme.textSecondary;
+
   // Completed-media path mappings belong to this exact arr instance. The
   // deployment roots remain server-owned; this form only routes arr paths into
   // those already-authorized read-only folders.
@@ -346,6 +356,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _passwordController = TextEditingController();
     _publicAddressController = TextEditingController()
       ..addListener(_markMediaServerConfigDirty);
+    _hardcoverController = TextEditingController();
     // A prompted new-instance form opens on the selector's disabled
     // placeholder ('') instead of a guessed type; every type-dependent
     // affordance stays hidden until a real one is picked (see
@@ -364,6 +375,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _loadArrRootFolders();
     _loadDirectory();
     _loadWebhookStatus();
+    _loadHardcoverStatus();
   }
 
   /// Reads the live instant-updates state so the section says whether the
@@ -783,6 +795,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     _usernameController.dispose();
     _passwordController.dispose();
     _publicAddressController.dispose();
+    _hardcoverController.dispose();
     for (final mapping in _mediaPathMappings) {
       mapping.dispose();
     }
@@ -1490,6 +1503,91 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _isConfiguringWebhook = false;
         _webhookResult = apiErrorMessage(e);
         _webhookResultColor = AppTheme.error;
+      });
+    }
+  }
+
+  /// Reads whether this Chaptarr instance is connected to Hardcover. The
+  /// server answers connected-or-not from the stored slot and never returns
+  /// the token. Older servers without the route answer 404/405 and the
+  /// section stays hidden.
+  Future<void> _loadHardcoverStatus() async {
+    if (!widget.isEditing || !_isChaptarr) return;
+    try {
+      final status =
+          await InstanceApiService(backendDio: ref.read(backendClientProvider))
+              .hardcoverStatus(widget.instanceId!);
+      if (!mounted || !status.supported) return;
+      setState(() {
+        _hardcoverSupported = true;
+        _hardcoverConnected = status.configured;
+      });
+    } catch (_) {
+      // Unknown is not worth a section: an older server, or a read that
+      // failed, must not render as "not connected".
+    }
+  }
+
+  Future<void> _saveHardcoverToken() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    final token = _hardcoverController.text.trim();
+    if (token.isEmpty) {
+      setState(() {
+        _hardcoverResult = 'Paste the API token from Hardcover first.';
+        _hardcoverResultColor = AppTheme.error;
+      });
+      return;
+    }
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      final status =
+          await InstanceApiService(backendDio: ref.read(backendClientProvider))
+              .saveHardcoverToken(id, token);
+      if (!mounted) return;
+      _hardcoverController.clear();
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverConnected = status.configured;
+        _hardcoverResult = 'Hardcover is connected.';
+        _hardcoverResultColor = AppTheme.available;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverResult = apiErrorMessage(e);
+        _hardcoverResultColor = AppTheme.error;
+      });
+    }
+  }
+
+  Future<void> _clearHardcoverToken() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      await InstanceApiService(backendDio: ref.read(backendClientProvider))
+          .clearHardcoverToken(id);
+      if (!mounted) return;
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverConnected = false;
+        _hardcoverResult = 'Hardcover is disconnected.';
+        _hardcoverResultColor = AppTheme.textSecondary;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isSavingHardcover = false;
+        _hardcoverResult = apiErrorMessage(e);
+        _hardcoverResultColor = AppTheme.error;
       });
     }
   }
@@ -2731,6 +2829,81 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                   )
                 : Text(widget.isEditing ? 'Save Changes' : 'Add Instance'),
           ),
+
+          // Hardcover (Chaptarr, editing only). The token is verified by the
+          // server and stored encrypted there; it is never read back.
+          if (widget.isEditing && _isChaptarr && _hardcoverSupported) ...[
+            const SizedBox(height: 32),
+            const Text('Hardcover',
+                style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text(
+              _hardcoverConnected
+                  ? 'Hardcover is connected to this instance. Paste a new '
+                      'API token to replace it, or disconnect.'
+                  : 'Connect a Hardcover account by pasting its API token '
+                      '(Hardcover → Settings → API). The server verifies it '
+                      'and keeps it encrypted; it never reaches a device.',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _hardcoverController,
+              obscureText: true,
+              enableSuggestions: false,
+              autocorrect: false,
+              decoration: InputDecoration(
+                labelText: 'Hardcover API token',
+                hintText: _hardcoverConnected
+                    ? 'Connected — paste a token to replace it'
+                    : 'Paste the token from Hardcover',
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _isSavingHardcover ? null : _saveHardcoverToken,
+                    icon: _isSavingHardcover
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: AppTheme.accent),
+                          )
+                        : const Icon(Icons.link),
+                    label: Text(_hardcoverConnected
+                        ? 'Replace Hardcover token'
+                        : 'Connect Hardcover'),
+                  ),
+                ),
+                if (_hardcoverConnected) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed:
+                        _isSavingHardcover ? null : _clearHardcoverToken,
+                    child: const Text('Disconnect'),
+                  ),
+                ],
+              ],
+            ),
+            if (_hardcoverResult != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _hardcoverResult!,
+                style: TextStyle(
+                  color: _hardcoverResultColor,
+                  fontSize: 12,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
 
           // Webhook setup (source instances, editing only). Cantinarr installs
           // its own Connect record; the callback credential never reaches the

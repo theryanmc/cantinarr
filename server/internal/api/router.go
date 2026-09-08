@@ -597,6 +597,12 @@ func NewRouter(
 				// call — a stored flag would drift the moment an admin edited
 				// the arr's Connect list.
 				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
+				// Hardcover API token for a Chaptarr instance: verified
+				// against Hardcover on save, encrypted at rest, and only
+				// ever reported as connected or not.
+				r.Get("/instances/{instanceID}/hardcover", instanceHandler.HardcoverStatus)
+				r.Put("/instances/{instanceID}/hardcover", instanceHandler.SaveHardcoverToken)
+				r.Delete("/instances/{instanceID}/hardcover", instanceHandler.ClearHardcoverToken)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only

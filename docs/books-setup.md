@@ -45,7 +45,13 @@ Without this, Cantinarr falls back to polling, and a fast ebook grab can land an
 
 The webhook also speeds up "Waiting for library" requests: Chaptarr announces the moment a queued author import lands, and Cantinarr completes the waiting request right then instead of on its next five-minute check.
 
-## 5. Optional — let people download the files
+## 5. Optional — connect Hardcover
+
+Open the instance and find the **Hardcover** section, just above Instant updates. Paste a [Hardcover](https://hardcover.app) API token (Hardcover → Settings → API) and choose **Connect Hardcover**. The server verifies the token against Hardcover before it stores anything: a token Hardcover rejects is reported and the previous connection, if any, stays; a Hardcover that cannot be reached is reported as exactly that, never as a bad token.
+
+The token is held encrypted on the server, per Chaptarr instance, and is write-only — the editor only ever shows connected or not. **Replace Hardcover token** swaps it, **Disconnect** removes it, and deleting the instance removes it with everything else. Chaptarr keeps its own copy of a Hardcover token for its metadata and never hands it back through its API, which is why Cantinarr needs one of its own.
+
+## 6. Optional — let people download the files
 
 Off by default, and deliberately two-layered. Chaptarr reports file paths but doesn't serve the bytes, so the deployment has to hand Cantinarr the files itself:
 
@@ -56,7 +62,7 @@ A Chaptarr instance often needs several mappings — `/ebooks`, `/audiobooks`, a
 
 An instance offers downloads only once explicit mappings are saved for it.
 
-## 6. Verify
+## 7. Verify
 
 - The Books tab appears for a pinned non-admin user, opening on Recently Added, Authors and Series, with native search in the top bar.
 - Searching a title returns results, and requesting an eBook or Audiobook row reads **Requested** until it downloads.
