@@ -23,12 +23,22 @@ platform :android do
     File.write(ENV['GITHUB_OUTPUT'], "build_number=#{next_build}\n", mode: "a") if ENV['GITHUB_OUTPUT']
   end
 
-  desc "Upload the release AAB to Play"
+  desc "Publish the same AAB to Play open and closed testing by default"
   lane :beta do
+    target = ENV["PLAY_TRACK"] || "both"
+    unless %w[both beta alpha internal].include?(target)
+      UI.user_error!("PLAY_TRACK must be both, beta, alpha, or internal")
+    end
+    version_code = ENV["PLAY_VERSION_CODE"].to_s
+    if target == "both" && !version_code.match?(/\A[1-9][0-9]*\z/)
+      UI.user_error!("PLAY_VERSION_CODE must be the positive version code built into the AAB")
+    end
+    release_status = ENV["PLAY_RELEASE_STATUS"] || "completed"
+
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "alpha",
-      release_status: ENV["PLAY_RELEASE_STATUS"] || "completed",
+      track: target == "both" ? "alpha" : target,
+      release_status: release_status,
       aab: "../build/app/outputs/bundle/release/app-release.aab",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_metadata: true,
@@ -36,13 +46,33 @@ platform :android do
       skip_upload_images: true,
       skip_upload_screenshots: true,
     )
+
+    if target == "both"
+      # Copy this run's release, including its notes, without uploading the AAB again.
+      # Keep the existing closed testers supplied while the open beta grows.
+      upload_to_play_store(
+        package_name: PACKAGE_NAME,
+        track: "alpha",
+        track_promote_to: "beta",
+        version_code: version_code.to_i,
+        release_status: release_status,
+        track_promote_release_status: release_status,
+        json_key: ENV["PLAY_JSON_KEY_PATH"],
+        skip_upload_aab: true,
+        skip_upload_apk: true,
+        skip_upload_metadata: true,
+        skip_upload_changelogs: true,
+        skip_upload_images: true,
+        skip_upload_screenshots: true,
+      )
+    end
   end
 
   desc "Push the Play listing (copy + graphics), no binary"
   lane :listing do
     upload_to_play_store(
       package_name: PACKAGE_NAME,
-      track: ENV["PLAY_TRACK"] || "alpha",
+      track: ENV["PLAY_TRACK"] || "beta",
       json_key: ENV["PLAY_JSON_KEY_PATH"],
       skip_upload_aab: true,
       skip_upload_apk: true,
