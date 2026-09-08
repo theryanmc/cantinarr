@@ -203,6 +203,7 @@ Feature-first structure with data / logic / ui layers per feature. State is Rive
 |---|---|---|
 | Discovery, search, media detail | Backend `/api/discover`, `/api/media`, `/api/trakt` | TMDB/Trakt keys stay server-side |
 | Poster/backdrop images | TMDB CDN (direct) + one shared tuned image cache | CDN images need no key |
+| Hardcover covers | Public CDN; browser image elements on web, shared disk cache on native | The CDN permits image display but not cross-origin byte reads |
 | Requests & approvals | Backend `/api/requests`, `/api/admin/requests` | ID bridging + policy live server-side |
 | Arr management | Backend `/api/instances/{id}/api/v3` (credential-scrubbed proxy) | API keys never reach devices; reads allowed for users, writes admin-only |
 | Books | Backend proxy to Chaptarr (Readarr API v1) | Per-user grant enforced server-side |
