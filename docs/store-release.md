@@ -11,7 +11,7 @@ for a user-facing version change — build numbers/version codes are computed pe
 
 `.github/workflows/playstore.yml` runs on every merge to `main` that touches Android-relevant
 `app/**` paths (web/ios/desktop subdirs, tests, dev tooling, and markdown excluded), and on manual dispatch (inputs: track
-`alpha`/`internal`, release status `completed`/`draft`).
+`beta` (default, open testing)/`alpha` (closed testing)/`internal`, release status `completed`/`draft`).
 
 0. A `gate` job waits for the `CI` run on that exact commit and fails the workflow if it isn't
    green, so nothing is built or uploaded from an unproven commit. The build-only PR check is
@@ -20,9 +20,9 @@ for a user-facing version change — build numbers/version codes are computed pe
    `app/android/fastlane/Fastfile`); version name = `pubspec.yaml` version minus the `+` suffix.
 2. The AAB is signed with the upload keystore from the `ANDROID_KEYSTORE_*` secrets and attached
    to the run as an artifact — every run, upload or not.
-3. With `PLAY_SERVICE_ACCOUNT_JSON` set, the `beta` lane uploads the AAB to the Play **alpha**
-   track ("Closed testing - Alpha" - Google's pre-made closed track; the id `beta` is reserved
-   for open testing). Without it, the upload is skipped and the run stays green.
+3. With `PLAY_SERVICE_ACCOUNT_JSON` set, the `beta` lane uploads the AAB to the Play **beta**
+   track (open testing). Manual dispatch can still target `alpha` (closed testing) or `internal`.
+   Without credentials, the upload is skipped and the run stays green.
 
 Runs are serialized (`concurrency: playstore-deploy`) because two concurrent runs would compute
 the same version code.
@@ -70,8 +70,9 @@ ignores `key.properties` and `*.jks`.
    (e.g. `play-publisher`) → Keys → add a JSON key.
 5. Play Console → Users and permissions → Invite new users → the service account's email →
    grant release permissions (releases to testing tracks) or Admin.
-6. `gh secret set PLAY_SERVICE_ACCOUNT_JSON < key.json` — from here on, every merge to `main`
-   ships to the closed-testing track automatically.
+6. `gh secret set PLAY_SERVICE_ACCOUNT_JSON < key.json` enables automatic uploads. The pipeline
+   defaults to open testing; a new app still completing its closed test must explicitly target
+   `alpha` until production access is approved and its open testing track is ready.
 7. Finish the listing prerequisites in the console before promoting beyond testing: store
    listing (copy + graphics), data safety form, content rating questionnaire, privacy policy URL.
 8. Closed testing → Testers: add an email list or Google Group and share the opt-in link.
@@ -83,7 +84,20 @@ ignores `key.properties` and `*.jks`.
 Personal developer accounts created after Nov 13, 2023 must run a closed test with **12+ opted-in
 testers for 14 continuous days** before they can apply for production access (the closed alpha track
 satisfies this; the console dashboard tracks progress and then offers a production-access
-questionnaire).
+questionnaire). Cantinarr has completed this requirement and received production access.
+
+### Open beta
+
+Google's [open-testing track ID is `beta`](https://developers.google.com/android-publisher/tracks).
+After production access is approved, Play Console → Testing → Open testing needs its own country
+selection and tester settings. Add the latest signed, CI-green bundle from the library, preview
+and confirm the release, then send the changes for review from Publishing overview. A draft or
+an upload alone does not make the open test available; verify the release is available to testers
+after Google's review (and publish approved changes if managed publishing is enabled).
+
+The public opt-in link is <https://play.google.com/apps/testing/codes.julian.cantinarr>. Open
+testers join there without an email-list or Google Group invitation. Future eligible `main`
+builds go to this track automatically. Production releases remain a separate decision.
 
 ## Store listings (both stores)
 

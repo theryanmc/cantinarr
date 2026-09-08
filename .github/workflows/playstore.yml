@@ -27,10 +27,10 @@ on:
   workflow_dispatch:
     inputs:
       track:
-        description: "Play track to upload to"
+        description: "Play track (beta = open testing, alpha = closed testing)"
         type: choice
-        options: [alpha, internal]
-        default: alpha
+        options: [beta, alpha, internal]
+        default: beta
       release_status:
         description: "Release status (a brand-new app must use draft until its first release is rolled out in the Play Console)"
         type: choice
@@ -156,7 +156,7 @@ jobs:
         if: github.event_name != 'pull_request' && steps.play.outputs.available == 'true'
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          PLAY_TRACK: ${{ inputs.track || 'alpha' }}
+          PLAY_TRACK: ${{ inputs.track || 'beta' }}
           PLAY_RELEASE_STATUS: ${{ inputs.release_status || 'completed' }}
         run: |
           printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"

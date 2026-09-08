@@ -175,10 +175,8 @@ talks only to your own server, so stand one up first (above) -- or open the
 
 - **iPhone and iPad** -- join the public beta on
   [TestFlight](https://testflight.apple.com/join/bCPDwCsD). No invite needed.
-- **Android** -- [ask for a tester slot](https://cantinarr.com/#android-beta). Play
-  testing is closed, so testers are added by hand: email **windoze95@proton.me**
-  with the address associated with your Play Store (Google) account -- that exact
-  address is what Google needs to let you in -- and you'll get the opt-in link back.
+- **Android** -- join the [open beta on Google Play](https://play.google.com/apps/testing/codes.julian.cantinarr).
+  No invite needed.
 - **Any browser** -- your server already serves the full app at
   `http://your-server:8585`. Nothing to install.
 
