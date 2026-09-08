@@ -1545,26 +1545,117 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _hardcoverResult = null;
     });
     try {
-      final status =
-          await InstanceApiService(backendDio: ref.read(backendClientProvider))
-              .saveHardcoverToken(id, token);
+      final service = InstanceApiService(
+        backendDio: ref.read(backendClientProvider),
+      );
+      final status = await service.saveHardcoverToken(id, token);
       if (!mounted) return;
       ref.invalidate(trendingBooksForInstanceProvider(id));
       _hardcoverController.clear();
       setState(() {
-        _isSavingHardcover = false;
         _hardcoverConnected = status.configured;
         _hardcoverResult = 'Hardcover is connected.';
         _hardcoverResultColor = AppTheme.available;
       });
+      if (status.configured) {
+        await _offerHardcoverForOtherInstances(service, token);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _isSavingHardcover = false;
         _hardcoverResult = apiErrorMessage(e);
         _hardcoverResultColor = AppTheme.error;
       });
+    } finally {
+      if (mounted) setState(() => _isSavingHardcover = false);
     }
+  }
+
+  Future<void> _offerHardcoverForOtherInstances(
+    InstanceApiService service,
+    String token,
+  ) async {
+    // Re-read the directory after saving: an instance may have been added or
+    // removed while the editor was open. Only the instances named in the
+    // confirmation receive this token, using the existing write-only API.
+    final List<ServiceInstance> instances;
+    try {
+      instances = await service.listInstances();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _hardcoverResult =
+            'Hardcover is connected to this instance, but the '
+            'other instances could not be loaded. ${apiErrorMessage(e)}';
+        _hardcoverResultColor = AppTheme.error;
+      });
+      return;
+    }
+    if (!mounted) return;
+    final others = instances
+        .where(
+          (instance) =>
+              instance.serviceType == 'chaptarr' &&
+              instance.id != widget.instanceId,
+        )
+        .toList(growable: false);
+    if (others.isEmpty) return;
+    setState(() => _isSavingHardcover = false);
+    final applyToAll = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        scrollable: true,
+        title: const Text('Use Hardcover for all Chaptarr instances?'),
+        content: Text(
+          'Also use this token for:\n\n'
+          '${others.map((instance) => '• ${instance.name}').join('\n')}\n\n'
+          'Any Hardcover tokens already set for these instances will be '
+          'replaced.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Only this instance'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Apply to all'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || applyToAll != true) return;
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult =
+          'Connecting Hardcover to the other Chaptarr instances…';
+    });
+    final failures = <String>[];
+    // Save one at a time to avoid a burst of provider verification requests.
+    // One failed instance does not prevent the remaining instances saving.
+    for (final instance in others) {
+      try {
+        await service.saveHardcoverToken(instance.id, token);
+        if (mounted) {
+          ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+        }
+      } catch (e) {
+        failures.add('${instance.name}: ${apiErrorMessage(e)}');
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _hardcoverResult = failures.isEmpty
+          ? 'Hardcover is connected to all ${others.length + 1} '
+                'Chaptarr instances.'
+          : 'Token saved for ${others.length + 1 - failures.length} of '
+                '${others.length + 1} Chaptarr instances. Could not update:\n'
+                '${failures.join('\n')}\n'
+                'Open those instances to try again.';
+      _hardcoverResultColor = failures.isEmpty
+          ? AppTheme.available
+          : AppTheme.error;
+    });
   }
 
   Future<void> _clearHardcoverToken() async {
@@ -2856,6 +2947,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
             const SizedBox(height: 8),
             TextField(
               controller: _hardcoverController,
+              enabled: !_isSavingHardcover,
               obscureText: true,
               enableSuggestions: false,
               autocorrect: false,

@@ -51,6 +51,8 @@ Open the instance and find the **Hardcover** section, just above Instant updates
 
 Connecting it turns on the **Trending Books** row at the top of the Books tab for everyone with a grant on this instance (see Discover books below). Connecting, replacing, or disconnecting the token refreshes the Books tab immediately. The server otherwise refreshes that list at most every 30 minutes per instance, because Hardcover's API budget is small.
 
+If you have more than one Chaptarr instance, connecting or replacing a token asks whether to use it for the others too. **Apply to all** saves the same token for the listed instances, replacing any Hardcover tokens already set there. **Only this instance**, or dismissing the prompt, keeps the change limited to the instance you just saved. If another instance cannot be updated, the result names it; successful saves stay in place, and you can open the affected instance to try again. Each instance remains independent: later replacements and disconnections only affect the instance being edited unless you choose **Apply to all** again.
+
 The token is held encrypted on the server, per Chaptarr instance, and is write-only — the editor only ever shows connected or not. **Replace Hardcover token** swaps it, **Disconnect** removes it, and deleting the instance removes it with everything else. Chaptarr keeps its own copy of a Hardcover token for its metadata and never hands it back through its API, which is why Cantinarr needs one of its own.
 
 ## 6. Optional — let people download the files
