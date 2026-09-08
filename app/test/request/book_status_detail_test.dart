@@ -594,6 +594,7 @@ void main() {
         'status': 'unavailable',
         'status_known': false,
         'status_unknown_reason': 'identity_ambiguous',
+        'canonical_foreign_id': 'canon-1',
       });
     await tester.pumpWidget(panel(1));
     await tester.pumpAndSettle();

@@ -220,7 +220,9 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       if (detail.isKnown ||
           detail.effectiveUnknownReason ==
               BookStatusUnknownReason.identityNeedsAttention) {
-        final nextId = canonical.isEmpty ? widget.foreignId : canonical;
+        final nextId = !detail.isKnown || canonical.isEmpty
+            ? widget.foreignId
+            : canonical;
         if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
           _reportedCanonicalId = nextId;
           widget.onCanonicalForeignId?.call(nextId);

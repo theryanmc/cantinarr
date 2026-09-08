@@ -83,8 +83,8 @@ class _RequesterBookDetailScreenState
 
   /// The foreignBookId the library files this book under, when the server
   /// reported it differs from [widget.foreignId] (Chaptarr re-keys created
-  /// records to its own canonical ids). Ownership binding, live records, and
-  /// the format panel all follow this id once known.
+  /// records to its own canonical ids). Ownership and library actions follow
+  /// this binding; the format panel keeps the selected ID.
   String? _canonicalForeignId;
 
   String get _effectiveForeignId => _canonicalForeignId ?? widget.foreignId;
@@ -248,8 +248,14 @@ class _RequesterBookDetailScreenState
     if (!mounted || canonical.isEmpty || canonical == _effectiveForeignId) {
       return;
     }
-    setState(() =>
-        _canonicalForeignId = canonical == widget.foreignId ? null : canonical);
+    setState(() {
+      _canonicalForeignId = canonical == widget.foreignId ? null : canonical;
+      // Files and admin actions belong to the previous binding. Retire them
+      // immediately, including when the follow-up library read fails.
+      _chaptarrRecords = const [];
+      _filesByBook = const {};
+      _recordsLoadGeneration++;
+    });
     _resolveChaptarrRecords(_loadGeneration);
   }
 

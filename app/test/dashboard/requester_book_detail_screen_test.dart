@@ -5,6 +5,7 @@ import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
 import 'package:cantinarr/core/providers/instance_provider.dart';
+import 'package:cantinarr/core/providers/library_refresh_provider.dart';
 import 'package:cantinarr/core/theme/app_theme.dart';
 import 'package:cantinarr/core/widgets/cached_image.dart';
 import 'package:cantinarr/features/auth/logic/auth_provider.dart';
@@ -201,8 +202,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // The first read goes out under the routed lookup id; the server resolves
-    // the stored record, answers with the library's canonical id, and every
-    // later read uses that id.
+    // the stored record and answers with the library's canonical id. Later
+    // status reads retain the original selected id.
     expect(adapter.statusForeignIds.first, 'lookup-29749107');
     expect(adapter.statusForeignIds.last, 'lookup-29749107');
     // The owned digest row (canonical id) binds: the monitored audiobook reads
@@ -277,6 +278,36 @@ void main() {
     expect(find.byTooltip('Download audiobook'), findsOneWidget);
     expect(find.textContaining('/library/'), findsNothing);
     expect(find.textContaining(r'Z:\'), findsNothing);
+  });
+
+  testWidgets('a lost binding clears downloads even when the next read fails',
+      (tester) async {
+    final adapter = _BooksAdapter(bookFiles: true);
+    final (:router, :container) = await _pumpRouter(
+      tester,
+      authState: _downloadBooksState,
+      adapter: adapter,
+    );
+    router.go('/detail/book/lookup-29749107?title=Ahsoka');
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byTooltip('Download eBook'), 250,
+        scrollable: _detailScrollable());
+    expect(find.byTooltip('Download eBook'), findsOneWidget);
+    expect(find.byTooltip('Download audiobook'), findsOneWidget);
+
+    adapter.statusOverride = {
+      'status': 'unavailable',
+      'status_known': false,
+      'status_unknown_reason': 'identity_ambiguous',
+    };
+    adapter.failBookRead = true;
+    container.read(libraryRefreshTickProvider.notifier).state++;
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Download eBook'), findsNothing);
+    expect(find.byTooltip('Download audiobook'), findsNothing);
+    expect(find.text('Library match needs attention'), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -792,6 +823,8 @@ class _BooksAdapter implements HttpClientAdapter {
   final bool mismatchedLookupAuthor;
   final bool partiallyUnknownStatus;
   final bool bookFiles;
+  bool failBookRead = false;
+  Map<String, dynamic>? statusOverride;
 
   /// Suppresses the `series`/`series_position` keys on the Ahsoka digest row,
   /// defaulted so every other test keeps its current behaviour unchanged.
@@ -918,41 +951,42 @@ class _BooksAdapter implements HttpClientAdapter {
       statusForeignIds.add(
         options.queryParameters['foreign_id'].toString(),
       );
-      body = switch (options.queryParameters['foreign_id']) {
-        'gr:101' => {
-            'status': 'partial',
-            'canonical_foreign_id': '29749107',
-            'book_formats': {'ebook': 'available', ..._requestedFormats},
-          },
-        '29749107' => {
-            'status': 'requested',
-            'book_formats': {
-              'audiobook': 'requested',
-              ..._requestedFormats,
-            },
-          },
-        // A request logged under a metadata lookup id whose created record
-        // Chaptarr filed under the canonical library id above.
-        'lookup-29749107' => {
-            'status': 'requested',
-            'book_formats': {'audiobook': 'requested'},
-            'canonical_foreign_id': '29749107',
-          },
-        '555' => {
-            'status': partiallyUnknownStatus ? 'partial' : 'requested',
-            'status_known': !partiallyUnknownStatus,
-            'book_formats': partiallyUnknownStatus
-                ? {
-                    'ebook': 'requested',
-                    'audiobook': 'future-status',
-                  }
-                : {
-                    'ebook': 'requested',
-                    'audiobook': 'requested',
-                  },
-          },
-        _ => {'status': 'unavailable'},
-      };
+      body = statusOverride ??
+          switch (options.queryParameters['foreign_id']) {
+            'gr:101' => {
+                'status': 'partial',
+                'canonical_foreign_id': '29749107',
+                'book_formats': {'ebook': 'available', ..._requestedFormats},
+              },
+            '29749107' => {
+                'status': 'requested',
+                'book_formats': {
+                  'audiobook': 'requested',
+                  ..._requestedFormats,
+                },
+              },
+            // A request logged under a metadata lookup id whose created record
+            // Chaptarr filed under the canonical library id above.
+            'lookup-29749107' => {
+                'status': 'requested',
+                'book_formats': {'audiobook': 'requested'},
+                'canonical_foreign_id': '29749107',
+              },
+            '555' => {
+                'status': partiallyUnknownStatus ? 'partial' : 'requested',
+                'status_known': !partiallyUnknownStatus,
+                'book_formats': partiallyUnknownStatus
+                    ? {
+                        'ebook': 'requested',
+                        'audiobook': 'future-status',
+                      }
+                    : {
+                        'ebook': 'requested',
+                        'audiobook': 'requested',
+                      },
+              },
+            _ => {'status': 'unavailable'},
+          };
     } else if (options.path.endsWith('/api/v1/book/lookup')) {
       final term = options.queryParameters['term'].toString();
       lookupTerms.add(term);
@@ -973,6 +1007,9 @@ class _BooksAdapter implements HttpClientAdapter {
     } else if (options.path.endsWith('/api/v1/book/43')) {
       body = _liveBook(id: 43, mediaType: 'audiobook');
     } else if (options.path.endsWith('/api/v1/book')) {
+      if (failBookRead) {
+        return ResponseBody.fromString('{}', 503);
+      }
       body = [
         _liveBook(id: 42, mediaType: 'ebook'),
         _liveBook(id: 43, mediaType: 'audiobook'),
