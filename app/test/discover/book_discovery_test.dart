@@ -15,6 +15,7 @@ import 'package:cantinarr/features/dashboard/ui/library_authors_row.dart';
 import 'package:cantinarr/features/dashboard/ui/library_series_row.dart';
 import 'package:cantinarr/features/dashboard/ui/recently_added_books_row.dart';
 import 'package:cantinarr/features/dashboard/ui/requester_book_detail_screen.dart';
+import 'package:cantinarr/features/dashboard/ui/trending_books_row.dart';
 import 'package:cantinarr/features/discover/ui/book_search_results_view.dart';
 import 'package:cantinarr/features/request/ui/book_format_panel.dart';
 import 'package:cantinarr/navigation/app_router.dart';
@@ -35,8 +36,56 @@ void main() {
             of: find.byType(DashboardBooksTab),
             matching: find.byType(SingleChildScrollView))
         .first);
-    expect((scroll.child as Column).children.map((w) => w.runtimeType),
-        [RecentlyAddedBooksRow, LibraryAuthorsRow, LibrarySeriesRow]);
+    expect((scroll.child as Column).children.map((w) => w.runtimeType), [
+      TrendingBooksRow,
+      RecentlyAddedBooksRow,
+      LibraryAuthorsRow,
+      LibrarySeriesRow,
+    ]);
+    expect(h.adapter.retiredReads, isEmpty);
+  });
+  testWidgets('a Hardcover trending book keeps its native lookup, instance, '
+      'and request state on the detail page', (t) async {
+    const hardcoverId = 'hc:123';
+    final h = await pump(t,
+        adapter: Adapter()
+          ..lookupID = hardcoverId
+          ..trendingBooks = [
+            {
+              'hardcover_id': 123,
+              'foreign_id': hardcoverId,
+              'title': nativeTitle,
+              'authors': ['Mark Manson'],
+            },
+          ]);
+    expect(h.adapter.lookupTerms, isEmpty);
+    await t.tap(find.text(nativeTitle));
+    await t.pumpAndSettle();
+
+    final page = t.widget<RequesterBookDetailScreen>(
+        find.byType(RequesterBookDetailScreen));
+    expect(page.foreignId, hardcoverId);
+    expect(page.instanceId, 'books');
+    expect(page.initialBook, isNull);
+    expect(h.adapter.lookupTerms, [hardcoverId]);
+    expect(find.text('A book by Mark Manson'), findsOneWidget);
+
+    final panel = find.byType(BookFormatPanel);
+    final state = t.state(panel);
+    final target = find.byKey(const ValueKey('book-format-row:ebook'));
+    await t.ensureVisible(target);
+    await t.tap(target);
+    await t.pumpAndSettle();
+    expect(h.adapter.posts.single, containsPair('foreign_id', hardcoverId));
+    expect(h.adapter.posts.single, containsPair('instance_id', 'books'));
+    expect(h.adapter.posts.single, containsPair('book_format', 'ebook'));
+
+    h.router.refresh();
+    await t.pumpAndSettle();
+    expect(t.state(panel), same(state));
+    expect(find.text('Your request is saved.'), findsWidgets);
+    expect(find.text('A book by Mark Manson'), findsOneWidget);
+    expect(h.adapter.lookupTerms, [hardcoverId]);
     expect(h.adapter.retiredReads, isEmpty);
   });
   for (final route in [
@@ -303,6 +352,8 @@ Future<({GoRouter router, ProviderContainer container, Adapter adapter})> pump(
 
 class Adapter implements HttpClientAdapter {
   final lookupTerms = <String>[];
+  String lookupID = nativeID;
+  List<Map<String, dynamic>> trendingBooks = const [];
   int extraResults = 0;
   final retiredReads = <String>[];
   final posts = <Map<String, dynamic>>[];
@@ -330,7 +381,14 @@ class Adapter implements HttpClientAdapter {
       Future<void>? cancelFuture) async {
     Object data = <String, dynamic>{};
     var code = 200;
-    if (o.path.startsWith('/api/discover/books') ||
+    if (o.path == '/api/discover/books/trending') {
+      // The live feed stays out of the way unless the test supplies books.
+      data = {
+        'instance_id': 'books',
+        'connected': trendingBooks.isNotEmpty,
+        'books': trendingBooks,
+      };
+    } else if (o.path.startsWith('/api/discover/books') ||
         o.path == '/api/genres/book' ||
         o.path.startsWith('/api/media/book/')) {
       retiredReads.add(o.path);
@@ -339,7 +397,7 @@ class Adapter implements HttpClientAdapter {
       lookupTerms.add(o.queryParameters['term'].toString());
       data = [
         {
-          'foreignBookId': nativeID,
+          'foreignBookId': lookupID,
           'foreignEditionId': 'gr:edition',
           'title': nativeTitle,
           'author': {'authorName': 'Mark Manson', 'foreignAuthorId': 'gr:1'},

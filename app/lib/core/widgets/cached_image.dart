@@ -13,15 +13,32 @@ import '../theme/app_theme.dart';
 typedef ImageSource = ({String url, Map<String, String>? headers});
 
 /// Prefetch uses exactly the same cache and web transport as visible artwork.
-ImageProvider cachedImageProvider(ImageSource source) =>
-    CachedNetworkImageProvider(
+ImageProvider cachedImageProvider(ImageSource source) {
+  if (usesHtmlImageElement(source)) {
+    return NetworkImage(
       source.url,
-      headers: source.headers,
-      cacheManager: appImageCache,
-      imageRenderMethodForWeb: source.headers == null
-          ? ImageRenderMethodForWeb.HtmlImage
-          : ImageRenderMethodForWeb.HttpGet,
+      webHtmlElementStrategy: WebHtmlElementStrategy.prefer,
     );
+  }
+  return CachedNetworkImageProvider(
+    source.url,
+    headers: source.headers,
+    cacheManager: appImageCache,
+    imageRenderMethodForWeb: source.headers == null
+        ? ImageRenderMethodForWeb.HtmlImage
+        : ImageRenderMethodForWeb.HttpGet,
+  );
+}
+
+/// Hardcover's public covers do not allow cross-origin byte reads. A browser
+/// image element can display them without a relay. Headered images still use
+/// HTTP so authentication is never silently dropped, and native keeps the
+/// shared disk cache.
+bool usesHtmlImageElement(ImageSource source, {bool isWeb = kIsWeb}) {
+  if (!isWeb || (source.headers?.isNotEmpty ?? false)) return false;
+  final uri = Uri.tryParse(source.url);
+  return uri?.scheme == 'https' && uri?.host == 'assets.hardcover.app';
+}
 
 /// True for Trakt's artwork CDNs (media.trakt.tv today, walter*.trakt.tv
 /// before July 2026 — Trakt migrates these hosts, so match the domain rather
@@ -107,26 +124,39 @@ class CachedImage extends StatelessWidget {
         child: Icon(icon, color: AppTheme.textSecondary, size: iconSize),
       );
 
-  Widget _image(ImageSource source) => CachedNetworkImage(
-        imageUrl: source.url,
-        httpHeaders: source.headers,
-        cacheManager: appImageCache,
-        // The default HtmlImage decode path on web drops httpHeaders entirely,
-        // which silently unauthenticates covers behind the backend proxy. Any
-        // headered request goes through the cache manager's real HTTP fetch
-        // instead; header-free CDN images keep the browser-native path.
-        imageRenderMethodForWeb: source.headers == null
-            ? ImageRenderMethodForWeb.HtmlImage
-            : ImageRenderMethodForWeb.HttpGet,
+  Widget _image(ImageSource source) {
+    if (usesHtmlImageElement(source)) {
+      return Image(
+        image: cachedImageProvider(source),
         fit: fit,
         width: width,
         height: height,
-        fadeInDuration: const Duration(milliseconds: 200),
-        // Keep the same fallback visible while the network image resolves. A
-        // blank rectangle briefly reads as a missing cover on slower devices.
-        placeholder: (_, __) => _fallback(),
-        errorWidget: (_, __, ___) => _fallback(),
+        loadingBuilder: (_, child, progress) =>
+            progress == null ? child : _fallback(),
+        errorBuilder: (_, __, ___) => _fallback(),
       );
+    }
+    return CachedNetworkImage(
+      imageUrl: source.url,
+      httpHeaders: source.headers,
+      cacheManager: appImageCache,
+      // The default HtmlImage decode path on web drops httpHeaders entirely,
+      // which silently unauthenticates covers behind the backend proxy. Any
+      // headered request goes through the cache manager's real HTTP fetch
+      // instead; header-free CDN images keep the browser-native path.
+      imageRenderMethodForWeb: source.headers == null
+          ? ImageRenderMethodForWeb.HtmlImage
+          : ImageRenderMethodForWeb.HttpGet,
+      fit: fit,
+      width: width,
+      height: height,
+      fadeInDuration: const Duration(milliseconds: 200),
+      // Keep the same fallback visible while the network image resolves. A
+      // blank rectangle briefly reads as a missing cover on slower devices.
+      placeholder: (_, __) => _fallback(),
+      errorWidget: (_, __, ___) => _fallback(),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {

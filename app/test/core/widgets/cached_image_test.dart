@@ -6,6 +6,42 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('Hardcover web artwork', () {
+    const source = (
+      url: 'https://assets.hardcover.app/edition/1/cover.jpg',
+      headers: null,
+    );
+
+    test('public Hardcover covers use browser image elements only on web', () {
+      expect(usesHtmlImageElement(source, isWeb: true), isTrue);
+      expect(usesHtmlImageElement(source, isWeb: false), isFalse);
+    });
+
+    test('authenticated images never lose their headers to an HTML element',
+        () {
+      expect(
+        usesHtmlImageElement(
+          (url: source.url, headers: const {'Authorization': 'Bearer token'}),
+          isWeb: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('other image hosts and insecure URLs keep their existing transport',
+        () {
+      for (final url in [
+        'http://assets.hardcover.app/edition/1/cover.jpg',
+        'https://assets.hardcover.app.example.com/cover.jpg',
+        'https://image.tmdb.org/t/p/w342/abc.jpg',
+        'https://cantina.example/api/instances/books/MediaCover/1.jpg',
+      ]) {
+        expect(usesHtmlImageElement((url: url, headers: null), isWeb: true),
+            isFalse);
+      }
+    });
+  });
+
   group('resolveImageSource', () {
     const walterUrl =
         'https://walter-r2.trakt.tv/images/movies/000/337/posters/thumb/faaa819377.jpg.webp';
@@ -151,11 +187,12 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
     });
 
-    testWidgets('header-free requests keep the browser-native path',
+    testWidgets('native Hardcover covers keep the shared cached image path',
         (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
-          home: CachedImage(url: 'https://image.tmdb.org/t/p/w342/abc.jpg'),
+          home: CachedImage(
+              url: 'https://assets.hardcover.app/edition/1/cover.jpg'),
         ),
       );
       final provider = tester.widget<Image>(find.byType(Image)).image
