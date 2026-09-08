@@ -178,6 +178,7 @@ func (h *Handler) SaveHardcoverToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to store hardcover token"}`, http.StatusInternalServerError)
 		return
 	}
+	h.notifyHardcoverChanged(inst.ID)
 	writeHardcoverStatus(w, true, true)
 }
 
@@ -195,6 +196,7 @@ func (h *Handler) ClearHardcoverToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to clear hardcover token"}`, http.StatusInternalServerError)
 		return
 	}
+	h.notifyHardcoverChanged(inst.ID)
 	writeHardcoverStatus(w, true, false)
 }
 

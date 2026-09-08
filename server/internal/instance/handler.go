@@ -138,6 +138,20 @@ type Handler struct {
 	// hardcoverAPIURL is where a pasted Hardcover token is verified
 	// (api.hardcover.app, or a test).
 	hardcoverAPIURL string
+	// hardcoverObserver is told which instance's Hardcover token changed, so
+	// anything cached under the old token (the trending list) is dropped.
+	hardcoverObserver func(instanceID string)
+}
+
+// SetHardcoverObserver installs the token-change notification.
+func (h *Handler) SetHardcoverObserver(observer func(instanceID string)) {
+	h.hardcoverObserver = observer
+}
+
+func (h *Handler) notifyHardcoverChanged(instanceID string) {
+	if h.hardcoverObserver != nil {
+		h.hardcoverObserver(instanceID)
+	}
 }
 
 // NewHandler creates a new instance handler.
