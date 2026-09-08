@@ -94,6 +94,9 @@ selection and tester settings. Add the latest signed, CI-green bundle from the l
 and confirm the release, then send the changes for review from Publishing overview. A draft or
 an upload alone does not make the open test available; verify the release is available to testers
 after Google's review (and publish approved changes if managed publishing is enabled).
+If the track is paused, choose **Resume track** and send its activation from Publishing overview
+for review too. Confirm the track is **Active** and the release is available before advertising
+the beta; a paused track does not deliver installs or updates.
 
 The public opt-in link is <https://play.google.com/apps/testing/codes.julian.cantinarr>. Open
 testers join there without an email-list or Google Group invitation. Future eligible `main`
