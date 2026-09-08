@@ -36,7 +36,11 @@ func (s *Service) reconcileBookApprovals(ctx context.Context) {
 		if err != nil || client == nil {
 			continue
 		}
-		live, err := s.freshLiveBookFormats(client, instanceID, r.foreignID)
+		projection, err := s.freshLiveBookProjection(client, instanceID)
+		if err != nil {
+			continue
+		}
+		live, canonicalID, err := projection.resolveFormatsWithLookup(client, r.foreignID, []string{r.title, r.searchTerm})
 		if err != nil {
 			continue
 		}
@@ -52,8 +56,8 @@ func (s *Service) reconcileBookApprovals(ctx context.Context) {
 			if status != StatusAvailable && status != StatusDownloading && status != StatusRequested {
 				continue
 			}
-			res, e := tx.Exec(`UPDATE request_dispatch SET state='complete',code=?,message='' WHERE request_id=? AND format=? AND state='approval'
-       AND EXISTS(SELECT 1 FROM request_log WHERE id=? AND status='pending' AND park_reason IS NULL)`, status, id, format, id)
+			res, e := tx.Exec(`UPDATE request_dispatch SET state='complete',code=?,canonical_foreign_id=?,book_record_id=?,message='' WHERE request_id=? AND format=? AND state='approval'
+       AND EXISTS(SELECT 1 FROM request_log WHERE id=? AND status='pending' AND park_reason IS NULL)`, status, canonicalID, projection.recordForFormat(canonicalID, format, status), id, format, id)
 			err = e
 			if err != nil {
 				break

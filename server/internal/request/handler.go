@@ -136,7 +136,7 @@ func (h *Handler) GetBookStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "foreign_id required"})
 		return
 	}
-	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"))
+	resp, err := h.service.GetUserBookStatusForInstance(claims.UserID, foreignID, r.URL.Query().Get("instance_id"), r.URL.Query().Get("title"), r.URL.Query().Get("q"))
 	if err != nil {
 		writeJSON(w, requestErrorStatus(err), map[string]string{"error": err.Error()})
 		return

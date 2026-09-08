@@ -603,14 +603,15 @@ type BookFormatWait struct {
 }
 
 type CreateResponse struct {
-	StatusKnown *bool             `json:"status_known,omitempty"`
-	RequestID   int64             `json:"request_id,omitempty"`
-	CatalogRef  *CatalogRef       `json:"catalog_ref,omitempty"`
-	Delivery    []DeliveryState   `json:"delivery,omitempty"`
-	Success     bool              `json:"success"`
-	Status      string            `json:"status"`
-	Title       string            `json:"title"`
-	BookFormats map[string]string `json:"book_formats,omitempty"`
+	StatusUnknownReason string            `json:"status_unknown_reason,omitempty"`
+	StatusKnown         *bool             `json:"status_known,omitempty"`
+	RequestID           int64             `json:"request_id,omitempty"`
+	CatalogRef          *CatalogRef       `json:"catalog_ref,omitempty"`
+	Delivery            []DeliveryState   `json:"delivery,omitempty"`
+	Success             bool              `json:"success"`
+	Status              string            `json:"status"`
+	Title               string            `json:"title"`
+	BookFormats         map[string]string `json:"book_formats,omitempty"`
 	// BookFormatWaits explains, per format, a book_formats entry that reads
 	// "requested" only because the server is finishing it unattended.
 	BookFormatWaits map[string]BookFormatWait `json:"book_format_waits,omitempty"`
@@ -629,12 +630,13 @@ type CreateResponse struct {
 }
 
 type StatusResponse struct {
-	RequestID   int64           `json:"request_id,omitempty"`
-	CatalogRef  *CatalogRef     `json:"catalog_ref,omitempty"`
-	Delivery    []DeliveryState `json:"delivery,omitempty"`
-	Status      string          `json:"status"`
-	Progress    float64         `json:"progress"`
-	StatusKnown *bool           `json:"status_known,omitempty"`
+	StatusUnknownReason string          `json:"status_unknown_reason,omitempty"`
+	RequestID           int64           `json:"request_id,omitempty"`
+	CatalogRef          *CatalogRef     `json:"catalog_ref,omitempty"`
+	Delivery            []DeliveryState `json:"delivery,omitempty"`
+	Status              string          `json:"status"`
+	Progress            float64         `json:"progress"`
+	StatusKnown         *bool           `json:"status_known,omitempty"`
 	// Seasons carries per-season availability for TV titles (omitted for
 	// movies and for series not yet in the library). Season 0 / Specials are
 	// excluded, matching the rest of the app's season handling.
@@ -651,8 +653,9 @@ type StatusResponse struct {
 	BookFormatWaits map[string]BookFormatWait `json:"book_format_waits,omitempty"`
 	// CanonicalForeignID is set when a logged book request resolved its live
 	// state through the stored Chaptarr record id and that record now reports a
-	// different foreignBookId than the one queried: the id the library files
-	// this book under today. Clients should re-address the book by it.
+	// different foreignBookId than the one queried, or explicit identifiers
+	// establish that binding. Clients use it for library actions; the original
+	// selected ID and metadata stay attached to navigation and submission.
 	CanonicalForeignID string `json:"canonical_foreign_id,omitempty"`
 	// Releases carries the movie's theatrical and digital release dates, so a
 	// title that reads "Requested" can say it is simply not out yet rather than
@@ -1476,22 +1479,36 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 	if unresolved {
 		return "", "", ErrBookFormatUnresolved
 	}
-	// Memoize an ID lookup so fallback terms never repeat the same fetch.
-	var idFetchResults []chaptarr.LookupResult
-	var idFetchErr error
-	idFetched := false
-	idFetch := func() ([]chaptarr.LookupResult, error) {
-		if !idFetched {
-			idFetched = true
-			idFetchResults, idFetchErr = client.LookupBook(r.foreignID)
-		}
-		return idFetchResults, idFetchErr
-	}
-
-	// A lookup returning another ID does not prove it is the selected book.
-	// Keep the request pinned; only a record ID returned by an accepted add
-	// can establish a later native re-key.
+	// Native identity wins. Otherwise an unambiguous provider work/edition ID
+	// or validated ISBN may bind the selected record to existing library truth.
+	// The lookup must still return the originally selected ID, never a similar
+	// title. Keep r.foreignID for receipts and bind only the library operation.
 	attachID := r.foreignID
+	var selectedForAdd *chaptarr.LookupResult
+	var selectedLookupErr error
+	if len(existing) == 0 {
+		index := chaptarr.IndexBookIdentities(books)
+		binding, bindErr := index.Resolve(r.foreignID, nil)
+		if bindErr != nil {
+			return "", "", bindErr
+		}
+		selectedForAdd, selectedLookupErr = lookupBookForAdd(client.LookupBook, r.foreignID, r.title, r.searchTerm)
+		if selectedForAdd != nil {
+			binding, bindErr = index.Resolve(r.foreignID, selectedForAdd.IdentityKeys())
+		} else if selectedLookupErr != nil {
+			return "", "", fmt.Errorf("book lookup failed: %w", selectedLookupErr)
+		}
+		if bindErr != nil {
+			return "", "", bindErr
+		}
+		if binding != "" {
+			attachID = binding
+			title, existing, unresolved = recordsForForeignID(books, binding)
+			if unresolved {
+				return "", "", ErrBookFormatUnresolved
+			}
+		}
+	}
 	if title == "" {
 		title = r.title
 	}
@@ -1612,12 +1629,7 @@ func (s *Service) addToChaptarr(r *resolvedRequest) (string, string, error) {
 		}
 		return s.finishBookMutation(r, title, lastErr)
 	}
-	match, lookupErr := lookupBookForAdd(func(term string) ([]chaptarr.LookupResult, error) {
-		if term == r.foreignID {
-			return idFetch()
-		}
-		return client.LookupBook(term)
-	}, r.foreignID, r.title, r.searchTerm)
+	match, lookupErr := selectedForAdd, selectedLookupErr
 	if match == nil {
 		if lookupErr != nil {
 			return "", "", fmt.Errorf("book lookup failed: %w", lookupErr)
@@ -2847,7 +2859,7 @@ func (s *Service) GetUserBookStatus(userID int64, foreignID string) (*StatusResp
 // GetUserBookStatusForInstance combines per-user approval history with live,
 // per-format Chaptarr truth for the selected authorized instance. Live file,
 // queue, and monitored state outrank pending/denied/history labels.
-func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requestedInstanceID string) (*StatusResponse, error) {
+func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requestedInstanceID string, lookupContext ...string) (*StatusResponse, error) {
 	if delivery, err := s.activeDeliveryStatus(userID, "book", foreignID, requestedInstanceID); err != nil || delivery != nil {
 		return delivery, err
 	}
@@ -2934,14 +2946,27 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 		projection, lerr := s.liveBookProjectionCached(client, instanceID)
 		var live map[string]string
 		if lerr == nil {
-			live, lerr = projection.formatsFor(foreignID)
+			contextForLookup := lookupContext
+			if len(recordIDs) > 0 {
+				// An accepted numeric record binding survives a catalog outage or
+				// re-key. Resolve it below rather than making metadata a new gate.
+				contextForLookup = nil
+			}
+			live, canonicalForeignID, lerr = projection.resolveFormatsWithLookup(client, foreignID, contextForLookup)
 		}
 		if lerr != nil {
-			if errors.Is(lerr, ErrBookFormatUnresolved) {
+			if errors.Is(lerr, ErrBookFormatUnresolved) || errors.Is(lerr, chaptarr.ErrBookIdentityAmbiguous) {
 				known := false
-				return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known}, nil
+				reason := "format_unresolved"
+				if errors.Is(lerr, chaptarr.ErrBookIdentityAmbiguous) {
+					reason = "identity_ambiguous"
+				}
+				return &StatusResponse{Status: StatusUnavailable, StatusKnown: &known, StatusUnknownReason: reason}, nil
 			}
 			return nil, lerr
+		}
+		if canonicalForeignID == foreignID {
+			canonicalForeignID = ""
 		}
 		for _, format := range []string{BookFormatEbook, BookFormatAudiobook} {
 			liveStatus, exists := live[format]
@@ -3002,6 +3027,7 @@ func (s *Service) GetUserBookStatusForInstance(userID int64, foreignID, requeste
 const bookLiveProjectionTTL = 15 * time.Second
 
 type bookLiveProjection struct {
+	Identities chaptarr.BookIdentityIndex   `json:"identities,omitempty"`
 	Formats    map[string]map[string]string `json:"formats"`
 	Unresolved map[string]bool              `json:"unresolved,omitempty"`
 	// Records indexes every live record by its numeric Chaptarr id with that
@@ -3016,6 +3042,7 @@ type bookLiveProjection struct {
 type bookLiveRecord struct {
 	Status    string `json:"status"`
 	ForeignID string `json:"foreignId,omitempty"`
+	Format    string `json:"format,omitempty"`
 }
 
 func (p *bookLiveProjection) recordByID(id int) (bookLiveRecord, bool) {
@@ -3056,7 +3083,7 @@ func (s *Service) liveBookProjectionCached(client *chaptarr.Client, instanceID s
 	return projection, nil
 }
 
-func (s *Service) freshLiveBookFormats(client *chaptarr.Client, instanceID, foreignID string) (map[string]string, error) {
+func (s *Service) freshLiveBookProjection(client *chaptarr.Client, instanceID string) (*bookLiveProjection, error) {
 	projectionLock := s.projectionLock(instanceID)
 	projectionLock.Lock()
 	defer projectionLock.Unlock()
@@ -3065,7 +3092,7 @@ func (s *Service) freshLiveBookFormats(client *chaptarr.Client, instanceID, fore
 		return nil, err
 	}
 	s.cacheBookProjection("book-live:"+instanceID, projection)
-	return projection.formatsFor(foreignID)
+	return projection, nil
 }
 
 func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, error) {
@@ -3082,6 +3109,7 @@ func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, erro
 		}
 	}
 	projection := &bookLiveProjection{
+		Identities: chaptarr.IndexBookIdentities(books),
 		Formats:    make(map[string]map[string]string),
 		Unresolved: make(map[string]bool),
 		Records:    make(map[int]bookLiveRecord, len(books)),
@@ -3099,7 +3127,7 @@ func buildBookLiveProjection(client *chaptarr.Client) (*bookLiveProjection, erro
 		case book.Monitored:
 			status = StatusRequested
 		}
-		projection.Records[book.ID] = bookLiveRecord{Status: status, ForeignID: book.ForeignBookID}
+		projection.Records[book.ID] = bookLiveRecord{Status: status, ForeignID: book.ForeignBookID, Format: recordFormat(book)}
 	}
 	foreignIDs := make(map[string]bool)
 	for _, book := range books {
@@ -3162,10 +3190,64 @@ func (s *Service) cacheBookProjection(cacheKey string, projection *bookLiveProje
 }
 
 func (p *bookLiveProjection) formatsFor(foreignID string) (map[string]string, error) {
-	if p.Unresolved[foreignID] {
-		return nil, ErrBookFormatUnresolved
+	formats, _, err := p.resolveFormats(foreignID, nil)
+	return formats, err
+}
+
+func (p *bookLiveProjection) resolveFormats(foreignID string, keys []string) (map[string]string, string, error) {
+	id := foreignID
+	// Preserve compatibility with projections cached before identity support.
+	if _, exact := p.Formats[id]; !exact && !p.Unresolved[id] {
+		var err error
+		id, err = p.Identities.Resolve(foreignID, keys)
+		if err != nil {
+			return nil, "", err
+		}
 	}
-	return p.Formats[foreignID], nil
+	if p.Unresolved[id] {
+		return nil, id, ErrBookFormatUnresolved
+	}
+	return p.Formats[id], id, nil
+}
+
+func lookupBookIdentity(client *chaptarr.Client, foreignID string, lookupContext []string) ([]string, error) {
+	title, term := "", ""
+	if len(lookupContext) > 0 {
+		title = lookupContext[0]
+	}
+	if len(lookupContext) > 1 {
+		term = lookupContext[1]
+	}
+	if title == "" && term == "" {
+		return nil, nil
+	}
+	selected, err := lookupBookForAdd(client.LookupBook, foreignID, title, term)
+	if selected == nil {
+		return nil, err
+	}
+	return selected.IdentityKeys(), nil
+}
+
+func (p *bookLiveProjection) resolveFormatsWithLookup(client *chaptarr.Client, foreignID string, lookupContext []string) (map[string]string, string, error) {
+	live, canonicalID, err := p.resolveFormats(foreignID, nil)
+	if err != nil || canonicalID == foreignID || len(p.Identities) == 0 {
+		return live, canonicalID, err
+	}
+	keys, err := lookupBookIdentity(client, foreignID, lookupContext)
+	if err != nil {
+		return nil, "", err
+	}
+	return p.resolveFormats(foreignID, keys)
+}
+
+func (p *bookLiveProjection) recordForFormat(foreignID, format, status string) int {
+	id := 0
+	for recordID, record := range p.Records {
+		if record.ForeignID == foreignID && record.Format == format && record.Status == status && (id == 0 || recordID < id) {
+			id = recordID
+		}
+	}
+	return id
 }
 
 func bookQueueItemDownloading(item chaptarr.QueueItem) bool {

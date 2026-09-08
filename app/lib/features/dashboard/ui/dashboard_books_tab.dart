@@ -52,6 +52,7 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
 
   void _refreshBookTruth() {
     final instanceId = ref.read(instanceProvider).activeChaptarrInstance?.id;
+    ref.invalidate(bookLibraryDigestProvider(instanceId));
     ref.invalidate(ownedBooksForInstanceProvider(instanceId));
     ref.invalidate(ownedBooksProvider);
     ref.invalidate(recentBooksForInstanceProvider(instanceId));
@@ -79,6 +80,8 @@ class _DashboardBooksTabState extends ConsumerState<DashboardBooksTab>
         if (previous == next) return;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
+          ref.invalidate(bookLibraryDigestProvider(
+              ref.read(instanceProvider).activeChaptarrInstance?.id));
           ref.invalidate(ownedBooksProvider);
         });
       },

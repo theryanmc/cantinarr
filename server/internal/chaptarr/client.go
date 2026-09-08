@@ -161,29 +161,37 @@ type BookStatistics struct {
 // Edition is one published edition of a book (a specific format/ISBN). Chaptarr
 // models ebooks and audiobooks as distinct editions of the same book.
 type Edition struct {
-	ID               int     `json:"id"`
-	BookID           int     `json:"bookId"`
-	ForeignEditionID string  `json:"foreignEditionId"`
-	TitleSlug        string  `json:"titleSlug"`
-	Title            string  `json:"title"`
-	Format           string  `json:"format"`
-	ASIN             string  `json:"asin"`
-	ISBN13           string  `json:"isbn13"`
-	Overview         string  `json:"overview"`
-	Publisher        string  `json:"publisher"`
-	PageCount        int     `json:"pageCount"`
-	Monitored        bool    `json:"monitored"`
-	ManualAdd        bool    `json:"manualAdd"`
-	IsEbook          *bool   `json:"isEbook,omitempty"`
-	Images           []Image `json:"images"`
+	ID                   int        `json:"id"`
+	BookID               int        `json:"bookId"`
+	ForeignEditionID     string     `json:"foreignEditionId"`
+	GoodreadsEditionID   ProviderID `json:"goodreadsEditionId,omitempty"`
+	OpenLibraryEditionID ProviderID `json:"openLibraryEditionId,omitempty"`
+	HardcoverEditionID   ProviderID `json:"hardcoverEditionId,omitempty"`
+	TitleSlug            string     `json:"titleSlug"`
+	Title                string     `json:"title"`
+	Format               string     `json:"format"`
+	ASIN                 string     `json:"asin"`
+	ISBN13               string     `json:"isbn13"`
+	ISBN10               string     `json:"isbn10,omitempty"`
+	Overview             string     `json:"overview"`
+	Publisher            string     `json:"publisher"`
+	PageCount            int        `json:"pageCount"`
+	Monitored            bool       `json:"monitored"`
+	ManualAdd            bool       `json:"manualAdd"`
+	IsEbook              *bool      `json:"isEbook,omitempty"`
+	Images               []Image    `json:"images"`
 }
 
 type Book struct {
-	OpenLibraryWorkID string     `json:"openLibraryWorkId,omitempty"`
+	OpenLibraryWorkID ProviderID `json:"openLibraryWorkId,omitempty"`
+	GoodreadsBookID   ProviderID `json:"goodreadsBookId,omitempty"`
+	GoodreadsWorkID   ProviderID `json:"goodreadsWorkId,omitempty"`
+	HardcoverBookID   ProviderID `json:"hardcoverBookId,omitempty"`
 	ID                int        `json:"id"`
 	Title             string     `json:"title"`
 	AuthorID          int        `json:"authorId"`
 	ForeignBookID     string     `json:"foreignBookId"`
+	ForeignEditionID  string     `json:"foreignEditionId,omitempty"`
 	TitleSlug         string     `json:"titleSlug"`
 	Overview          string     `json:"overview"`
 	ReleaseDate       *time.Time `json:"releaseDate,omitempty"`
@@ -345,7 +353,11 @@ type LookupResult struct {
 	AuthorName        string            `json:"authorName"`
 	ForeignAuthorID   string            `json:"foreignAuthorId"`
 	ForeignBookID     string            `json:"foreignBookId"`
-	OpenLibraryWorkID string            `json:"openLibraryWorkId,omitempty"`
+	ForeignEditionID  string            `json:"foreignEditionId,omitempty"`
+	OpenLibraryWorkID ProviderID        `json:"openLibraryWorkId,omitempty"`
+	GoodreadsBookID   ProviderID        `json:"goodreadsBookId,omitempty"`
+	GoodreadsWorkID   ProviderID        `json:"goodreadsWorkId,omitempty"`
+	HardcoverBookID   ProviderID        `json:"hardcoverBookId,omitempty"`
 	Overview          string            `json:"overview"`
 	Year              int               `json:"year"`
 	Images            []Image           `json:"images"`
@@ -767,6 +779,9 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 	var books []Book
 	if err := c.doWith(libraryFetchClient(), "GET", "/api/v1/book", nil, &books); err != nil {
 		return nil, fmt.Errorf("chaptarr books: %w", err)
+	}
+	if books == nil {
+		return nil, fmt.Errorf("chaptarr returned an incomplete book list")
 	}
 	return books, nil
 }

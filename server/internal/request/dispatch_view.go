@@ -355,5 +355,5 @@ func (s *Service) activeDeliveryStatus(userID int64, mediaType, foreignID, insta
 	if !active {
 		return nil, nil
 	}
-	return &StatusResponse{RequestID: saved.RequestID, CatalogRef: saved.CatalogRef, Delivery: saved.Delivery, Status: saved.Status, StatusKnown: saved.StatusKnown, BookFormats: saved.BookFormats, BookFormatWaits: saved.BookFormatWaits, CanonicalForeignID: saved.CanonicalForeignID}, nil
+	return &StatusResponse{RequestID: saved.RequestID, CatalogRef: saved.CatalogRef, Delivery: saved.Delivery, Status: saved.Status, StatusKnown: saved.StatusKnown, StatusUnknownReason: saved.StatusUnknownReason, BookFormats: saved.BookFormats, BookFormatWaits: saved.BookFormatWaits, CanonicalForeignID: saved.CanonicalForeignID}, nil
 }

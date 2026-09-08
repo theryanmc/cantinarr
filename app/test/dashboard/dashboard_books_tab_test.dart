@@ -177,8 +177,7 @@ void main() {
     expect(adapter.requestBodies.single['book_format'], 'ebook');
   });
 
-  testWidgets(
-      'an exact library record with unknown formats blocks requests',
+  testWidgets('an exact library record with unknown formats blocks requests',
       (tester) async {
     _usePhoneSize(tester);
     final (:router, container: _, :adapter) =
@@ -2325,6 +2324,14 @@ class _BooksSearchAdapter implements HttpClientAdapter {
                           ],
                         }
                       : {'titles': <Object>[]};
+      (body as Map<String, dynamic>)['authors'] = [
+        {
+          'foreign_author_id': 'gr:tracked-library-id',
+          'name': 'Tracked Author',
+          'title_count': 4,
+          'available_count': 2,
+        },
+      ];
     } else if (options.path == '/api/requests/book-status') {
       statusRequests++;
       final foreignId = options.queryParameters['foreign_id'].toString();
@@ -2373,7 +2380,8 @@ class _BooksSearchAdapter implements HttpClientAdapter {
             'id': 7,
             'authorName': 'Tracked Author',
             'foreignAuthorId': 'gr:tracked-library-id',
-            'statistics': {'bookCount': 4, 'bookFileCount': 2},
+            // Raw file/format statistics disagree with the reduced digest.
+            'statistics': {'bookCount': 2, 'bookFileCount': 2},
           },
         if (duplicateAuthorRecords) ...[
           {

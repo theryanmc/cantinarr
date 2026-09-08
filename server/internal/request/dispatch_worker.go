@@ -301,7 +301,7 @@ func (s *Service) dispatchFormat(ctx context.Context, id int64, format string) {
 	if title != "" {
 		r.title = title
 	}
-	if _, err = s.db.Exec(`UPDATE request_log SET foreign_id=CASE WHEN catalog_provider IS NOT NULL THEN ? ELSE foreign_id END,title=?,book_record_id=COALESCE(NULLIF(?,0),book_record_id) WHERE id=? AND status='pending'`, r.foreignID, r.title, r.bookRecordIDs[format], id); err != nil {
+	if _, err = s.db.Exec(`UPDATE request_log SET foreign_id=CASE WHEN catalog_provider IS NOT NULL THEN ? ELSE foreign_id END,title=CASE WHEN media_type='book' AND catalog_provider IS NULL AND title!='' THEN title ELSE ? END,book_record_id=COALESCE(NULLIF(?,0),book_record_id) WHERE id=? AND status='pending'`, r.foreignID, r.title, r.bookRecordIDs[format], id); err != nil {
 		return
 	}
 	if _, err = s.db.Exec(`UPDATE request_dispatch SET canonical_foreign_id=?,book_record_id=? WHERE request_id=? AND format=? AND lease_token=?`, r.foreignID, r.bookRecordIDs[format], id, format, token); err != nil {
