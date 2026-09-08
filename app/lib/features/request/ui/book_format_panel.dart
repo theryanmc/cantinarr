@@ -741,26 +741,21 @@ class _FormatRow extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(minHeight: 48),
-                            child: Row(
+                          if (pill != null || download != null)
+                            Row(
                               children: [
                                 // Bounded so a long state wraps instead of
                                 // running off a narrow or scaled-up row.
-                                if (pill != null)
-                                  Flexible(child: pill)
-                                else if (action != null)
-                                  Flexible(child: action!),
-                                // Reserve width too: otherwise a late button
-                                // can wrap the status onto a new line.
-                                const SizedBox(width: 4),
-                                SizedBox(
-                                    width: 48, height: 48, child: download),
+                                if (pill != null) Flexible(child: pill),
+                                if (download != null) ...[
+                                  const SizedBox(width: 4),
+                                  download!,
+                                ],
                               ],
                             ),
-                          ),
-                          if (pill != null && action != null) ...[
-                            const SizedBox(height: 8),
+                          if (action != null) ...[
+                            if (pill != null || download != null)
+                              const SizedBox(height: 8),
                             action!,
                           ],
                         ],
@@ -768,20 +763,19 @@ class _FormatRow extends StatelessWidget {
                     ),
                   ],
                 )
-              : ConstrainedBox(
-                  // Reserve the download button's touch target before its
-                  // file lookup finishes, keeping both format rows steady.
-                  constraints: const BoxConstraints(minHeight: 48),
-                  child: Row(children: [
+              : Row(
+                  children: [
                     Expanded(child: heading),
                     if (pill != null) pill,
                     if (action != null) ...[
                       if (pill != null) const SizedBox(width: 8),
                       action!,
                     ],
-                    const SizedBox(width: 4),
-                    SizedBox(width: 48, height: 48, child: download),
-                  ]),
+                    if (download != null) ...[
+                      const SizedBox(width: 4),
+                      download!,
+                    ],
+                  ],
                 ),
         ),
       ),

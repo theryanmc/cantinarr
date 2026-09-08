@@ -116,7 +116,7 @@ void main() {
         expect(tester.takeException(), isNull);
       });
       testWidgets(
-          'late download actions keep formats and synopsis in place at $width, scale $scale',
+          'late download actions retain request state at $width, scale $scale',
           (tester) async {
         final files = Completer<void>();
         final adapter = _BooksAdapter(
@@ -130,15 +130,18 @@ void main() {
         router.go('/detail/book/29749107?instance_id=books&title=Ahsoka');
         await tester.pumpAndSettle();
         final ebook = find.byKey(const ValueKey('book-format-row:ebook'));
-        final before = tester.getRect(ebook);
-        final availabilityBefore = tester.getRect(find.text('Available'));
-        final synopsisBefore = tester.getTopLeft(find.text('About this book'));
+        final panel = find.byType(BookFormatPanel);
+        final panelState = tester.state(panel);
+        final checks = adapter.statusForeignIds.length;
+        expect(find.text('Available'), findsOneWidget);
         files.complete();
         await tester.pumpAndSettle();
-        expect(find.byTooltip('Download eBook'), findsOneWidget);
-        expect(tester.getRect(ebook), before);
-        expect(tester.getRect(find.text('Available')), availabilityBefore);
-        expect(tester.getTopLeft(find.text('About this book')), synopsisBefore);
+        expect(find.descendant(of: ebook,
+            matching: find.byTooltip('Download eBook')), findsOneWidget);
+        expect(find.text('Available'), findsOneWidget);
+        expect(tester.state(panel), same(panelState));
+        expect(adapter.statusForeignIds, hasLength(checks));
+        expect(find.text('About this book'), findsOneWidget);
         expect(tester.takeException(), isNull);
       });
     }

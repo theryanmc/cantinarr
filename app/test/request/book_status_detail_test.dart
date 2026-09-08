@@ -525,7 +525,7 @@ void main() {
 
   for (final status in ['available', 'unavailable']) {
     testWidgets(
-        'a delayed $status check never shows a failure or shifts the synopsis',
+        'a delayed $status check never shows a failure or resets the panel',
         (tester) async {
       final adapter = _DeferredStatusAdapter(delivery: []);
       final dio = Dio(BaseOptions(baseUrl: 'http://localhost'))
@@ -545,6 +545,7 @@ void main() {
         ),
       ));
       expect(find.text('Couldn’t check · Retry'), findsNothing);
+      final panelState = tester.state(find.byType(BookFormatPanel));
       final synopsisPosition = tester.getTopLeft(find.text('About this book'));
 
       await _waitForRequest(tester, adapter, 'fb');
@@ -564,7 +565,7 @@ void main() {
       expect(find.text('Couldn’t check · Retry'), findsNothing);
       expect(find.text(status == 'available' ? 'Available' : 'Request'),
           findsNWidgets(2));
-      expect(tester.getTopLeft(find.text('About this book')), synopsisPosition);
+      expect(tester.state(find.byType(BookFormatPanel)), same(panelState));
     });
   }
 
