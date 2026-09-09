@@ -269,3 +269,120 @@ func TestTrendingHardcoverFailuresAreBlindnessNotAbsence(t *testing.T) {
 		t.Fatalf("recovery = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+type trendingSourceFunc func(context.Context, string, int) ([]hardcover.Book, error)
+
+func (f trendingSourceFunc) Trending(ctx context.Context, token string, limit int) ([]hardcover.Book, error) {
+	return f(ctx, token, limit)
+}
+
+func TestTrendingResolvesCredentialsOnlyOnMiss(t *testing.T) {
+	e := newEnv(t)
+	if err := e.store.SetHardcoverToken(e.granted, "stored"); err != nil {
+		t.Fatal(err)
+	}
+	resolutions := 0
+	e.h.SetCredentialResolver(func(context.Context, string, string) (string, error) { resolutions++; return "resolved", nil })
+	for i := 0; i < 3; i++ {
+		if rec := e.get(t, 1, "user", e.granted); rec.Code != 200 {
+			t.Fatal(rec.Body.String())
+		}
+	}
+	if resolutions != 1 || e.source.calls.Load() != 1 {
+		t.Fatalf("cache hit renewed credential: %d %d", resolutions, e.source.calls.Load())
+	}
+	e.h.Invalidate(e.granted)
+	_ = e.get(t, 1, "user", e.granted)
+	if resolutions != 2 {
+		t.Fatal("cache invalidation did not resolve again")
+	}
+}
+
+func TestTrendingOldInflightCannotRepopulateAfterConnectionChange(t *testing.T) {
+	for _, disconnect := range []bool{false, true} {
+		t.Run(map[bool]string{false: "replace", true: "disconnect"}[disconnect], func(t *testing.T) {
+			e := newEnv(t)
+			_ = e.store.SetHardcoverToken(e.granted, "old")
+			started, release := make(chan struct{}), make(chan struct{})
+			e.h.source = trendingSourceFunc(func(_ context.Context, token string, _ int) ([]hardcover.Book, error) {
+				if token == "old" {
+					close(started)
+					<-release
+				}
+				return []hardcover.Book{{Title: token}}, nil
+			})
+			result := make(chan *httptest.ResponseRecorder, 1)
+			go func() { result <- e.get(t, 1, "user", e.granted) }()
+			<-started
+			if disconnect {
+				_ = e.store.ClearHardcoverToken(e.granted)
+			} else {
+				_ = e.store.SetHardcoverToken(e.granted, "new")
+			}
+			e.h.Invalidate(e.granted)
+			close(release)
+			rec := <-result
+			if rec.Code != 200 || strings.Contains(rec.Body.String(), `"title":"old"`) {
+				t.Fatalf("stale result: %s", rec.Body.String())
+			}
+			if disconnect && !strings.Contains(rec.Body.String(), `"connected":false`) {
+				t.Fatal("disconnect kept feed connected")
+			}
+			rec = e.get(t, 1, "user", e.granted)
+			if strings.Contains(rec.Body.String(), `"title":"old"`) {
+				t.Fatal("old inflight repopulated cache")
+			}
+		})
+	}
+}
+
+func TestTrendingWaiterCanCancelWithoutInterruptingFetch(t *testing.T) {
+	e := newEnv(t)
+	_ = e.store.SetHardcoverToken(e.granted, "token")
+	started, release := make(chan struct{}), make(chan struct{})
+	e.h.source = trendingSourceFunc(func(context.Context, string, int) ([]hardcover.Book, error) {
+		close(started)
+		<-release
+		return []hardcover.Book{{Title: "ready"}}, nil
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); _, _, _, _ = e.h.trending(context.Background(), e.granted) }()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, _, err := e.h.trending(ctx, e.granted); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	close(release)
+	<-done
+	if rec := e.get(t, 1, "user", e.granted); rec.Code != 200 {
+		t.Fatal("cancelled waiter damaged fetch")
+	}
+}
+
+func TestTrendingRetriesRejectedOAuthAccessTokenOnce(t *testing.T) {
+	e := newEnv(t)
+	_ = e.store.SetHardcoverToken(e.granted, "metadata-only")
+	resolutions := 0
+	e.h.SetCredentialResolver(func(_ context.Context, _ string, rejected string) (string, error) {
+		resolutions++
+		if rejected == "old" {
+			return "new", nil
+		}
+		return "old", nil
+	})
+	calls := 0
+	e.h.source = trendingSourceFunc(func(_ context.Context, token string, _ int) ([]hardcover.Book, error) {
+		calls++
+		if token == "old" {
+			return nil, hardcover.ErrUnauthorized
+		}
+		return []hardcover.Book{{Title: "renewed"}}, nil
+	})
+	if rec := e.get(t, 1, "user", e.granted); rec.Code != 200 || !strings.Contains(rec.Body.String(), "renewed") {
+		t.Fatal(rec.Body.String())
+	}
+	if resolutions != 2 || calls != 2 {
+		t.Fatalf("refresh retry: %d %d", resolutions, calls)
+	}
+}

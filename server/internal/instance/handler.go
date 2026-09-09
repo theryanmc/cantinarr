@@ -1,6 +1,7 @@
 package instance
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,6 +139,7 @@ type Handler struct {
 	// hardcoverAPIURL is where a pasted Hardcover token is verified
 	// (api.hardcover.app, or a test).
 	hardcoverAPIURL string
+	hardcover       *HardcoverManager
 	// hardcoverObserver is told which instance's Hardcover token changed, so
 	// anything cached under the old token (the trending list) is dropped.
 	hardcoverObserver func(instanceID string)
@@ -146,6 +148,7 @@ type Handler struct {
 // SetHardcoverObserver installs the token-change notification.
 func (h *Handler) SetHardcoverObserver(observer func(instanceID string)) {
 	h.hardcoverObserver = observer
+	h.hardcover.changed = observer
 }
 
 func (h *Handler) notifyHardcoverChanged(instanceID string) {
@@ -157,6 +160,7 @@ func (h *Handler) notifyHardcoverChanged(instanceID string) {
 // NewHandler creates a new instance handler.
 func NewHandler(store *Store, registry *Registry, arrCallbackURL ...string) *Handler {
 	h := &Handler{store: store, registry: registry, webhookLocks: make(map[string]*sync.Mutex), plexLinks: newPlexLinks(), plexBaseURL: plex.BaseURL, hardcoverAPIURL: hardcoverAPIURL}
+	h.hardcover = newHardcoverManager(store)
 	if len(arrCallbackURL) > 0 {
 		h.arrCallbackURL = strings.TrimRight(arrCallbackURL[0], "/")
 	}
@@ -500,6 +504,8 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.registry.InvalidateClient(instanceID)
+	h.hardcover.ForgetUnlinked()
+	h.notifyHardcoverChanged(instanceID)
 	h.notifyConfigChanged()
 
 	w.WriteHeader(http.StatusNoContent)
@@ -956,4 +962,9 @@ func validateArrURL(baseURL, apiKey, apiVersion string) error {
 		return fmt.Errorf("server returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// ResolveHardcoverToken is wired only into upstream catalog cache misses.
+func (h *Handler) ResolveHardcoverToken(ctx context.Context, id, rejected string) (string, error) {
+	return h.hardcover.Token(ctx, id, rejected)
 }

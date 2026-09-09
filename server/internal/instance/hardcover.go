@@ -1,41 +1,25 @@
 package instance
 
 import (
-	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/windoze95/cantinarr-server/internal/httpx"
+	"github.com/windoze95/cantinarr-server/internal/auth"
+	"github.com/windoze95/cantinarr-server/internal/hardcover"
 )
 
-// Hardcover is the book community whose GraphQL API Chaptarr's metadata
-// already points at (hc: identities). An admin connects a Chaptarr instance
-// to Hardcover by pasting an account's API token here. The token is a
-// per-instance secret with the same contract as the arr API key: held
-// encrypted at rest, write-only through the API, never logged, and gone with
-// the instance. Chaptarr holds its own copy of the same token and correctly
-// refuses to hand it back, so this is the only copy Cantinarr can call with.
-
-// hardcoverAPIURL is Hardcover's GraphQL endpoint. Handlers dial through
-// h.hardcoverAPIURL so tests can stand in for it.
-const hardcoverAPIURL = "https://api.hardcover.app/v1/graphql"
+// Hardcover connects Cantinarr's trending feed; Chaptarr manages its own
+// metadata credential. API tokens remain write-only for older clients.
+const hardcoverAPIURL = hardcover.APIURL
 
 // hardcoverTokenMaxLen bounds a pasted token. Hardcover issues JWTs of a few
 // hundred bytes; anything past this is not a token.
 const hardcoverTokenMaxLen = 4096
-
-// errHardcoverRejected means Hardcover answered and said the token is not
-// valid, as opposed to Hardcover being unreachable.
-var errHardcoverRejected = errors.New("Hardcover rejected the API token")
 
 // SupportsHardcover reports whether a service type carries a Hardcover token.
 func SupportsHardcover(serviceType string) bool { return serviceType == "chaptarr" }
@@ -80,41 +64,26 @@ func (s *Store) HardcoverToken(id string) (string, error) {
 	return token, nil
 }
 
-// SetHardcoverToken stores a verified token, encrypted at rest. Only that
-// column moves, so a concurrent admin save of the rest of the instance is
-// never overwritten.
+// SetHardcoverToken selects a verified API token, encrypted at rest, and
+// releases this instance's OAuth link. Unrelated instance settings stay intact.
 func (s *Store) SetHardcoverToken(id, token string) error {
 	if token == "" {
 		return errors.New("hardcover token is required")
 	}
-	encrypted, err := s.cipher.Encrypt(token)
+	revision, err := s.beginHardcoverChange(id)
 	if err != nil {
-		return fmt.Errorf("encrypt hardcover token: %w", err)
+		return err
 	}
-	res, err := s.db.Exec(
-		"UPDATE service_instances SET hardcover_token = ? WHERE id = ?", encrypted, id,
-	)
-	if err != nil {
-		return fmt.Errorf("store hardcover token: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("instance not found: %s", id)
-	}
-	return nil
+	return s.setHardcoverTokenAtRevision(id, token, revision)
 }
 
-// ClearHardcoverToken disconnects Hardcover from an instance.
+// ClearHardcoverToken disconnects either connection method for this instance.
 func (s *Store) ClearHardcoverToken(id string) error {
-	res, err := s.db.Exec(
-		"UPDATE service_instances SET hardcover_token = '' WHERE id = ?", id,
-	)
+	revision, err := s.beginHardcoverChange(id)
 	if err != nil {
-		return fmt.Errorf("clear hardcover token: %w", err)
+		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("instance not found: %s", id)
-	}
-	return nil
+	return s.setHardcoverTokenAtRevision(id, "", revision)
 }
 
 // HardcoverStatus answers GET /instances/{id}/hardcover: whether this
@@ -129,12 +98,12 @@ func (h *Handler) HardcoverStatus(w http.ResponseWriter, r *http.Request) {
 		writeHardcoverStatus(w, false, false)
 		return
 	}
-	configured, err := h.store.HasHardcoverToken(inst.ID)
+	state, err := h.store.HardcoverState(inst.ID)
 	if err != nil {
-		http.Error(w, `{"error":"failed to read hardcover status"}`, http.StatusInternalServerError)
+		writeHardcoverError(w, errHardcoverStorage)
 		return
 	}
-	writeHardcoverStatus(w, true, configured)
+	writeHardcoverJSON(w, state)
 }
 
 // SaveHardcoverToken answers PUT /instances/{id}/hardcover with {token}. The
@@ -163,23 +132,25 @@ func (h *Handler) SaveHardcoverToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
 		return
 	}
-	if err := verifyHardcoverToken(r.Context(), h.hardcoverAPIURL, token); err != nil {
-		if errors.Is(err, errHardcoverRejected) {
-			http.Error(w, `{"error":"Hardcover rejected the API token. Copy it again from Hardcover's settings and try once more."}`, http.StatusBadRequest)
-			return
+	revision, err := h.store.beginHardcoverChange(inst.ID)
+	if err != nil {
+		writeHardcoverError(w, err)
+		return
+	}
+	if err := hardcover.NewClientForURL(h.hardcoverAPIURL).VerifyCatalog(r.Context(), token); err != nil {
+		if !errors.Is(err, hardcover.ErrUnauthorized) && !errors.Is(err, hardcover.ErrInsufficientScope) {
+			err = hardcover.ErrProvider
 		}
-		// The token is never part of err; log the reachability failure and
-		// tell the admin which side did not answer.
-		log.Printf("instance: hardcover token verification for %s failed: %v", inst.ID, err)
-		http.Error(w, `{"error":"could not reach Hardcover to verify the token"}`, http.StatusBadGateway)
+		writeHardcoverError(w, err)
 		return
 	}
-	if err := h.store.SetHardcoverToken(inst.ID, token); err != nil {
-		http.Error(w, `{"error":"failed to store hardcover token"}`, http.StatusInternalServerError)
+	if err := h.store.setHardcoverTokenAtRevision(inst.ID, token, revision); err != nil {
+		writeHardcoverError(w, err)
 		return
 	}
+	h.hardcover.ForgetUnlinked()
 	h.notifyHardcoverChanged(inst.ID)
-	writeHardcoverStatus(w, true, true)
+	h.HardcoverStatus(w, r)
 }
 
 // ClearHardcoverToken answers DELETE /instances/{id}/hardcover.
@@ -196,11 +167,22 @@ func (h *Handler) ClearHardcoverToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to clear hardcover token"}`, http.StatusInternalServerError)
 		return
 	}
+	h.hardcover.ForgetUnlinked()
 	h.notifyHardcoverChanged(inst.ID)
-	writeHardcoverStatus(w, true, false)
+	h.HardcoverStatus(w, r)
 }
 
 func (h *Handler) hardcoverInstance(w http.ResponseWriter, r *http.Request) (*Instance, bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return nil, false
+	}
+	if claims.Role != auth.RoleAdmin {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return nil, false
+	}
 	inst, err := h.store.Get(chi.URLParam(r, "instanceID"))
 	if err != nil {
 		http.Error(w, `{"error":"failed to get instance"}`, http.StatusInternalServerError)
@@ -236,71 +218,4 @@ func normalizeHardcoverToken(raw string) (string, error) {
 		return "", errors.New("that does not look like a Hardcover API token")
 	}
 	return token, nil
-}
-
-// verifyHardcoverToken asks Hardcover whether the token authenticates. It
-// returns errHardcoverRejected when Hardcover answered and refused the token
-// (an authentication status, or a GraphQL error in a 200 body -- Hardcover
-// reports an expired token that way) and a plain error when Hardcover could
-// not be reached or answered something unexpected.
-func verifyHardcoverToken(ctx context.Context, apiURL, token string) error {
-	payload, err := json.Marshal(map[string]string{"query": "query CantinarrVerify { me { id } }"})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	client := &http.Client{Transport: httpx.External(), Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("hardcover: %w", err)
-	}
-	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return errHardcoverRejected
-	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("hardcover: unexpected status %d", resp.StatusCode)
-	}
-	var reply struct {
-		Data struct {
-			Me json.RawMessage `json:"me"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&reply); err != nil {
-		return fmt.Errorf("hardcover: invalid response: %w", err)
-	}
-	if len(reply.Errors) > 0 {
-		// Hardcover answered the request and would not run it for this
-		// token; the message text is Hardcover's and is not echoed.
-		return errHardcoverRejected
-	}
-	if !hardcoverNamedAccount(reply.Data.Me) {
-		return errors.New("hardcover: response named no account")
-	}
-	return nil
-}
-
-// hardcoverNamedAccount reads `me` in either shape Hardcover has used -- a
-// list with the caller's account as its one element, or the account object
-// itself -- and reports whether an account was actually there.
-func hardcoverNamedAccount(me json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(me)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return false
-	}
-	if trimmed[0] == '[' {
-		var list []map[string]any
-		return json.Unmarshal(trimmed, &list) == nil && len(list) > 0
-	}
-	var one map[string]any
-	return json.Unmarshal(trimmed, &one) == nil && len(one) > 0
 }

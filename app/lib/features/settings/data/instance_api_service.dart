@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'hardcover_connection.dart';
 import '../../../core/models/backend_connection.dart';
 
 /// Maps the path reported by one arr instance to the corresponding read-only
@@ -32,10 +33,20 @@ class MediaPathMapping {
 class InstanceHardcoverStatus {
   final bool supported;
   final bool configured;
+  final bool oauthAvailable;
+  final String method;
+  final bool reconnectRequired;
+  final String connectionId;
+  final int revision;
 
   const InstanceHardcoverStatus({
     required this.supported,
     required this.configured,
+    this.oauthAvailable = false,
+    this.method = 'none',
+    this.reconnectRequired = false,
+    this.connectionId = '',
+    this.revision = 0,
   });
 
   factory InstanceHardcoverStatus.fromJson(dynamic json) {
@@ -44,6 +55,12 @@ class InstanceHardcoverStatus {
     return InstanceHardcoverStatus(
       supported: map['supported'] == true,
       configured: map['configured'] == true,
+      oauthAvailable: map['oauth_available'] == true,
+      method: map['method'] as String? ??
+          (map['configured'] == true ? 'api_token' : 'none'),
+      reconnectRequired: map['reconnect_required'] == true,
+      connectionId: map['connection_id'] as String? ?? '',
+      revision: (map['revision'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -366,6 +383,45 @@ class InstanceApiService {
   Future<InstanceHardcoverStatus> clearHardcoverToken(String id) async {
     final resp = await _dio.delete('/api/instances/$id/hardcover');
     return InstanceHardcoverStatus.fromJson(resp.data);
+  }
+
+  Future<HardcoverDeviceFlow> beginHardcoverDevice(String id) async {
+    final response =
+        await _dio.post('/api/instances/$id/hardcover/device/begin');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<HardcoverDeviceFlow> checkHardcoverDevice(
+      String id, String flowId) async {
+    final response =
+        await _dio.get('/api/instances/$id/hardcover/device/$flowId');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<HardcoverDeviceFlow> cancelHardcoverDevice(
+      String id, String flowId) async {
+    final response =
+        await _dio.delete('/api/instances/$id/hardcover/device/$flowId');
+    return HardcoverDeviceFlow.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<List<HardcoverApplyResult>> applyHardcoverConnection(
+    String id,
+    String connectionId,
+    Map<String, int> revisions,
+  ) async {
+    final response =
+        await _dio.post('/api/instances/$id/hardcover/apply', data: {
+      'connection_id': connectionId,
+      'instances': [
+        for (final entry in revisions.entries)
+          {'instance_id': entry.key, 'revision': entry.value}
+      ],
+    });
+    return ((response.data as Map<String, dynamic>)['results'] as List<dynamic>)
+        .map((item) =>
+            HardcoverApplyResult.fromJson(item as Map<String, dynamic>))
+        .toList();
   }
 
   /// Per-user default pins for this instance's service type, keyed by user id.

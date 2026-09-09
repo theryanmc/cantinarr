@@ -141,8 +141,8 @@ func TestTrendingReportsAuthAndProviderErrors(t *testing.T) {
 	}))
 	defer trendingError.Close()
 	_, err := NewClientForURL(trendingError.URL).Trending(context.Background(), "tok", 50)
-	if err == nil || !strings.Contains(err.Error(), "trending unavailable") {
-		t.Fatalf("trending error → %v, want the provider's error surfaced, not an empty list", err)
+	if err == nil || !strings.Contains(err.Error(), "could not compute") {
+		t.Fatalf("trending error → %v, want a safe provider failure, not an empty list", err)
 	}
 
 	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

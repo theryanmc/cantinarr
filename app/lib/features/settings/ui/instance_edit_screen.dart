@@ -16,6 +16,8 @@ import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
+import '../data/hardcover_connection.dart';
+import 'hardcover_connection_dialog.dart';
 import '../logic/arr_path_match.dart';
 import '../logic/plex_invites_provider.dart';
 
@@ -139,6 +141,10 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   late final TextEditingController _hardcoverController;
   bool _hardcoverSupported = false;
   bool _hardcoverConnected = false;
+  bool _hardcoverOAuthAvailable = false;
+  bool _hardcoverUseToken = false;
+  bool _hardcoverReconnect = false;
+  String _hardcoverMethod = 'none';
   bool _isSavingHardcover = false;
   String? _hardcoverResult;
   Color _hardcoverResultColor = AppTheme.textSecondary;
@@ -1522,10 +1528,60 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _hardcoverSupported = true;
         _hardcoverConnected = status.configured;
+        _hardcoverOAuthAvailable = status.oauthAvailable;
+        _hardcoverReconnect = status.reconnectRequired;
+        _hardcoverMethod = status.method;
       });
     } catch (_) {
       // Unknown is not worth a section: an older server, or a read that
       // failed, must not render as "not connected".
+    }
+  }
+
+  Future<void> _connectHardcover() async {
+    final id = widget.instanceId;
+    if (id == null) return;
+    final service =
+        InstanceApiService(backendDio: ref.read(backendClientProvider));
+    setState(() {
+      _isSavingHardcover = true;
+      _hardcoverResult = null;
+    });
+    try {
+      final flow = await showDialog<HardcoverDeviceFlow>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) =>
+            HardcoverConnectionDialog(service: service, instanceId: id),
+      );
+      if (!mounted) return;
+      // Cancellation can race a successful server commit. Always read status
+      // again, including when the dialog returned without a connection.
+      final status = await service.hardcoverStatus(id);
+      if (!mounted) return;
+      ref.invalidate(trendingBooksForInstanceProvider(id));
+      setState(() {
+        _hardcoverConnected = status.configured;
+        _hardcoverMethod = status.method;
+        _hardcoverReconnect = status.reconnectRequired;
+        _hardcoverResult =
+            flow?.status == 'connected' ? 'Hardcover is connected.' : null;
+        _hardcoverResultColor = AppTheme.available;
+      });
+      if (flow?.status == 'connected' &&
+          status.connectionId == flow!.connectionId) {
+        await _offerHardcoverForOtherInstances(service, '',
+            connectionId: flow.connectionId);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _hardcoverResult = apiErrorMessage(e);
+          _hardcoverResultColor = AppTheme.error;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isSavingHardcover = false);
     }
   }
 
@@ -1554,6 +1610,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _hardcoverController.clear();
       setState(() {
         _hardcoverConnected = status.configured;
+        _hardcoverMethod = status.method;
+        _hardcoverReconnect = status.reconnectRequired;
         _hardcoverResult = 'Hardcover is connected.';
         _hardcoverResultColor = AppTheme.available;
       });
@@ -1573,11 +1631,13 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
 
   Future<void> _offerHardcoverForOtherInstances(
     InstanceApiService service,
-    String token,
-  ) async {
+    String token, {
+    String? connectionId,
+  }) async {
     // Re-read the directory after saving: an instance may have been added or
     // removed while the editor was open. Only the instances named in the
-    // confirmation receive this token, using the existing write-only API.
+    // confirmation receive the connection. OAuth uses explicit revisions;
+    // API tokens use the existing write-only endpoint.
     final List<ServiceInstance> instances;
     try {
       instances = await service.listInstances();
@@ -1600,6 +1660,19 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         )
         .toList(growable: false);
     if (others.isEmpty) return;
+    final revisions = <String, int>{};
+    final failures = <String>[];
+    if (connectionId != null) {
+      for (final instance in others) {
+        try {
+          revisions[instance.id] =
+              (await service.hardcoverStatus(instance.id)).revision;
+        } catch (e) {
+          failures.add('${instance.name}: ${apiErrorMessage(e)}');
+        }
+      }
+    }
+    if (!mounted) return;
     setState(() => _isSavingHardcover = false);
     final applyToAll = await showDialog<bool>(
       context: context,
@@ -1607,9 +1680,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         scrollable: true,
         title: const Text('Use Hardcover for all Chaptarr instances?'),
         content: Text(
-          'Also use this token for:\n\n'
+          'Also use this ${connectionId == null ? 'token' : 'connection'} for:\n\n'
           '${others.map((instance) => '• ${instance.name}').join('\n')}\n\n'
-          'Any Hardcover tokens already set for these instances will be '
+          'Any Hardcover connections already set for these instances will be '
           'replaced.',
         ),
         actions: [
@@ -1630,31 +1703,48 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       _hardcoverResult =
           'Connecting Hardcover to the other Chaptarr instances…';
     });
-    final failures = <String>[];
-    // Save one at a time to avoid a burst of provider verification requests.
-    // One failed instance does not prevent the remaining instances saving.
-    for (final instance in others) {
-      try {
-        await service.saveHardcoverToken(instance.id, token);
-        if (mounted) {
-          ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+    if (connectionId != null) {
+      if (revisions.isNotEmpty) {
+        final results = await service.applyHardcoverConnection(
+            widget.instanceId!, connectionId, revisions);
+        for (final instance
+            in others.where((item) => revisions.containsKey(item.id))) {
+          final matches =
+              results.where((result) => result.instanceId == instance.id);
+          if (matches.length == 1 && matches.single.applied) {
+            if (mounted) {
+              ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+            }
+          } else {
+            failures.add(
+                '${instance.name}: ${matches.length == 1 ? matches.single.error : 'No result was returned. Try again.'}');
+          }
         }
-      } catch (e) {
-        failures.add('${instance.name}: ${apiErrorMessage(e)}');
+      }
+    } else {
+      // Older servers still accept write-only API tokens one instance at a time.
+      for (final instance in others) {
+        try {
+          await service.saveHardcoverToken(instance.id, token);
+          if (mounted) {
+            ref.invalidate(trendingBooksForInstanceProvider(instance.id));
+          }
+        } catch (e) {
+          failures.add('${instance.name}: ${apiErrorMessage(e)}');
+        }
       }
     }
     if (!mounted) return;
     setState(() {
       _hardcoverResult = failures.isEmpty
           ? 'Hardcover is connected to all ${others.length + 1} '
-                'Chaptarr instances.'
-          : 'Token saved for ${others.length + 1 - failures.length} of '
-                '${others.length + 1} Chaptarr instances. Could not update:\n'
-                '${failures.join('\n')}\n'
-                'Open those instances to try again.';
-      _hardcoverResultColor = failures.isEmpty
-          ? AppTheme.available
-          : AppTheme.error;
+              'Chaptarr instances.'
+          : '${connectionId == null ? 'Token saved' : 'Connected'} for ${others.length + 1 - failures.length} of '
+              '${others.length + 1} Chaptarr instances. Could not update:\n'
+              '${failures.join('\n')}\n'
+              'Open those instances to try again.';
+      _hardcoverResultColor =
+          failures.isEmpty ? AppTheme.available : AppTheme.error;
     });
   }
 
@@ -1673,6 +1763,9 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       setState(() {
         _isSavingHardcover = false;
         _hardcoverConnected = false;
+        _hardcoverMethod = 'none';
+        _hardcoverReconnect = false;
+        _hardcoverUseToken = false;
         _hardcoverResult = 'Hardcover is disconnected.';
         _hardcoverResultColor = AppTheme.textSecondary;
       });
@@ -2935,58 +3028,75 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Text(
-              _hardcoverConnected
-                  ? 'Hardcover is connected to this instance. Paste a new '
-                      'API token to replace it, or disconnect.'
-                  : 'Connect a Hardcover account by pasting its API token '
-                      '(Hardcover → Settings → API). The server verifies it '
-                      'and keeps it encrypted; it never reaches a device.',
+              _hardcoverReconnect
+                  ? 'Hardcover needs you to sign in again. Reconnect to refresh trending books.'
+                  : _hardcoverConnected
+                      ? 'Hardcover is connected ${_hardcoverMethod == 'oauth' ? 'with OAuth' : 'with an API token'}. You can replace this connection or disconnect it.'
+                      : 'Connect Hardcover to show trending books in Cantinarr. Chaptarr manages its own metadata connection.',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: _hardcoverController,
-              enabled: !_isSavingHardcover,
-              obscureText: true,
-              enableSuggestions: false,
-              autocorrect: false,
-              decoration: InputDecoration(
-                labelText: 'Hardcover API token',
-                hintText: _hardcoverConnected
-                    ? 'Connected — paste a token to replace it'
-                    : 'Paste the token from Hardcover',
+            if (!_hardcoverOAuthAvailable || _hardcoverUseToken) ...[
+              TextField(
+                controller: _hardcoverController,
+                enabled: !_isSavingHardcover,
+                obscureText: true,
+                enableSuggestions: false,
+                autocorrect: false,
+                decoration: InputDecoration(
+                  labelText: 'Hardcover API token',
+                  hintText: _hardcoverConnected
+                      ? 'Connected — paste a token to replace it'
+                      : 'Paste the token from Hardcover',
+                  helperText:
+                      'Hardcover → Settings → API. Allow public catalog reads.',
+                  helperMaxLines: 3,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _isSavingHardcover ? null : _saveHardcoverToken,
-                    icon: _isSavingHardcover
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: AppTheme.accent),
-                          )
-                        : const Icon(Icons.link),
-                    label: Text(_hardcoverConnected
+              const SizedBox(height: 8),
+            ],
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              OutlinedButton.icon(
+                onPressed: _isSavingHardcover
+                    ? null
+                    : _hardcoverOAuthAvailable && !_hardcoverUseToken
+                        ? _connectHardcover
+                        : _saveHardcoverToken,
+                icon: _isSavingHardcover
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.accent))
+                    : const Icon(Icons.link),
+                label: Text(_hardcoverOAuthAvailable && !_hardcoverUseToken
+                    ? _hardcoverReconnect
+                        ? 'Reconnect Hardcover'
+                        : _hardcoverConnected
+                            ? 'Replace Hardcover connection'
+                            : 'Connect Hardcover'
+                    : _hardcoverConnected
                         ? 'Replace Hardcover token'
                         : 'Connect Hardcover'),
-                  ),
-                ),
-                if (_hardcoverConnected) ...[
-                  const SizedBox(width: 8),
-                  TextButton(
-                    onPressed:
-                        _isSavingHardcover ? null : _clearHardcoverToken,
-                    child: const Text('Disconnect'),
-                  ),
-                ],
-              ],
-            ),
+              ),
+              if (_hardcoverConnected)
+                TextButton(
+                    onPressed: _isSavingHardcover ? null : _clearHardcoverToken,
+                    child: const Text('Disconnect')),
+            ]),
+            if (_hardcoverOAuthAvailable)
+              Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _isSavingHardcover
+                        ? null
+                        : () => setState(
+                            () => _hardcoverUseToken = !_hardcoverUseToken),
+                    child: Text(_hardcoverUseToken
+                        ? 'Sign in with Hardcover instead'
+                        : 'Use an API token instead'),
+                  )),
             if (_hardcoverResult != null) ...[
               const SizedBox(height: 8),
               Text(
