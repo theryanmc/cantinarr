@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' show PointerDeviceKind;
 import 'package:cantinarr/core/models/backend_connection.dart';
 import 'package:cantinarr/core/models/user_profile.dart';
 import 'package:cantinarr/core/network/backend_client.dart';
@@ -41,6 +42,50 @@ void main() {
       LibraryAuthorsRow,
       LibrarySeriesRow,
     ]);
+    expect(h.adapter.retiredReads, isEmpty);
+  });
+  testWidgets('a Hardcover trending book keeps its native lookup, instance, '
+      'and request state on the detail page', (t) async {
+    const hardcoverId = 'hc:123';
+    final h = await pump(t,
+        adapter: Adapter()
+          ..lookupID = hardcoverId
+          ..trendingBooks = [
+            {
+              'hardcover_id': 123,
+              'foreign_id': hardcoverId,
+              'title': nativeTitle,
+              'authors': ['Mark Manson'],
+            },
+          ]);
+    expect(h.adapter.lookupTerms, isEmpty);
+    await t.tap(find.text(nativeTitle));
+    await t.pumpAndSettle();
+
+    final page = t.widget<RequesterBookDetailScreen>(
+        find.byType(RequesterBookDetailScreen));
+    expect(page.foreignId, hardcoverId);
+    expect(page.instanceId, 'books');
+    expect(page.initialBook, isNull);
+    expect(h.adapter.lookupTerms, [hardcoverId]);
+    expect(find.text('A book by Mark Manson'), findsOneWidget);
+
+    final panel = find.byType(BookFormatPanel);
+    final state = t.state(panel);
+    final target = find.byKey(const ValueKey('book-format-row:ebook'));
+    await t.ensureVisible(target);
+    await t.tap(target);
+    await t.pumpAndSettle();
+    expect(h.adapter.posts.single, containsPair('foreign_id', hardcoverId));
+    expect(h.adapter.posts.single, containsPair('instance_id', 'books'));
+    expect(h.adapter.posts.single, containsPair('book_format', 'ebook'));
+
+    h.router.refresh();
+    await t.pumpAndSettle();
+    expect(t.state(panel), same(state));
+    expect(find.text('Your request is saved.'), findsWidgets);
+    expect(find.text('A book by Mark Manson'), findsOneWidget);
+    expect(h.adapter.lookupTerms, [hardcoverId]);
     expect(h.adapter.retiredReads, isEmpty);
   });
   for (final route in [
@@ -103,6 +148,48 @@ void main() {
     expect(page.initialBook?.author?.authorName, 'Mark Manson');
     expect(page.searchTerm, nativeTitle);
     expect(h.adapter.retiredReads, isEmpty);
+  });
+  testWidgets(
+      'pausing, scrolling, and opening search results do not fetch metadata',
+      (t) async {
+    final h = await pump(t, adapter: Adapter()..extraResults = 30);
+    final field = find.descendant(
+        of: find.byType(CantinarrSearchBar), matching: find.byType(TextField));
+    await t.enterText(field, nativeTitle);
+    await t.pump(const Duration(milliseconds: 350));
+    await t.pumpAndSettle();
+    final results = find.byType(BookSearchResultsView);
+    final selected = t.widget<BookSearchResultsView>(results).results.first;
+    final scrollable =
+        find.descendant(of: results, matching: find.byType(Scrollable));
+    final row =
+        find.byKey(const ValueKey('book-result:$nativeID:$nativeID:lookup:0'));
+    final mouse = await t.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: t.getCenter(row));
+    await mouse.moveTo(t.getCenter(row));
+    await t.pump(const Duration(seconds: 2));
+    expect(h.adapter.lookupTerms, [nativeTitle]);
+
+    await t.drag(scrollable, const Offset(0, -650));
+    await t.pumpAndSettle();
+    expect(
+        t.state<ScrollableState>(scrollable).position.pixels, greaterThan(0));
+    await t.pump(const Duration(seconds: 2));
+    expect(h.adapter.lookupTerms, [nativeTitle]);
+    await t.scrollUntilVisible(row, -350, scrollable: scrollable);
+    await t.tap(row);
+    await t.pumpAndSettle();
+    final page = t.widget<RequesterBookDetailScreen>(
+        find.byType(RequesterBookDetailScreen));
+    expect(page.initialBook, same(selected));
+    expect(page.initialBook?.foreignEditionId, 'gr:edition');
+    expect(page.foreignId, nativeID);
+    expect(page.instanceId, 'books');
+    expect(page.searchTerm, nativeTitle);
+    expect(find.text('A book by Mark Manson'), findsOneWidget);
+    await t.pump(const Duration(seconds: 2));
+    expect(h.adapter.lookupTerms, [nativeTitle]);
+    await mouse.removePointer();
   });
   for (final format in ['ebook', 'audiobook', 'both']) {
     testWidgets(
@@ -264,6 +351,10 @@ Future<({GoRouter router, ProviderContainer container, Adapter adapter})> pump(
 }
 
 class Adapter implements HttpClientAdapter {
+  final lookupTerms = <String>[];
+  String lookupID = nativeID;
+  List<Map<String, dynamic>> trendingBooks = const [];
+  int extraResults = 0;
   final retiredReads = <String>[];
   final posts = <Map<String, dynamic>>[];
   final savedReads = <Map<String, dynamic>>[];
@@ -291,18 +382,23 @@ class Adapter implements HttpClientAdapter {
     Object data = <String, dynamic>{};
     var code = 200;
     if (o.path == '/api/discover/books/trending') {
-      // The one live book feed: not connected here, so the row stays out of
-      // the way of these tests. It is not a retired read.
-      data = {'instance_id': 'books', 'connected': false, 'books': []};
+      // The live feed stays out of the way unless the test supplies books.
+      data = {
+        'instance_id': 'books',
+        'connected': trendingBooks.isNotEmpty,
+        'books': trendingBooks,
+      };
     } else if (o.path.startsWith('/api/discover/books') ||
         o.path == '/api/genres/book' ||
         o.path.startsWith('/api/media/book/')) {
       retiredReads.add(o.path);
       code = 410;
     } else if (o.path.endsWith('/book/lookup')) {
+      lookupTerms.add(o.queryParameters['term'].toString());
       data = [
         {
-          'foreignBookId': nativeID,
+          'foreignBookId': lookupID,
+          'foreignEditionId': 'gr:edition',
           'title': nativeTitle,
           'author': {'authorName': 'Mark Manson', 'foreignAuthorId': 'gr:1'},
           'overview': 'A book by Mark Manson'
@@ -311,7 +407,9 @@ class Adapter implements HttpClientAdapter {
           'foreignBookId': 'gr:summary',
           'title': 'Summary of $nativeTitle',
           'author': {'authorName': 'Another Author'}
-        }
+        },
+        for (var i = 0; i < extraResults; i++)
+          {'foreignBookId': 'gr:extra-$i', 'title': 'Another book $i'},
       ];
     } else if (o.path.endsWith('/author/lookup')) {
       if (authorWait != null) await authorWait;

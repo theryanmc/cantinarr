@@ -220,9 +220,8 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
       if (detail.isKnown ||
           detail.effectiveUnknownReason ==
               BookStatusUnknownReason.identityNeedsAttention) {
-        final nextId = !detail.isKnown || canonical.isEmpty
-            ? widget.foreignId
-            : canonical;
+        final nextId =
+            !detail.isKnown || canonical.isEmpty ? widget.foreignId : canonical;
         if (nextId != (_reportedCanonicalId ?? widget.foreignId)) {
           _reportedCanonicalId = nextId;
           widget.onCanonicalForeignId?.call(nextId);
@@ -619,8 +618,11 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
               ],
             ),
           )
-        else if (_refreshFailed ||
-            detail.effectiveUnknownReason == BookStatusUnknownReason.transient)
+        // The initial unknown status is still being checked, not a failure.
+        else if (!_loading &&
+            (_refreshFailed ||
+                detail.effectiveUnknownReason ==
+                    BookStatusUnknownReason.transient))
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
@@ -802,12 +804,14 @@ class _RequestAction extends StatelessWidget {
         children: [
           const Icon(Icons.add_rounded, size: 15, color: AppTheme.accent),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppTheme.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+          Flexible(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppTheme.accent,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -831,12 +835,14 @@ class _SubmittingIndicator extends StatelessWidget {
               CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
         ),
         SizedBox(width: 8),
-        Text(
-          'Requesting…',
-          style: TextStyle(
-            color: AppTheme.accent,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Text(
+            'Requesting…',
+            style: TextStyle(
+              color: AppTheme.accent,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
