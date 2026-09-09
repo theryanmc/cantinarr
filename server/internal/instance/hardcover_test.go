@@ -1,7 +1,9 @@
 package instance
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/windoze95/cantinarr-server/internal/auth"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,9 +15,21 @@ import (
 
 func newHardcoverRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if auth.GetClaims(r.Context()) == nil {
+				r = r.WithContext(context.WithValue(r.Context(), auth.ClaimsKey, &auth.Claims{UserID: 1, Role: auth.RoleAdmin}))
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Get("/instances/{instanceID}/hardcover", h.HardcoverStatus)
 	r.Put("/instances/{instanceID}/hardcover", h.SaveHardcoverToken)
 	r.Delete("/instances/{instanceID}/hardcover", h.ClearHardcoverToken)
+	r.Post("/instances/{instanceID}/hardcover/device/begin", h.BeginHardcoverDevice)
+	r.Get("/instances/{instanceID}/hardcover/device/{flowID}", h.CheckHardcoverDevice)
+	r.Delete("/instances/{instanceID}/hardcover/device/{flowID}", h.CancelHardcoverDevice)
+	r.Post("/instances/{instanceID}/hardcover/apply", h.ApplyHardcoverConnection)
 	return r
 }
 
@@ -31,8 +45,8 @@ func fakeHardcover(t *testing.T, accept string, calls *atomic.Int32) *httptest.S
 		var body struct {
 			Query string `json:"query"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !strings.Contains(body.Query, "me") {
-			t.Errorf("hardcover query = %q, want a me query", body.Query)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (!strings.Contains(body.Query, "books_trending") || strings.Contains(body.Query, " me ")) {
+			t.Errorf("hardcover query = %q, want catalog queries only", body.Query)
 		}
 		if r.Header.Get("Authorization") != "Bearer "+accept {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -40,7 +54,7 @@ func fakeHardcover(t *testing.T, accept string, calls *atomic.Int32) *httptest.S
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"me":[{"id":42}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"books":[{"id":42}],"books_trending":{"ids":[42]}}}`))
 	}))
 }
 

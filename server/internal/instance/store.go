@@ -612,6 +612,12 @@ func (s *Store) Delete(id string) error {
 	if _, err := tx.Exec("DELETE FROM arr_queue_witness WHERE instance_id = ?", id); err != nil {
 		return fmt.Errorf("delete instance queue witness: %w", err)
 	}
+	if _, err := tx.Exec("DELETE FROM hardcover_instance_connections WHERE instance_id=?", id); err != nil {
+		return err
+	}
+	if err := cleanupHardcoverConnections(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit instance deletion: %w", err)
 	}

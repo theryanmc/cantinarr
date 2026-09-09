@@ -78,6 +78,7 @@ func NewRouter(
 	bookTrending := bookdiscovery.NewTrendingHandler(instanceStore, hardcover.NewClient())
 	if instanceHandler != nil {
 		instanceHandler.SetHardcoverObserver(bookTrending.Invalidate)
+		bookTrending.SetCredentialResolver(instanceHandler.ResolveHardcoverToken)
 	}
 
 	// Middleware
@@ -609,12 +610,15 @@ func NewRouter(
 				// call — a stored flag would drift the moment an admin edited
 				// the arr's Connect list.
 				r.Get("/instances/{instanceID}/webhook", instanceHandler.WebhookStatus)
-				// Hardcover API token for a Chaptarr instance: verified
-				// against Hardcover on save, encrypted at rest, and only
-				// ever reported as connected or not.
+				// Hardcover OAuth/API-token connection management. Catalog
+				// credentials remain encrypted and server-only.
 				r.Get("/instances/{instanceID}/hardcover", instanceHandler.HardcoverStatus)
 				r.Put("/instances/{instanceID}/hardcover", instanceHandler.SaveHardcoverToken)
 				r.Delete("/instances/{instanceID}/hardcover", instanceHandler.ClearHardcoverToken)
+				r.Post("/instances/{instanceID}/hardcover/device/begin", instanceHandler.BeginHardcoverDevice)
+				r.Get("/instances/{instanceID}/hardcover/device/{flowID}", instanceHandler.CheckHardcoverDevice)
+				r.Delete("/instances/{instanceID}/hardcover/device/{flowID}", instanceHandler.CancelHardcoverDevice)
+				r.Post("/instances/{instanceID}/hardcover/apply", instanceHandler.ApplyHardcoverConnection)
 			})
 
 			// Instance proxy — forward to specific instance. Read-only

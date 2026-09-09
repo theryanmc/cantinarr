@@ -33,8 +33,8 @@ generated API key or local username/password:
 
 - Radarr, Sonarr, Chaptarr — local API key from each service's own settings
 - Hardcover — the one third-party account books can use, and only for the
-  Trending Books row: a personal API token from hardcover.app → Settings →
-  API, pasted into the Chaptarr instance editor
+  Trending Books row: approve Cantinarr’s catalog-only OAuth device code from
+  the Chaptarr instance editor, or paste an API token with public catalog access
 - SABnzbd, NZBGet, qBittorrent, Transmission, Deluge, ruTorrent — local key or local credentials
 - Tautulli — local API key (meaningful data needs a Plex server feeding it)
 - Tracearr — public API key from its Settings > General (needs a Plex, Jellyfin, or Emby server feeding it; the jf-lab compose runs the all-in-one `supervised` image against the lab Jellyfin)

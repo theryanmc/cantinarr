@@ -14,6 +14,20 @@ import (
 )
 
 const initSQL = `
+-- OAuth credentials can be shared deliberately by multiple Chaptarr instances.
+-- The JSON token pair is encrypted as one unit; links contain no secrets.
+CREATE TABLE IF NOT EXISTS hardcover_connections (
+    id TEXT PRIMARY KEY,
+    credentials TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    reconnect INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS hardcover_instance_connections (
+    instance_id TEXT PRIMARY KEY REFERENCES service_instances(id) ON DELETE CASCADE,
+    connection_id TEXT NOT NULL REFERENCES hardcover_connections(id)
+);
+CREATE INDEX IF NOT EXISTS hardcover_connection_links ON hardcover_instance_connections(connection_id);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
@@ -1055,6 +1069,9 @@ func Open(dbPath string) (*sql.DB, error) {
 		// instance, encrypted at rest and write-only through the API. Empty =
 		// not connected, which is the only thing the API ever reports about it.
 		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_token TEXT NOT NULL DEFAULT ''"},
+		// A connection change reserves a revision before provider I/O. A stale
+		// verification/device flow cannot replace a newer connection or deletion.
+		{alter: "ALTER TABLE service_instances ADD COLUMN hardcover_revision INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		if err := applySchemaMigration(db, m); err != nil {

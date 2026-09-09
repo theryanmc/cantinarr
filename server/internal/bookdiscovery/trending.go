@@ -40,8 +40,9 @@ type TrendingSource interface {
 }
 
 type trendingEntry struct {
-	books   []hardcover.Book
-	fetched time.Time
+	books    []hardcover.Book
+	fetched  time.Time
+	revision int64
 }
 
 // TrendingHandler serves GET /api/discover/books/trending.
@@ -55,19 +56,23 @@ type TrendingHandler struct {
 	cache map[string]*trendingEntry // by instance id
 	// inflight coalesces concurrent misses for one instance so a busy screen
 	// never spends two Hardcover calls where one would do.
-	inflight map[string]*sync.WaitGroup
+	inflight   map[string]chan struct{}
+	generation map[string]uint64
+	resolve    func(context.Context, string, string) (string, error)
 }
 
 // NewTrendingHandler wires the feed to the instance store (grants + tokens)
 // and a Hardcover source.
 func NewTrendingHandler(store *instance.Store, source TrendingSource) *TrendingHandler {
 	return &TrendingHandler{
-		store:    store,
-		source:   source,
-		now:      time.Now,
-		ttl:      trendingTTL,
-		cache:    map[string]*trendingEntry{},
-		inflight: map[string]*sync.WaitGroup{},
+		store:      store,
+		source:     source,
+		now:        time.Now,
+		ttl:        trendingTTL,
+		cache:      map[string]*trendingEntry{},
+		inflight:   map[string]chan struct{}{},
+		generation: map[string]uint64{},
+		resolve:    func(_ context.Context, id, _ string) (string, error) { return store.HardcoverToken(id) },
 	}
 }
 
@@ -76,6 +81,7 @@ func NewTrendingHandler(store *instance.Store, source TrendingSource) *TrendingH
 func (h *TrendingHandler) Invalidate(instanceID string) {
 	h.mu.Lock()
 	delete(h.cache, instanceID)
+	h.generation[instanceID]++
 	h.mu.Unlock()
 }
 
@@ -98,68 +104,108 @@ func (h *TrendingHandler) Trending(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	token, err := h.store.HardcoverToken(id)
-	if err != nil {
-		fail(w, http.StatusServiceUnavailable, "could not read the Hardcover connection")
-		return
-	}
-	resp := trendingResponse{InstanceID: id, Source: "Hardcover", Scope: "Trending on Hardcover right now", Books: []hardcover.Book{}}
-	if token == "" {
-		writeJSON(w, resp)
-		return
-	}
-	resp.Connected = true
-	books, err := h.trending(r.Context(), id, token)
-	if err != nil {
-		if errors.Is(err, hardcover.ErrUnauthorized) {
-			// The connected token no longer works. Say so rather than
-			// rendering an empty row that looks like a quiet day.
-			fail(w, http.StatusBadGateway, "Hardcover no longer accepts the connected API token; reconnect it in the instance settings")
+	for {
+		books, connected, revision, err := h.trending(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, hardcover.ErrUnauthorized) {
+				fail(w, http.StatusBadGateway, "Hardcover no longer accepts the connection; reconnect it in the instance settings")
+			} else if errors.Is(err, hardcover.ErrInsufficientScope) {
+				fail(w, http.StatusBadGateway, hardcover.ErrInsufficientScope.Error())
+			} else {
+				log.Printf("bookdiscovery: hardcover trending for %s failed: %v", id, err)
+				fail(w, http.StatusBadGateway, "could not reach Hardcover for the trending list; check the connection in instance settings and try again")
+			}
 			return
 		}
-		log.Printf("bookdiscovery: hardcover trending for %s failed: %v", id, err)
-		fail(w, http.StatusBadGateway, "could not reach Hardcover for the trending list")
-		return
-	}
-	// The grant is re-checked after any wait on the provider or the cache.
-	if _, ok := h.authorize(w, r, id); !ok {
-		return
-	}
-	resp.Books = books
-	writeJSON(w, resp)
-}
-
-func (h *TrendingHandler) trending(ctx context.Context, instanceID, token string) ([]hardcover.Book, error) {
-	for {
-		h.mu.Lock()
-		if entry, ok := h.cache[instanceID]; ok && h.now().Sub(entry.fetched) < h.ttl {
-			books := entry.books
-			h.mu.Unlock()
-			return books, nil
+		// Access and connection selection are rechecked after provider/cache waits.
+		if _, ok := h.authorize(w, r, id); !ok {
+			return
 		}
-		if wg, busy := h.inflight[instanceID]; busy {
-			h.mu.Unlock()
-			wg.Wait()
+		latest, err := h.store.HardcoverState(id)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "could not read the Hardcover connection")
+			return
+		}
+		if latest.Revision != revision {
 			continue
 		}
-		wg := &sync.WaitGroup{}
-		wg.Add(1)
-		h.inflight[instanceID] = wg
+		writeJSON(w, trendingResponse{InstanceID: id, Connected: connected, Source: "Hardcover", Scope: "Trending on Hardcover right now", Books: books})
+		return
+	}
+}
+
+// SetCredentialResolver installs lazy OAuth renewal during startup.
+func (h *TrendingHandler) SetCredentialResolver(resolve func(context.Context, string, string) (string, error)) {
+	h.resolve = resolve
+}
+
+func (h *TrendingHandler) trending(ctx context.Context, id string) ([]hardcover.Book, bool, int64, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, 0, err
+		}
+		state, err := h.store.HardcoverState(id)
+		if err != nil {
+			return nil, false, 0, err
+		}
+		if !state.Configured {
+			return []hardcover.Book{}, false, state.Revision, nil
+		}
+		h.mu.Lock()
+		if entry, ok := h.cache[id]; ok && entry.revision == state.Revision && h.now().Sub(entry.fetched) < h.ttl {
+			books := entry.books
+			h.mu.Unlock()
+			return books, true, state.Revision, nil
+		}
+		if done, busy := h.inflight[id]; busy {
+			h.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, false, 0, ctx.Err()
+			case <-done:
+				continue
+			}
+		}
+		done := make(chan struct{})
+		h.inflight[id] = done
+		generation := h.generation[id]
 		h.mu.Unlock()
 
-		books, err := h.source.Trending(ctx, token, TrendingLimit)
-
+		token, err := h.resolve(ctx, id, "")
+		var books []hardcover.Book
+		if err == nil && token != "" {
+			books, err = h.source.Trending(ctx, token, TrendingLimit)
+			if errors.Is(err, hardcover.ErrUnauthorized) {
+				renewed, renewErr := h.resolve(ctx, id, token)
+				if renewErr != nil {
+					err = renewErr
+				} else if renewed != "" && renewed != token {
+					books, err = h.source.Trending(ctx, renewed, TrendingLimit)
+				}
+			}
+		}
+		latest, stateErr := h.store.HardcoverState(id)
 		h.mu.Lock()
-		delete(h.inflight, instanceID)
-		if err == nil {
+		delete(h.inflight, id)
+		stale := h.generation[id] != generation || stateErr == nil && latest.Revision != state.Revision
+		if err == nil && stateErr != nil {
+			err = stateErr
+		}
+		if err == nil && token == "" {
+			stale = true
+		}
+		if err == nil && !stale {
 			if books == nil {
 				books = []hardcover.Book{}
 			}
-			h.cache[instanceID] = &trendingEntry{books: books, fetched: h.now()}
+			h.cache[id] = &trendingEntry{books: books, fetched: h.now(), revision: state.Revision}
 		}
+		close(done)
 		h.mu.Unlock()
-		wg.Done()
-		return books, err
+		if stale {
+			continue
+		}
+		return books, true, state.Revision, err
 	}
 }
 

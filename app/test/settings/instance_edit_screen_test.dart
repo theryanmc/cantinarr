@@ -31,6 +31,7 @@ class _FakeAdapter implements HttpClientAdapter {
     this.webhookError,
     this.webhookStatus,
     this.hardcoverStatus,
+    this.hardcoverOAuth = false,
     this.hardcoverErrors = const {},
     this.beforeHardcoverSave,
     this.testError,
@@ -57,6 +58,10 @@ class _FakeAdapter implements HttpClientAdapter {
   final Map<String, String> hardcoverErrors;
   final Future<void> Function(String)? beforeHardcoverSave;
   final String? testError;
+  final bool hardcoverOAuth;
+  String hardcoverDeviceStatus = 'connected';
+  final Map<String, String> hardcoverLinks = {};
+  final Map<String, int> hardcoverRevisions = {};
   final Map<String, String> hardcoverTokens = {};
   final Map<String, int> hardcoverFeedReads = {};
   final List<({String method, String path, dynamic body})> requests = [];
@@ -158,14 +163,70 @@ class _FakeAdapter implements HttpClientAdapter {
           },
         );
       }
-      response = status;
+      final id = path.split('/')[3];
+      response = hardcoverOAuth
+          ? {
+              ...status,
+              'oauth_available': true,
+              'configured': hardcoverLinks.containsKey(id) ||
+                  hardcoverTokens.containsKey(id),
+              'method': hardcoverLinks.containsKey(id)
+                  ? 'oauth'
+                  : hardcoverTokens.containsKey(id)
+                      ? 'api_token'
+                      : 'none',
+              'connection_id': hardcoverLinks[id] ?? '',
+              'revision': hardcoverRevisions[id] ?? 0,
+            }
+          : status;
+    } else if (options.method == 'POST' && path.endsWith('/hardcover/apply')) {
+      final targets =
+          (body as Map<String, dynamic>)['instances'] as List<dynamic>;
+      response = {
+        'results': [
+          for (final target in targets)
+            {
+              'instance_id': target['instance_id'],
+              'applied': !hardcoverErrors.containsKey(target['instance_id']),
+              'error': hardcoverErrors[target['instance_id']] ?? '',
+            }
+        ]
+      };
+      for (final target in targets) {
+        final id = target['instance_id'] as String;
+        if (!hardcoverErrors.containsKey(id)) {
+          hardcoverLinks[id] = body['connection_id'] as String;
+        }
+      }
+    } else if (path.contains('/hardcover/device/')) {
+      final id = path.split('/')[3];
+      final completed =
+          options.method == 'GET' && hardcoverDeviceStatus == 'connected';
+      if (completed) hardcoverLinks[id] = 'oauth-new';
+      response = {
+        'flow_id': 'local-flow',
+        'status': completed
+            ? 'connected'
+            : options.method == 'DELETE'
+                ? 'cancelled'
+                : 'pending',
+        'user_code': 'ABCD-EFGH',
+        'verification_uri': 'https://hardcover.app/link',
+        'expires_at': DateTime.now()
+            .add(const Duration(minutes: 10))
+            .toUtc()
+            .toIso8601String(),
+        'interval': 5,
+        'connection_id': completed ? 'oauth-new' : '',
+      };
     } else if (options.method == 'GET' &&
         path == '/api/discover/books/trending') {
       final id = options.queryParameters['instance_id'] as String;
       hardcoverFeedReads[id] = (hardcoverFeedReads[id] ?? 0) + 1;
       response = {
         'instance_id': id,
-        'connected': hardcoverTokens.containsKey(id),
+        'connected':
+            hardcoverTokens.containsKey(id) || hardcoverLinks.containsKey(id),
         'books': <Map<String, dynamic>>[],
       };
     } else if (options.method == 'PUT' && path.endsWith('/hardcover')) {
@@ -185,6 +246,7 @@ class _FakeAdapter implements HttpClientAdapter {
       response = {'supported': true, 'configured': true};
     } else if (options.method == 'DELETE' && path.endsWith('/hardcover')) {
       hardcoverTokens.remove(path.split('/')[3]);
+      hardcoverLinks.remove(path.split('/')[3]);
       response = {'supported': true, 'configured': false};
     } else if (options.method == 'PUT') {
       // Instance update echo; the id encodes the service type (radarr-b).
@@ -2047,6 +2109,112 @@ void main() {
       ),
     );
     expect(find.text('Hardcover'), findsNothing);
+  });
+
+  testWidgets(
+      'OAuth is the default and the API token fallback remains available',
+      (tester) async {
+    final adapter = _FakeAdapter(
+        instances: [_chaptarr('a')],
+        hardcoverOAuth: true,
+        hardcoverStatus: {'supported': true, 'configured': false})
+      ..hardcoverDeviceStatus = 'pending';
+    await _pumpEdit(tester,
+        adapter: adapter, users: const [], screen: _chaptarrEditor);
+    expect(find.widgetWithText(TextField, 'Hardcover API token'), findsNothing);
+    await tester.tap(find.text('Use an API token instead'));
+    await tester.pumpAndSettle();
+    expect(
+        find.widgetWithText(TextField, 'Hardcover API token'), findsOneWidget);
+    await tester.tap(find.text('Sign in with Hardcover instead'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Connect Hardcover'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('ABCD-EFGH'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(adapter.hardcoverLinks, isEmpty);
+    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
+  });
+
+  testWidgets(
+      'OAuth apply uses an expected connection and explicit revisions, refreshes feeds, and isolates disconnect',
+      (tester) async {
+    final adapter = _FakeAdapter(
+        instances: [
+          _chaptarr('a'),
+          _chaptarr('b'),
+          _chaptarr('c'),
+          Map.of(_radarrB)
+        ],
+        hardcoverOAuth: true,
+        hardcoverStatus: {'supported': true, 'configured': false})
+      ..hardcoverRevisions['chaptarr-b'] = 7;
+    await _pumpEdit(tester,
+        adapter: adapter, users: const [], screen: _chaptarrEditor);
+    final container = ProviderScope.containerOf(
+        tester.element(find.byType(InstanceEditScreen)));
+    for (final suffix in ['a', 'b', 'c']) {
+      final subscription = container.listen(
+          trendingBooksForInstanceProvider('chaptarr-$suffix'), (_, __) {});
+      addTearDown(subscription.close);
+    }
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Connect Hardcover'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('Use Hardcover for all Chaptarr instances?'), findsOneWidget);
+    await tester.tap(find.text('Apply to all'));
+    await tester.pumpAndSettle();
+    final apply = adapter.requests
+        .singleWhere((r) => r.path.endsWith('/hardcover/apply'));
+    expect(apply.body, {
+      'connection_id': 'oauth-new',
+      'instances': [
+        {'instance_id': 'chaptarr-b', 'revision': 7},
+        {'instance_id': 'chaptarr-c', 'revision': 0},
+      ]
+    });
+    expect(adapter.requests.where((r) => r.method == 'PUT'), isEmpty);
+    expect(adapter.hardcoverFeedReads,
+        {'chaptarr-a': 2, 'chaptarr-b': 2, 'chaptarr-c': 2});
+    expect(adapter.hardcoverLinks.length, 3);
+    expect(find.text('Replace Hardcover connection'), findsOneWidget);
+    await tester.tap(find.text('Disconnect'));
+    await tester.pumpAndSettle();
+    expect(adapter.hardcoverLinks,
+        {'chaptarr-b': 'oauth-new', 'chaptarr-c': 'oauth-new'});
+  });
+
+  testWidgets(
+      'OAuth reconnect and partial apply failures identify the next action',
+      (tester) async {
+    final adapter = _FakeAdapter(
+        instances: [_chaptarr('a'), _chaptarr('b'), _chaptarr('c')],
+        hardcoverOAuth: true,
+        hardcoverStatus: {
+          'supported': true,
+          'configured': true,
+          'reconnect_required': true
+        },
+        hardcoverErrors: {
+          'chaptarr-b': 'Connection changed. Reload and try again.'
+        })
+      ..hardcoverLinks['chaptarr-a'] = 'expired';
+    await _pumpEdit(tester,
+        adapter: adapter, users: const [], screen: _chaptarrEditor);
+    expect(find.text('Reconnect Hardcover'), findsOneWidget);
+    await tester.tap(find.text('Reconnect Hardcover'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Apply to all'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Books b: Connection changed.'), findsOneWidget);
+    expect(adapter.hardcoverLinks['chaptarr-c'], 'oauth-new');
   });
 
   testWidgets('Radarr never asks about Hardcover', (tester) async {

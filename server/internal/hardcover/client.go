@@ -1,5 +1,5 @@
 // Package hardcover talks to Hardcover's GraphQL API (https://hardcover.app)
-// with an admin-supplied per-instance token. Hardcover is an internet host:
+// with an instance's API or OAuth access token. Hardcover is an internet host:
 // every call rides httpx.External().
 //
 // Hardcover's `books_trending` answers only an ordered list of book ids, so a
@@ -26,7 +26,8 @@ import (
 const APIURL = "https://api.hardcover.app/v1/graphql"
 
 // ErrUnauthorized means Hardcover answered and refused the token.
-var ErrUnauthorized = errors.New("hardcover rejected the API token")
+var ErrUnauthorized = errors.New("Hardcover rejected the credential")
+var ErrInsufficientScope = errors.New("Hardcover requires public catalog permission (read:catalog:data)")
 
 // Client runs GraphQL operations against one Hardcover endpoint. It holds no
 // token; the caller passes the instance's token per call so one client serves
@@ -43,7 +44,8 @@ func NewClient() *Client { return NewClientForURL(APIURL) }
 func NewClientForURL(apiURL string) *Client {
 	return &Client{
 		apiURL: apiURL,
-		http:   &http.Client{Transport: httpx.External(), Timeout: 20 * time.Second},
+		http: &http.Client{Transport: httpx.External(), Timeout: 20 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -96,7 +98,7 @@ func (c *Client) Trending(ctx context.Context, token string, limit int) ([]Book,
 	if trending.BooksTrending.Error != "" {
 		// Hardcover said it could not compute the list: blindness, not an
 		// empty answer.
-		return nil, fmt.Errorf("hardcover trending: %s", trending.BooksTrending.Error)
+		return nil, errors.New("hardcover: could not compute the trending list")
 	}
 	ids := trending.BooksTrending.IDs
 	if len(ids) == 0 {
@@ -234,8 +236,10 @@ func (c *Client) query(ctx context.Context, token, operation string, variables m
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized:
 		return ErrUnauthorized
+	case resp.StatusCode == http.StatusForbidden:
+		return ErrInsufficientScope
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return errors.New("hardcover: rate limited")
 	case resp.StatusCode != http.StatusOK:
@@ -244,24 +248,64 @@ func (c *Client) query(ctx context.Context, token, operation string, variables m
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
-			Message string `json:"message"`
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&envelope); err != nil {
 		return fmt.Errorf("hardcover: invalid response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		msg := strings.ToLower(envelope.Errors[0].Message)
-		if strings.Contains(msg, "jwt") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication") {
-			return ErrUnauthorized
+		for _, problem := range envelope.Errors {
+			msg := strings.ToLower(problem.Message)
+			code := strings.ToLower(problem.Extensions.Code)
+			if strings.Contains(msg, "jwt") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "authentication") || code == "invalid-jwt" || code == "unauthenticated" {
+				return ErrUnauthorized
+			}
+			if strings.Contains(msg, "scope") || strings.Contains(msg, "permission") || code == "access-denied" || code == "forbidden" || code == "insufficient_scope" {
+				return ErrInsufficientScope
+			}
 		}
-		return fmt.Errorf("hardcover: %s", envelope.Errors[0].Message)
+		// Provider error text can include submitted values; never echo it.
+		return errors.New("hardcover: catalog query failed")
 	}
 	if len(envelope.Data) == 0 {
 		return errors.New("hardcover: empty response")
 	}
 	if err := json.Unmarshal(envelope.Data, out); err != nil {
 		return fmt.Errorf("hardcover: invalid data: %w", err)
+	}
+	return nil
+}
+
+// VerifyCatalog exercises both operations used by the feed, including the
+// hydration fields, without asking for profile (me) or library permissions.
+// Empty arrays are valid; a missing/null result is an unreadable response.
+func (c *Client) VerifyCatalog(ctx context.Context, token string) error {
+	var reply struct {
+		Books    json.RawMessage `json:"books"`
+		Trending *struct {
+			IDs   []int64 `json:"ids"`
+			Error string  `json:"error"`
+		} `json:"books_trending"`
+	}
+	const query = `query CantinarrVerify {
+  books_trending(limit: 1, offset: 0) { ids error }
+  books(limit: 1) {
+    id title release_year rating ratings_count users_count description
+    image { url } contributions { author { name } }
+    book_series { position series { name } }
+    default_physical_edition { isbn_13 } default_ebook_edition { isbn_13 } default_audio_edition { isbn_13 }
+  }
+ }`
+	if err := c.query(ctx, token, query, nil, &reply); err != nil {
+		return err
+	}
+	var books []json.RawMessage
+	if json.Unmarshal(reply.Books, &books) != nil || books == nil || reply.Trending == nil || reply.Trending.IDs == nil || reply.Trending.Error != "" {
+		return errors.New("hardcover: incomplete catalog verification")
 	}
 	return nil
 }
