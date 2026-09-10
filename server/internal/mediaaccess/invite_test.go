@@ -635,7 +635,8 @@ func TestSharedLibrariesChangeRescopesInviteSharesAndUserDeleteRemovesThem(t *te
 		t.Fatalf("library writes = %+v", fake.libraryWrites)
 	}
 
-	commit := e.svc.BeforeUserDelete(alice)
+	commit, release := e.svc.BeforeUserDelete(alice)
+	defer release()
 	if _, err := e.db.Exec("DELETE FROM users WHERE id = ?", alice); err != nil {
 		t.Fatal(err)
 	}

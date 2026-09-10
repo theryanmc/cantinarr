@@ -73,6 +73,42 @@ MediaAccessService _service(HttpClientAdapter adapter) => MediaAccessService(
     );
 
 void main() {
+  test('management intent, local grant, and remote status parse separately',
+      () {
+    final row = MediaServerAccountRow.fromJson({
+      'manage_access': false,
+      'granted': true,
+      'disabled': true,
+      'verified': true
+    });
+    expect(row.manageAccess, false);
+    expect(row.granted, true);
+    expect(row.disabled, true);
+    expect(row.managementLabel, 'Linked only');
+    expect(row.accessLabel, 'Off on server');
+    final legacy = MediaServerAccountRow.fromJson({'disabled': true});
+    expect(legacy.manageAccess, true);
+    expect(legacy.granted, false);
+    final pending = MediaServerAccountRow.fromJson(
+        {'manage_access': true, 'access_sync_pending': true});
+    expect(pending.accessLabel, 'Access change pending');
+    expect(
+        MediaServerAccess.fromJson({'auto_link_suppressed': true})
+            .autoLinkSuppressed,
+        true);
+  });
+
+  test('management route carries only explicit mode', () async {
+    final adapter = _FakeAdapter({
+      'PATCH /api/admin/users/7/media-servers/abs/account/management':
+          const _Reply(200, {'manage_access': false})
+    });
+    final row = await _service(adapter)
+        .setManagement(userId: 7, instanceId: 'abs', manageAccess: false);
+    expect(row.manageAccess, false);
+    expect(adapter.requests.single.body, {'manage_access': false});
+  });
+
   group('mediaServerGuideTitle', () {
     test('names the granted product, in a stable order', () {
       expect(mediaServerGuideTitle(const []), 'Watch on your media server');
@@ -91,6 +127,42 @@ void main() {
       expect(mediaServerTypeLabel('emby'), 'Emby');
       expect(mediaServerTypeLabel(''), 'your media server');
     });
+  });
+
+  test('Audiobookshelf names and listening responses keep distinct copies',
+      () async {
+    expect(mediaServerTypeLabel('audiobookshelf'), 'Audiobookshelf');
+    expect(mediaServerGuideTitle(['audiobookshelf']), 'Audiobookshelf access');
+    expect(mediaServerGuideTitle(['plex', 'audiobookshelf']),
+        'Media server access');
+    final adapter = _FakeAdapter({
+      'GET /api/media-servers/listen': const _Reply(200, [
+        {
+          'instance_id': 'abs',
+          'name': 'Books',
+          'state': 'found',
+          'items': [
+            {
+              'id': 'one',
+              'title': 'Book',
+              'library_name': 'Main',
+              'url': 'https://abs.example/item/one'
+            },
+            {
+              'id': 'two',
+              'title': 'Book',
+              'library_name': 'Other',
+              'url': 'https://abs.example/item/two'
+            },
+          ],
+        }
+      ]),
+    });
+    final links = await _service(adapter)
+        .listenLinks(instanceId: 'chaptarr-a', foreignBookId: 'hc:1');
+    expect(links.single.items.map((item) => item.id), ['one', 'two']);
+    expect(adapter.uris.single.queryParameters,
+        {'instance_id': 'chaptarr-a', 'foreign_book_id': 'hc:1'});
   });
 
   group('listMine', () {
@@ -187,8 +259,7 @@ void main() {
       expect(links[1].url, isEmpty);
     });
 
-    test('unknown ids and an empty title are left out of the query',
-        () async {
+    test('unknown ids and an empty title are left out of the query', () async {
       final adapter = _FakeAdapter({
         'GET /api/media-servers/watch': const _Reply(200, []),
       });
@@ -311,8 +382,7 @@ void main() {
       );
       expect(
         MediaServerAccountRow.fromJson(
-                const {'disabled_at': '2026-08-28T10:00:00Z'})
-            .disabled,
+            const {'disabled_at': '2026-08-28T10:00:00Z'}).disabled,
         isTrue,
       );
       expect(MediaServerAccountRow.fromJson(const {}).disabled, isFalse);
@@ -333,8 +403,7 @@ void main() {
       expect(row.createdByCantinarr, isFalse);
     });
 
-    test('link PUTs the remote id and unlink DELETEs the same path',
-        () async {
+    test('link PUTs the remote id and unlink DELETEs the same path', () async {
       final adapter = _FakeAdapter({
         'PUT /api/admin/users/7/media-servers/jf-a/account': const _Reply(200, {
           'user_id': 7,
@@ -468,8 +537,7 @@ void main() {
     test('an account status reads administrator, off by default', () {
       expect(
         MediaServerAccountStatus.fromJson(
-                const {'username': 'julian', 'administrator': true})
-            .administrator,
+            const {'username': 'julian', 'administrator': true}).administrator,
         isTrue,
       );
       expect(

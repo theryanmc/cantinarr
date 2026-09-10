@@ -915,6 +915,8 @@ class _UserRequestSettingsScreenState
         return 'Tautulli';
       case 'tracearr':
         return 'Tracearr';
+      case 'audiobookshelf':
+        return 'Audiobookshelf';
       case 'jellyfin':
         return 'Jellyfin';
       case 'emby':

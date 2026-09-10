@@ -70,11 +70,12 @@ type ImportResult struct {
 // for each requested id, a user named after the account (found or created;
 // a new one gets a connect link for the admin to hand out), the instance
 // grant, and the account linked to them, exactly as the admin's link picker
-// does it. The admin's pick is the mapping; nothing on the server changes.
+// does it. The admin's pick is the mapping; the remote account changes only
+// when access management is explicitly requested.
 // Rows are best-effort and independent, each carrying its own outcome, so
 // one failure never stops the rest; only a server that cannot list its
 // accounts fails the whole call.
-func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID, serverURL string, remoteIDs []string) ([]ImportResult, error) {
+func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID, serverURL string, remoteIDs []string, manage ...bool) ([]ImportResult, error) {
 	if s.userCreator == nil {
 		return nil, ErrImportUnavailable
 	}
@@ -113,14 +114,14 @@ func (s *Service) ImportAccounts(ctx context.Context, adminID int64, instanceID,
 			continue
 		}
 		seen[id] = true
-		results = append(results, s.importOne(ctx, adminID, inst.ID, serverURL, invite, id, byID))
+		results = append(results, s.importOne(ctx, adminID, inst.ID, serverURL, invite, id, byID, len(manage) > 0 && manage[0]))
 	}
 	return results, nil
 }
 
 // importOne is one row of an import; every outcome is a result, never an
 // error, so the caller's loop goes on.
-func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serverURL string, invite bool, id string, byID map[string]mediaserver.RemoteUser) ImportResult {
+func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serverURL string, invite bool, id string, byID map[string]mediaserver.RemoteUser, manage bool) ImportResult {
 	res := ImportResult{RemoteUserID: id}
 	remote, ok := byID[id]
 	if !ok {
@@ -190,7 +191,7 @@ func (s *Service) importOne(ctx context.Context, adminID int64, instanceID, serv
 			}
 		}
 	}
-	account, err := s.LinkAccount(ctx, userID, instanceID, id)
+	account, err := s.LinkAccount(ctx, userID, instanceID, id, manage)
 	res.PlexIdentityError = account.PlexIdentityError
 	switch {
 	case err == nil:

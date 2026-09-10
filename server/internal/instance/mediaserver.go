@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/windoze95/cantinarr-server/internal/audiobookshelf"
 	"github.com/windoze95/cantinarr-server/internal/emby"
 	"github.com/windoze95/cantinarr-server/internal/jellyfin"
 	"github.com/windoze95/cantinarr-server/internal/mediaserver"
@@ -19,9 +20,9 @@ import (
 
 // mediaServerTypes are the service types that are media servers Cantinarr
 // manages user access on. They follow the Chaptarr rule: never a global
-// default, granted per user, invisible to arr routing. Jellyfin and Emby
-// hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
-var mediaServerTypes = []string{"jellyfin", "emby", "plex"}
+// default, granted per user, invisible to arr routing. Jellyfin, Emby and
+// Audiobookshelf hold accounts Cantinarr creates; Plex holds shares Cantinarr sends.
+var mediaServerTypes = []string{"jellyfin", "emby", "plex", "audiobookshelf"}
 
 // PlexPublicAddress is where anyone signs in to any Plex server, so it is the
 // sign-in address a Plex instance shows unless the admin typed another.
@@ -121,6 +122,8 @@ func (c *MediaServerConfig) setPlexOwner(owner plex.Account) {
 // case here plus an entry in mediaServerTypes.
 func NewMediaServerProvider(inst *Instance) (mediaserver.Provider, error) {
 	switch inst.ServiceType {
+	case "audiobookshelf":
+		return audiobookshelf.NewClient(inst.URL, inst.APIKey), nil
 	case "jellyfin":
 		return jellyfin.NewClient(inst.URL, inst.APIKey), nil
 	case "emby":

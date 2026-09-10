@@ -193,10 +193,20 @@ CREATE TABLE IF NOT EXISTS user_media_server_accounts (
     remote_user_id TEXT NOT NULL,
     remote_username TEXT NOT NULL,
     created_by_cantinarr INTEGER NOT NULL DEFAULT 1,
+    manage_access INTEGER NOT NULL DEFAULT 0,
+    access_sync_pending INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     disabled_at DATETIME,
     PRIMARY KEY (user_id, instance_id),
     UNIQUE (instance_id, remote_user_id)
+);
+
+-- An explicit unlink prevents automatic Plex adoption/invitations from
+-- recreating the connection. No remote identity or credentials are retained.
+CREATE TABLE IF NOT EXISTS user_media_server_unlinks (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    instance_id TEXT NOT NULL REFERENCES service_instances(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, instance_id)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -1061,6 +1071,13 @@ func Open(dbPath string) (*sql.DB, error) {
 		// address shown to granted users plus the shared library ids, as one
 		// JSON document; '{}' for every other service type.
 		{alter: "ALTER TABLE service_instances ADD COLUMN media_server_config TEXT NOT NULL DEFAULT '{}'"},
+		// Preserve established offboarding behavior exactly once. New links
+		// default to passive; account creation explicitly opts into management.
+		{
+			alter:    "ALTER TABLE user_media_server_accounts ADD COLUMN manage_access INTEGER NOT NULL DEFAULT 0",
+			backfill: []string{"UPDATE user_media_server_accounts SET manage_access = 1"},
+		},
+		{alter: "ALTER TABLE user_media_server_accounts ADD COLUMN access_sync_pending INTEGER NOT NULL DEFAULT 0"},
 		// Music availability alerts: pushed when a Lidarr album import lands.
 		// On by default like the other new-content categories; the audience is
 		// additionally scoped in SQL to users who can see the instance.
@@ -1094,7 +1111,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
 	// and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf') AND is_default = 1",
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)

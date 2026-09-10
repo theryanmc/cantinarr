@@ -246,6 +246,7 @@ const List<SettingsSearchEntry> _rootEntries = [
       'tautulli',
       'tracearr',
       'monitoring',
+      'audiobookshelf',
       'jellyfin',
       'emby',
       'media server',
@@ -531,6 +532,7 @@ const List<SettingsSearchEntry> _rootEntries = [
     section: 'Guides',
     keywords: [
       'plex',
+      'audiobookshelf',
       'jellyfin',
       'emby',
       'media server',

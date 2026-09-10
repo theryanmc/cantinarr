@@ -120,13 +120,15 @@ void main() {
         ServiceInstance(id: 'tracearr-a', serviceType: 'tracearr', name: 'TR'),
         ServiceInstance(id: 'jf-b', serviceType: 'jellyfin', name: 'Cabin'),
         ServiceInstance(id: 'em-a', serviceType: 'emby', name: 'Den Emby'),
+        ServiceInstance(id: 'abs-a', serviceType: 'audiobookshelf', name: 'Books'),
       ],
     );
 
-    expect(mediaServerServiceTypes, containsAll(['jellyfin', 'emby', 'plex']));
+    expect(mediaServerServiceTypes,
+        containsAll(['jellyfin', 'emby', 'plex', 'audiobookshelf']));
     expect(
       connection.mediaServerInstances.map((i) => i.id).toList(),
-      ['jf-a', 'jf-b', 'em-a'],
+      ['jf-a', 'jf-b', 'em-a', 'abs-a'],
     );
     // A media server is neither a library nor a download client, and a
     // watch-history provider is not a media server.

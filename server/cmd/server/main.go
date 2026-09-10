@@ -267,6 +267,7 @@ func main() {
 	authHandler.SetAccessRequestHook(mediaAccessService.OnPlexEmailShared)
 	requestService := request.NewService(database, registry, bridge, notifier)
 	requestHandler := request.NewHandler(requestService)
+	mediaAccessHandler.SetListeningBooks(requestService)
 
 	// Remediation (issue reporting) service + handler. Records/threads issues, runs
 	// the read-only agent, and (Wave 5) accepts auto-dispatched issues from the

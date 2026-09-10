@@ -33,6 +33,7 @@ class BookFormatPanel extends StatefulWidget {
   /// download action and a request action never share a row.
   final Widget? ebookDownload;
   final Widget? audiobookDownload;
+  final Widget? audiobookListen;
 
   final FutureOr<void> Function()? onRequestCompleted;
 
@@ -54,6 +55,7 @@ class BookFormatPanel extends StatefulWidget {
     this.refreshTick = 0,
     this.ebookDownload,
     this.audiobookDownload,
+    this.audiobookListen,
     this.onRequestCompleted,
     this.onCanonicalForeignId,
   });
@@ -523,6 +525,16 @@ class _BookFormatPanelState extends State<BookFormatPanel> {
                 icon: Icons.headphones,
                 download: widget.audiobookDownload,
               ),
+              if (widget.audiobookListen != null &&
+                  detail.isKnown &&
+                  !widget.identityAmbiguous &&
+                  !_refreshFailed &&
+                  detail.statusFor(BookRequestFormat.audiobook) ==
+                      RequestStatus.available)
+                Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: widget.audiobookListen),
               const Divider(height: 1, color: AppTheme.border),
               Align(
                   alignment: Alignment.centerLeft,

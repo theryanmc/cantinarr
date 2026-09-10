@@ -790,7 +790,12 @@ func (c *Client) GetAllBooks() ([]Book, error) {
 // exists. Non-2xx responses become host-free errors instead of decoding an
 // error body into a bogus zero-id record.
 func (c *Client) GetBook(id int) (*Book, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/book/%d", id))
+	return c.GetBookContext(context.Background(), id)
+}
+
+// GetBookContext is the cancellable single-record read used by listening links.
+func (c *Client) GetBookContext(ctx context.Context, id int) (*Book, error) {
+	resp, err := c.doRequestContext(ctx, "GET", fmt.Sprintf("/api/v1/book/%d", id))
 	if err != nil {
 		return nil, fmt.Errorf("chaptarr get book: %w", err)
 	}

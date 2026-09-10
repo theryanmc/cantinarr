@@ -10,12 +10,13 @@ import 'media_server_email_sheet.dart';
 import 'media_server_password_sheet.dart';
 import 'media_server_sign_in_sheet.dart';
 import 'plex_sign_in_sheet.dart';
+import '../logic/listen_links_provider.dart';
 
-/// Requester-focused guide for the media servers (Plex, Jellyfin, Emby)
+/// Requester-focused guide for the media servers (Plex, Jellyfin, Emby, Audiobookshelf)
 /// shared with this account: create the account with a password only they
 /// know, or link one they already have by signing in with it; on Plex, sign
 /// in with their own Plex account or share the email their invite goes to;
-/// see where to sign in, install the app, start watching. Everything here is
+/// see where to sign in and start watching or listening. Everything here is
 /// re-read from the server on every open and on pull-to-refresh: the rows
 /// behind it are an action log and the media server is the truth, which is
 /// also why an unconfirmed account is said to be unconfirmed rather than
@@ -43,6 +44,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     try {
       final servers = await ref.read(mediaAccessServiceProvider).listMine();
       if (!mounted) return;
+      ref.read(mediaAccessRevisionProvider.notifier).state++;
       setState(() {
         _servers = servers;
         _failed = false;
@@ -113,6 +115,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
       content: Text((switch (state.inviteState) {
             'sent' => 'Signed in as $who. Invite sent. Check your email.',
             'adopted' => 'Signed in as $who. Your access is set up.',
+            'unlinked' => 'Signed in as $who. Your server connection stays unlinked; use Link my Plex account to reconnect it.',
             'failed' =>
               "Signed in as $who, but the invite couldn't be sent yet. "
                   'It will be retried.',
@@ -373,6 +376,13 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
     final names = mediaServerNamesPhrase(types);
     final where = single ? labels.single : 'your media server';
     final whereOpening = single ? labels.single : 'Your media server';
+    final includesAudiobookshelf = types.contains('audiobookshelf');
+    final onlyAudiobookshelf = single && includesAudiobookshelf;
+    final activity = onlyAudiobookshelf
+        ? 'listen'
+        : includesAudiobookshelf
+            ? 'watch or listen'
+            : 'watch';
     final includesEmby = types.contains('emby');
     final includesPlex = types.contains('plex');
     final onlyPlex = single && includesPlex;
@@ -385,10 +395,10 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                 'invite, then sign in on any device.'
             : includesPlex
                 ? 'Cantinarr is where you request. $whereOpening is where '
-                    'you watch. Set up your access once, then sign in on '
+                    'you $activity. Set up your access once, then sign in on '
                     'any device.'
                 : 'Cantinarr is where you request. $whereOpening is where '
-                    'you watch. Create your account once, then sign in on '
+                    'you $activity. Create your account once, then sign in on '
                     'any device.',
         style: const TextStyle(
           color: AppTheme.textSecondary,
@@ -414,19 +424,25 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
       const SizedBox(height: 12),
       _GuideSection(
         number: 2,
-        title: 'Install the $names app',
+        title: onlyAudiobookshelf
+            ? 'Open Audiobookshelf'
+            : includesAudiobookshelf
+                ? 'Open your media apps'
+                : 'Install the $names app',
         steps: [
           // Jellyfin's and Plex's apps are free; Emby's are free to install
           // but ask for an unlock or Premiere to play video on phones and
           // tablets, so "free" is said only when Emby is not in the set.
-          if (!includesEmby)
+          if (includesAudiobookshelf)
+            'Open Audiobookshelf using the sign-in address above in your browser, or use an Audiobookshelf-compatible app'
+          else if (!includesEmby)
             'Download the free $names app from the App Store or Google Play'
           else
             'Download the $names app from the App Store or Google Play',
-          if (single)
+          if (single && !includesAudiobookshelf)
             '$names is also on Apple TV, Android TV, Roku, Fire TV, and most '
                 'smart TVs'
-          else
+          else if (!includesAudiobookshelf)
             '${labels.length == 2 ? 'Both' : 'All of them'} are also on '
                 'Apple TV, Android TV, Roku, Fire TV, and most smart TVs',
           if (includesEmby)
@@ -466,12 +482,25 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
       const SizedBox(height: 24),
       _GuideSection(
         number: 4,
-        title: 'Start watching',
+        title: onlyAudiobookshelf
+            ? 'Start listening'
+            : includesAudiobookshelf
+                ? 'Watch or listen'
+                : 'Start watching',
         steps: [
-          'Everything you request in Cantinarr shows up in $where once '
-              'it is Available',
-          'When $where confirms a match, tap Watch on $names on the '
-              "title's page in Cantinarr to open it",
+          if (includesAudiobookshelf) ...[
+            'Audiobookshelf needs to scan the audiobook library after a download finishes',
+            'On an available audiobook, Listen in Audiobookshelf opens a verified copy. If several copies match, choose the one you want',
+            'Open Audiobookshelf is a general shortcut when a matching copy cannot be verified',
+          ],
+          if (!onlyAudiobookshelf) ...[
+            includesAudiobookshelf
+                ? 'Your media server needs to scan the downloaded files before they appear'
+                : 'Everything you request in Cantinarr shows up in $where once it is Available',
+            includesAudiobookshelf
+                ? 'Tap Watch on a movie or show to open it on your media server'
+                : 'When $where confirms a match, tap Watch on $names on the title\'s page in Cantinarr to open it',
+          ],
           if (includesPlex)
             'If Cantinarr cannot confirm the Plex title, Open Plex takes '
                 'you to the sign-in address instead',
@@ -479,10 +508,11 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       ),
       const SizedBox(height: 24),
-      const _TipCard(
-        title: 'Request here, watch there',
-        message: 'When a request shows as Available in Cantinarr, it is '
-            'ready to play on your server.',
+      _TipCard(
+        title: 'Request here, $activity there',
+        message: includesAudiobookshelf
+            ? 'Available means the files have arrived. Audiobookshelf must scan them before you can listen.'
+            : 'When a request shows as Available in Cantinarr, it is ready to play on your server.',
       ),
     ];
   }
@@ -497,8 +527,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You have access to ${server.name}. Sign in with Plex to link '
-            'your account, or share the email of your Plex account.',
+            server.autoLinkSuppressed
+                ? 'Your account was unlinked from ${server.name}. Link it again explicitly to reconnect this server.'
+                : 'You have access to ${server.name}. Sign in with Plex to link your account, or share the email of your Plex account.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -507,15 +538,20 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
-            onPressed: _signInWithPlex,
+            onPressed: server.autoLinkSuppressed
+                ? () => _requestInvite(server, plexEmail)
+                : _signInWithPlex,
             icon: const Icon(Icons.login, size: 18),
-            label: const Text('Sign in with Plex'),
+            label: Text(server.autoLinkSuppressed
+                ? 'Link my Plex account'
+                : 'Sign in with Plex'),
           ),
-          TextButton.icon(
-            onPressed: () => _requestInvite(server, plexEmail),
-            icon: const Icon(Icons.mail_outline, size: 18),
-            label: const Text('Share my Plex email'),
-          ),
+          if (!server.autoLinkSuppressed)
+            TextButton.icon(
+              onPressed: () => _requestInvite(server, plexEmail),
+              icon: const Icon(Icons.mail_outline, size: 18),
+              label: const Text('Share my Plex email'),
+            ),
         ],
       );
     } else if (account.pending) {
@@ -624,7 +660,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       );
     }
-    return _card(body);
+    return _accountCardWithManagement(server, body);
   }
 
   /// A Plex server exists but this user holds no grant on it: signing in
@@ -728,8 +764,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           SizedBox(width: 6),
           Expanded(
             child: Text(
-              "We couldn't confirm this with the server just now. It should "
-              'still work.',
+              "We couldn't confirm your server access just now. Try again or check with your admin.",
               style: TextStyle(
                 color: AppTheme.warning,
                 fontSize: 12,
@@ -740,6 +775,36 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       ),
     );
+  }
+
+  Widget _accountCardWithManagement(MediaServerAccess server, Widget body) {
+    final account = server.account;
+    final supported = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.mediaAccountManagement ??
+        false;
+    if (!supported || account == null) return _card(body);
+    return _card(
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      body,
+      const SizedBox(height: 10),
+      Text(
+          account.accessSyncPending
+              ? 'Your server access change is pending. Cantinarr will retry.'
+              : account.administrator
+                  ? 'Protected administrator account.'
+                  : account.manageAccess
+                      ? 'Your admin manages this account’s access through Cantinarr.'
+                      : 'Linked only. Your account’s access is managed on ${server.name}.',
+          style: TextStyle(
+              color: account.accessSyncPending
+                  ? AppTheme.warning
+                  : AppTheme.textMuted,
+              fontSize: 12)),
+      if (!account.verified && account.disabled) _buildUnconfirmed(),
+    ]));
   }
 
   Widget _card(Widget body) {
@@ -796,7 +861,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         children: [
           Text(
             'You have access to ${server.name}. Create your account to '
-            'start watching.',
+            'get started.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -959,8 +1024,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    "We couldn't confirm this account with the server just "
-                    'now. Signing in should still work.',
+                    "We couldn't confirm your server access just now. Try again or check with your admin.",
                     style: TextStyle(
                       color: AppTheme.warning,
                       fontSize: 12,
@@ -974,16 +1038,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       );
     }
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
-      ),
-      child: body,
-    );
+    return _accountCardWithManagement(server, body);
   }
 }
 

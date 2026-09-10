@@ -153,7 +153,8 @@ void main() {
     expect(auth.aiAccessUpdates, isEmpty);
   });
 
-  testWidgets('an unconfigured shared provider stages access without OAuth claims',
+  testWidgets(
+      'an unconfigured shared provider stages access without OAuth claims',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -304,6 +305,7 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   WidgetTester tester, {
   List<Map<String, dynamic>> accounts = const [],
   bool accountsFail = false,
+  bool supportsManagement = false,
   List<ServiceInstance> instances = const [_homeJellyfin],
   List<String> grants = const ['jf-a'],
   List<UserSummary>? users,
@@ -323,8 +325,10 @@ Future<_MediaAdapter> _pumpWithMediaServer(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authProvider.overrideWith(
-            () => _FakeAuthNotifier(instances: instances, users: users)),
+        authProvider.overrideWith(() => _FakeAuthNotifier(
+            instances: instances,
+            users: users,
+            supportsManagement: supportsManagement)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: MaterialApp(theme: AppTheme.dark, home: const UsersScreen()),
@@ -340,6 +344,92 @@ Future<void> _openMenu(WidgetTester tester) async {
 }
 
 void _mediaServerAccountTests() {
+  testWidgets('grant controls use grant rather than remote disabled state',
+      (tester) async {
+    final adapter =
+        await _pumpWithMediaServer(tester, supportsManagement: true, accounts: [
+      {
+        ..._accountRow(disabled: true),
+        'manage_access': false,
+        'granted': true,
+        'verified': true
+      }
+    ]);
+    expect(find.textContaining('Granted · Linked only · Off on server'),
+        findsOneWidget);
+    await _openMenu(tester);
+    expect(find.text('Turn Home Jellyfin access off'), findsOneWidget);
+    expect(find.text('Cantinarr only; server access stays the same'),
+        findsOneWidget);
+    await tester.tap(find.text('Turn Home Jellyfin access off'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.singleWhere((r) => r.method == 'PUT').body,
+        {'jellyfin': []});
+  });
+
+  testWidgets('management requires confirmation and reports pending sync',
+      (tester) async {
+    final adapter =
+        await _pumpWithMediaServer(tester, supportsManagement: true, accounts: [
+      {
+        ..._accountRow(),
+        'manage_access': false,
+        'granted': false,
+        'verified': true
+      }
+    ]);
+    await _openMenu(tester);
+    await tester.tap(find.text('Manage Home Jellyfin access…'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('disable this account'), findsOneWidget);
+    expect(adapter.requests.where((r) => r.method == 'PATCH'), isEmpty);
+    await tester.tap(find.widgetWithText(FilledButton, 'Manage access'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.singleWhere((r) => r.method == 'PATCH').body,
+        {'manage_access': true});
+    expect(
+        find.textContaining('server access change is pending'), findsOneWidget);
+  });
+
+  testWidgets('new link defaults to linked only and management is opt in',
+      (tester) async {
+    final adapter =
+        await _pumpWithMediaServer(tester, supportsManagement: true);
+    await _openMenu(tester);
+    await tester.tap(find.text('Link Home Jellyfin account…'));
+    await tester.pumpAndSettle();
+    final checkbox = find.widgetWithText(
+        CheckboxListTile, 'Manage this account’s access through Cantinarr');
+    expect(tester.widget<CheckboxListTile>(checkbox).value, false);
+    await tester.tap(find.text('old-tablet'));
+    await tester.pumpAndSettle();
+    expect(adapter.requests.singleWhere((r) => r.method == 'PUT').body,
+        {'remote_user_id': 'u3', 'manage_access': false});
+  });
+
+  testWidgets('protected accounts and old servers omit management controls',
+      (tester) async {
+    await _pumpWithMediaServer(tester, supportsManagement: true, accounts: [
+      {
+        ..._accountRow(),
+        'administrator': true,
+        'manage_access': false,
+        'granted': true,
+        'verified': true
+      }
+    ]);
+    expect(find.textContaining('Protected administrator'), findsOneWidget);
+    await _openMenu(tester);
+    expect(find.text('Manage Home Jellyfin access…'), findsNothing);
+    expect(find.text('Stop managing Home Jellyfin access…'), findsNothing);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpWithMediaServer(tester, accounts: [_accountRow()]);
+    await _openMenu(tester);
+    expect(find.text('Stop managing Home Jellyfin access…'), findsNothing);
+  });
+
   testWidgets('the import action shows only with a media server',
       (tester) async {
     await _pumpWithMediaServer(tester, instances: const []);
@@ -407,7 +497,7 @@ void _mediaServerAccountTests() {
     await tester.tap(find.byTooltip('Import from a media server'));
     await tester.pumpAndSettle();
     expect(find.text('Import from Home Jellyfin'), findsOneWidget);
-    expect(find.textContaining('Nothing else on Home Jellyfin changes'),
+    expect(find.textContaining('This server manages linked accounts'),
         findsOneWidget);
     // What each pick would do, said before it happens.
     expect(find.text('Administrator · New Cantinarr user jfadmin'),
@@ -422,8 +512,8 @@ void _mediaServerAccountTests() {
     final linkedTile = tester.widget<CheckboxListTile>(
         find.widgetWithText(CheckboxListTile, 'lr-tv'));
     expect(linkedTile.onChanged, isNull);
-    expect(find.widgetWithText(ElevatedButton, 'Import 0 accounts'),
-        findsNothing);
+    expect(
+        find.widgetWithText(ElevatedButton, 'Import 0 accounts'), findsNothing);
 
     // Select all skips the administrator; it is ticked by hand.
     await tester.tap(find.text('Select all'));
@@ -449,8 +539,8 @@ void _mediaServerAccountTests() {
     expect(find.text('Existing user old-tablet, linked'), findsOneWidget);
     expect(find.byTooltip('Copy link for jfadmin'), findsOneWidget);
     expect(find.byTooltip('Copy link for old-tablet'), findsNothing);
-    expect(find.textContaining('address your app connects with'),
-        findsOneWidget);
+    expect(
+        find.textContaining('address your app connects with'), findsOneWidget);
     expect(find.text('Copy all links'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Done'));
@@ -486,7 +576,9 @@ void _mediaServerAccountTests() {
       adapter.requests.any((r) => r.path.contains('/media-servers/jf-a')),
       isFalse,
     );
-    expect(find.text('Turned Home Jellyfin access off for living-room'),
+    expect(
+        find.text(
+            'Turned Home Jellyfin access in Cantinarr off for living-room'),
         findsOneWidget);
   });
 
@@ -510,7 +602,9 @@ void _mediaServerAccountTests() {
     expect(put.body, {
       'jellyfin': ['jf-a'],
     });
-    expect(find.text('Turned Home Jellyfin access on for living-room'),
+    expect(
+        find.text(
+            'Turned Home Jellyfin access in Cantinarr on for living-room'),
         findsOneWidget);
   });
 
@@ -629,8 +723,7 @@ void _mediaServerAccountTests() {
     await tester.tap(find.widgetWithText(ElevatedButton, 'Unlink'));
     await tester.pumpAndSettle();
 
-    final delete =
-        adapter.requests.singleWhere((r) => r.method == 'DELETE');
+    final delete = adapter.requests.singleWhere((r) => r.method == 'DELETE');
     expect(delete.path, '/api/admin/users/7/media-servers/jf-a/account');
     // The grant is not touched by unlinking.
     expect(
@@ -769,6 +862,13 @@ class _MediaAdapter implements HttpClientAdapter {
       response = {'results': importResults};
     } else if (path == '/api/admin/users/7/instance-grants') {
       response = {'jellyfin': grants};
+    } else if (path ==
+        '/api/admin/users/7/media-servers/jf-a/account/management') {
+      response = {
+        ...accounts.single,
+        'manage_access': body['manage_access'],
+        'access_sync_pending': true
+      };
     } else if (path == '/api/admin/users/7/media-servers/jf-a/account') {
       if (options.method == 'DELETE') {
         return ResponseBody.fromString('', 204, headers: {});
@@ -797,6 +897,7 @@ class _MediaAdapter implements HttpClientAdapter {
 class _FakeAuthNotifier extends AuthNotifier {
   _FakeAuthNotifier({
     this.currentUser = false,
+    this.supportsManagement = false,
     this.instances = const [],
     List<UserSummary>? users,
   }) {
@@ -804,6 +905,7 @@ class _FakeAuthNotifier extends AuthNotifier {
   }
 
   final bool currentUser;
+  final bool supportsManagement;
 
   /// Instances the admin's config lists; a jellyfin one makes the screen
   /// read and offer media-server accounts.
@@ -834,6 +936,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           accessToken: 'access',
           refreshToken: 'refresh',
           instances: instances,
+          mediaAccountManagement: supportsManagement,
         ),
         user: currentUser
             ? const UserProfile(id: 7, username: 'admin', role: 'admin')

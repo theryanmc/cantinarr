@@ -1062,6 +1062,8 @@ IconData _serviceIcon(String serviceType) {
     case 'tautulli':
     case 'tracearr':
       return Icons.monitor_heart_outlined;
+    case 'audiobookshelf':
+      return Icons.headphones_outlined;
     case 'jellyfin':
     case 'emby':
       return Icons.live_tv_outlined;
@@ -1096,6 +1098,8 @@ String _serviceLabel(String serviceType) {
       return 'Tautulli';
     case 'tracearr':
       return 'Tracearr';
+    case 'audiobookshelf':
+      return 'Audiobookshelf';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':

@@ -588,6 +588,9 @@ class ServerConfig {
   final bool plexAccessRequestable;
   final bool adminCatalogBrowsing;
 
+  /// Supports linking accounts independently from managing their access.
+  final bool mediaAccountManagement;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -601,6 +604,7 @@ class ServerConfig {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.mediaAccountManagement = false,
     this.hiddenDiscoverTabs,
   });
 
@@ -621,6 +625,8 @@ class ServerConfig {
       allowReporting: json['allow_reporting'] as bool? ?? false,
       plexAccessRequestable: json['plex_access_requestable'] as bool? ?? false,
       adminCatalogBrowsing: json['admin_catalog_browsing'] as bool? ?? false,
+      mediaAccountManagement:
+          json['media_account_management'] as bool? ?? false,
       hiddenDiscoverTabs:
           (json['hidden_discover_tabs'] as List?)?.cast<String>(),
     );
