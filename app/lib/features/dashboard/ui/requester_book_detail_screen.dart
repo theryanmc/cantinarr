@@ -25,6 +25,7 @@ import '../../chaptarr/ui/chaptarr_book_screen.dart';
 import '../../chaptarr/ui/widgets/book_link_chips.dart';
 import '../../issues/ui/report_problem_sheet.dart';
 import '../../media_detail/logic/title_links.dart';
+import '../../media_access/ui/book_listen_actions.dart';
 import '../../media_download/data/media_download_models.dart';
 import '../../media_download/ui/media_download_button.dart';
 import '../../request/data/book_ownership.dart';
@@ -644,6 +645,10 @@ class _RequesterBookDetailScreenState
               identityAmbiguous: libraryMatch.ambiguous,
               refreshTick: requestRefreshTick,
               onCanonicalForeignId: _onCanonicalForeignId,
+              audiobookListen: BookListenActions(
+                  instanceId: instanceId,
+                  foreignBookId: _effectiveForeignId,
+                  refreshTick: requestRefreshTick),
               ebookDownload: !downloadsEnabled || ebookFiles.isEmpty
                   ? null
                   : MediaDownloadChoiceButton(

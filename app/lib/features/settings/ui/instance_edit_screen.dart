@@ -234,6 +234,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
     ('tracearr', 'Tracearr'),
     ('jellyfin', 'Jellyfin'),
     ('emby', 'Emby'),
+    ('audiobookshelf', 'Audiobookshelf'),
     ('plex', 'Plex'),
   ];
 
@@ -1808,6 +1809,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'http://tautulli:8181';
       case 'tracearr':
         return 'http://tracearr:3000';
+      case 'audiobookshelf':
+        return 'http://audiobookshelf:80';
       case 'jellyfin':
         return 'http://jellyfin:8096';
       case 'emby':
@@ -1824,6 +1827,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'e.g. Tautulli';
       case 'tracearr':
         return 'e.g. Tracearr';
+      case 'audiobookshelf':
+        return 'e.g. Home Audiobookshelf';
       case 'jellyfin':
         return 'e.g. Home Jellyfin';
       case 'emby':
@@ -1894,6 +1899,8 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         return 'Your Chaptarr API key';
       case 'lidarr':
         return 'Your Lidarr API key';
+      case 'audiobookshelf':
+        return 'Your Audiobookshelf administrator API key';
       case 'jellyfin':
         return 'Your Jellyfin API key (Dashboard > API Keys)';
       case 'emby':

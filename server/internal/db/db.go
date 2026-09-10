@@ -1094,7 +1094,7 @@ func Open(dbPath string) (*sql.DB, error) {
 	// (GetDefault) resolves purely by sort order. Runs every boot; idempotent
 	// and the table is tiny.
 	if _, err := db.Exec(
-		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex') AND is_default = 1",
+		"UPDATE service_instances SET is_default = 0 WHERE service_type IN ('chaptarr', 'lidarr', 'jellyfin', 'emby', 'plex', 'audiobookshelf') AND is_default = 1",
 	); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("clear grant-only default flags: %w", err)

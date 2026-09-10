@@ -26,24 +26,25 @@ import (
 
 // allowedServiceTypes is the set of supported service types.
 var allowedServiceTypes = map[string]bool{
-	"radarr":       true,
-	"sonarr":       true,
-	"chaptarr":     true,
-	"lidarr":       true,
-	"sabnzbd":      true,
-	"qbittorrent":  true,
-	"nzbget":       true,
-	"transmission": true,
-	"deluge":       true,
-	"rutorrent":    true,
-	"tautulli":     true,
-	"tracearr":     true,
-	"jellyfin":     true,
-	"emby":         true,
-	"plex":         true,
+	"radarr":         true,
+	"sonarr":         true,
+	"chaptarr":       true,
+	"lidarr":         true,
+	"sabnzbd":        true,
+	"qbittorrent":    true,
+	"nzbget":         true,
+	"transmission":   true,
+	"deluge":         true,
+	"rutorrent":      true,
+	"tautulli":       true,
+	"tracearr":       true,
+	"audiobookshelf": true,
+	"jellyfin":       true,
+	"emby":           true,
+	"plex":           true,
 }
 
-const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex'"}`
+const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 'sonarr', 'chaptarr', 'lidarr', 'sabnzbd', 'qbittorrent', 'nzbget', 'transmission', 'deluge', 'rutorrent', 'tautulli', 'tracearr', 'jellyfin', 'emby', 'plex', 'audiobookshelf'"}`
 
 // grantableServiceTypes is the subset a user can hold access-grant rows for.
 // Download clients and watch-history providers (Tautulli, Tracearr) are admin
@@ -51,13 +52,14 @@ const serviceTypeListError = `{"error":"service_type must be one of 'radarr', 's
 // confusion. For media servers a grant is
 // the eligibility to create an account there.
 var grantableServiceTypes = map[string]bool{
-	"radarr":   true,
-	"sonarr":   true,
-	"chaptarr": true,
-	"lidarr":   true,
-	"jellyfin": true,
-	"emby":     true,
-	"plex":     true,
+	"radarr":         true,
+	"sonarr":         true,
+	"chaptarr":       true,
+	"lidarr":         true,
+	"audiobookshelf": true,
+	"jellyfin":       true,
+	"emby":           true,
+	"plex":           true,
 }
 
 // instanceResponse is the JSON shape returned to clients. All credentials are

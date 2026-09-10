@@ -7,6 +7,7 @@ import '../../../core/widgets/app_sheet.dart';
 import '../../../core/widgets/status_pill.dart';
 import '../../../navigation/ambient_page_route.dart';
 import '../../media_detail/logic/title_links.dart';
+import '../../media_access/ui/book_listen_actions.dart';
 import '../data/chaptarr_api_service.dart';
 import '../data/chaptarr_models.dart';
 import '../logic/book_links.dart';
@@ -261,6 +262,12 @@ class _ChaptarrBookDetailSheetState
                 }),
             ],
           ),
+          if (_records.any((book) =>
+                  book.format == BookFormat.audiobook && book.hasFile) &&
+              (_primary.foreignBookId?.isNotEmpty ?? false))
+            BookListenActions(
+                instanceId: widget.instanceId,
+                foreignBookId: _primary.foreignBookId!),
           if (links.isNotEmpty) ...[
             const SizedBox(height: 12),
             BookLinkChips(links),

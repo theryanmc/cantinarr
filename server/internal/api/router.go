@@ -389,6 +389,7 @@ func NewRouter(
 			r.Use(authService.AuthMiddleware)
 			r.Get("/media-servers", mediaAccessHandler.List)
 			r.Get("/media-servers/watch", mediaAccessHandler.Watch)
+			r.Get("/media-servers/listen", mediaAccessHandler.Listen)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account", mediaAccessHandler.CreateAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/{instanceID}/account/link", mediaAccessHandler.LinkOwnAccount)
 			r.With(authLimiter.Middleware).Post("/media-servers/plex/sign-in/begin", mediaAccessHandler.PlexSignInBegin)

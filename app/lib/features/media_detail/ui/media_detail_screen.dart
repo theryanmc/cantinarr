@@ -1028,7 +1028,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final connection = ref.read(authProvider).valueOrNull?.connection;
     final watchable = status == RequestStatus.available ||
         status == RequestStatus.partial;
-    final askable = connection?.mediaServerInstances.isNotEmpty ?? false;
+    final askable = connection?.mediaServerInstances.any((server) => server.serviceType != 'audiobookshelf') ?? false;
     final detail = _detailNotifier.state;
     if (!watchable || !askable) {
       if (_watchLinks.isNotEmpty) setState(() => _watchLinks = const []);

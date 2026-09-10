@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../discover/data/tmdb_models.dart';
 import '../../../core/network/backend_client.dart';
+import 'listen_links.dart';
 
 /// The live state of one user's account on a media server, as the server
 /// answered just now. [verified] is false when the backend could not reach
@@ -37,7 +38,7 @@ class MediaServerAccountStatus {
 }
 
 /// One requested account's outcome from an import: [created] says a
-/// Cantinarr user was made for it (Jellyfin/Emby can reuse a namesake;
+/// Cantinarr user was made for it (Jellyfin/Emby/Audiobookshelf can reuse a namesake;
 /// Plex requires an explicit link for existing users), [linked] says the account is now that
 /// user's, [link] is the connect link to hand out, and [error] is the
 /// server's code when a step was refused (`not_found`, `already_linked`,
@@ -83,7 +84,7 @@ class MediaServerImportResult {
 }
 
 /// How a media server grants access: an account Cantinarr creates with a
-/// password the user picks (Jellyfin, Emby), or an invite sent to the email
+/// password the user picks (Jellyfin, Emby, Audiobookshelf), or an invite sent to the email
 /// the user shares (Plex).
 enum MediaServerKind { account, invite }
 
@@ -414,6 +415,19 @@ class MediaAccessService {
         .toList(growable: false);
   }
 
+  /// Resolves current audio identifiers from this authorized Chaptarr book.
+  Future<List<ListenLink>> listenLinks(
+      {required String instanceId, required String foreignBookId}) async {
+    final response =
+        await _dio.get('/api/media-servers/listen', queryParameters: {
+      'instance_id': instanceId,
+      'foreign_book_id': foreignBookId,
+    });
+    return _list(response.data)
+        .map(ListenLink.fromJson)
+        .toList(growable: false);
+  }
+
   /// Asks where a title can be watched on the media servers the user holds a
   /// linked account on: one entry per server that was asked, each with the
   /// server's own answer; empty when no server was eligible. The year, the
@@ -630,6 +644,8 @@ String mediaServerTypeLabel(String serviceType) {
   switch (serviceType) {
     case 'plex':
       return 'Plex';
+    case 'audiobookshelf':
+      return 'Audiobookshelf';
     case 'jellyfin':
       return 'Jellyfin';
     case 'emby':
@@ -643,7 +659,7 @@ String mediaServerTypeLabel(String serviceType) {
 /// The product names of the granted media-server types, distinct and in a
 /// fixed order: Plex, Jellyfin, then Emby, then anything unknown as typed.
 List<String> mediaServerTypeLabels(Iterable<String> serviceTypes) {
-  const order = ['plex', 'jellyfin', 'emby'];
+  const order = ['plex', 'jellyfin', 'emby', 'audiobookshelf'];
   final distinct = serviceTypes.toSet();
   return [
     for (final type in order)
@@ -674,6 +690,11 @@ String mediaServerNamesPhrase(Iterable<String> serviceTypes) {
 /// or Emby". Static surfaces (Settings row, breadcrumb, search index) say
 /// "Media server access" instead, because they cannot know the set.
 String mediaServerGuideTitle(Iterable<String> serviceTypes) {
+  if (serviceTypes.contains('audiobookshelf')) {
+    return serviceTypes.toSet().length == 1
+        ? 'Audiobookshelf access'
+        : 'Media server access';
+  }
   final names = mediaServerNamesPhrase(serviceTypes);
   return names.isEmpty ? 'Watch on your media server' : 'Watch on $names';
 }

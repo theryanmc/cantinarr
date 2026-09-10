@@ -134,6 +134,11 @@ const _emby = ServiceInstance(
   serviceType: 'emby',
   name: 'Den Emby',
 );
+const _audiobookshelf = ServiceInstance(
+  id: 'abs-a',
+  serviceType: 'audiobookshelf',
+  name: 'Home Audiobookshelf',
+);
 const _plex = ServiceInstance(
   id: 'px-a',
   serviceType: 'plex',
@@ -326,6 +331,51 @@ void main() {
     expect(find.widgetWithText(ElevatedButton, 'Create my account'),
         findsNothing);
   });
+
+  for (final mixed in [false, true]) {
+    testWidgets(
+        'Audiobookshelf guide uses listening and browser guidance (mixed=$mixed)',
+        (tester) async {
+      final launched = <Uri>[];
+      await _pumpGuide(tester,
+          instances: [_audiobookshelf, if (mixed) _jellyfin],
+          handlers: {
+            'GET /api/media-servers': (_, __) => _Reply(200, [
+                  {
+                    'instance_id': 'abs-a',
+                    'service_type': 'audiobookshelf',
+                    'name': 'Home Audiobookshelf',
+                    'public_address': 'https://books.example.com',
+                    'account': _account(),
+                  },
+                  if (mixed) _server(account: _account()),
+                ]),
+          },
+          launcher: MediaAppLauncher(
+            platform: TargetPlatform.iOS,
+            launchExternal: (uri) async {
+              launched.add(uri);
+              return true;
+            },
+          ));
+      expect(find.text(mixed ? 'Media server access' : 'Audiobookshelf access'),
+          findsOneWidget);
+      expect(find.text(mixed ? 'Watch or listen' : 'Start listening'),
+          findsOneWidget);
+      expect(
+          find.textContaining('Listen in Audiobookshelf opens a verified copy'),
+          findsOneWidget);
+      expect(find.textContaining('Open Audiobookshelf is a general shortcut'),
+          findsOneWidget);
+      expect(find.textContaining('Apple TV'), findsNothing);
+      expect(find.textContaining('App Store or Google Play'), findsNothing);
+      final open = find.widgetWithText(TextButton, 'Open').first;
+      await tester.ensureVisible(open);
+      await tester.tap(open);
+      await tester.pumpAndSettle();
+      expect(launched.single.toString(), 'https://books.example.com');
+    });
+  }
 
   for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
     for (final server in [_plex, _jellyfin, _emby]) {

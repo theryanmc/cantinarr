@@ -93,6 +93,42 @@ void main() {
     });
   });
 
+  test('Audiobookshelf names and listening responses keep distinct copies',
+      () async {
+    expect(mediaServerTypeLabel('audiobookshelf'), 'Audiobookshelf');
+    expect(mediaServerGuideTitle(['audiobookshelf']), 'Audiobookshelf access');
+    expect(mediaServerGuideTitle(['plex', 'audiobookshelf']),
+        'Media server access');
+    final adapter = _FakeAdapter({
+      'GET /api/media-servers/listen': const _Reply(200, [
+        {
+          'instance_id': 'abs',
+          'name': 'Books',
+          'state': 'found',
+          'items': [
+            {
+              'id': 'one',
+              'title': 'Book',
+              'library_name': 'Main',
+              'url': 'https://abs.example/item/one'
+            },
+            {
+              'id': 'two',
+              'title': 'Book',
+              'library_name': 'Other',
+              'url': 'https://abs.example/item/two'
+            },
+          ],
+        }
+      ]),
+    });
+    final links = await _service(adapter)
+        .listenLinks(instanceId: 'chaptarr-a', foreignBookId: 'hc:1');
+    expect(links.single.items.map((item) => item.id), ['one', 'two']);
+    expect(adapter.uris.single.queryParameters,
+        {'instance_id': 'chaptarr-a', 'foreign_book_id': 'hc:1'});
+  });
+
   group('listMine', () {
     test('parses accounts, absence, and the verified flag', () async {
       final adapter = _FakeAdapter({

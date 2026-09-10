@@ -366,6 +366,29 @@ Future<void> _waitForRequest(
 }
 
 void main() {
+  for (final audioStatus in ['available', 'requested', 'unavailable']) {
+    testWidgets('listening requires available audio ($audioStatus)',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: BookFormatPanel(
+            foreignId: 'hc:1',
+            title: 'The Book',
+            instanceId: 'books',
+            service: _service({
+              'status': 'available',
+              'book_formats': {'ebook': 'available', 'audiobook': audioStatus},
+            }),
+            audiobookListen: const Text('Listening action'),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Listening action'),
+          audioStatus == 'available' ? findsOneWidget : findsNothing);
+    });
+  }
+
   _concurrencyTests();
   group('checkBookStatusDetail', () {
     test('one requested format leaves the other requestable', () async {

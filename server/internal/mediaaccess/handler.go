@@ -25,8 +25,9 @@ const (
 // Handler serves the user-facing and admin media-server account routes.
 // Every error body is fixed text: nothing a media server says is echoed.
 type Handler struct {
-	svc    *Service
-	logger *slog.Logger
+	listeningBooks ListeningBooks
+	svc            *Service
+	logger         *slog.Logger
 	// externalURL is the admin-configured external address, read per call;
 	// an import's connect links prefer it over the address the admin's own
 	// app sent, exactly as the connect-token route does.

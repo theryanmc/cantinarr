@@ -1,9 +1,9 @@
 /// Service types that are media servers: places users sign in to watch, as
 /// opposed to the arrs and download clients Cantinarr drives. Access to one
 /// is grant-only, so an instance of these types is listed for a requester only
-/// when an admin granted it. Jellyfin and Emby hold accounts Cantinarr
+/// when an admin granted it. Jellyfin, Emby, and Audiobookshelf hold accounts Cantinarr
 /// creates; Plex holds shares Cantinarr sends to the user's Plex email.
-const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex'};
+const mediaServerServiceTypes = {'jellyfin', 'emby', 'plex', 'audiobookshelf'};
 
 /// Service types that watch a media server's playback: Tautulli (Plex) and
 /// Tracearr (Plex, Jellyfin, Emby). Admin-only infrastructure with a global
