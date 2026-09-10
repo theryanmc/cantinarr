@@ -83,11 +83,13 @@ class _FakeAuthNotifier extends AuthNotifier {
     required this.user,
     this.instances = const [],
     this.plexAccessRequestable = false,
+    this.supportsManagement = false,
   });
 
   final UserProfile user;
   final List<ServiceInstance> instances;
   final bool plexAccessRequestable;
+  final bool supportsManagement;
 
   /// The emails shared through the ask-for-access card.
   final List<String> sharedEmails = [];
@@ -100,6 +102,7 @@ class _FakeAuthNotifier extends AuthNotifier {
           refreshToken: 'refresh',
           instances: instances,
           plexAccessRequestable: plexAccessRequestable,
+          mediaAccountManagement: supportsManagement,
         ),
         user: user,
       );
@@ -203,6 +206,7 @@ Future<_JsonAdapter> _pumpGuide(
   UserProfile user = _alice,
   List<ServiceInstance> instances = const [_jellyfin],
   bool plexAccessRequestable = false,
+  bool supportsManagement = false,
   List<String>? logs,
   MediaAppLauncher? launcher,
 }) async {
@@ -224,7 +228,8 @@ Future<_JsonAdapter> _pumpGuide(
         authProvider.overrideWith(() => _lastAuth = _FakeAuthNotifier(
             user: user,
             instances: instances,
-            plexAccessRequestable: plexAccessRequestable)),
+            plexAccessRequestable: plexAccessRequestable,
+            supportsManagement: supportsManagement)),
         backendClientProvider.overrideWithValue(dio),
       ],
       child: const MaterialApp(theme: null, home: MediaAccessGuide()),
@@ -254,8 +259,7 @@ Future<void> _submitPassword(
   required String password,
   String? confirm,
 }) async {
-  await tester.enterText(
-      find.widgetWithText(TextField, 'Password'), password);
+  await tester.enterText(find.widgetWithText(TextField, 'Password'), password);
   await tester.enterText(
       find.widgetWithText(TextField, 'Confirm password'), confirm ?? password);
   await tester.tap(find.widgetWithText(ElevatedButton, 'Create account'));
@@ -278,6 +282,47 @@ Map<String, _Reply Function(dynamic, int)> _createFlow(_Reply postReply) {
 }
 
 void main() {
+  testWidgets('account management and pending changes are shown independently',
+      (tester) async {
+    await _pumpGuide(tester, supportsManagement: true, handlers: {
+      'GET /api/media-servers': (_, __) => _Reply(200, [
+            _server(account: {..._account(), 'manage_access': false})
+          ]),
+    });
+    expect(
+        find.text(
+            'Linked only. Your account’s access is managed on Home Jellyfin.'),
+        findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await _pumpGuide(tester, supportsManagement: true, handlers: {
+      'GET /api/media-servers': (_, __) => _Reply(200, [
+            _server(account: {
+              ..._account(disabled: true),
+              'manage_access': true,
+              'access_sync_pending': true
+            })
+          ]),
+    });
+    expect(
+        find.text(
+            'Your server access change is pending. Cantinarr will retry.'),
+        findsOneWidget);
+  });
+
+  testWidgets('explicitly unlinked Plex server offers per-server relink',
+      (tester) async {
+    await _pumpGuide(tester, supportsManagement: true, instances: const [
+      _plex
+    ], handlers: {
+      'GET /api/media-servers': (_, __) => _Reply(200, [
+            {..._plexServer(), 'auto_link_suppressed': true}
+          ]),
+    });
+    expect(find.text('Link my Plex account'), findsOneWidget);
+    expect(find.text('Sign in with Plex'), findsNothing);
+    expect(find.textContaining('was unlinked from'), findsOneWidget);
+  });
+
   testWidgets(
       'create flow validates locally, posts the password once, and shows the '
       'account', (tester) async {
@@ -292,7 +337,7 @@ void main() {
     expect(find.text('Watch on Jellyfin'), findsOneWidget);
     expect(
       find.text('You have access to Home Jellyfin. Create your account to '
-          'start watching.'),
+          'get started.'),
       findsOneWidget,
     );
     expect(find.text('Your account'), findsOneWidget);
@@ -306,16 +351,15 @@ void main() {
     );
 
     await _submitPassword(tester, password: 'short');
-    expect(find.text('Password must be at least 8 characters.'),
-        findsOneWidget);
+    expect(
+        find.text('Password must be at least 8 characters.'), findsOneWidget);
     await _submitPassword(tester,
         password: 'correct-horse', confirm: 'different-one');
     expect(find.text('Passwords do not match.'), findsOneWidget);
     expect(adapter.calls('POST', '/api/media-servers/jf-a/account'), 0);
 
     await _submitPassword(tester, password: 'correct-horse');
-    final post = adapter.requests
-        .singleWhere((r) => r.method == 'POST');
+    final post = adapter.requests.singleWhere((r) => r.method == 'POST');
     expect(post.body, {'password': 'correct-horse'});
     expect(find.text('Create your Jellyfin account'), findsNothing);
     expect(find.text('Account created. Sign in with your new password.'),
@@ -328,8 +372,8 @@ void main() {
     expect(find.text('Sign in at https://jf.example.com'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Copy address'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Create my account'),
-        findsNothing);
+    expect(
+        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
   });
 
   for (final mixed in [false, true]) {
@@ -390,7 +434,9 @@ void main() {
         };
         await _pumpGuide(tester,
             instances: [server],
-            handlers: {'GET /api/media-servers': (_, __) => _Reply(200, [data])},
+            handlers: {
+              'GET /api/media-servers': (_, __) => _Reply(200, [data])
+            },
             launcher: MediaAppLauncher(
               platform: platform,
               launchExternal: (uri) async {
@@ -575,8 +621,8 @@ void main() {
     expect(find.widgetWithText(ElevatedButton, 'Sign in to link it'),
         findsOneWidget);
     expect(find.text('Not yours? Ask your admin.'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Create my account'),
-        findsNothing);
+    expect(
+        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
     expect(find.widgetWithText(TextButton, 'I already have an account'),
         findsNothing);
     // The flag is a hint about the layout, never a claim of an account.
@@ -591,7 +637,8 @@ void main() {
     await tester.pumpAndSettle();
 
     final post = adapter.requests.singleWhere((r) => r.method == 'POST');
-    expect(post.body, {'username': 'alice', 'password': 'correct-horse-battery'});
+    expect(
+        post.body, {'username': 'alice', 'password': 'correct-horse-battery'});
     expect(find.text('Account linked. Sign in with your usual password.'),
         findsOneWidget);
     // The card re-read the server: the linked account is shown and the
@@ -641,9 +688,8 @@ void main() {
     );
     const notAvailable =
         _Reply(403, {'error': 'that server is not available to you'});
-    const upstream = _Reply(502, {
-      'error': "couldn't create the account right now; try again later"
-    });
+    const upstream = _Reply(502,
+        {'error': "couldn't create the account right now; try again later"});
     const offline = _Reply(0, '');
     final expectations = <_Reply, String>{
       invalidName: "Home Jellyfin doesn't accept your username as an account "
@@ -682,8 +728,8 @@ void main() {
           "if you think that's a mistake."),
       findsOneWidget,
     );
-    expect(find.widgetWithText(ElevatedButton, 'Create my account'),
-        findsNothing);
+    expect(
+        find.widgetWithText(ElevatedButton, 'Create my account'), findsNothing);
     expect(find.text('Username'), findsNothing);
   });
 
@@ -700,8 +746,8 @@ void main() {
 
     expect(find.text('alice'), findsOneWidget);
     expect(
-      find.text("We couldn't confirm this account with the server just now. "
-          'Signing in should still work.'),
+      find.text(
+          "We couldn't confirm your server access just now. Try again or check with your admin."),
       findsOneWidget,
     );
   });
@@ -813,7 +859,8 @@ void main() {
           authProvider.overrideWith(() => _FakeAuthNotifier(user: _alice)),
           backendClientProvider.overrideWithValue(dio),
         ],
-        child: MaterialApp(theme: AppTheme.dark, home: const MediaAccessGuide()),
+        child:
+            MaterialApp(theme: AppTheme.dark, home: const MediaAccessGuide()),
       ),
     );
     await tester.pumpAndSettle();
@@ -885,8 +932,8 @@ void main() {
         findsOneWidget);
     expect(find.textContaining('Invite sent to alice@example.com'),
         findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Share my Plex email'),
-        findsNothing);
+    expect(
+        find.widgetWithText(TextButton, 'Share my Plex email'), findsNothing);
     expect(find.widgetWithText(TextButton, 'Wrong email?'), findsOneWidget);
   });
 
@@ -904,11 +951,11 @@ void main() {
         findsOneWidget);
     expect(find.text('Sign in at https://app.plex.tv'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Open'), findsOneWidget);
-    expect(find.textContaining("couldn't confirm this"), findsOneWidget);
+    expect(find.textContaining("couldn't confirm your server access"),
+        findsOneWidget);
   });
 
-  testWidgets(
-      'a Plex server the user is not granted offers to ask for access',
+  testWidgets('a Plex server the user is not granted offers to ask for access',
       (tester) async {
     await _pumpGuide(
       tester,
@@ -942,7 +989,8 @@ void main() {
     expect(find.textContaining('Your admin has been notified. Once they grant'),
         findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Change email'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Sign in with Plex'), findsOneWidget);
+    expect(
+        find.widgetWithText(TextButton, 'Sign in with Plex'), findsOneWidget);
     // The delayed re-read fires and finds nothing new; no pending timers.
     await tester.pump(const Duration(seconds: 4));
     await tester.pumpAndSettle();
@@ -963,8 +1011,8 @@ void main() {
     expect(find.text('Watch on Plex or Jellyfin'), findsOneWidget);
     expect(find.text('Your account'), findsOneWidget);
     expect(find.text('Install the Plex or Jellyfin app'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, 'Share my Plex email'),
-        findsOneWidget);
+    expect(
+        find.widgetWithText(TextButton, 'Share my Plex email'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'I already have an account'),
         findsNothing);
     expect(find.text('Sign in'), findsOneWidget);
@@ -1001,7 +1049,8 @@ void main() {
       },
     );
 
-    await tester.tap(find.widgetWithText(TextButton, 'I already have an account'));
+    await tester
+        .tap(find.widgetWithText(TextButton, 'I already have an account'));
     await tester.pumpAndSettle();
     expect(find.text('Link your Jellyfin account'), findsOneWidget);
     expect(
@@ -1024,7 +1073,8 @@ void main() {
     expect(adapter.calls('POST', '/api/media-servers/jf-a/account/link'), 0);
 
     // A refused password says so and keeps the sheet (and the session).
-    await tester.enterText(find.widgetWithText(TextField, 'Password'), 'not-it');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Password'), 'not-it');
     await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
     await tester.pumpAndSettle();
     expect(find.text('Wrong username or password for Home Jellyfin.'),
@@ -1076,7 +1126,8 @@ void main() {
                   }),
       },
     );
-    await tester.tap(find.widgetWithText(TextButton, 'I already have an account'));
+    await tester
+        .tap(find.widgetWithText(TextButton, 'I already have an account'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'Password'), 'pw');
     await tester.tap(find.widgetWithText(ElevatedButton, 'Link account'));
@@ -1177,8 +1228,12 @@ void main() {
       instances: const [_plex],
       handlers: {
         'GET /api/media-servers': (_, __) => _Reply(200, [_plexServer()]),
-        'POST /api/media-servers/plex/sign-in/begin': (_, __) =>
-            const _Reply(200, {'pin_id': 7, 'code': 'WXYZ', 'url': 'https://app.plex.tv/auth#?code=WXYZ'}),
+        'POST /api/media-servers/plex/sign-in/begin': (_, __) => const _Reply(
+                200, {
+              'pin_id': 7,
+              'code': 'WXYZ',
+              'url': 'https://app.plex.tv/auth#?code=WXYZ'
+            }),
         'POST /api/media-servers/plex/sign-in/check': (_, __) =>
             const _Reply(200, {
               'linked': true,

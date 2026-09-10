@@ -22,8 +22,9 @@ type AccessRequestHook func(userID int64, username string)
 // happen once they are gone (switching off their media-server accounts). It
 // returns the commit step, which the handler runs only after the delete
 // succeeded — the delete can still refuse (self-delete, last admin), and a
-// refused delete must leave the user untouched everywhere.
-type UserDeleteHook func(userID int64) (committed func())
+// refused delete must leave the user untouched everywhere. The second closure
+// releases the snapshot lock and must run on both commit and abort.
+type UserDeleteHook func(userID int64) (committed func(), release func())
 
 type Handler struct {
 	service           *Service
@@ -372,7 +373,11 @@ func (h *Handler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	// nothing is touched until the delete has actually gone through.
 	var committed func()
 	if h.userDeleteHook != nil {
-		committed = h.userDeleteHook(userID)
+		var release func()
+		committed, release = h.userDeleteHook(userID)
+		if release != nil {
+			defer release()
+		}
 	}
 
 	if err := h.service.DeleteUser(claims.UserID, userID); err != nil {

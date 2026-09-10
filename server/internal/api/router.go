@@ -272,6 +272,7 @@ func NewRouter(
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Post("/media-servers/{instanceID}/import", mediaAccessHandler.Import)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Put("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.LinkAccount)
 			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Delete("/users/{userID}/media-servers/{instanceID}/account", mediaAccessHandler.UnlinkAccount)
+			r.With(auth.RequirePermission(auth.PermissionUsersManage)).Patch("/users/{userID}/media-servers/{instanceID}/account/management", mediaAccessHandler.SetManagement)
 
 			// Per-user default *arr instance overrides (admin-managed). Pins which
 			// instance is a given user's default source per service type, and —
@@ -899,9 +900,10 @@ func configHandler(cfg *config.Config, store configInstanceStore, creds *credent
 			"allow_reporting": remSettings.AllowReporting,
 			// True when a Plex server exists at all, so a user without the
 			// grant can still ask for access from the guide.
-			"plex_access_requestable": plexRequestable,
-			"admin_catalog_browsing":  true,
-			"hidden_discover_tabs":    hiddenTabs,
+			"plex_access_requestable":  plexRequestable,
+			"admin_catalog_browsing":   true,
+			"media_account_management": true,
+			"hidden_discover_tabs":     hiddenTabs,
 		})
 	}
 }

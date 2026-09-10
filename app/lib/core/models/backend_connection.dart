@@ -77,6 +77,9 @@ class BackendConnection {
   /// External book/music metadata can be browsed by admins before setup.
   final bool adminCatalogBrowsing;
 
+  /// Supports linking accounts independently from managing their access.
+  final bool mediaAccountManagement;
+
   /// Null means the server predates Discover visibility preferences.
   final List<String>? hiddenDiscoverTabs;
 
@@ -97,6 +100,7 @@ class BackendConnection {
     this.allowReporting = false,
     this.plexAccessRequestable = false,
     this.adminCatalogBrowsing = false,
+    this.mediaAccountManagement = false,
     this.hiddenDiscoverTabs,
     this.configConfirmed = false,
   });
@@ -114,6 +118,7 @@ class BackendConnection {
     bool? allowReporting,
     bool? plexAccessRequestable,
     bool? adminCatalogBrowsing,
+    bool? mediaAccountManagement,
     List<String>? hiddenDiscoverTabs,
     bool clearHiddenDiscoverTabs = false,
     bool? configConfirmed,
@@ -126,6 +131,8 @@ class BackendConnection {
         serverVersion: serverVersion ?? this.serverVersion,
         minAppVersion: minAppVersion ?? this.minAppVersion,
         adminCatalogBrowsing: adminCatalogBrowsing ?? this.adminCatalogBrowsing,
+        mediaAccountManagement:
+            mediaAccountManagement ?? this.mediaAccountManagement,
         hiddenDiscoverTabs: clearHiddenDiscoverTabs
             ? null
             : hiddenDiscoverTabs ?? this.hiddenDiscoverTabs,

@@ -392,7 +392,7 @@ func (s *Service) exchangePlex(ctx context.Context, flow, code, verifier string)
 			}
 			// A legacy row owned by someone else is a conflict, never an email match
 			// authorizing takeover or a reason to move that user's grant.
-			if _, err = tx.Exec("INSERT INTO user_media_server_accounts(user_id,instance_id,remote_user_id,remote_username,created_by_cantinarr) VALUES (?,?,?,?,0)", linked, server.InstanceID, email, a.account.Username); err != nil {
+			if _, err = tx.Exec("INSERT INTO user_media_server_accounts(user_id,instance_id,remote_user_id,remote_username,created_by_cantinarr,manage_access) VALUES (?,?,?,?,0,0)", linked, server.InstanceID, email, a.account.Username); err != nil {
 				return nil, ErrPlexConflict
 			}
 		}

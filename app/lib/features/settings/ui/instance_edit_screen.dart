@@ -14,6 +14,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/unsaved_changes_guard.dart';
 import '../../auth/data/auth_service.dart';
 import '../../auth/logic/auth_provider.dart';
+import '../../media_access/data/media_access_service.dart';
 import '../../discover/data/trending_books_service.dart';
 import '../data/instance_api_service.dart';
 import '../data/hardcover_connection.dart';
@@ -180,6 +181,12 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
   // the working selection, and the selection as last saved. A user counts as
   // having access here when either a pin or a grant row names this instance.
   List<UserSummary>? _users;
+  Map<int, MediaServerAccountRow> _mediaAccounts = {};
+  bool _mediaAccountsFailed = false;
+  bool _mediaAccountsLoaded = false;
+  bool get _supportsAccountManagement =>
+      ref.read(authProvider).valueOrNull?.connection?.mediaAccountManagement ??
+      false;
   Map<int, String> _pins = const {};
   Set<int> _assignedUserIds = <int>{};
   Set<int> _savedAssignedUserIds = <int>{};
@@ -510,6 +517,23 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
         _applyAutoDefault();
       });
       await _loadPins();
+      if (_isMediaServer && widget.isEditing && _supportsAccountManagement) {
+        try {
+          final accounts =
+              await ref.read(mediaAccessServiceProvider).listAccounts();
+          if (!mounted) return;
+          setState(() {
+            _mediaAccounts = {
+              for (final a in accounts)
+                if (a.instanceId == widget.instanceId) a.userId: a
+            };
+            _mediaAccountsFailed = false;
+            _mediaAccountsLoaded = true;
+          });
+        } catch (_) {
+          if (mounted) setState(() => _mediaAccountsFailed = true);
+        }
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _userSelectError = 'Could not load users');
@@ -1151,26 +1175,28 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
                     'Music access through this instance (alongside any other '
                     'Lidarr instance they hold). Unselecting a user removes '
                     'their access.'
-            : _isPlex
-                ? 'Selected users get this server under Watch on Plex, '
-                    'where they sign in with their own Plex account or share '
-                    'its email; the share of the chosen libraries goes out '
-                    'the moment they do. Select yourself too: the account '
-                    'that owns the server is recognised as the owner, never '
-                    'invited. Unselecting a user removes their share; '
-                    'selecting them again shares it again.'
-                : _isMediaServer
-                    ? 'Selected users get this server under Watch on '
-                        '$_serviceLabel, where they create their own account '
-                        'or sign in with one they already have (administrator '
-                        'accounts included, so select yourself too). '
-                        'Unselecting a user turns their account off without '
-                        'deleting it; selecting them again turns it back on. '
-                        'Administrator accounts are never changed.'
-                    : 'Selected users can use this library for requests alongside '
-                    'their default $_serviceLabel library, choosing per '
-                    'request. Unselecting a user removes their access to this '
-                    'library.',
+                : _isMediaServer && _supportsAccountManagement
+                    ? 'Selected users can use this server in Cantinarr and create or link an account. New accounts and shares created by Cantinarr are managed automatically. Grant changes affect server access only for accounts marked Managed by Cantinarr. Linked-only accounts and administrators stay as they are. Change account management in Settings > Users.'
+                    : _isPlex
+                        ? 'Selected users get this server under Watch on Plex, '
+                            'where they sign in with their own Plex account or share '
+                            'its email; the share of the chosen libraries goes out '
+                            'the moment they do. Select yourself too: the account '
+                            'that owns the server is recognised as the owner, never '
+                            'invited. Unselecting a user removes their share; '
+                            'selecting them again shares it again.'
+                        : _isMediaServer
+                            ? 'Selected users get this server under Watch on '
+                                '$_serviceLabel, where they create their own account '
+                                'or sign in with one they already have (administrator '
+                                'accounts included, so select yourself too). '
+                                'Unselecting a user turns their account off without '
+                                'deleting it; selecting them again turns it back on. '
+                                'Administrator accounts are never changed.'
+                            : 'Selected users can use this library for requests alongside '
+                                'their default $_serviceLabel library, choosing per '
+                                'request. Unselecting a user removes their access to this '
+                                'library.',
         style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: 8),
@@ -1221,11 +1247,22 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
       activeColor: AppTheme.accent,
       title: Text(user.username,
           style: const TextStyle(color: AppTheme.textPrimary)),
-      subtitle: defaultElsewhere != null
-          ? Text('Default library: "$defaultElsewhere"',
+      subtitle: _isMediaServer && _supportsAccountManagement
+          ? Text(
+              _mediaAccountsFailed
+                  ? 'Account management could not be loaded'
+                  : !_mediaAccountsLoaded && widget.isEditing
+                      ? 'Loading account management…'
+                  : _mediaAccounts.containsKey(user.id)
+                      ? '${_mediaAccounts[user.id]!.managementLabel} · ${_mediaAccounts[user.id]!.accessLabel}'
+                      : 'No linked account',
               style:
                   const TextStyle(color: AppTheme.textSecondary, fontSize: 12))
-          : null,
+          : defaultElsewhere != null
+              ? Text('Default library: "$defaultElsewhere"',
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 12))
+              : null,
       value: _assignedUserIds.contains(user.id),
       onChanged: (checked) => setState(() {
         if (checked == true) {
@@ -2280,7 +2317,7 @@ class _InstanceEditScreenState extends ConsumerState<InstanceEditScreen> {
           const SizedBox(height: 10),
           const Text(
             'Optional. Choose which libraries these accounts can see. '
-            'Changing it updates the accounts Cantinarr created here; '
+            'Changing it updates accounts Cantinarr created here and still manages; '
             'accounts you linked keep what they have. With nothing chosen, '
             'every library is shared, including ones you add later.',
             style: TextStyle(

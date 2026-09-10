@@ -115,6 +115,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
       content: Text((switch (state.inviteState) {
             'sent' => 'Signed in as $who. Invite sent. Check your email.',
             'adopted' => 'Signed in as $who. Your access is set up.',
+            'unlinked' => 'Signed in as $who. Your server connection stays unlinked; use Link my Plex account to reconnect it.',
             'failed' =>
               "Signed in as $who, but the invite couldn't be sent yet. "
                   'It will be retried.',
@@ -526,8 +527,9 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'You have access to ${server.name}. Sign in with Plex to link '
-            'your account, or share the email of your Plex account.',
+            server.autoLinkSuppressed
+                ? 'Your account was unlinked from ${server.name}. Link it again explicitly to reconnect this server.'
+                : 'You have access to ${server.name}. Sign in with Plex to link your account, or share the email of your Plex account.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -536,15 +538,20 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
-            onPressed: _signInWithPlex,
+            onPressed: server.autoLinkSuppressed
+                ? () => _requestInvite(server, plexEmail)
+                : _signInWithPlex,
             icon: const Icon(Icons.login, size: 18),
-            label: const Text('Sign in with Plex'),
+            label: Text(server.autoLinkSuppressed
+                ? 'Link my Plex account'
+                : 'Sign in with Plex'),
           ),
-          TextButton.icon(
-            onPressed: () => _requestInvite(server, plexEmail),
-            icon: const Icon(Icons.mail_outline, size: 18),
-            label: const Text('Share my Plex email'),
-          ),
+          if (!server.autoLinkSuppressed)
+            TextButton.icon(
+              onPressed: () => _requestInvite(server, plexEmail),
+              icon: const Icon(Icons.mail_outline, size: 18),
+              label: const Text('Share my Plex email'),
+            ),
         ],
       );
     } else if (account.pending) {
@@ -653,7 +660,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       );
     }
-    return _card(body);
+    return _accountCardWithManagement(server, body);
   }
 
   /// A Plex server exists but this user holds no grant on it: signing in
@@ -757,8 +764,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
           SizedBox(width: 6),
           Expanded(
             child: Text(
-              "We couldn't confirm this with the server just now. It should "
-              'still work.',
+              "We couldn't confirm your server access just now. Try again or check with your admin.",
               style: TextStyle(
                 color: AppTheme.warning,
                 fontSize: 12,
@@ -769,6 +775,36 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       ),
     );
+  }
+
+  Widget _accountCardWithManagement(MediaServerAccess server, Widget body) {
+    final account = server.account;
+    final supported = ref
+            .watch(authProvider)
+            .valueOrNull
+            ?.connection
+            ?.mediaAccountManagement ??
+        false;
+    if (!supported || account == null) return _card(body);
+    return _card(
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      body,
+      const SizedBox(height: 10),
+      Text(
+          account.accessSyncPending
+              ? 'Your server access change is pending. Cantinarr will retry.'
+              : account.administrator
+                  ? 'Protected administrator account.'
+                  : account.manageAccess
+                      ? 'Your admin manages this account’s access through Cantinarr.'
+                      : 'Linked only. Your account’s access is managed on ${server.name}.',
+          style: TextStyle(
+              color: account.accessSyncPending
+                  ? AppTheme.warning
+                  : AppTheme.textMuted,
+              fontSize: 12)),
+      if (!account.verified && account.disabled) _buildUnconfirmed(),
+    ]));
   }
 
   Widget _card(Widget body) {
@@ -825,7 +861,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         children: [
           Text(
             'You have access to ${server.name}. Create your account to '
-            'start watching.',
+            'get started.',
             style: const TextStyle(
               color: AppTheme.textSecondary,
               fontSize: 14,
@@ -988,8 +1024,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    "We couldn't confirm this account with the server just "
-                    'now. Signing in should still work.',
+                    "We couldn't confirm your server access just now. Try again or check with your admin.",
                     style: TextStyle(
                       color: AppTheme.warning,
                       fontSize: 12,
@@ -1003,16 +1038,7 @@ class _MediaAccessGuideState extends ConsumerState<MediaAccessGuide> {
         ],
       );
     }
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
-      ),
-      child: body,
-    );
+    return _accountCardWithManagement(server, body);
   }
 }
 

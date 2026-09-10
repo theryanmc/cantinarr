@@ -18,6 +18,8 @@ class MediaServerAccountStatus {
   final bool pending;
   final bool administrator;
   final bool verified;
+  final bool manageAccess;
+  final bool accessSyncPending;
 
   const MediaServerAccountStatus({
     required this.username,
@@ -25,6 +27,8 @@ class MediaServerAccountStatus {
     this.pending = false,
     this.administrator = false,
     this.verified = true,
+    this.manageAccess = true,
+    this.accessSyncPending = false,
   });
 
   factory MediaServerAccountStatus.fromJson(Map<String, dynamic> json) =>
@@ -34,6 +38,8 @@ class MediaServerAccountStatus {
         pending: json['pending'] as bool? ?? false,
         administrator: json['administrator'] as bool? ?? false,
         verified: json['verified'] as bool? ?? true,
+        manageAccess: json['manage_access'] as bool? ?? true,
+        accessSyncPending: json['access_sync_pending'] as bool? ?? false,
       );
 }
 
@@ -148,6 +154,7 @@ class MediaServerAccess {
   /// match was confirmed (the server may have been unreachable), so the
   /// card never claims there is no such account.
   final bool existingAccount;
+  final bool autoLinkSuppressed;
 
   const MediaServerAccess({
     required this.instanceId,
@@ -157,6 +164,7 @@ class MediaServerAccess {
     this.publicAddress = '',
     this.account,
     this.existingAccount = false,
+    this.autoLinkSuppressed = false,
   });
 
   bool get isInvite => kind == MediaServerKind.invite;
@@ -182,6 +190,7 @@ class MediaServerAccess {
             )
           : null,
       existingAccount: json['existing_account'] as bool? ?? false,
+      autoLinkSuppressed: json['auto_link_suppressed'] as bool? ?? false,
     );
   }
 }
@@ -276,6 +285,11 @@ class MediaServerAccountRow {
   final String remoteUsername;
   final bool createdByCantinarr;
   final bool disabled;
+  final bool manageAccess;
+  final bool granted;
+  final bool accessSyncPending;
+  final bool administrator;
+  final bool verified;
   final String? createdAt;
 
   const MediaServerAccountRow({
@@ -288,8 +302,27 @@ class MediaServerAccountRow {
     required this.remoteUsername,
     this.createdByCantinarr = true,
     this.disabled = false,
+    this.manageAccess = true,
+    bool? granted,
+    this.accessSyncPending = false,
+    this.administrator = false,
+    this.verified = false,
     this.createdAt,
-  });
+  }) : granted = granted ?? !disabled;
+
+  String get managementLabel => administrator
+      ? 'Protected administrator'
+      : manageAccess
+          ? 'Managed by Cantinarr'
+          : 'Linked only';
+
+  String get accessLabel => accessSyncPending
+      ? 'Access change pending'
+      : !verified
+          ? 'Server access unconfirmed'
+          : disabled
+              ? 'Off on server'
+              : 'Active on server';
 
   factory MediaServerAccountRow.fromJson(Map<String, dynamic> json) =>
       MediaServerAccountRow(
@@ -305,6 +338,11 @@ class MediaServerAccountRow {
         // as the same fact.
         disabled: json['disabled'] as bool? ?? json['disabled_at'] != null,
         createdAt: json['created_at'] as String?,
+        manageAccess: json['manage_access'] as bool? ?? true,
+        granted: json['granted'] as bool?,
+        accessSyncPending: json['access_sync_pending'] as bool? ?? false,
+        administrator: json['administrator'] as bool? ?? false,
+        verified: json['verified'] as bool? ?? false,
       );
 }
 
@@ -573,10 +611,15 @@ class MediaAccessService {
     required String instanceId,
     required List<String> remoteUserIds,
     required String serverUrl,
+    bool? manageAccess,
   }) async {
     final resp = await _dio.post(
       '/api/admin/media-servers/$instanceId/import',
-      data: {'remote_user_ids': remoteUserIds, 'server_url': serverUrl},
+      data: {
+        'remote_user_ids': remoteUserIds,
+        'server_url': serverUrl,
+        if (manageAccess != null) 'manage_access': manageAccess
+      },
     );
     dynamic data = resp.data;
     if (data is Map && data['results'] is List) data = data['results'];
@@ -591,11 +634,32 @@ class MediaAccessService {
     required int userId,
     required String instanceId,
     required String remoteUserId,
+    bool? manageAccess,
   }) async {
     try {
       final resp = await _dio.put(
         '/api/admin/users/$userId/media-servers/$instanceId/account',
-        data: {'remote_user_id': remoteUserId},
+        data: {
+          'remote_user_id': remoteUserId,
+          if (manageAccess != null) 'manage_access': manageAccess
+        },
+      );
+      return MediaServerAccountRow.fromJson(_map(resp.data));
+    } on DioException catch (e) {
+      throw MediaAccessException.fromDio(e);
+    }
+  }
+
+  /// Changes who manages access, keeping the identity link intact.
+  Future<MediaServerAccountRow> setManagement({
+    required int userId,
+    required String instanceId,
+    required bool manageAccess,
+  }) async {
+    try {
+      final resp = await _dio.patch(
+        '/api/admin/users/$userId/media-servers/$instanceId/account/management',
+        data: {'manage_access': manageAccess},
       );
       return MediaServerAccountRow.fromJson(_map(resp.data));
     } on DioException catch (e) {

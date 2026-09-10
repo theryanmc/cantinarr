@@ -398,8 +398,8 @@ func TestPlexSignInRecognisesTheOwner(t *testing.T) {
 	before := f.count("DELETE ")
 	e.grantType(julian, "plex")
 	e.svc.OnGrantsChanged([]int64{julian})
-	if !e.row(julian, plex).DisabledAt.Valid || f.count("DELETE ") != before {
-		t.Fatal("revoking the owner's grant did not stamp the row, or dialed plex.tv")
+	if e.row(julian, plex).ManageAccess || e.row(julian, plex).AccessSyncPending || f.count("DELETE ") != before {
+		t.Fatal("revoking the owner's grant attempted to manage the owner")
 	}
 	e.grantType(julian, "plex", plex)
 	e.svc.OnGrantsChanged([]int64{julian})
